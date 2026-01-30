@@ -14,11 +14,13 @@ use std::time::Duration;
 ///
 /// This uses a simple shell script that reads a line and responds with
 /// a proper JSON-RPC response.
+///
+/// Note: Uses absolute path `/bin/bash` for security compliance.
 fn mock_mcp_server_command() -> (&'static str, Vec<&'static str>) {
-    // Use bash to create a simple echo server
+    // Use bash with absolute path to create a simple echo server
     // It reads a line, parses it as JSON-RPC, and responds
     (
-        "bash",
+        "/bin/bash",
         vec![
             "-c",
             r#"

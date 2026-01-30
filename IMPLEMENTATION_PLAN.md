@@ -162,19 +162,25 @@ Steps:
 
 ### 1.2 MCP Command Validation (MEDIUM M-1)
 
-- [ ] 1.2.1 Write MCP command validation tests (RED)
+- [x] 1.2.1 Write MCP command validation tests (RED)
   - Path: `tests/integration/mcp_test.rs`
   - Test: `test_mcp_blocks_dangerous_command`
+  - Test: `test_mcp_blocks_sudo_command`
   - Test: `test_mcp_requires_absolute_path`
+  - Test: `test_mcp_blocks_path_traversal`
   - Test: `test_mcp_warns_on_new_server`
-  - Acceptance: Tests fail initially
+  - Test: `test_mcp_allows_valid_absolute_path`
+  - Test: `test_mcp_blocks_shell_injection_in_args`
+  - Acceptance: 4 security tests fail (no validation exists yet)
 
-- [ ] 1.2.2 Add MCP command validation (GREEN)
-  - Path: `src/mcp/transport.rs`
-  - Add: Validate command path exists
-  - Add: Warn on first use of new server
-  - Add: Block dangerous patterns
-  - Acceptance: All MCP security tests pass
+- [x] 1.2.2 Add MCP command validation (GREEN)
+  - Path: `src/mcp/client.rs`
+  - Add: `validate_mcp_command()` function with security checks
+  - Add: Block dangerous commands (rm, sudo, dd, etc.) even with absolute paths
+  - Add: Require absolute paths for interpreters (bash, python, etc.)
+  - Add: Block path traversal and relative paths
+  - Add: Block shell injection patterns in non-interpreter arguments
+  - Acceptance: All 9 MCP security tests pass
 
 - [ ] 1.2.3 Commit MCP validation
   - Message: `feat(mcp): Add command validation to MCP transport`
