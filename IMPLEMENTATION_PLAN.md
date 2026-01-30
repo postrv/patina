@@ -287,7 +287,7 @@ Steps:
 
 ### 3.2 Error Path Tests for API
 
-- [ ] 3.2.1 Write API error tests (RED)
+- [x] 3.2.1 Write API error tests (RED)
   - Path: `tests/api_client.rs`
   - Test: `test_api_network_timeout`
   - Test: `test_api_invalid_json_response`
@@ -295,7 +295,7 @@ Steps:
   - Test: `test_api_server_error_retry`
   - Acceptance: Network errors properly handled
 
-- [ ] 3.2.2 Verify retry logic (GREEN)
+- [x] 3.2.2 Verify retry logic (GREEN)
   - Path: `src/api/mod.rs`
   - Verify: Retry on 429, 5xx errors
   - Verify: Exponential backoff implemented
@@ -527,6 +527,15 @@ Steps:
   - Tests: permission handling, size limits, boundary conditions
   - 8 new tests added
   - Commit: 34bd99d
+
+- [x] 3.2.1-3.2.2 Error Path Tests for API
+  - Added test_api_network_timeout: verifies connection errors are properly propagated
+  - Added test_api_invalid_json_response: verifies invalid JSON is gracefully skipped
+  - Renamed test_retry_on_rate_limit → test_api_rate_limit_retry
+  - Renamed test_retry_on_server_error → test_api_server_error_retry
+  - Verified retry logic: MAX_RETRIES=2, exponential backoff (100ms, 200ms, 400ms)
+  - Verified retryable statuses: 429 (rate limit), 5xx (server errors)
+  - 2 new tests added
 
 ---
 
