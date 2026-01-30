@@ -339,8 +339,9 @@ Steps:
   - Acceptance: Tests compile on Windows
   - Completed: 2026-01-30
 
-- [ ] 3.2.4 Commit MCP cross-platform tests
+- [x] 3.2.4 Commit MCP cross-platform tests
   - Message: `feat(mcp): Add cross-platform MCP test infrastructure`
+  - Completed: 2026-01-30
 
 ---
 
