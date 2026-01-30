@@ -4,6 +4,9 @@
 //! - Start MCP server processes
 //! - Send and receive JSON-RPC messages
 //! - Handle the MCP initialization protocol
+//!
+//! Note: These tests are Unix-only as they use `/bin/bash` for mock servers.
+#![cfg(unix)]
 
 use rct::mcp::protocol::JsonRpcRequest;
 use rct::mcp::transport::{StdioTransport, Transport};

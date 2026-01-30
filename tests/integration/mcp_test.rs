@@ -19,6 +19,9 @@
 //! Dangerous commands like `rm -rf /` ARE spawned - they only fail because
 //! the process doesn't respond to MCP protocol, not because of security checks.
 //! This is a critical vulnerability that these tests aim to fix.
+//!
+//! Note: These tests are Unix-only as they use Unix paths like `/bin/cat`.
+#![cfg(unix)]
 
 use rct::mcp::client::McpClient;
 use rct::mcp::McpTransport;
