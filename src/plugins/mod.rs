@@ -157,7 +157,10 @@ impl PluginRegistry {
                 let entry = entry?;
                 let path = entry.path();
                 if path.extension().map(|e| e == "md").unwrap_or(false) {
-                    let name = path.file_stem().unwrap().to_string_lossy().to_string();
+                    let name = path
+                        .file_stem()
+                        .map(|s| s.to_string_lossy().to_string())
+                        .unwrap_or_else(|| "unnamed".to_string());
                     let content = std::fs::read_to_string(&path)?;
                     commands.push(Command {
                         name,

@@ -482,3 +482,82 @@ fn test_plugin_get_nonexistent_command() {
         "Should return None for nonexistent namespaced command"
     );
 }
+
+/// Tests that files without .md extension are properly skipped.
+#[test]
+fn test_plugin_handles_no_extension() {
+    let temp_dir = TempDir::new().expect("Should create temp dir");
+    let manifest = r#"{
+        "name": "ext-plugin",
+        "version": "1.0.0"
+    }"#;
+
+    let plugin_dir = create_plugin(&temp_dir, "ext-plugin", manifest);
+    let commands_dir = plugin_dir.join("commands");
+    fs::create_dir_all(&commands_dir).expect("Should create commands dir");
+
+    // Create files with various problematic names
+    fs::write(commands_dir.join("no-extension"), "No extension content")
+        .expect("Should write file without extension");
+    fs::write(commands_dir.join("valid.md"), "Valid command").expect("Should write valid .md file");
+    fs::write(commands_dir.join(".txt"), "Just extension no stem")
+        .expect("Should write dot-extension file");
+
+    let mut registry = PluginRegistry::new();
+    registry
+        .load_all(&[temp_dir.path().to_path_buf()])
+        .expect("Should load plugins without panicking");
+
+    // Only the valid .md file should be loaded
+    assert!(
+        registry.get_command("ext-plugin:valid").is_some(),
+        "Should load valid.md command"
+    );
+    assert!(
+        registry.get_command("ext-plugin:no-extension").is_none(),
+        "Should skip file without extension"
+    );
+    assert!(
+        registry.get_command("ext-plugin:").is_none(),
+        "Should not create command with empty name"
+    );
+}
+
+/// Tests that dotfiles with .md extension are handled correctly.
+#[test]
+fn test_plugin_handles_dotfile() {
+    let temp_dir = TempDir::new().expect("Should create temp dir");
+    let manifest = r#"{
+        "name": "dot-plugin",
+        "version": "1.0.0"
+    }"#;
+
+    let plugin_dir = create_plugin(&temp_dir, "dot-plugin", manifest);
+    let commands_dir = plugin_dir.join("commands");
+    fs::create_dir_all(&commands_dir).expect("Should create commands dir");
+
+    // Create a dotfile with .md extension
+    fs::write(commands_dir.join(".hidden.md"), "Hidden command content")
+        .expect("Should write dotfile");
+    fs::write(commands_dir.join("normal.md"), "Normal command").expect("Should write normal file");
+
+    let mut registry = PluginRegistry::new();
+    registry
+        .load_all(&[temp_dir.path().to_path_buf()])
+        .expect("Should load plugins without panicking");
+
+    // Normal file should be loaded
+    assert!(
+        registry.get_command("dot-plugin:normal").is_some(),
+        "Should load normal.md"
+    );
+
+    // Dotfile behavior - either loaded with dot prefix name or gracefully skipped
+    // We verify the loader doesn't panic, the exact behavior can be defined
+    let dotfile_cmd = registry.get_command("dot-plugin:.hidden");
+    // Dotfiles with .md extension should be loaded (file_stem returns ".hidden")
+    assert!(
+        dotfile_cmd.is_some(),
+        "Should handle dotfile with .md extension"
+    );
+}
