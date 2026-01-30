@@ -35,3 +35,6 @@ mod ide_test;
 
 #[path = "unit/multi_model_test.rs"]
 mod multi_model_test;
+
+#[path = "unit/error_test.rs"]
+mod error_test;
