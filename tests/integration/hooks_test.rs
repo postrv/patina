@@ -699,7 +699,11 @@ async fn test_session_start_hook_fires() {
 
     let result = manager.fire_session_start().await;
 
-    assert!(result.is_ok(), "SessionStart hook should succeed");
+    assert!(
+        result.is_ok(),
+        "SessionStart hook should succeed, but got error: {:?}",
+        result.as_ref().err()
+    );
     let result = result.unwrap();
     assert!(matches!(result.decision, HookDecision::Continue));
 }
@@ -770,7 +774,11 @@ async fn test_user_prompt_submit_hook_fires() {
 
     let result = manager.fire_user_prompt_submit("Hello, Claude!").await;
 
-    assert!(result.is_ok());
+    assert!(
+        result.is_ok(),
+        "Hook should fire successfully, but got error: {:?}",
+        result.as_ref().err()
+    );
     assert!(matches!(result.unwrap().decision, HookDecision::Continue));
 }
 
@@ -835,7 +843,11 @@ async fn test_stop_hook_fires() {
 
     let result = manager.fire_stop("user_interrupt").await;
 
-    assert!(result.is_ok());
+    assert!(
+        result.is_ok(),
+        "Stop hook should fire, but got error: {:?}",
+        result.as_ref().err()
+    );
     assert!(matches!(result.unwrap().decision, HookDecision::Continue));
 }
 
@@ -1063,7 +1075,11 @@ async fn test_hook_allows_safe_commands() {
 
     let result = executor.execute(HookEvent::SessionStart, &context).await;
 
-    assert!(result.is_ok(), "Safe hook execution should succeed");
+    assert!(
+        result.is_ok(),
+        "Safe hook execution should succeed, but got error: {:?}",
+        result.as_ref().err()
+    );
     let result = result.unwrap();
 
     // Safe command should execute successfully and return its output
