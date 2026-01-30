@@ -8,10 +8,10 @@
 
 | Metric | Value | Command |
 |--------|-------|---------|
-| Unit Tests | 182 | `cargo test --lib` |
+| Unit Tests | 186 | `cargo test --lib` |
 | Integration Tests | 281 | `cargo test --test '*'` |
 | Doc Tests | 19 | `cargo test --doc` |
-| Total Tests | 494 | `cargo test` |
+| Total Tests | 498 | `cargo test` |
 | Test Files | 33 | `find tests -name '*.rs' \| wc -l` |
 | Clippy Warnings | 0 | `cargo clippy --all-targets -- -D warnings` |
 | Source Files | 30 | `find src -name '*.rs' \| wc -l` |
@@ -87,19 +87,19 @@ Steps:
 
 ### 0.2 Plain String API Keys (HIGH H-1)
 
-- [ ] 0.2.1 Write API key secrecy tests (RED)
+- [x] 0.2.1 Write API key secrecy tests (RED)
   - Path: `tests/unit/multi_model_test.rs`
   - Test: `test_api_key_not_in_debug_output`
   - Test: `test_api_key_uses_secret_string`
   - Acceptance: Tests verify SecretString behavior
 
-- [ ] 0.2.2 Change api_key to SecretString (GREEN)
+- [x] 0.2.2 Change api_key to SecretString (GREEN)
   - Path: `src/api/multi_model.rs:70-96`
   - Change: `api_key: String` → `api_key: secrecy::SecretString`
   - Update: All usages to call `.expose_secret()`
   - Acceptance: Tests pass, no API key in Debug output
 
-- [ ] 0.2.3 Commit SecretString fix
+- [x] 0.2.3 Commit SecretString fix
   - Message: `fix(api): Use SecretString for API keys in multi_model`
 
 ### 0.3 Unsandboxed Hook Execution (HIGH H-2)
@@ -444,6 +444,12 @@ Steps:
   - Added validate_path() to list_files
   - 3 security tests added
   - Commit: 953e40d
+
+- [x] 0.2.1-0.2.3 SecretString for API keys (H-1)
+  - Changed api_key: String to SecretString in multi_model
+  - Custom Debug impl shows [REDACTED]
+  - 4 security tests added
+  - Commit: b9d8301
 
 ---
 
