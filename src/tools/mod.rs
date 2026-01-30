@@ -22,13 +22,15 @@ use tracing::{debug, warn};
 use walkdir::WalkDir;
 
 use crate::hooks::{HookDecision, HookManager};
+use crate::shell::ShellConfig;
 
-/// Static collection of dangerous command patterns.
+/// Static collection of dangerous command patterns for Unix systems.
 ///
 /// These patterns are compiled once on first access, ensuring:
 /// - No runtime panics from invalid regex (patterns validated at initialization)
 /// - No repeated compilation cost when creating new `ToolExecutionPolicy` instances
 /// - Consistent pattern set across all policy instances
+#[cfg(unix)]
 static DANGEROUS_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
     vec![
         // Destructive file operations
@@ -82,6 +84,48 @@ static DANGEROUS_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
     ]
 });
 
+/// Static collection of dangerous command patterns for Windows systems.
+///
+/// These patterns detect dangerous Windows commands including:
+/// - Recursive file deletion (del /s, rd /s)
+/// - Disk formatting (format)
+/// - Privilege escalation (runas)
+/// - PowerShell code injection (encoded commands, Invoke-Expression)
+/// - Registry manipulation (reg add/delete)
+#[cfg(windows)]
+static DANGEROUS_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
+    vec![
+        // Destructive file operations (case-insensitive for Windows)
+        Regex::new(r"(?i)\bdel\s+/[sq]").expect("invalid regex: del /s or /q"),
+        Regex::new(r"(?i)\bdel\s+.*/[sq]").expect("invalid regex: del with path"),
+        Regex::new(r"(?i)\brd\s+/[sq]").expect("invalid regex: rd /s or /q"),
+        Regex::new(r"(?i)\brmdir\s+/[sq]").expect("invalid regex: rmdir /s or /q"),
+        // Disk formatting
+        Regex::new(r"(?i)\bformat\s+[a-z]:").expect("invalid regex: format drive"),
+        // Privilege escalation
+        Regex::new(r"(?i)\brunas\s+/user").expect("invalid regex: runas"),
+        // PowerShell dangers - encoded commands bypass security scanning
+        Regex::new(r"(?i)powershell.*\s+-e\s").expect("invalid regex: powershell -e"),
+        Regex::new(r"(?i)powershell.*\s+-enc\s").expect("invalid regex: powershell -enc"),
+        Regex::new(r"(?i)powershell.*\s+-encodedcommand\s")
+            .expect("invalid regex: powershell -encodedcommand"),
+        // PowerShell Invoke-Expression - executes arbitrary code
+        Regex::new(r"(?i)\biex\s*\(").expect("invalid regex: iex()"),
+        Regex::new(r"(?i)\binvoke-expression\b").expect("invalid regex: Invoke-Expression"),
+        // Registry manipulation
+        Regex::new(r"(?i)\breg\s+delete\b").expect("invalid regex: reg delete"),
+        Regex::new(r"(?i)\breg\s+add\b").expect("invalid regex: reg add"),
+        // System disruption (shared with Unix but case-insensitive on Windows)
+        Regex::new(r"(?i)\bshutdown\b").expect("invalid regex: shutdown"),
+        // Remote code execution patterns (Windows versions)
+        Regex::new(r"(?i)curl\s+.+\|\s*powershell").expect("invalid regex: curl pipe powershell"),
+        Regex::new(r"(?i)invoke-webrequest.*\|\s*iex").expect("invalid regex: IWR pipe iex"),
+        // Certutil abuse for downloading/decoding (common attack vector)
+        Regex::new(r"(?i)certutil\s+-urlcache").expect("invalid regex: certutil download"),
+        Regex::new(r"(?i)certutil\s+-decode").expect("invalid regex: certutil decode"),
+    ]
+});
+
 /// Tool executor with security policy enforcement.
 pub struct ToolExecutor {
     working_dir: PathBuf,
@@ -126,17 +170,33 @@ impl Default for ToolExecutionPolicy {
     fn default() -> Self {
         Self {
             dangerous_patterns: DANGEROUS_PATTERNS.clone(),
-            protected_paths: vec![
-                PathBuf::from("/etc"),
-                PathBuf::from("/usr"),
-                PathBuf::from("/bin"),
-            ],
+            protected_paths: default_protected_paths(),
             max_file_size: 10 * 1024 * 1024,
             command_timeout: Duration::from_secs(300),
             allowlist_mode: false,
             allowed_commands: vec![],
         }
     }
+}
+
+/// Returns platform-specific protected paths.
+#[cfg(unix)]
+fn default_protected_paths() -> Vec<PathBuf> {
+    vec![
+        PathBuf::from("/etc"),
+        PathBuf::from("/usr"),
+        PathBuf::from("/bin"),
+    ]
+}
+
+/// Returns platform-specific protected paths for Windows.
+#[cfg(windows)]
+fn default_protected_paths() -> Vec<PathBuf> {
+    vec![
+        PathBuf::from(r"C:\Windows"),
+        PathBuf::from(r"C:\Program Files"),
+        PathBuf::from(r"C:\Program Files (x86)"),
+    ]
 }
 
 /// Normalizes a command string by removing shell escape characters.
@@ -400,8 +460,10 @@ impl ToolExecutor {
         }
 
         // Spawn the command with kill_on_drop to ensure process cleanup on timeout
-        let child = Command::new("sh")
-            .arg("-c")
+        // Use platform-agnostic shell configuration (sh -c on Unix, cmd.exe /C on Windows)
+        let shell = ShellConfig::default();
+        let child = Command::new(&shell.command)
+            .args(&shell.args)
             .arg(command)
             .current_dir(&self.working_dir)
             .stdout(Stdio::piped())

@@ -406,6 +406,184 @@ async fn test_bash_blocks_dd_device_write() {
 }
 
 // =============================================================================
+// Windows Security Blocking Tests
+// =============================================================================
+
+/// Test that del /s (recursive delete) is blocked on Windows.
+#[cfg(windows)]
+#[tokio::test]
+async fn test_bash_blocks_del_recursive() {
+    let ctx = TestContext::new();
+    let executor = ToolExecutor::new(ctx.path());
+
+    let call = ToolCall {
+        name: "bash".to_string(),
+        input: json!({ "command": "del /s /q C:\\Windows\\*" }),
+    };
+
+    let result = executor
+        .execute(call)
+        .await
+        .expect("execution should not error");
+
+    match result {
+        ToolResult::Error(e) => {
+            assert!(
+                e.contains("blocked by security policy"),
+                "error should mention security policy, got: {e}"
+            );
+        }
+        ToolResult::Success(s) => panic!("del /s should be blocked, got success: {s}"),
+        ToolResult::Cancelled => panic!("expected error, got cancelled"),
+    }
+}
+
+/// Test that format drive commands are blocked on Windows.
+#[cfg(windows)]
+#[tokio::test]
+async fn test_bash_blocks_format_drive() {
+    let ctx = TestContext::new();
+    let executor = ToolExecutor::new(ctx.path());
+
+    let call = ToolCall {
+        name: "bash".to_string(),
+        input: json!({ "command": "format C:" }),
+    };
+
+    let result = executor
+        .execute(call)
+        .await
+        .expect("execution should not error");
+
+    match result {
+        ToolResult::Error(e) => {
+            assert!(
+                e.contains("blocked by security policy"),
+                "error should mention security policy, got: {e}"
+            );
+        }
+        ToolResult::Success(s) => panic!("format drive should be blocked, got success: {s}"),
+        ToolResult::Cancelled => panic!("expected error, got cancelled"),
+    }
+}
+
+/// Test that rd /s (recursive remove directory) is blocked on Windows.
+#[cfg(windows)]
+#[tokio::test]
+async fn test_bash_blocks_rd_recursive() {
+    let ctx = TestContext::new();
+    let executor = ToolExecutor::new(ctx.path());
+
+    let call = ToolCall {
+        name: "bash".to_string(),
+        input: json!({ "command": "rd /s /q C:\\Users" }),
+    };
+
+    let result = executor
+        .execute(call)
+        .await
+        .expect("execution should not error");
+
+    match result {
+        ToolResult::Error(e) => {
+            assert!(
+                e.contains("blocked by security policy"),
+                "error should mention security policy, got: {e}"
+            );
+        }
+        ToolResult::Success(s) => panic!("rd /s should be blocked, got success: {s}"),
+        ToolResult::Cancelled => panic!("expected error, got cancelled"),
+    }
+}
+
+/// Test that PowerShell encoded commands are blocked on Windows.
+#[cfg(windows)]
+#[tokio::test]
+async fn test_bash_blocks_powershell_encoded() {
+    let ctx = TestContext::new();
+    let executor = ToolExecutor::new(ctx.path());
+
+    let call = ToolCall {
+        name: "bash".to_string(),
+        input: json!({ "command": "powershell -enc SGVsbG8=" }),
+    };
+
+    let result = executor
+        .execute(call)
+        .await
+        .expect("execution should not error");
+
+    match result {
+        ToolResult::Error(e) => {
+            assert!(
+                e.contains("blocked by security policy"),
+                "error should mention security policy, got: {e}"
+            );
+        }
+        ToolResult::Success(s) => panic!("powershell -enc should be blocked, got success: {s}"),
+        ToolResult::Cancelled => panic!("expected error, got cancelled"),
+    }
+}
+
+/// Test that Invoke-Expression is blocked on Windows.
+#[cfg(windows)]
+#[tokio::test]
+async fn test_bash_blocks_invoke_expression() {
+    let ctx = TestContext::new();
+    let executor = ToolExecutor::new(ctx.path());
+
+    let call = ToolCall {
+        name: "bash".to_string(),
+        input: json!({ "command": "powershell -c \"Invoke-Expression $env:cmd\"" }),
+    };
+
+    let result = executor
+        .execute(call)
+        .await
+        .expect("execution should not error");
+
+    match result {
+        ToolResult::Error(e) => {
+            assert!(
+                e.contains("blocked by security policy"),
+                "error should mention security policy, got: {e}"
+            );
+        }
+        ToolResult::Success(s) => panic!("Invoke-Expression should be blocked, got success: {s}"),
+        ToolResult::Cancelled => panic!("expected error, got cancelled"),
+    }
+}
+
+/// Test that registry modification commands are blocked on Windows.
+#[cfg(windows)]
+#[tokio::test]
+async fn test_bash_blocks_reg_delete() {
+    let ctx = TestContext::new();
+    let executor = ToolExecutor::new(ctx.path());
+
+    let call = ToolCall {
+        name: "bash".to_string(),
+        input: json!({ "command": "reg delete HKCU\\Software\\Test /f" }),
+    };
+
+    let result = executor
+        .execute(call)
+        .await
+        .expect("execution should not error");
+
+    match result {
+        ToolResult::Error(e) => {
+            assert!(
+                e.contains("blocked by security policy"),
+                "error should mention security policy, got: {e}"
+            );
+        }
+        ToolResult::Success(s) => panic!("reg delete should be blocked, got success: {s}"),
+        ToolResult::Cancelled => panic!("expected error, got cancelled"),
+    }
+}
+
+// =============================================================================
 // Timeout Tests (2.1.3)
 // =============================================================================
 
