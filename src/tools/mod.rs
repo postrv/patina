@@ -273,6 +273,46 @@ impl ToolExecutor {
         Ok(canonical_path)
     }
 
+    /// Checks if a path is a symlink and returns an error if so.
+    ///
+    /// This is a security measure to prevent TOCTOU (Time-of-Check-Time-of-Use)
+    /// attacks. Symlinks can be exploited in race conditions where an attacker
+    /// replaces a validated file with a symlink pointing to a sensitive file
+    /// between validation and operation.
+    ///
+    /// By rejecting all symlinks uniformly, we provide defense in depth against
+    /// this class of attacks, regardless of where the symlink points.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - The path to check (should be the original, non-canonicalized path)
+    ///
+    /// # Errors
+    ///
+    /// Returns an error message if the path is a symlink.
+    fn check_symlink(&self, path: &str) -> std::result::Result<(), String> {
+        let full_path = self.working_dir.join(path);
+
+        // Use symlink_metadata to check the path itself, not what it points to
+        // fs::metadata follows symlinks, symlink_metadata does not
+        match std::fs::symlink_metadata(&full_path) {
+            Ok(metadata) => {
+                if metadata.file_type().is_symlink() {
+                    return Err(
+                        "Symlink not allowed: file operations on symlinks are rejected for security (TOCTOU mitigation)"
+                            .to_string(),
+                    );
+                }
+                Ok(())
+            }
+            Err(_) => {
+                // Path doesn't exist yet (for new files), which is fine
+                // The path traversal check already validates the parent
+                Ok(())
+            }
+        }
+    }
+
     pub async fn execute(&self, call: ToolCall) -> Result<ToolResult> {
         match call.name.as_str() {
             "bash" => self.execute_bash(&call.input).await,
@@ -352,6 +392,11 @@ impl ToolExecutor {
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("Missing path"))?;
 
+        // Check for symlinks BEFORE path validation to prevent TOCTOU attacks
+        if let Err(e) = self.check_symlink(path) {
+            return Ok(ToolResult::Error(e));
+        }
+
         // Validate path is within working directory
         let full_path = match self.validate_path(path) {
             Ok(p) => p,
@@ -381,6 +426,11 @@ impl ToolExecutor {
                 content.len(),
                 self.policy.max_file_size
             )));
+        }
+
+        // Check for symlinks BEFORE path validation to prevent TOCTOU attacks
+        if let Err(e) = self.check_symlink(path) {
+            return Ok(ToolResult::Error(e));
         }
 
         // Validate path is within working directory and not protected
@@ -430,6 +480,11 @@ impl ToolExecutor {
             .get("new_string")
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("Missing new_string"))?;
+
+        // Check for symlinks BEFORE path validation to prevent TOCTOU attacks
+        if let Err(e) = self.check_symlink(path) {
+            return Ok(ToolResult::Error(e));
+        }
 
         // Validate path is within working directory
         let full_path = match self.validate_path(path) {
