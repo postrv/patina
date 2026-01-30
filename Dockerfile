@@ -6,11 +6,12 @@ WORKDIR /app
 # Install dependencies first for better caching
 COPY Cargo.toml Cargo.lock ./
 
-# Create a dummy main.rs to build dependencies
-RUN mkdir -p src && \
+# Create dummy files to build dependencies (matching Cargo.toml structure)
+RUN mkdir -p src benches && \
     echo "fn main() {}" > src/main.rs && \
+    echo "fn main() {}" > benches/rendering.rs && \
     cargo build --release && \
-    rm -rf src
+    rm -rf src benches
 
 # Copy actual source code
 COPY src ./src
