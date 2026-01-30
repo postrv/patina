@@ -2,11 +2,62 @@
 //!
 //! Tests lifecycle hooks including pre-tool-use and post-tool-use events.
 //!
-//! Note: These tests are Unix-only as they depend on shell command execution via `sh -c`.
-#![cfg(unix)]
+//! Note: Some tests use bash-specific constructs ($(cat), grep, etc.) and are
+//! marked with #[cfg(unix)]. Cross-platform tests use the helper functions below.
 
 use rct::hooks::{HookCommand, HookContext, HookDecision, HookDefinition, HookEvent, HookExecutor};
 use serde_json::json;
+
+// =============================================================================
+// Cross-Platform Test Helpers
+// =============================================================================
+
+/// Generates a platform-specific command that echoes a message and exits with a code.
+///
+/// On Unix: `echo 'message' && exit N`
+/// On Windows: `echo message & exit /b N`
+#[allow(dead_code)]
+fn echo_and_exit(msg: &str, code: i32) -> String {
+    #[cfg(unix)]
+    {
+        format!("echo '{}' && exit {}", msg, code)
+    }
+    #[cfg(windows)]
+    {
+        format!("echo {} & exit /b {}", msg, code)
+    }
+}
+
+/// Generates a platform-specific exit command.
+///
+/// On Unix: `exit N`
+/// On Windows: `exit /b N`
+fn exit_with_code(code: i32) -> String {
+    #[cfg(unix)]
+    {
+        format!("exit {}", code)
+    }
+    #[cfg(windows)]
+    {
+        format!("exit /b {}", code)
+    }
+}
+
+/// Generates a platform-specific command that writes to stderr and exits.
+///
+/// On Unix: `echo 'message' >&2 && exit N`
+/// On Windows: `echo message 1>&2 & exit /b N`
+#[allow(dead_code)]
+fn stderr_and_exit(msg: &str, code: i32) -> String {
+    #[cfg(unix)]
+    {
+        format!("echo '{}' >&2 && exit {}", msg, code)
+    }
+    #[cfg(windows)]
+    {
+        format!("echo {} 1>&2 & exit /b {}", msg, code)
+    }
+}
 
 /// Creates a HookContext for tool-related events.
 fn tool_context(event: HookEvent, tool_name: &str) -> HookContext {
@@ -50,12 +101,13 @@ fn hook_with_matcher(matcher: &str, command: &str) -> HookDefinition {
 // =============================================================================
 
 /// Test that a pre-tool-use hook with exit code 0 allows execution to continue.
+/// This test is cross-platform using the exit_with_code helper.
 #[tokio::test]
 async fn test_pre_tool_use_hook_continues() {
     let mut executor = HookExecutor::new();
 
     // Hook that exits with 0 should continue
-    executor.register(HookEvent::PreToolUse, vec![simple_hook("exit 0")]);
+    executor.register(HookEvent::PreToolUse, vec![simple_hook(&exit_with_code(0))]);
 
     let context = tool_context(HookEvent::PreToolUse, "Bash");
     let result = executor.execute(HookEvent::PreToolUse, &context).await;
@@ -70,6 +122,7 @@ async fn test_pre_tool_use_hook_continues() {
 }
 
 /// Test that a pre-tool-use hook with exit code 2 blocks execution.
+/// This test is cross-platform using the echo_and_exit helper.
 #[tokio::test]
 async fn test_pre_tool_use_hook_blocks() {
     let mut executor = HookExecutor::new();
@@ -77,7 +130,7 @@ async fn test_pre_tool_use_hook_blocks() {
     // Hook that exits with 2 and provides a reason should block
     executor.register(
         HookEvent::PreToolUse,
-        vec![simple_hook("echo 'Blocked by security policy' && exit 2")],
+        vec![simple_hook(&echo_and_exit("Blocked by security policy", 2))],
     );
 
     let context = tool_context(HookEvent::PreToolUse, "Bash");

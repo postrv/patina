@@ -7,6 +7,7 @@ use std::process::Stdio;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
+use crate::shell::ShellConfig;
 use crate::tools::ToolExecutionPolicy;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -237,8 +238,10 @@ impl HookExecutor {
         // Log hook execution for audit trail
         tracing::info!(command = %trimmed, "Executing hook command");
 
-        let mut child = Command::new("sh")
-            .arg("-c")
+        // Use platform-agnostic shell configuration (sh -c on Unix, cmd.exe /C on Windows)
+        let shell = ShellConfig::default();
+        let mut child = Command::new(&shell.command)
+            .args(&shell.args)
             .arg(trimmed)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

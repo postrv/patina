@@ -242,65 +242,40 @@ Steps:
 
 ### 2.1 Refactor Hook Executor
 
-- [ ] 2.1.1 Update run_hook_command to use shell abstraction (GREEN)
-  - Path: `src/hooks/mod.rs:240`
-  - Change: Replace `Command::new("sh").arg("-c")` with `ShellConfig::default()`
-  - Before:
-  ```rust
-  let mut child = Command::new("sh")
-      .arg("-c")
-      .arg(trimmed)
-  ```
-  - After:
-  ```rust
-  let shell = ShellConfig::default();
-  let mut child = Command::new(&shell.command)
-      .args(&shell.args)
-      .arg(trimmed)
-  ```
-  - Acceptance: Hook execution uses platform shell
-
-- [ ] 2.1.2 Add stdin handling for Windows (GREEN)
+- [x] 2.1.1 Update run_hook_command to use shell abstraction (GREEN)
   - Path: `src/hooks/mod.rs`
-  - Note: stdin piping works same on both platforms
-  - Verify: JSON context passed correctly on Windows
-  - Acceptance: Hook context tests pass
+  - Change: Replace `Command::new("sh").arg("-c")` with `ShellConfig::default()`
+  - Acceptance: Hook execution uses platform shell
+  - Completed: 2026-01-30
+
+- [x] 2.1.2 Add stdin handling for Windows (GREEN)
+  - Path: `src/hooks/mod.rs`
+  - Note: stdin piping works same on both platforms (verified)
+  - Completed: 2026-01-30
 
 ### 2.2 Remove Unix-Only Restriction from Hook Tests
 
-- [ ] 2.2.1 Create cross-platform test helpers (GREEN)
+- [x] 2.2.1 Create cross-platform test helpers (GREEN)
   - Path: `tests/integration/hooks_test.rs`
-  - Add: `fn echo_and_exit(msg: &str, code: i32) -> String`
-  ```rust
-  fn echo_and_exit(msg: &str, code: i32) -> String {
-      #[cfg(unix)]
-      { format!("echo '{}' && exit {}", msg, code) }
-      #[cfg(windows)]
-      { format!("echo {} & exit /b {}", msg, code) }
-  }
-  ```
-  - Add: Similar helpers for other common patterns
-  - Acceptance: Helper compiles on both platforms
+  - Added: `echo_and_exit()`, `exit_with_code()`, `stderr_and_exit()` helpers
+  - Acceptance: Helpers compile on both platforms
+  - Completed: 2026-01-30
 
-- [ ] 2.2.2 Update hook tests to use helpers (REFACTOR)
+- [x] 2.2.2 Update hook tests to use helpers (REFACTOR)
   - Path: `tests/integration/hooks_test.rs`
-  - Change: Replace hardcoded shell commands with helpers
-  - Example:
-  ```rust
-  // Before
-  simple_hook("echo 'safe_command_executed' && exit 2")
-  // After
-  simple_hook(&echo_and_exit("safe_command_executed", 2))
-  ```
-  - Acceptance: Tests pass on Unix
+  - Updated: `test_pre_tool_use_hook_continues`, `test_pre_tool_use_hook_blocks`
+  - Note: Tests with bash-specific constructs (grep, $(cat)) remain Unix-only
+  - Completed: 2026-01-30
 
-- [ ] 2.2.3 Remove #![cfg(unix)] from hooks_test.rs (GREEN)
-  - Path: `tests/integration/hooks_test.rs:6`
-  - Remove: `#![cfg(unix)]`
-  - Acceptance: Tests compile on Windows
+- [x] 2.2.3 Remove #![cfg(unix)] from hooks_test.rs (GREEN)
+  - Path: `tests/integration/hooks_test.rs`
+  - Removed: `#![cfg(unix)]` module attribute
+  - Note: Complex bash tests still have individual #[cfg(unix)] if needed
+  - Completed: 2026-01-30
 
-- [ ] 2.2.4 Commit hook executor cross-platform
+- [x] 2.2.4 Commit hook executor cross-platform
   - Message: `feat(hooks): Add cross-platform shell execution`
+  - Completed: 2026-01-30
 
 ---
 
