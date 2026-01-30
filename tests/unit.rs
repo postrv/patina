@@ -41,3 +41,6 @@ mod error_test;
 
 #[path = "unit/error_logging_test.rs"]
 mod error_logging_test;
+
+#[path = "unit/shell_test.rs"]
+mod shell_test;

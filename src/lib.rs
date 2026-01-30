@@ -16,6 +16,7 @@ pub mod ide;
 pub mod mcp;
 pub mod plugins;
 pub mod session;
+pub mod shell;
 pub mod skills;
 pub mod tools;
 pub mod tui;
