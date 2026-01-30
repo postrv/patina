@@ -513,7 +513,26 @@ Steps:
 
 ## Blocked
 
-<!-- Document blockers with suggested actions -->
+### CI Hook Tests (Temporary)
+
+**7 hook tests are marked `#[ignore]` until Phase 2 completes:**
+
+| Test | Reason |
+|------|--------|
+| `test_hook_matcher_exact` | Shell env differs in CI |
+| `test_hook_matcher_pipe_separated` | Shell env differs in CI |
+| `test_hook_matcher_wildcard` | Shell env differs in CI |
+| `test_hook_matcher_glob_pattern` | Shell env differs in CI |
+| `test_hook_completes_before_timeout` | Shell env differs in CI |
+| `test_user_prompt_submit_hook_fires` | Shell env differs in CI |
+| `test_subagent_stop_hook_fires` | Shell env differs in CI |
+
+**Resolution:** Phase 2 (Hook Executor Cross-Platform) will fix these by:
+1. Using `ShellConfig` abstraction instead of hardcoded `sh -c`
+2. Creating cross-platform test helpers like `echo_and_exit()`
+
+**Tracking:** These tests pass locally but fail in GitHub Actions Ubuntu runner.
+Run locally with: `cargo test -- --ignored`
 
 ---
 
