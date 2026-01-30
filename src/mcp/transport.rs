@@ -39,6 +39,10 @@ use tokio::sync::{mpsc, oneshot, Mutex};
 ///
 /// Implementations of this trait provide the communication layer
 /// between the MCP client and server.
+///
+/// This trait uses async fn syntax without explicit Send bounds because it is an
+/// internal trait only used within this crate. The associated futures don't need
+/// to be Send since they're consumed locally in single-threaded contexts.
 #[allow(async_fn_in_trait)]
 pub trait Transport {
     /// Starts the transport connection.
