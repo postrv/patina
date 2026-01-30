@@ -36,3 +36,13 @@ Thumbs.db
 context*.txt
 sbom.json
 *.log
+
+# Local configuration
+.mcp.json
+
+# Coverage reports
+coverage/
+tarpaulin-report.html
+
+# Prompt files (development use)
+PROMPT_*.md

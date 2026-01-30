@@ -1,0 +1,28 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.4.0.schema.json
+PackageIdentifier: postrv.rct
+PackageVersion: 0.1.0
+PackageLocale: en-US
+Publisher: postrv
+PublisherUrl: https://github.com/postrv
+PublisherSupportUrl: https://github.com/postrv/rct/issues
+Author: postrv
+PackageName: RCT
+PackageUrl: https://github.com/postrv/rct
+License: MIT OR Apache-2.0
+LicenseUrl: https://github.com/postrv/rct/blob/main/LICENSE-MIT
+Copyright: Copyright (c) 2026 postrv
+ShortDescription: High-performance Rust CLI for Claude API
+Description: |-
+  RCT (Rust Claude Terminal) is a high-performance command-line interface
+  for interacting with the Anthropic Claude API. It features streaming
+  responses, syntax highlighting, tool execution, and a modern TUI.
+Moniker: rct
+Tags:
+  - ai
+  - anthropic
+  - claude
+  - cli
+  - terminal
+  - tui
+ManifestType: defaultLocale
+ManifestVersion: 1.4.0

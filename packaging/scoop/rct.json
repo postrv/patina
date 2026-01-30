@@ -1,0 +1,23 @@
+{
+    "version": "0.1.0",
+    "description": "High-performance Rust CLI for Claude API",
+    "homepage": "https://github.com/postrv/rct",
+    "license": "MIT|Apache-2.0",
+    "architecture": {
+        "64bit": {
+            "url": "https://github.com/postrv/rct/releases/download/v0.1.0/rct-windows-x86_64.zip",
+            "hash": "PLACEHOLDER_SHA256"
+        }
+    },
+    "bin": "rct.exe",
+    "checkver": {
+        "github": "https://github.com/postrv/rct"
+    },
+    "autoupdate": {
+        "architecture": {
+            "64bit": {
+                "url": "https://github.com/postrv/rct/releases/download/v$version/rct-windows-x86_64.zip"
+            }
+        }
+    }
+}

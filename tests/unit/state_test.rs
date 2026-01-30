@@ -390,3 +390,86 @@ fn test_cursor_end() {
     state.cursor_end();
     assert_eq!(state.cursor_position(), 3);
 }
+
+// ============================================================================
+// Stream Chunk Tests
+// ============================================================================
+
+/// Tests append_chunk with content delta.
+#[test]
+fn test_append_chunk_content_delta() {
+    use rct::types::StreamEvent;
+
+    let mut state = new_state();
+    state.mark_rendered();
+
+    // Simulate starting a response
+    state.current_response = Some(String::new());
+
+    let result = state.append_chunk(StreamEvent::ContentDelta("Hello ".to_string()));
+    assert!(result.is_ok());
+    assert_eq!(state.current_response.as_ref().unwrap(), "Hello ");
+    assert!(state.needs_render());
+}
+
+/// Tests append_chunk accumulates content.
+#[test]
+fn test_append_chunk_accumulates_content() {
+    use rct::types::StreamEvent;
+
+    let mut state = new_state();
+    state.current_response = Some(String::new());
+
+    state
+        .append_chunk(StreamEvent::ContentDelta("Hello ".to_string()))
+        .unwrap();
+    state
+        .append_chunk(StreamEvent::ContentDelta("World!".to_string()))
+        .unwrap();
+
+    assert_eq!(state.current_response.as_ref().unwrap(), "Hello World!");
+}
+
+/// Tests append_chunk message stop finalizes the response.
+#[test]
+fn test_append_chunk_message_stop() {
+    use rct::types::StreamEvent;
+
+    let mut state = new_state();
+    state.current_response = Some("Test response".to_string());
+    state.mark_rendered();
+
+    let result = state.append_chunk(StreamEvent::MessageStop);
+    assert!(result.is_ok());
+
+    // Response should be moved to messages
+    assert!(state.current_response.is_none());
+    assert!(!state.is_loading());
+    assert_eq!(state.messages.len(), 1);
+    assert_eq!(state.messages[0].content, "Test response");
+    assert!(state.needs_render());
+}
+
+/// Tests append_chunk error sets dirty flag.
+#[test]
+fn test_append_chunk_error() {
+    use rct::types::StreamEvent;
+
+    let mut state = new_state();
+    state.current_response = Some("Partial response".to_string());
+    state.mark_rendered();
+
+    let result = state.append_chunk(StreamEvent::Error("Connection error".to_string()));
+    assert!(result.is_ok());
+
+    // After error, loading should be cleared (verified by is_loading)
+    assert!(!state.is_loading());
+    assert!(state.needs_render());
+}
+
+/// Tests is_loading returns false initially.
+#[test]
+fn test_is_loading_initial() {
+    let state = new_state();
+    assert!(!state.is_loading());
+}
