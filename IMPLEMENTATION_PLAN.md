@@ -9,10 +9,10 @@
 | Metric | Value | Command |
 |--------|-------|---------|
 | Unit Tests | 17 | `cargo test --lib` |
-| Integration Tests | 122 | `cargo test --test '*'` |
+| Integration Tests | 130 | `cargo test --test '*'` |
 | Doc Tests | 10 | `cargo test --doc` |
-| Total Tests | 149 | `cargo test` |
-| Test Files | 10 | `find tests -name '*.rs' \| wc -l` |
+| Total Tests | 157 | `cargo test` |
+| Test Files | 11 | `find tests -name '*.rs' \| wc -l` |
 | Clippy Warnings | 0 | `cargo clippy --all-targets -- -D warnings` |
 | Source Files | 23 | `find src -name '*.rs' \| wc -l` |
 | LOC | ~4000 | `tokei src` |
@@ -375,8 +375,9 @@ Steps:
   - Spawn process, pipe JSON-RPC
   - **Completed: 2026-01-30** - StdioTransport with Transport trait, async I/O, request correlation
 
-- [ ] 3.2.5 Implement SSE transport (GREEN)
+- [x] 3.2.5 Implement SSE transport (GREEN)
   - Path: `src/mcp/transport.rs`
+  - **Completed: 2026-01-30** - SseTransport with HTTP POST for messages, relative URL resolution, custom headers support
 
 - [x] 3.2.6 Implement tool discovery (GREEN)
   - Path: `src/mcp/client.rs`
