@@ -561,3 +561,117 @@ fn test_plugin_handles_dotfile() {
         "Should handle dotfile with .md extension"
     );
 }
+
+// =============================================================================
+// Graceful Degradation Tests (4.2.1)
+// =============================================================================
+
+/// Tests that plugin loading continues when WalkDir encounters permission errors.
+///
+/// This tests graceful degradation: if a subdirectory cannot be traversed
+/// during plugin discovery (e.g., permission denied), loading should log
+/// a warning and continue discovering other plugins.
+#[cfg(unix)]
+#[test]
+fn test_plugin_continues_on_walkdir_permission_error() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp_dir = TempDir::new().expect("Should create temp dir");
+
+    // Create a valid plugin in a readable directory
+    let valid_manifest = r#"{"name": "valid-plugin", "version": "1.0.0"}"#;
+    let valid_plugin = create_plugin(&temp_dir, "valid-plugin", valid_manifest);
+    add_plugin_command(&valid_plugin, "valid-cmd", "Valid command content");
+
+    // Create an unreadable directory that will cause WalkDir to fail
+    let unreadable_dir = temp_dir.path().join("unreadable-subdir");
+    fs::create_dir_all(&unreadable_dir).expect("Should create unreadable dir");
+
+    // Put a plugin in the unreadable dir before making it unreadable
+    let unreachable_plugin = unreadable_dir.join("unreachable-plugin");
+    let claude_dir = unreachable_plugin.join(".claude-plugin");
+    fs::create_dir_all(&claude_dir).expect("Should create claude dir");
+    fs::write(
+        claude_dir.join("plugin.json"),
+        r#"{"name": "unreachable", "version": "1.0.0"}"#,
+    )
+    .expect("Should write manifest");
+
+    // Remove read permission from the unreadable directory
+    let mut perms = fs::metadata(&unreadable_dir)
+        .expect("Should get metadata")
+        .permissions();
+    perms.set_mode(0o000);
+    fs::set_permissions(&unreadable_dir, perms).expect("Should set permissions");
+
+    // Ensure we restore permissions on cleanup
+    struct RestorePerms {
+        path: std::path::PathBuf,
+    }
+    impl Drop for RestorePerms {
+        fn drop(&mut self) {
+            let mut perms = fs::metadata(&self.path)
+                .map(|m| m.permissions())
+                .unwrap_or_else(|_| std::fs::Permissions::from_mode(0o755));
+            perms.set_mode(0o755);
+            let _ = fs::set_permissions(&self.path, perms);
+        }
+    }
+    let _guard = RestorePerms {
+        path: unreadable_dir.clone(),
+    };
+
+    let mut registry = PluginRegistry::new();
+
+    // Load should succeed despite the unreadable subdirectory
+    let result = registry.load_all(&[temp_dir.path().to_path_buf()]);
+    assert!(
+        result.is_ok(),
+        "Plugin loading should succeed even with unreadable subdirs: {:?}",
+        result.err()
+    );
+
+    // Valid plugin should still be discovered and loaded
+    assert!(
+        registry.get_command("valid-plugin:valid-cmd").is_some(),
+        "Valid plugin should be loaded despite walkdir errors"
+    );
+}
+
+/// Tests that plugin loading continues when a command file cannot be read.
+///
+/// This tests graceful degradation: if an individual command file in a plugin
+/// cannot be read, the plugin should still load with other commands.
+#[test]
+fn test_plugin_continues_on_unreadable_command_file() {
+    let temp_dir = TempDir::new().expect("Should create temp dir");
+    let manifest = r#"{"name": "partial-plugin", "version": "1.0.0"}"#;
+
+    let plugin_dir = create_plugin(&temp_dir, "partial-plugin", manifest);
+    let commands_dir = plugin_dir.join("commands");
+    fs::create_dir_all(&commands_dir).expect("Should create commands dir");
+
+    // Create a valid command
+    fs::write(commands_dir.join("valid.md"), "Valid command content")
+        .expect("Should write valid command");
+
+    // Create a command with invalid UTF-8 content
+    fs::write(commands_dir.join("invalid.md"), [0xFF, 0xFE, 0x00, 0x01])
+        .expect("Should write invalid command");
+
+    let mut registry = PluginRegistry::new();
+
+    // Load should succeed despite the invalid command file
+    let result = registry.load_all(&[temp_dir.path().to_path_buf()]);
+    assert!(
+        result.is_ok(),
+        "Plugin loading should succeed even with unreadable command files: {:?}",
+        result.err()
+    );
+
+    // Valid command should still be loaded
+    assert!(
+        registry.get_command("partial-plugin:valid").is_some(),
+        "Valid command should be loaded despite invalid sibling"
+    );
+}

@@ -185,3 +185,135 @@ fn test_project_context_outside_project_root() {
     let content = ctx.get_context(outside_path);
     assert!(content.contains("Project context"));
 }
+
+// =============================================================================
+// Graceful Degradation Tests (4.2.1)
+// =============================================================================
+
+/// Test that context loading continues when a CLAUDE.md file is unreadable.
+///
+/// This tests graceful degradation: if a CLAUDE.md file in a subdirectory
+/// cannot be read (e.g., permission denied), loading should log a warning
+/// and continue, rather than failing the entire load operation.
+#[test]
+fn test_context_continues_on_unreadable_claude_md() {
+    let temp = setup_temp_project();
+
+    // Create valid root CLAUDE.md
+    let root_claude = temp.path().join("CLAUDE.md");
+    fs::write(&root_claude, "Root context content").unwrap();
+
+    // Create a readable subdir with CLAUDE.md
+    let readable_dir = temp.path().join("readable");
+    fs::create_dir_all(&readable_dir).unwrap();
+    let readable_claude = readable_dir.join("CLAUDE.md");
+    fs::write(&readable_claude, "Readable subdir context").unwrap();
+
+    // Create another subdir whose CLAUDE.md has invalid UTF-8
+    // This tests the graceful handling of read failures
+    let invalid_dir = temp.path().join("invalid");
+    fs::create_dir_all(&invalid_dir).unwrap();
+    let invalid_claude = invalid_dir.join("CLAUDE.md");
+    // Write invalid UTF-8 bytes - this will cause read_to_string to fail
+    fs::write(&invalid_claude, [0xFF, 0xFE, 0x00, 0x01]).unwrap();
+
+    let mut ctx = ProjectContext::new(temp.path().to_path_buf());
+
+    // Load should succeed despite the unreadable CLAUDE.md
+    let result = ctx.load();
+    assert!(
+        result.is_ok(),
+        "Context loading should succeed even with unreadable subdir CLAUDE.md: {:?}",
+        result.err()
+    );
+
+    // Root context should still be loaded
+    let content = ctx.get_context(temp.path());
+    assert!(
+        content.contains("Root context"),
+        "Root context should be loaded"
+    );
+
+    // Readable subdir context should be loaded
+    let readable_content = ctx.get_context(&readable_dir);
+    assert!(
+        readable_content.contains("Readable subdir context"),
+        "Readable subdir context should be loaded"
+    );
+}
+
+/// Test that context loading continues when a subdirectory cannot be traversed.
+///
+/// This tests graceful degradation: if a subdirectory cannot be read
+/// (e.g., permission denied on the directory itself), loading should
+/// log a warning and continue with other directories.
+#[cfg(unix)]
+#[test]
+fn test_context_continues_on_unreadable_subdir() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = setup_temp_project();
+
+    // Create valid root CLAUDE.md
+    let root_claude = temp.path().join("CLAUDE.md");
+    fs::write(&root_claude, "Root context content").unwrap();
+
+    // Create a readable subdir with CLAUDE.md
+    let readable_dir = temp.path().join("readable");
+    fs::create_dir_all(&readable_dir).unwrap();
+    let readable_claude = readable_dir.join("CLAUDE.md");
+    fs::write(&readable_claude, "Readable content").unwrap();
+
+    // Create an unreadable subdir (no read permission)
+    let unreadable_dir = temp.path().join("unreadable");
+    fs::create_dir_all(&unreadable_dir).unwrap();
+    // Write a CLAUDE.md in it before making it unreadable
+    let unreadable_claude = unreadable_dir.join("CLAUDE.md");
+    fs::write(&unreadable_claude, "Unreadable content").unwrap();
+
+    // Remove read permission from the directory
+    let mut perms = fs::metadata(&unreadable_dir).unwrap().permissions();
+    perms.set_mode(0o000);
+    fs::set_permissions(&unreadable_dir, perms).unwrap();
+
+    // Ensure we restore permissions on cleanup
+    struct RestorePerms {
+        path: std::path::PathBuf,
+    }
+    impl Drop for RestorePerms {
+        fn drop(&mut self) {
+            let mut perms = fs::metadata(&self.path)
+                .map(|m| m.permissions())
+                .unwrap_or_else(|_| std::fs::Permissions::from_mode(0o755));
+            perms.set_mode(0o755);
+            let _ = fs::set_permissions(&self.path, perms);
+        }
+    }
+    let _guard = RestorePerms {
+        path: unreadable_dir.clone(),
+    };
+
+    let mut ctx = ProjectContext::new(temp.path().to_path_buf());
+
+    // Load should succeed despite the unreadable subdirectory
+    let result = ctx.load();
+    assert!(
+        result.is_ok(),
+        "Context loading should succeed even with unreadable subdir: {:?}",
+        result.err()
+    );
+
+    // Root context should still be loaded
+    let content = ctx.get_context(temp.path());
+    assert!(
+        content.contains("Root context"),
+        "Root context should be loaded"
+    );
+
+    // Readable subdir context should be loaded
+    let readable_content = ctx.get_context(&readable_dir);
+    assert!(
+        readable_content.contains("Readable content"),
+        "Readable subdir context should be loaded"
+    );
+}

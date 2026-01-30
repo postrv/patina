@@ -98,13 +98,28 @@ impl PluginRegistry {
         Ok(())
     }
 
+    /// Discovers plugins in a directory.
+    ///
+    /// Uses graceful degradation: logs warnings for unreadable directories
+    /// and continues with other entries.
     fn discover_plugins(&mut self, dir: &Path) -> Result<()> {
         if !dir.exists() {
             return Ok(());
         }
 
-        for entry in WalkDir::new(dir).max_depth(2) {
-            let entry = entry?;
+        for entry_result in WalkDir::new(dir).max_depth(2) {
+            // Handle WalkDir errors gracefully - skip unreadable directories
+            let entry = match entry_result {
+                Ok(e) => e,
+                Err(e) => {
+                    tracing::debug!(
+                        "Cannot access directory entry during plugin discovery: {}",
+                        e
+                    );
+                    continue;
+                }
+            };
+
             let manifest_path = entry.path().join(".claude-plugin/plugin.json");
 
             if manifest_path.exists() {
@@ -148,25 +163,60 @@ impl PluginRegistry {
         })
     }
 
+    /// Loads commands from a plugin directory.
+    ///
+    /// Uses graceful degradation: logs warnings for unreadable command files
+    /// and continues with other commands.
     fn load_commands(&self, plugin_dir: &Path) -> Result<Vec<Command>> {
         let commands_dir = plugin_dir.join("commands");
         let mut commands = Vec::new();
 
         if commands_dir.exists() {
-            for entry in std::fs::read_dir(commands_dir)? {
-                let entry = entry?;
+            let entries = match std::fs::read_dir(&commands_dir) {
+                Ok(e) => e,
+                Err(e) => {
+                    tracing::debug!(
+                        "Cannot read commands directory {:?}, skipping: {}",
+                        commands_dir,
+                        e
+                    );
+                    return Ok(commands);
+                }
+            };
+
+            for entry_result in entries {
+                let entry = match entry_result {
+                    Ok(e) => e,
+                    Err(e) => {
+                        tracing::debug!(
+                            "Error reading command entry in {:?}, skipping: {}",
+                            commands_dir,
+                            e
+                        );
+                        continue;
+                    }
+                };
+
                 let path = entry.path();
                 if path.extension().map(|e| e == "md").unwrap_or(false) {
                     let name = path
                         .file_stem()
                         .map(|s| s.to_string_lossy().to_string())
                         .unwrap_or_else(|| "unnamed".to_string());
-                    let content = std::fs::read_to_string(&path)?;
-                    commands.push(Command {
-                        name,
-                        description: None,
-                        content,
-                    });
+
+                    // Gracefully handle unreadable command files
+                    match std::fs::read_to_string(&path) {
+                        Ok(content) => {
+                            commands.push(Command {
+                                name,
+                                description: None,
+                                content,
+                            });
+                        }
+                        Err(e) => {
+                            tracing::debug!("Cannot read command file {:?}, skipping: {}", path, e);
+                        }
+                    }
                 }
             }
         }

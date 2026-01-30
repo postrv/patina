@@ -624,6 +624,65 @@ timeout_ms = 5000
     );
 }
 
+// =============================================================================
+// Graceful Degradation Tests (4.2.1)
+// =============================================================================
+
+/// Test that HookManager returns Ok when config file doesn't exist.
+///
+/// This tests graceful degradation: if the hooks configuration file is missing,
+/// the hook manager should return Ok (not error) and simply have no hooks
+/// registered. This allows the application to continue without hooks.
+#[tokio::test]
+async fn test_hook_manager_missing_config_returns_ok() {
+    let temp_dir = TempDir::new().unwrap();
+    let nonexistent_path = temp_dir.path().join("does-not-exist.toml");
+
+    let mut manager = HookManager::new("test-missing-config".to_string());
+    let result = manager.load_config_graceful(&nonexistent_path);
+
+    // Missing config should succeed with no hooks registered
+    assert!(
+        result.is_ok(),
+        "Missing config should not cause an error: {:?}",
+        result.err()
+    );
+
+    // Hooks should still work (just with no hooks registered)
+    let session_result = manager.fire_session_start().await;
+    assert!(
+        session_result.is_ok(),
+        "Session start should succeed with no hooks"
+    );
+    assert!(
+        matches!(session_result.unwrap().decision, HookDecision::Continue),
+        "No hooks should mean Continue decision"
+    );
+}
+
+/// Test that HookManager returns error for malformed config file.
+///
+/// While missing config files should be tolerated (graceful degradation),
+/// malformed config files indicate user error and should return an error
+/// so the user can fix their configuration.
+#[tokio::test]
+async fn test_hook_manager_malformed_config_returns_error() {
+    let temp_dir = TempDir::new().unwrap();
+    let config_path = temp_dir.path().join("malformed.toml");
+
+    // Write invalid TOML
+    std::fs::write(&config_path, "{ invalid toml syntax [[").unwrap();
+
+    let mut manager = HookManager::new("test-malformed-config".to_string());
+    let result = manager.load_config(&config_path);
+
+    // Malformed config should return an error
+    assert!(
+        result.is_err(),
+        "Malformed config should return an error so user can fix it"
+    );
+}
+
 /// Test that SessionStart hook fires on session initialization.
 #[tokio::test]
 async fn test_session_start_hook_fires() {

@@ -322,7 +322,41 @@ impl HookManager {
     pub fn load_config(&mut self, path: &std::path::Path) -> Result<()> {
         let content = std::fs::read_to_string(path)?;
         let config: HooksConfig = toml::from_str(&content)?;
+        self.apply_config(config);
+        Ok(())
+    }
 
+    /// Loads hook configuration from a TOML file, with graceful degradation.
+    ///
+    /// Unlike `load_config`, this method handles missing files gracefully:
+    /// - If the file doesn't exist, returns Ok (no hooks registered)
+    /// - If the file exists but is malformed, returns an error
+    ///
+    /// This allows applications to run without hooks when no configuration
+    /// is provided, while still catching user configuration errors.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the file exists but cannot be parsed.
+    pub fn load_config_graceful(&mut self, path: &std::path::Path) -> Result<()> {
+        // If file doesn't exist, that's OK - just no hooks configured
+        if !path.exists() {
+            tracing::debug!(
+                "Hook config file not found at {:?}, continuing without hooks",
+                path
+            );
+            return Ok(());
+        }
+
+        // File exists, so try to read and parse it
+        let content = std::fs::read_to_string(path)?;
+        let config: HooksConfig = toml::from_str(&content)?;
+        self.apply_config(config);
+        Ok(())
+    }
+
+    /// Applies a parsed configuration to the executor.
+    fn apply_config(&mut self, config: HooksConfig) {
         // Register hooks from configuration
         if let Some(hooks) = config.pre_tool_use {
             self.executor.register(HookEvent::PreToolUse, hooks);
@@ -357,8 +391,6 @@ impl HookManager {
         if let Some(hooks) = config.pre_compact {
             self.executor.register(HookEvent::PreCompact, hooks);
         }
-
-        Ok(())
     }
 
     /// Registers a hook definition for a specific event.
