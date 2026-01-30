@@ -410,48 +410,45 @@ Steps:
 
 ### 5.1 Test Context Abstraction
 
-- [ ] 5.1.1 Create TestContext improvements (GREEN)
-  - Path: `tests/common/mod.rs` (or existing test helpers)
-  - Add: `fn temp_script(content: &str) -> PathBuf` - creates platform script
-  - Add: `fn is_windows() -> bool` - runtime check
-  - Add: `fn skip_on_windows(reason: &str)` - conditional skip
-  - Acceptance: Helpers available in all test files
-
-- [ ] 5.1.2 Create permission test helpers (GREEN)
+- [x] 5.1.1 Create TestContext improvements (GREEN)
   - Path: `tests/common/mod.rs`
-  - Add: `fn make_readonly(path: &Path)` - platform-agnostic
-  - Add: `fn make_writable(path: &Path)` - platform-agnostic
-  - Note: Windows uses different permission model
+  - Add: `temp_script(name, content)` - creates platform script (.sh on Unix, .bat on Windows)
+  - Add: `is_windows()` / `is_unix()` - runtime platform checks
+  - Add: `skip_on_windows!` macro - conditional skip with reason
+  - Acceptance: Helpers available in all test files
+  - Completed: 2026-01-30
+
+- [x] 5.1.2 Create permission test helpers (GREEN)
+  - Path: `tests/common/mod.rs`
+  - Add: `make_readonly(path)` / `make_writable(path)` - file permissions
+  - Add: `make_dir_readonly(path)` / `make_dir_writable(path)` - directory permissions
+  - Note: Uses Unix permission bits and Windows readonly attribute
   - Acceptance: Permission tests work on Windows
+  - Completed: 2026-01-30
 
 ### 5.2 Symlink Test Abstraction
 
-- [ ] 5.2.1 Create symlink test helpers (GREEN)
+- [x] 5.2.1 Create symlink test helpers (GREEN)
   - Path: `tests/common/mod.rs`
-  - Add: `fn create_symlink(target: &Path, link: &Path) -> Result<()>`
-  ```rust
-  fn create_symlink(target: &Path, link: &Path) -> io::Result<()> {
-      #[cfg(unix)]
-      { std::os::unix::fs::symlink(target, link) }
-      #[cfg(windows)]
-      {
-          if target.is_dir() {
-              std::os::windows::fs::symlink_dir(target, link)
-          } else {
-              std::os::windows::fs::symlink_file(target, link)
-          }
-      }
-  }
-  ```
-  - Note: Windows symlinks require admin or developer mode
-  - Add: `fn symlinks_available() -> bool` - check if symlinks work
+  - Add: `create_symlink(target, link)` - cross-platform symlink creation
+  - Add: `symlinks_available()` - checks if symlinks work (tests on Windows)
+  - Add: `skip_if_no_symlinks!` macro - skip tests on Windows without admin
+  - Note: Windows symlinks require admin or Developer Mode
   - Acceptance: Symlink tests skip gracefully on Windows without admin
+  - Completed: 2026-01-30
 
-- [ ] 5.2.2 Update symlink tests to use helpers (REFACTOR)
-  - Path: Various test files
-  - Change: Use `create_symlink()` helper
-  - Add: Skip condition for Windows without symlink support
+- [x] 5.2.2 Update symlink tests to use helpers (REFACTOR)
+  - Path: `tests/tools.rs`
+  - Change: Replace `#[cfg(unix)]` and `use std::os::unix::fs::symlink`
+  - Change: Use `create_symlink()` and `symlinks_available()` helpers
+  - Add: Skip condition at runtime if symlinks unavailable (Windows without admin)
+  - Tests updated:
+    - `test_file_read_rejects_symlinks`
+    - `test_file_write_rejects_symlinks`
+    - `test_edit_rejects_symlinks`
+    - `test_file_read_rejects_internal_symlinks`
   - Acceptance: Tests pass or skip appropriately
+  - Completed: 2026-01-30
 
 - [ ] 5.2.3 Commit test helpers
   - Message: `feat(tests): Add cross-platform test utilities`
