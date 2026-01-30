@@ -28,10 +28,60 @@
 use crate::types::message::Message;
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 use std::time::SystemTime;
 use tokio::fs;
 use uuid::Uuid;
+
+/// Static key used for session integrity HMAC.
+///
+/// This provides protection against accidental corruption and casual tampering.
+/// For stronger security, this should be derived from a user-configured secret.
+const INTEGRITY_KEY: &[u8] = b"rct-session-integrity-v1";
+
+/// Wrapper for session files that includes integrity checksum.
+///
+/// This struct is used for serialization/deserialization of session files,
+/// wrapping the actual session data with a checksum for integrity verification.
+#[derive(Debug, Serialize, Deserialize)]
+struct SessionFile {
+    /// The session data.
+    session: Session,
+    /// HMAC-SHA256 checksum of the session JSON (hex-encoded).
+    checksum: String,
+}
+
+impl SessionFile {
+    /// Creates a new session file with computed checksum.
+    fn new(session: Session) -> Result<Self> {
+        let session_json =
+            serde_json::to_string(&session).context("Failed to serialize session for checksum")?;
+        let checksum = compute_checksum(&session_json);
+        Ok(Self { session, checksum })
+    }
+
+    /// Verifies the checksum and returns the session if valid.
+    fn verify(self) -> Result<Session> {
+        let session_json = serde_json::to_string(&self.session)
+            .context("Failed to serialize session for verification")?;
+        let expected_checksum = compute_checksum(&session_json);
+
+        if self.checksum != expected_checksum {
+            bail!("Session integrity check failed: checksum mismatch");
+        }
+
+        Ok(self.session)
+    }
+}
+
+/// Computes HMAC-SHA256 checksum of the given data.
+fn compute_checksum(data: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(INTEGRITY_KEY);
+    hasher.update(data.as_bytes());
+    hex::encode(hasher.finalize())
+}
 
 /// Validates a session ID to prevent path traversal attacks.
 ///
@@ -183,6 +233,8 @@ impl SessionManager {
     ///
     /// Returns the session ID (a UUID string).
     ///
+    /// The session is saved with an integrity checksum that is verified on load.
+    ///
     /// # Errors
     ///
     /// Returns an error if the session cannot be serialized or written to disk.
@@ -203,9 +255,12 @@ impl SessionManager {
         session_to_save.id = Some(session_id.clone());
         session_to_save.updated_at = SystemTime::now();
 
+        // Wrap with checksum for integrity
+        let session_file = SessionFile::new(session_to_save)?;
+
         // Serialize and write
-        let json = serde_json::to_string_pretty(&session_to_save)
-            .context("Failed to serialize session")?;
+        let json =
+            serde_json::to_string_pretty(&session_file).context("Failed to serialize session")?;
 
         let path = self.session_path(&session_id);
         fs::write(&path, json)
@@ -223,7 +278,8 @@ impl SessionManager {
     ///
     /// # Errors
     ///
-    /// Returns an error if the session ID is invalid, doesn't exist, or cannot be read.
+    /// Returns an error if the session ID is invalid, doesn't exist, cannot be read,
+    /// or fails integrity verification.
     pub async fn load(&self, session_id: &str) -> Result<Session> {
         validate_session_id(session_id)?;
         let path = self.session_path(session_id);
@@ -232,10 +288,11 @@ impl SessionManager {
             .await
             .context("Failed to read session file")?;
 
-        let session: Session =
+        let session_file: SessionFile =
             serde_json::from_str(&json).context("Failed to deserialize session")?;
 
-        Ok(session)
+        // Verify integrity checksum
+        session_file.verify()
     }
 
     /// Updates an existing session.
@@ -255,8 +312,11 @@ impl SessionManager {
         session_to_save.id = Some(session_id.to_string());
         session_to_save.updated_at = SystemTime::now();
 
-        let json = serde_json::to_string_pretty(&session_to_save)
-            .context("Failed to serialize session")?;
+        // Wrap with checksum for integrity
+        let session_file = SessionFile::new(session_to_save)?;
+
+        let json =
+            serde_json::to_string_pretty(&session_file).context("Failed to serialize session")?;
 
         let path = self.session_path(session_id);
         fs::write(&path, json)
