@@ -226,19 +226,20 @@ Steps:
 
 ### 2.2 Plugin file_stem Safety
 
-- [ ] 2.2.1 Write plugin path edge case tests (RED)
+- [x] 2.2.1 Write plugin path edge case tests (RED)
   - Path: `tests/unit/plugins_test.rs`
   - Test: `test_plugin_handles_no_extension`
   - Test: `test_plugin_handles_dotfile`
   - Acceptance: Tests cover edge cases
 
-- [ ] 2.2.2 Fix unsafe file_stem unwrap (GREEN)
+- [x] 2.2.2 Fix unsafe file_stem unwrap (GREEN)
   - Path: `src/plugins/mod.rs:160`
   - Change: `unwrap()` → `unwrap_or_else()` with default
   - Acceptance: Tests pass, no panic possible
 
-- [ ] 2.2.3 Commit plugin safety fix
+- [x] 2.2.3 Commit plugin safety fix
   - Message: `fix(plugins): Handle edge cases in plugin path parsing`
+  - Commit: bd3b51f
 
 ### 2.3 Session Integrity
 
@@ -499,6 +500,12 @@ Steps:
   - Patterns compile once on first access, not on every Default impl call
   - Eliminates runtime panics from invalid regex after initialization
   - Commit: b5576ae
+
+- [x] 2.2.1-2.2.3 Plugin file_stem Safety
+  - Replaced unwrap() with unwrap_or_else() on file_stem()
+  - Added tests for files without extensions, dotfiles, and edge cases
+  - 2 new tests added
+  - Commit: bd3b51f
 
 ---
 
