@@ -1,4 +1,11 @@
-//! Plugin discovery, loading, and management
+//! Plugin discovery, loading, and management.
+//!
+//! This module provides:
+//! - Plugin discovery from filesystem
+//! - Plugin registry for managing loaded plugins
+//! - Host API traits for plugin development
+
+pub mod host;
 
 use anyhow::Result;
 use serde::Deserialize;
@@ -212,6 +219,107 @@ impl PluginRegistry {
 
     pub fn all_skills(&self) -> impl Iterator<Item = &Skill> {
         self.skills.iter().map(|(_, s)| s)
+    }
+
+    /// Checks if a plugin is loaded.
+    #[must_use]
+    pub fn has_plugin(&self, name: &str) -> bool {
+        self.plugins.contains_key(name)
+    }
+
+    /// Returns the number of loaded plugins.
+    #[must_use]
+    pub fn plugin_count(&self) -> usize {
+        self.plugins.len()
+    }
+
+    /// Unloads a plugin and removes its commands and skills.
+    ///
+    /// Returns `true` if the plugin was found and unloaded, `false` otherwise.
+    pub fn unload_plugin(&mut self, name: &str) -> bool {
+        if self.plugins.remove(name).is_some() {
+            // Remove commands from this plugin
+            self.commands.retain(|_, (plugin_name, _)| plugin_name != name);
+
+            // Remove skills from this plugin
+            self.skills.retain(|(plugin_name, _)| plugin_name != name);
+
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Reloads a plugin from its directory.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the plugin cannot be loaded from the path.
+    pub fn reload_plugin(&mut self, name: &str, plugin_dir: &Path) -> Result<()> {
+        self.unload_plugin(name);
+
+        let plugin = self.load_plugin(plugin_dir)?;
+        let loaded_name = plugin.manifest.name.clone();
+
+        for cmd in &plugin.commands {
+            let key = format!("{}:{}", loaded_name, cmd.name);
+            self.commands.insert(key, (loaded_name.clone(), cmd.clone()));
+        }
+
+        for skill in &plugin.skills {
+            self.skills.push((loaded_name.clone(), skill.clone()));
+        }
+
+        self.plugins.insert(loaded_name, plugin);
+        Ok(())
+    }
+
+    /// Returns the manifest for a plugin.
+    #[must_use]
+    pub fn get_manifest(&self, name: &str) -> Option<&PluginManifest> {
+        self.plugins.get(name).map(|p| &p.manifest)
+    }
+
+    /// Returns the path for a plugin.
+    #[must_use]
+    pub fn get_plugin_path(&self, name: &str) -> Option<&Path> {
+        self.plugins.get(name).map(|p| p.path.as_path())
+    }
+
+    /// Returns a list of all loaded plugin names.
+    #[must_use]
+    pub fn list_plugins(&self) -> Vec<String> {
+        self.plugins.keys().cloned().collect()
+    }
+
+    /// Returns a list of all registered command names (fully qualified).
+    #[must_use]
+    pub fn list_commands(&self) -> Vec<String> {
+        self.commands.keys().cloned().collect()
+    }
+
+    /// Returns the plugin name that provides a command.
+    #[must_use]
+    pub fn get_command_plugin(&self, name: &str) -> Option<String> {
+        // Try exact match first
+        if let Some((plugin_name, _)) = self.commands.get(name) {
+            return Some(plugin_name.clone());
+        }
+
+        // Try short name match
+        for (key, (plugin_name, _)) in &self.commands {
+            if key.ends_with(&format!(":{}", name)) {
+                return Some(plugin_name.clone());
+            }
+        }
+
+        None
+    }
+
+    /// Returns the total number of registered commands.
+    #[must_use]
+    pub fn command_count(&self) -> usize {
+        self.commands.len()
     }
 }
 

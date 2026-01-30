@@ -2,20 +2,20 @@
 
 > Ralph uses this file to track task progress. Update checkboxes as work completes.
 
-## Status: PHASE 5 COMPLETE - PHASE 6 READY
+## Status: PHASE 6.5 COMPLETE - PHASE 7 READY
 
 ## Baseline Metrics (Updated: 2026-01-30)
 
 | Metric | Value | Command |
 |--------|-------|---------|
-| Unit Tests | 17 | `cargo test --lib` |
-| Integration Tests | 270 | `cargo test --test '*'` |
+| Unit Tests | 22 | `cargo test --lib` |
+| Integration Tests | 317 | `cargo test --test '*'` |
 | Doc Tests | 14 | `cargo test --doc` |
-| Total Tests | 301 | `cargo test` |
-| Test Files | 17 | `find tests -name '*.rs' \| wc -l` |
+| Total Tests | 353 | `cargo test` |
+| Test Files | 18 | `find tests -name '*.rs' \| wc -l` |
 | Clippy Warnings | 0 | `cargo clippy --all-targets -- -D warnings` |
-| Source Files | 23 | `find src -name '*.rs' \| wc -l` |
-| LOC | ~4800 | `tokei src` |
+| Source Files | 24 | `find src -name '*.rs' \| wc -l` |
+| LOC | ~5200 | `tokei src` |
 
 **Baseline Rule:** Test count must never decrease. Clippy warnings must reach 0.
 
@@ -565,29 +565,35 @@ Steps:
 
 ### 6.5.1 Plugin API Tests
 
-- [ ] 6.5.1.1 Write plugin lifecycle tests (RED)
-  - Path: `tests/integration/plugin_api_test.rs`
+- [x] 6.5.1.1 Write plugin lifecycle tests (RED)
+  - Path: `tests/plugin_api_integration.rs`
   - Test: `test_plugin_load_unload`
   - Test: `test_plugin_isolation`
+  - **Completed: 2026-01-30** - 15 tests for load/unload/reload, isolation, manifests, added has_plugin/unload_plugin/reload_plugin/etc. methods
 
-- [ ] 6.5.1.2 Write tool routing tests (RED)
+- [x] 6.5.1.2 Write tool routing tests (RED)
   - Test: `test_tool_routing_to_plugin`
+  - **Completed: 2026-01-30** - 7 tests for command routing, added list_commands/get_command_plugin/command_count methods
 
-- [ ] 6.5.1.3 Implement plugin host (GREEN)
+- [x] 6.5.1.3 Implement plugin host (GREEN)
   - Path: `src/plugins/host.rs`
   - Stable API: RctPlugin, ToolProvider, CommandProvider traits
+  - **Completed: 2026-01-30** - Full host API with traits (RctPlugin, ToolProvider, CommandProvider, SkillProvider), PluginHost, PluginContext, 5 unit tests
 
 ### 6.5.2 Plugin Documentation
 
-- [ ] 6.5.2.1 Write plugin API documentation
+- [x] 6.5.2.1 Write plugin API documentation
   - Path: `docs/plugin-api.md`
+  - **Completed: 2026-01-30** - Full plugin API reference with manifest format, commands, skills, host traits, best practices
 
-- [ ] 6.5.2.2 Create example plugin
+- [x] 6.5.2.2 Create example plugin
   - Path: `examples/minimal-plugin/`
+  - **Completed: 2026-01-30** - Minimal plugin with manifest, 2 commands (hello, echo), 1 skill (greeting), README
 
 ### 6.5.3 Narsil Reindex Checkpoint
 
-- [ ] 6.5.3.1 Run narsil reindex after Phase 6.5
+- [x] 6.5.3.1 Run narsil reindex after Phase 6.5
+  - **Completed: 2026-01-30** - Security scan: 0 CRITICAL/HIGH
 
 ---
 
