@@ -8,10 +8,10 @@
 
 | Metric | Value | Command |
 |--------|-------|---------|
-| Unit Tests | 188 | `cargo test --lib` |
-| Integration Tests | 289 | `cargo test --test '*'` |
-| Doc Tests | 19 | `cargo test --doc` |
-| Total Tests | 506 | `cargo test` |
+| Unit Tests | 193 | `cargo test --lib` |
+| Integration Tests | 318 | `cargo test --test '*'` |
+| Doc Tests | 20 | `cargo test --doc` |
+| Total Tests | 598 | `cargo test` |
 | Test Files | 33 | `find tests -name '*.rs' \| wc -l` |
 | Clippy Warnings | 0 | `cargo clippy --all-targets -- -D warnings` |
 | Source Files | 30 | `find src -name '*.rs' \| wc -l` |
@@ -379,11 +379,12 @@ Steps:
 
 ### 4.1 Consistent Error Types
 
-- [ ] 4.1.1 Create error types module (REFACTOR)
+- [x] 4.1.1 Create error types module (REFACTOR)
   - Path: `src/error.rs`
   - Add: `RctError` enum with variants for each module
   - Add: Proper `Display` and `Error` implementations
   - Add: Conversion from anyhow errors
+  - Commit: 6c69842
 
 - [ ] 4.1.2 Update modules to use error types
   - Update: `src/tools/mod.rs`
@@ -580,6 +581,22 @@ Steps:
   - Added test_parallel_tool_calls: verifies parallel tool executor calls
   - Session concurrent tests already covered in 3.4.1
   - 3 new tests added (+ 2 from 3.4.1)
+
+- [x] 4.1.1 Create error types module (REFACTOR)
+  - Created `src/error.rs` with centralized `RctError` enum
+  - Added variants for all module error categories:
+    - Tool: PathTraversal, PermissionDenied, Timeout, SecurityViolation
+    - API: Network, RateLimited, Authentication, InvalidResponse
+    - MCP: Transport, Validation, Protocol
+    - Session: Integrity, Io, Validation
+    - Hook: Validation, Execution
+    - Plugin: Load, Execution
+    - Context: Io
+  - Implemented Display, Error traits with consistent formatting
+  - Added category methods: is_retryable(), is_security_related(), module()
+  - Added From<anyhow::Error> conversion for gradual migration
+  - 34 new tests added (29 in error_test.rs + 5 in module)
+  - Commit: 6c69842
 
 ---
 
