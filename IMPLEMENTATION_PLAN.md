@@ -8,14 +8,14 @@
 
 | Metric | Value | Command |
 |--------|-------|---------|
-| Unit Tests | 12 | `cargo test --lib` |
-| Integration Tests | 97 | `cargo test --test '*'` |
-| Doc Tests | 6 | `cargo test --doc` |
-| Total Tests | 115 | `cargo test` |
-| Test Files | 7 | `find tests -name '*.rs' \| wc -l` |
+| Unit Tests | 17 | `cargo test --lib` |
+| Integration Tests | 122 | `cargo test --test '*'` |
+| Doc Tests | 10 | `cargo test --doc` |
+| Total Tests | 149 | `cargo test` |
+| Test Files | 10 | `find tests -name '*.rs' \| wc -l` |
 | Clippy Warnings | 0 | `cargo clippy --all-targets -- -D warnings` |
-| Source Files | 20 | `find src -name '*.rs' \| wc -l` |
-| LOC | ~2800 | `tokei src` |
+| Source Files | 23 | `find src -name '*.rs' \| wc -l` |
+| LOC | ~4000 | `tokei src` |
 
 **Baseline Rule:** Test count must never decrease. Clippy warnings must reach 0.
 
@@ -340,52 +340,62 @@ Steps:
 
 ### 3.1 JSON-RPC Protocol Tests
 
-- [ ] 3.1.1 Write JSON-RPC serialization tests (RED)
+- [x] 3.1.1 Write JSON-RPC serialization tests (RED)
   - Path: `tests/unit/mcp_protocol_test.rs`
   - Test: `test_jsonrpc_request_serialization`
   - Test: `test_jsonrpc_response_parsing`
   - Test: `test_jsonrpc_error_parsing`
+  - **Completed: 2026-01-30** - 13 unit tests for request/response/error handling
 
-- [ ] 3.1.2 Implement JSON-RPC types (GREEN)
+- [x] 3.1.2 Implement JSON-RPC types (GREEN)
   - Path: `src/mcp/protocol.rs`
   - Types: JsonRpcRequest, JsonRpcResponse, JsonRpcError
+  - **Completed: 2026-01-30** - Full JSON-RPC 2.0 compliant types with standard error codes
 
 ### 3.2 Transport Tests
 
-- [ ] 3.2.1 Write stdio transport tests (RED)
+- [x] 3.2.1 Write stdio transport tests (RED)
   - Path: `tests/integration/mcp_transport_test.rs`
   - Test: `test_mcp_stdio_initialization`
   - Test: `test_mcp_stdio_bidirectional`
+  - **Completed: 2026-01-30** - 5 integration tests including timeout, restart, error handling
 
-- [ ] 3.2.2 Write tool discovery tests (RED)
+- [x] 3.2.2 Write tool discovery tests (RED)
   - Test: `test_mcp_tool_discovery`
   - Test: `test_mcp_tool_schema_parsing`
+  - **Completed: 2026-01-30** - 2 tests for tool catalog and schema validation
 
-- [ ] 3.2.3 Write tool call tests (RED)
+- [x] 3.2.3 Write tool call tests (RED)
   - Test: `test_mcp_tool_call`
   - Test: `test_mcp_tool_call_error`
+  - **Completed: 2026-01-30** - 2 tests for tool execution and error handling
 
-- [ ] 3.2.4 Implement stdio transport (GREEN)
+- [x] 3.2.4 Implement stdio transport (GREEN)
   - Path: `src/mcp/transport.rs`
   - Spawn process, pipe JSON-RPC
+  - **Completed: 2026-01-30** - StdioTransport with Transport trait, async I/O, request correlation
 
 - [ ] 3.2.5 Implement SSE transport (GREEN)
   - Path: `src/mcp/transport.rs`
 
-- [ ] 3.2.6 Implement tool discovery (GREEN)
-  - Path: `src/mcp/mod.rs`
+- [x] 3.2.6 Implement tool discovery (GREEN)
+  - Path: `src/mcp/client.rs`
+  - **Completed: 2026-01-30** - McpClient::list_tools() and McpClient::call_tool()
 
 ### 3.3 Server Management Tests
 
-- [ ] 3.3.1 Write server lifecycle tests (RED)
+- [x] 3.3.1 Write server lifecycle tests (RED)
   - Test: `test_mcp_server_start_stop`
   - Test: `test_mcp_server_crash_recovery`
   - Test: `test_mcp_server_restart`
+  - **Completed: 2026-01-30** - 3 tests for server lifecycle management
 
-- [ ] 3.3.2 Implement server lifecycle (GREEN)
-  - Path: `src/mcp/mod.rs`
+- [x] 3.3.2 Implement server lifecycle (GREEN)
+  - Path: `src/mcp/client.rs`
+  - **Completed: 2026-01-30** - McpClient with start/stop/force_stop and tool operations
 
-- [ ] 3.3.3 Remove `#[allow(dead_code)]` from MCP module (REFACTOR)
+- [x] 3.3.3 Remove `#[allow(dead_code)]` from MCP module (REFACTOR)
+  - **Completed: 2026-01-30** - No allow(dead_code) attributes present; clippy clean
 
 ### 3.4 Narsil Reindex Checkpoint
 
