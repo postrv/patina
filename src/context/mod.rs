@@ -18,29 +18,74 @@ impl ProjectContext {
         }
     }
 
+    /// Loads project context from CLAUDE.md files.
+    ///
+    /// This method uses graceful degradation:
+    /// - If a CLAUDE.md file cannot be read, a warning is logged and loading continues
+    /// - If a subdirectory cannot be traversed, a warning is logged and loading continues
+    /// - The method only fails on critical errors (e.g., root context file exists but can't be read)
+    ///
+    /// # Errors
+    ///
+    /// Returns an error only for critical failures that should stop the application.
     pub fn load(&mut self) -> anyhow::Result<()> {
         let root_path = self.project_root.join("CLAUDE.md");
         if root_path.exists() {
-            self.root_context = Some(std::fs::read_to_string(&root_path)?);
+            match std::fs::read_to_string(&root_path) {
+                Ok(content) => self.root_context = Some(content),
+                Err(e) => {
+                    // Root CLAUDE.md is more important - log warning but don't fail
+                    tracing::warn!("Failed to read root CLAUDE.md at {:?}: {}", root_path, e);
+                }
+            }
         }
 
         let rct_path = self.project_root.join(".rct/CLAUDE.md");
         if rct_path.exists() {
-            let rct_content = std::fs::read_to_string(&rct_path)?;
-            self.root_context = Some(match &self.root_context {
-                Some(existing) => format!("{}\n\n{}", existing, rct_content),
-                None => rct_content,
-            });
+            match std::fs::read_to_string(&rct_path) {
+                Ok(rct_content) => {
+                    self.root_context = Some(match &self.root_context {
+                        Some(existing) => format!("{}\n\n{}", existing, rct_content),
+                        None => rct_content,
+                    });
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to read .rct/CLAUDE.md at {:?}: {}", rct_path, e);
+                }
+            }
         }
 
-        self.walk_for_claude_md(&self.project_root.clone())?;
+        self.walk_for_claude_md(&self.project_root.clone());
 
         Ok(())
     }
 
-    fn walk_for_claude_md(&mut self, dir: &Path) -> anyhow::Result<()> {
-        for entry in std::fs::read_dir(dir)? {
-            let entry = entry?;
+    /// Recursively walks directories looking for CLAUDE.md files.
+    ///
+    /// Uses graceful degradation: logs warnings for unreadable directories
+    /// or files and continues with other directories.
+    fn walk_for_claude_md(&mut self, dir: &Path) {
+        let entries = match std::fs::read_dir(dir) {
+            Ok(entries) => entries,
+            Err(e) => {
+                tracing::debug!("Cannot read directory {:?}, skipping: {}", dir, e);
+                return;
+            }
+        };
+
+        for entry_result in entries {
+            let entry = match entry_result {
+                Ok(e) => e,
+                Err(e) => {
+                    tracing::debug!(
+                        "Error reading directory entry in {:?}, skipping: {}",
+                        dir,
+                        e
+                    );
+                    continue;
+                }
+            };
+
             let path = entry.path();
 
             if path.is_dir() {
@@ -51,16 +96,28 @@ impl ProjectContext {
 
                 let claude_md = path.join("CLAUDE.md");
                 if claude_md.exists() {
-                    let rel_path = path.strip_prefix(&self.project_root)?.to_path_buf();
-                    let content = std::fs::read_to_string(&claude_md)?;
-                    self.subdir_contexts.insert(rel_path, content);
+                    match path.strip_prefix(&self.project_root) {
+                        Ok(rel_path) => match std::fs::read_to_string(&claude_md) {
+                            Ok(content) => {
+                                self.subdir_contexts.insert(rel_path.to_path_buf(), content);
+                            }
+                            Err(e) => {
+                                tracing::debug!(
+                                    "Cannot read CLAUDE.md at {:?}, skipping: {}",
+                                    claude_md,
+                                    e
+                                );
+                            }
+                        },
+                        Err(e) => {
+                            tracing::debug!("Cannot strip prefix for {:?}, skipping: {}", path, e);
+                        }
+                    }
                 }
 
-                self.walk_for_claude_md(&path)?;
+                self.walk_for_claude_md(&path);
             }
         }
-
-        Ok(())
     }
 
     pub fn get_context(&self, cwd: &Path) -> String {
