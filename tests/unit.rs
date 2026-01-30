@@ -14,3 +14,6 @@ mod mcp_protocol_test;
 
 #[path = "unit/skills_test.rs"]
 mod skills_test;
+
+#[path = "unit/commands_test.rs"]
+mod commands_test;
