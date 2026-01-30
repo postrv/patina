@@ -9,13 +9,13 @@
 | Metric | Value | Command |
 |--------|-------|---------|
 | Unit Tests | 17 | `cargo test --lib` |
-| Integration Tests | 171 | `cargo test --test '*'` |
-| Doc Tests | 10 | `cargo test --doc` |
-| Total Tests | 198 | `cargo test` |
-| Test Files | 13 | `find tests -name '*.rs' \| wc -l` |
+| Integration Tests | 181 | `cargo test --test '*'` |
+| Doc Tests | 13 | `cargo test --doc` |
+| Total Tests | 211 | `cargo test` |
+| Test Files | 14 | `find tests -name '*.rs' \| wc -l` |
 | Clippy Warnings | 0 | `cargo clippy --all-targets -- -D warnings` |
 | Source Files | 23 | `find src -name '*.rs' \| wc -l` |
-| LOC | ~4500 | `tokei src` |
+| LOC | ~4700 | `tokei src` |
 
 **Baseline Rule:** Test count must never decrease. Clippy warnings must reach 0.
 
@@ -465,21 +465,24 @@ Steps:
 
 ### 5.1 Skill Engine Tests
 
-- [ ] 5.1.1 Write skill markdown parsing tests (RED)
+- [x] 5.1.1 Write skill markdown parsing tests (RED)
   - Path: `tests/unit/skills_test.rs`
   - Test: `test_skill_md_parsing`
   - Test: `test_skill_frontmatter_extraction`
+  - **Completed: 2026-01-30** - 15 tests for parsing and frontmatter extraction
 
-- [ ] 5.1.2 Write skill matching tests (RED)
+- [x] 5.1.2 Write skill matching tests (RED)
   - Test: `test_skill_matching_keywords`
   - Test: `test_skill_matching_file_patterns`
+  - **Completed: 2026-01-30** - 7 tests for keyword/file pattern matching, implemented match_skills_for_file()
 
-- [ ] 5.1.3 Write skill context injection tests (RED)
+- [x] 5.1.3 Write skill context injection tests (RED)
   - Test: `test_skill_context_injection`
+  - **Completed: 2026-01-30** - 6 context injection tests, implemented get_context_for_task() and get_context_for_file()
 
-- [ ] 5.1.4 Implement skill engine (GREEN)
+- [x] 5.1.4 Implement skill engine (GREEN)
   - Path: `src/skills/mod.rs`
-  - Remove unused code warnings
+  - **Completed: 2026-01-30** - Full implementation with matching and context injection, no unused code warnings
 
 ### 5.2 Slash Command Tests
 
