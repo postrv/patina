@@ -1572,3 +1572,153 @@ async fn test_hooked_executor_post_tool_use_receives_response() {
         "PostToolUse hook should receive tool_response in context"
     );
 }
+
+// =============================================================================
+// list_files Path Traversal Security Tests (0.1.1)
+// =============================================================================
+
+/// Test that list_files blocks path traversal via `..` escape.
+///
+/// This is a security test to ensure the list_files tool cannot be used
+/// to enumerate files outside the working directory.
+#[tokio::test]
+async fn test_list_files_blocks_path_traversal() {
+    let ctx = TestContext::new();
+    let working_dir = ctx.path();
+
+    // Create a file in the parent directory (outside working dir)
+    let parent_dir = working_dir.parent().expect("temp dir should have parent");
+    let external_dir = parent_dir.join("external_test_dir_traversal");
+    std::fs::create_dir_all(&external_dir).expect("failed to create external test dir");
+    std::fs::write(external_dir.join("secret.txt"), "secret content")
+        .expect("failed to create test file");
+
+    // Ensure cleanup on drop
+    struct Cleanup(std::path::PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let _cleanup = Cleanup(external_dir.clone());
+
+    let executor = ToolExecutor::new(working_dir);
+
+    // Attempt to list the external directory via path traversal
+    let call = ToolCall {
+        name: "list_files".to_string(),
+        input: json!({ "path": "../external_test_dir_traversal" }),
+    };
+
+    let result = executor
+        .execute(call)
+        .await
+        .expect("execution should not error");
+
+    match result {
+        ToolResult::Error(e) => {
+            assert!(
+                e.contains("path traversal")
+                    || e.contains("outside working directory")
+                    || e.contains("Absolute paths are not allowed"),
+                "error should mention path traversal, got: {e}"
+            );
+        }
+        ToolResult::Success(s) => {
+            panic!("list_files should block path traversal, but listed contents: {s}")
+        }
+        ToolResult::Cancelled => panic!("expected error, got cancelled"),
+    }
+}
+
+/// Test that list_files blocks absolute paths.
+///
+/// This prevents enumeration of arbitrary directories on the system.
+#[tokio::test]
+async fn test_list_files_blocks_absolute_path() {
+    let ctx = TestContext::new();
+    let executor = ToolExecutor::new(ctx.path());
+
+    // Attempt to list an absolute path outside working directory
+    let call = ToolCall {
+        name: "list_files".to_string(),
+        input: json!({ "path": "/tmp" }),
+    };
+
+    let result = executor
+        .execute(call)
+        .await
+        .expect("execution should not error");
+
+    match result {
+        ToolResult::Error(e) => {
+            assert!(
+                e.contains("path traversal")
+                    || e.contains("outside working directory")
+                    || e.contains("Absolute paths are not allowed")
+                    || e.contains("absolute"),
+                "error should mention path traversal or absolute path, got: {e}"
+            );
+        }
+        ToolResult::Success(s) => {
+            panic!("list_files should block absolute paths, but listed contents: {s}")
+        }
+        ToolResult::Cancelled => panic!("expected error, got cancelled"),
+    }
+}
+
+/// Test that list_files blocks complex parent directory escapes.
+///
+/// This tests escapes like `subdir/../../` which could bypass naive checks.
+#[tokio::test]
+async fn test_list_files_blocks_parent_escape() {
+    let ctx = TestContext::new();
+    let working_dir = ctx.path();
+
+    // Create a subdirectory to enable the escape pattern
+    ctx.create_file("subdir/file.txt", "content");
+
+    // Create a file in the parent directory (outside working dir)
+    let parent_dir = working_dir.parent().expect("temp dir should have parent");
+    let external_dir = parent_dir.join("external_test_dir_escape");
+    std::fs::create_dir_all(&external_dir).expect("failed to create external test dir");
+    std::fs::write(external_dir.join("secret.txt"), "secret content")
+        .expect("failed to create test file");
+
+    // Ensure cleanup on drop
+    struct Cleanup(std::path::PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    let _cleanup = Cleanup(external_dir.clone());
+
+    let executor = ToolExecutor::new(working_dir);
+
+    // Attempt to escape via subdir/../../
+    let call = ToolCall {
+        name: "list_files".to_string(),
+        input: json!({ "path": "subdir/../../external_test_dir_escape" }),
+    };
+
+    let result = executor
+        .execute(call)
+        .await
+        .expect("execution should not error");
+
+    match result {
+        ToolResult::Error(e) => {
+            assert!(
+                e.contains("path traversal")
+                    || e.contains("outside working directory")
+                    || e.contains("Absolute paths are not allowed"),
+                "error should mention path traversal, got: {e}"
+            );
+        }
+        ToolResult::Success(s) => {
+            panic!("list_files should block parent escape, but listed contents: {s}")
+        }
+        ToolResult::Cancelled => panic!("expected error, got cancelled"),
+    }
+}
