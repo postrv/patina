@@ -188,21 +188,23 @@ Steps:
 
 ### 1.3 TOCTOU Mitigation (MEDIUM M-2)
 
-- [ ] 1.3.1 Write symlink race condition tests (RED)
+- [x] 1.3.1 Write symlink race condition tests (RED)
   - Path: `tests/tools.rs`
   - Test: `test_file_read_rejects_symlinks`
   - Test: `test_file_write_rejects_symlinks`
   - Test: `test_edit_rejects_symlinks`
+  - Test: `test_file_read_rejects_internal_symlinks` (added for defense in depth)
   - Acceptance: Tests verify symlink handling
 
-- [ ] 1.3.2 Add symlink detection to file operations (GREEN)
+- [x] 1.3.2 Add symlink detection to file operations (GREEN)
   - Path: `src/tools/mod.rs`
-  - Add: Check `full_path.is_symlink()` before operations
-  - Add: Error if path is symlink pointing outside working dir
+  - Add: `check_symlink()` helper using `symlink_metadata()`
+  - Add: Reject ALL symlinks uniformly for defense in depth
   - Acceptance: All symlink tests pass
 
-- [ ] 1.3.3 Commit TOCTOU mitigation
+- [x] 1.3.3 Commit TOCTOU mitigation
   - Message: `fix(tools): Reject symlinks in file operations`
+  - Commit: d54046f
 
 ---
 
@@ -482,6 +484,14 @@ Steps:
   - Validates arguments for shell injection on non-interpreters
   - 9 security tests added
   - Commit: 63aced4
+
+- [x] 1.3.1-1.3.3 TOCTOU Mitigation - Symlink Rejection (M-2)
+  - Added check_symlink() helper to src/tools/mod.rs
+  - Uses symlink_metadata() to check paths without following symlinks
+  - Rejects ALL symlinks uniformly for defense in depth (both internal and external)
+  - Added symlink checks to read_file, write_file, and edit_file operations
+  - 4 security tests added
+  - Commit: d54046f
 
 ---
 
