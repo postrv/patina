@@ -1,4 +1,9 @@
 //! MCP (Model Context Protocol) client
+//!
+//! This module implements the Model Context Protocol for communication with
+//! external tools and services.
+
+pub mod protocol;
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
