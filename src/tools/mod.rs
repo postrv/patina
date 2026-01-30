@@ -1,12 +1,23 @@
-//! Tool execution for agentic capabilities
+//! Tool execution for agentic capabilities.
+//!
+//! This module provides secure tool execution including:
+//! - Bash command execution with security policy
+//! - File operations with path traversal protection
+//! - Edit operations with diff generation
+//! - Glob pattern matching for file discovery
+//! - Grep content search with regex support
 
 use anyhow::Result;
-use std::path::PathBuf;
+use glob::Pattern;
+use regex::Regex;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 use tokio::process::Command;
-use regex::Regex;
+use walkdir::WalkDir;
 
+/// Tool executor with security policy enforcement.
 pub struct ToolExecutor {
     working_dir: PathBuf,
     policy: ToolExecutionPolicy,
@@ -23,9 +34,40 @@ impl Default for ToolExecutionPolicy {
     fn default() -> Self {
         Self {
             dangerous_patterns: vec![
+                // Destructive file operations
                 Regex::new(r"rm\s+-rf\s+/").unwrap(),
+                Regex::new(r"rm\s+-fr\s+/").unwrap(),
+                Regex::new(r"rm\s+--no-preserve-root").unwrap(),
+                // Privilege escalation
                 Regex::new(r"sudo\s+").unwrap(),
+                Regex::new(r"su\s+-").unwrap(),
+                Regex::new(r"doas\s+").unwrap(),
+                // Dangerous permissions
                 Regex::new(r"chmod\s+777").unwrap(),
+                Regex::new(r"chmod\s+-R\s+777").unwrap(),
+                Regex::new(r"chmod\s+u\+s").unwrap(), // setuid
+                // Disk/filesystem destruction
+                Regex::new(r"mkfs\.").unwrap(),
+                Regex::new(r"dd\s+if=.+of=/dev/").unwrap(),
+                Regex::new(r">\s*/dev/sd[a-z]").unwrap(),
+                Regex::new(r">\s*/dev/nvme").unwrap(),
+                // Fork bombs and resource exhaustion
+                Regex::new(r":\(\)\s*\{\s*:\|:&\s*\}\s*;").unwrap(),
+                // Remote code execution patterns
+                Regex::new(r"curl\s+.+\|\s*(ba)?sh").unwrap(),
+                Regex::new(r"wget\s+.+\|\s*(ba)?sh").unwrap(),
+                Regex::new(r"curl\s+.+\|\s*sudo").unwrap(),
+                Regex::new(r"wget\s+.+\|\s*sudo").unwrap(),
+                // System disruption
+                Regex::new(r"\bshutdown\b").unwrap(),
+                Regex::new(r"\breboot\b").unwrap(),
+                Regex::new(r"\bhalt\b").unwrap(),
+                Regex::new(r"\bpoweroff\b").unwrap(),
+                // History manipulation (hiding tracks)
+                Regex::new(r"history\s+-c").unwrap(),
+                Regex::new(r">\s*~/\.bash_history").unwrap(),
+                // Dangerous eval patterns
+                Regex::new(r"\beval\s+\$").unwrap(),
             ],
             protected_paths: vec![
                 PathBuf::from("/etc"),
@@ -64,18 +106,102 @@ impl ToolExecutor {
         self
     }
 
+    /// Validates that a path is within the working directory.
+    ///
+    /// Returns the canonicalized path if valid, or an error message if the path
+    /// attempts to escape the working directory.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error string if:
+    /// - The path is absolute and not within the working directory
+    /// - The path uses `..` to escape the working directory
+    /// - The path cannot be canonicalized
+    fn validate_path(&self, path: &str) -> std::result::Result<PathBuf, String> {
+        // Reject absolute paths that don't start with working_dir
+        if Path::new(path).is_absolute() {
+            return Err(
+                "Absolute paths are not allowed: path traversal outside working directory"
+                    .to_string(),
+            );
+        }
+
+        let full_path = self.working_dir.join(path);
+
+        // Canonicalize the working directory
+        let canonical_working_dir = self
+            .working_dir
+            .canonicalize()
+            .map_err(|e| format!("Failed to canonicalize working directory: {e}"))?;
+
+        // For existing files, canonicalize the full path
+        // For non-existing files, canonicalize the parent and append the filename
+        let canonical_full_path = if full_path.exists() {
+            full_path
+                .canonicalize()
+                .map_err(|e| format!("Failed to canonicalize path: {e}"))?
+        } else {
+            // For new files, canonicalize the parent directory
+            let parent = full_path.parent().unwrap_or(&self.working_dir);
+            let filename = full_path
+                .file_name()
+                .ok_or_else(|| "Invalid path: no filename".to_string())?;
+
+            if parent.exists() {
+                let canonical_parent = parent
+                    .canonicalize()
+                    .map_err(|e| format!("Failed to canonicalize parent directory: {e}"))?;
+                canonical_parent.join(filename)
+            } else {
+                // Parent doesn't exist, check if the path contains ..
+                if path.contains("..") {
+                    return Err("Path traversal outside working directory".to_string());
+                }
+                full_path
+            }
+        };
+
+        // Verify the canonical path starts with the working directory
+        if !canonical_full_path.starts_with(&canonical_working_dir) {
+            return Err("Path traversal outside working directory".to_string());
+        }
+
+        Ok(canonical_full_path)
+    }
+
+    /// Validates a path for writing, checking both path traversal and protected paths.
+    fn validate_write_path(&self, path: &str) -> std::result::Result<PathBuf, String> {
+        let canonical_path = self.validate_path(path)?;
+
+        // Check against protected paths
+        for protected in &self.policy.protected_paths {
+            if canonical_path.starts_with(protected) {
+                return Err(format!(
+                    "Write blocked: path is in protected directory {:?}",
+                    protected
+                ));
+            }
+        }
+
+        Ok(canonical_path)
+    }
+
     pub async fn execute(&self, call: ToolCall) -> Result<ToolResult> {
         match call.name.as_str() {
             "bash" => self.execute_bash(&call.input).await,
             "read_file" => self.read_file(&call.input).await,
             "write_file" => self.write_file(&call.input).await,
+            "edit" => self.edit_file(&call.input).await,
             "list_files" => self.list_files(&call.input).await,
+            "glob" => self.glob_files(&call.input).await,
+            "grep" => self.grep_content(&call.input).await,
             _ => Ok(ToolResult::Error(format!("Unknown tool: {}", call.name))),
         }
     }
 
     async fn execute_bash(&self, input: &serde_json::Value) -> Result<ToolResult> {
-        let command = input.get("command")
+        let command = input
+            .get("command")
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("Missing command"))?;
 
@@ -96,8 +222,9 @@ impl ToolExecutor {
                 .current_dir(&self.working_dir)
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
-                .output()
-        ).await??;
+                .output(),
+        )
+        .await??;
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -115,11 +242,16 @@ impl ToolExecutor {
     }
 
     async fn read_file(&self, input: &serde_json::Value) -> Result<ToolResult> {
-        let path = input.get("path")
+        let path = input
+            .get("path")
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("Missing path"))?;
 
-        let full_path = self.working_dir.join(path);
+        // Validate path is within working directory
+        let full_path = match self.validate_path(path) {
+            Ok(p) => p,
+            Err(e) => return Ok(ToolResult::Error(e)),
+        };
 
         match tokio::fs::read_to_string(&full_path).await {
             Ok(content) => Ok(ToolResult::Success(content)),
@@ -128,11 +260,13 @@ impl ToolExecutor {
     }
 
     async fn write_file(&self, input: &serde_json::Value) -> Result<ToolResult> {
-        let path = input.get("path")
+        let path = input
+            .get("path")
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("Missing path"))?;
 
-        let content = input.get("content")
+        let content = input
+            .get("content")
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("Missing content"))?;
 
@@ -144,22 +278,154 @@ impl ToolExecutor {
             )));
         }
 
-        let full_path = self.working_dir.join(path);
+        // Validate path is within working directory and not protected
+        let full_path = match self.validate_write_path(path) {
+            Ok(p) => p,
+            Err(e) => return Ok(ToolResult::Error(e)),
+        };
+
+        // Create backup if file exists
+        if full_path.exists() {
+            if let Err(e) = self.create_backup(&full_path).await {
+                return Ok(ToolResult::Error(format!("Failed to create backup: {e}")));
+            }
+        }
 
         if let Some(parent) = full_path.parent() {
             tokio::fs::create_dir_all(parent).await?;
         }
 
         match tokio::fs::write(&full_path, content).await {
-            Ok(()) => Ok(ToolResult::Success(format!("Wrote {} bytes to {}", content.len(), path))),
+            Ok(()) => Ok(ToolResult::Success(format!(
+                "Wrote {} bytes to {}",
+                content.len(),
+                path
+            ))),
             Err(e) => Ok(ToolResult::Error(format!("Failed to write file: {}", e))),
         }
     }
 
-    async fn list_files(&self, input: &serde_json::Value) -> Result<ToolResult> {
-        let path = input.get("path")
+    /// Performs a string replacement edit on a file.
+    ///
+    /// Requires a unique match of `old_string` in the file. If there are zero
+    /// or multiple matches, returns an error. On success, generates a diff-like
+    /// output showing the change.
+    async fn edit_file(&self, input: &serde_json::Value) -> Result<ToolResult> {
+        let path = input
+            .get("path")
             .and_then(|v| v.as_str())
-            .unwrap_or(".");
+            .ok_or_else(|| anyhow::anyhow!("Missing path"))?;
+
+        let old_string = input
+            .get("old_string")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("Missing old_string"))?;
+
+        let new_string = input
+            .get("new_string")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("Missing new_string"))?;
+
+        // Validate path is within working directory
+        let full_path = match self.validate_path(path) {
+            Ok(p) => p,
+            Err(e) => return Ok(ToolResult::Error(e)),
+        };
+
+        // Read file content
+        let content = match tokio::fs::read_to_string(&full_path).await {
+            Ok(c) => c,
+            Err(e) => return Ok(ToolResult::Error(format!("Failed to read file: {e}"))),
+        };
+
+        // Count matches
+        let match_count = content.matches(old_string).count();
+
+        if match_count == 0 {
+            return Ok(ToolResult::Error(
+                "No matches found for old_string: 0 matches".to_string(),
+            ));
+        }
+
+        if match_count > 1 {
+            return Ok(ToolResult::Error(format!(
+                "Multiple matches found: {match_count} matches. Edit requires a unique match to avoid ambiguity."
+            )));
+        }
+
+        // Create backup before editing
+        if let Err(e) = self.create_backup(&full_path).await {
+            return Ok(ToolResult::Error(format!("Failed to create backup: {e}")));
+        }
+
+        // Perform the replacement
+        let new_content = content.replacen(old_string, new_string, 1);
+
+        // Write the modified content
+        if let Err(e) = tokio::fs::write(&full_path, &new_content).await {
+            return Ok(ToolResult::Error(format!("Failed to write file: {e}")));
+        }
+
+        // Generate diff output
+        let diff = Self::generate_diff(old_string, new_string);
+
+        Ok(ToolResult::Success(format!(
+            "Successfully replaced in {path}:\n{diff}"
+        )))
+    }
+
+    /// Generates a simple diff output showing the replacement.
+    fn generate_diff(old: &str, new: &str) -> String {
+        let old_lines: Vec<&str> = old.lines().collect();
+        let new_lines: Vec<&str> = new.lines().collect();
+
+        let mut diff = String::new();
+
+        for line in &old_lines {
+            diff.push_str(&format!("- {line}\n"));
+        }
+        for line in &new_lines {
+            diff.push_str(&format!("+ {line}\n"));
+        }
+
+        if diff.is_empty() {
+            format!("- {old}\n+ {new}\n")
+        } else {
+            diff
+        }
+    }
+
+    /// Creates a backup of an existing file before modification.
+    async fn create_backup(&self, path: &Path) -> std::result::Result<PathBuf, String> {
+        let backup_dir = self.working_dir.join(".rct_backups");
+
+        // Create backup directory if it doesn't exist
+        tokio::fs::create_dir_all(&backup_dir)
+            .await
+            .map_err(|e| format!("Failed to create backup directory: {e}"))?;
+
+        // Generate backup filename with timestamp
+        let filename = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("unknown");
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let backup_name = format!("{filename}.{timestamp}.bak");
+        let backup_path = backup_dir.join(&backup_name);
+
+        // Copy file to backup location
+        tokio::fs::copy(path, &backup_path)
+            .await
+            .map_err(|e| format!("Failed to copy file to backup: {e}"))?;
+
+        Ok(backup_path)
+    }
+
+    async fn list_files(&self, input: &serde_json::Value) -> Result<ToolResult> {
+        let path = input.get("path").and_then(|v| v.as_str()).unwrap_or(".");
 
         let full_path = self.working_dir.join(path);
 
@@ -175,5 +441,236 @@ impl ToolExecutor {
 
         entries.sort();
         Ok(ToolResult::Success(entries.join("\n")))
+    }
+
+    /// Searches for files matching a glob pattern.
+    ///
+    /// # Arguments
+    ///
+    /// * `pattern` - The glob pattern (e.g., `**/*.rs`)
+    /// * `respect_gitignore` - Whether to respect .gitignore rules (optional)
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the pattern attempts path traversal.
+    async fn glob_files(&self, input: &serde_json::Value) -> Result<ToolResult> {
+        let pattern = input
+            .get("pattern")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("Missing pattern"))?;
+
+        let respect_gitignore = input
+            .get("respect_gitignore")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
+        // Block path traversal attempts
+        if pattern.contains("..") {
+            return Ok(ToolResult::Error(
+                "Invalid pattern: path traversal not allowed".to_string(),
+            ));
+        }
+
+        // Load gitignore patterns if requested
+        let gitignore_patterns = if respect_gitignore {
+            self.load_gitignore_patterns()
+        } else {
+            Vec::new()
+        };
+
+        // Compile the glob pattern
+        let glob_pattern = match Pattern::new(pattern) {
+            Ok(p) => p,
+            Err(e) => return Ok(ToolResult::Error(format!("Invalid glob pattern: {e}"))),
+        };
+
+        let mut matches = Vec::new();
+
+        // Walk the directory tree
+        for entry in WalkDir::new(&self.working_dir)
+            .follow_links(false)
+            .into_iter()
+            .filter_map(|e| e.ok())
+        {
+            let path = entry.path();
+
+            // Skip directories
+            if path.is_dir() {
+                continue;
+            }
+
+            // Get relative path
+            let relative = match path.strip_prefix(&self.working_dir) {
+                Ok(r) => r,
+                Err(_) => continue,
+            };
+
+            let relative_str = relative.to_string_lossy();
+
+            // Check gitignore patterns
+            if respect_gitignore && self.is_gitignored(&relative_str, &gitignore_patterns) {
+                continue;
+            }
+
+            // Check if path matches the glob pattern
+            if glob_pattern.matches(&relative_str) {
+                matches.push(relative_str.to_string());
+            }
+        }
+
+        if matches.is_empty() {
+            return Ok(ToolResult::Success(String::new()));
+        }
+
+        matches.sort();
+        Ok(ToolResult::Success(matches.join("\n")))
+    }
+
+    /// Loads gitignore patterns from .gitignore file if it exists.
+    fn load_gitignore_patterns(&self) -> Vec<String> {
+        let gitignore_path = self.working_dir.join(".gitignore");
+        if !gitignore_path.exists() {
+            return Vec::new();
+        }
+
+        let content = match fs::read_to_string(&gitignore_path) {
+            Ok(c) => c,
+            Err(_) => return Vec::new(),
+        };
+
+        content
+            .lines()
+            .filter(|line| !line.trim().is_empty() && !line.starts_with('#'))
+            .map(|line| line.trim().to_string())
+            .collect()
+    }
+
+    /// Checks if a path matches any gitignore pattern.
+    fn is_gitignored(&self, path: &str, patterns: &[String]) -> bool {
+        for pattern in patterns {
+            // Handle directory patterns (ending with /)
+            if pattern.ends_with('/') {
+                let dir_name = &pattern[..pattern.len() - 1];
+                // Match if path starts with the directory or contains it as a component
+                if path.starts_with(dir_name) || path.starts_with(&format!("{dir_name}/")) {
+                    return true;
+                }
+            }
+            // Handle glob patterns like *.log
+            else if pattern.starts_with('*') {
+                if let Ok(glob) = Pattern::new(pattern) {
+                    // Check against the full path and just the filename
+                    let filename = Path::new(path)
+                        .file_name()
+                        .map(|n| n.to_string_lossy())
+                        .unwrap_or_default();
+                    if glob.matches(path) || glob.matches(&filename) {
+                        return true;
+                    }
+                }
+            }
+            // Handle exact matches and path prefixes
+            else if path == pattern || path.starts_with(&format!("{pattern}/")) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Searches file contents for a pattern.
+    ///
+    /// # Arguments
+    ///
+    /// * `pattern` - The regex pattern to search for
+    /// * `case_insensitive` - Whether to perform case-insensitive search (optional)
+    /// * `file_pattern` - Glob pattern to filter files (optional)
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the regex pattern is invalid.
+    async fn grep_content(&self, input: &serde_json::Value) -> Result<ToolResult> {
+        let pattern = input
+            .get("pattern")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("Missing pattern"))?;
+
+        let case_insensitive = input
+            .get("case_insensitive")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
+        let file_pattern = input
+            .get("file_pattern")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
+        // Compile the regex pattern
+        let regex = match if case_insensitive {
+            regex::RegexBuilder::new(pattern)
+                .case_insensitive(true)
+                .build()
+        } else {
+            Regex::new(pattern)
+        } {
+            Ok(r) => r,
+            Err(e) => return Ok(ToolResult::Error(format!("Invalid regex pattern: {e}"))),
+        };
+
+        // Compile file filter pattern if provided
+        let file_glob = file_pattern.as_ref().and_then(|p| Pattern::new(p).ok());
+
+        let mut results = Vec::new();
+
+        // Walk the directory tree
+        for entry in WalkDir::new(&self.working_dir)
+            .follow_links(false)
+            .into_iter()
+            .filter_map(|e| e.ok())
+        {
+            let path = entry.path();
+
+            // Skip directories
+            if path.is_dir() {
+                continue;
+            }
+
+            // Get relative path
+            let relative = match path.strip_prefix(&self.working_dir) {
+                Ok(r) => r,
+                Err(_) => continue,
+            };
+
+            let relative_str = relative.to_string_lossy();
+
+            // Apply file pattern filter if provided
+            if let Some(ref glob) = file_glob {
+                let filename = relative
+                    .file_name()
+                    .map(|n| n.to_string_lossy())
+                    .unwrap_or_default();
+                if !glob.matches(&filename) {
+                    continue;
+                }
+            }
+
+            // Read file content (skip binary files)
+            let content = match fs::read_to_string(path) {
+                Ok(c) => c,
+                Err(_) => continue, // Skip files we can't read as text
+            };
+
+            // Search for matches
+            for (line_num, line) in content.lines().enumerate() {
+                if regex.is_match(line) {
+                    results.push(format!("{}:{}: {}", relative_str, line_num + 1, line));
+                }
+            }
+        }
+
+        if results.is_empty() {
+            return Ok(ToolResult::Success(String::new()));
+        }
+
+        Ok(ToolResult::Success(results.join("\n")))
     }
 }

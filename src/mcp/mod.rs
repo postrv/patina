@@ -2,7 +2,6 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use tokio::sync::mpsc;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct McpServerConfig {
@@ -41,27 +40,18 @@ pub struct McpTool {
 }
 
 pub struct McpManager {
-    servers: HashMap<String, McpConnection>,
     tools: Vec<McpTool>,
-}
-
-#[allow(dead_code)]
-enum McpConnection {
-    Stdio {
-        stdin: mpsc::Sender<String>,
-        stdout: mpsc::Receiver<String>,
-    },
 }
 
 impl McpManager {
     pub fn new() -> Self {
-        Self {
-            servers: HashMap::new(),
-            tools: Vec::new(),
-        }
+        Self { tools: Vec::new() }
     }
 
-    pub async fn initialize(&mut self, configs: HashMap<String, McpServerConfig>) -> anyhow::Result<()> {
+    pub async fn initialize(
+        &mut self,
+        configs: HashMap<String, McpServerConfig>,
+    ) -> anyhow::Result<()> {
         for (name, config) in configs {
             if !config.enabled {
                 continue;

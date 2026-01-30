@@ -63,12 +63,10 @@ impl SkillEngine {
     fn parse_skill_file(&self, path: &PathBuf) -> anyhow::Result<Skill> {
         let content = std::fs::read_to_string(path)?;
 
-        let (frontmatter, body) = if content.starts_with("---") {
-            let end = content[3..].find("---")
-                .map(|i| i + 3)
-                .unwrap_or(0);
-            let yaml = &content[3..end];
-            let body = content[end + 3..].trim();
+        let (frontmatter, body) = if let Some(after_open) = content.strip_prefix("---") {
+            let end = after_open.find("---").unwrap_or(after_open.len());
+            let yaml = &after_open[..end];
+            let body = after_open[end..].strip_prefix("---").unwrap_or("").trim();
             (yaml, body)
         } else {
             ("", content.as_str())
@@ -78,7 +76,8 @@ impl SkillEngine {
             serde_yaml::from_str(frontmatter)?
         } else {
             SkillConfig {
-                name: path.parent()
+                name: path
+                    .parent()
                     .and_then(|p| p.file_name())
                     .and_then(|s| s.to_str())
                     .unwrap_or("unknown")
@@ -101,7 +100,8 @@ impl SkillEngine {
     pub fn match_skills(&self, task_description: &str) -> Vec<&Skill> {
         let task_lower = task_description.to_lowercase();
 
-        self.skills.iter()
+        self.skills
+            .iter()
             .filter(|skill| {
                 if skill.config.triggers.always_active {
                     return true;
@@ -113,7 +113,9 @@ impl SkillEngine {
                     }
                 }
 
-                skill.description.to_lowercase()
+                skill
+                    .description
+                    .to_lowercase()
                     .split_whitespace()
                     .any(|word| task_lower.contains(word))
             })

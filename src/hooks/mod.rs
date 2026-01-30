@@ -86,7 +86,9 @@ pub struct HookResult {
 pub enum HookDecision {
     #[default]
     Continue,
-    Block { reason: String },
+    Block {
+        reason: String,
+    },
     Allow,
     Deny,
 }
@@ -106,19 +108,17 @@ impl HookExecutor {
         self.hooks.entry(event).or_default().extend(hooks);
     }
 
-    pub async fn execute(
-        &self,
-        event: HookEvent,
-        context: &HookContext,
-    ) -> Result<HookResult> {
+    pub async fn execute(&self, event: HookEvent, context: &HookContext) -> Result<HookResult> {
         let definitions = match self.hooks.get(&event) {
             Some(defs) => defs,
-            None => return Ok(HookResult {
-                exit_code: 0,
-                stdout: String::new(),
-                stderr: String::new(),
-                decision: HookDecision::Continue,
-            }),
+            None => {
+                return Ok(HookResult {
+                    exit_code: 0,
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    decision: HookDecision::Continue,
+                })
+            }
         };
 
         let context_json = serde_json::to_string(context)?;
@@ -137,14 +137,20 @@ impl HookExecutor {
 
                 match result.exit_code {
                     0 => continue,
-                    2 => return Ok(HookResult {
-                        decision: HookDecision::Block {
-                            reason: result.stdout.clone(),
-                        },
-                        ..result
-                    }),
+                    2 => {
+                        return Ok(HookResult {
+                            decision: HookDecision::Block {
+                                reason: result.stdout.clone(),
+                            },
+                            ..result
+                        })
+                    }
                     _ => {
-                        tracing::warn!("Hook exited with code {}: {}", result.exit_code, result.stderr);
+                        tracing::warn!(
+                            "Hook exited with code {}: {}",
+                            result.exit_code,
+                            result.stderr
+                        );
                     }
                 }
             }
@@ -159,9 +165,23 @@ impl HookExecutor {
     }
 
     async fn run_hook_command(&self, command: &str, stdin_data: &str) -> Result<HookResult> {
+        // Validate command is not empty or whitespace-only
+        let trimmed = command.trim();
+        if trimmed.is_empty() {
+            return Ok(HookResult {
+                exit_code: 1,
+                stdout: String::new(),
+                stderr: "Hook command is empty".to_string(),
+                decision: HookDecision::Continue,
+            });
+        }
+
+        // Log hook execution for audit trail
+        tracing::info!(command = %trimmed, "Executing hook command");
+
         let mut child = Command::new("sh")
             .arg("-c")
-            .arg(command)
+            .arg(trimmed)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

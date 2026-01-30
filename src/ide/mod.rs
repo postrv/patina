@@ -4,8 +4,8 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use tokio::net::{TcpListener, TcpStream};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream};
 use uuid::Uuid;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -24,15 +24,10 @@ pub enum IdeMessage {
     },
 
     #[serde(rename = "apply_edit")]
-    ApplyEdit {
-        file: PathBuf,
-        diff: String,
-    },
+    ApplyEdit { file: PathBuf, diff: String },
 
     #[serde(rename = "streaming_content")]
-    StreamingContent {
-        delta: String,
-    },
+    StreamingContent { delta: String },
 
     #[serde(rename = "edit_proposal")]
     EditProposal {
@@ -59,9 +54,12 @@ pub struct Selection {
 }
 
 pub struct IdeSession {
-    id: Uuid,
-    workspace: PathBuf,
-    capabilities: Vec<String>,
+    /// Session identifier
+    pub id: Uuid,
+    /// Workspace directory
+    pub workspace: PathBuf,
+    /// Supported capabilities
+    pub capabilities: Vec<String>,
 }
 
 pub struct IdeServer {
@@ -98,11 +96,14 @@ impl IdeServer {
     }
 
     pub fn register_session(&mut self, id: Uuid, workspace: PathBuf, capabilities: Vec<String>) {
-        self.sessions.insert(id, IdeSession {
+        self.sessions.insert(
             id,
-            workspace,
-            capabilities,
-        });
+            IdeSession {
+                id,
+                workspace,
+                capabilities,
+            },
+        );
     }
 
     pub fn get_session(&self, id: Uuid) -> Option<&IdeSession> {
@@ -126,7 +127,10 @@ pub async fn handle_connection(mut stream: TcpStream) -> Result<()> {
         let message: IdeMessage = serde_json::from_slice(&buffer[..n])?;
 
         let response = match message {
-            IdeMessage::Init { workspace, capabilities } => {
+            IdeMessage::Init {
+                workspace,
+                capabilities,
+            } => {
                 tracing::info!("IDE init: {:?} with {:?}", workspace, capabilities);
                 serde_json::json!({
                     "type": "init_ack",

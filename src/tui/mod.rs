@@ -8,15 +8,13 @@ use ratatui::{
     Frame,
 };
 
-use crate::app::state::{AppState, Role};
+use crate::app::state::AppState;
+use crate::types::Role;
 
 pub fn render(frame: &mut Frame, state: &AppState) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Min(3),
-            Constraint::Length(3),
-        ])
+        .constraints([Constraint::Min(3), Constraint::Length(3)])
         .split(frame.area());
 
     render_messages(frame, chunks[0], state);
@@ -32,9 +30,10 @@ fn render_messages(frame: &mut Frame, area: Rect, state: &AppState) {
             Role::Assistant => ("Claude: ", Style::default().fg(Color::Green)),
         };
 
-        lines.push(Line::from(vec![
-            Span::styled(prefix, style.add_modifier(Modifier::BOLD)),
-        ]));
+        lines.push(Line::from(vec![Span::styled(
+            prefix,
+            style.add_modifier(Modifier::BOLD),
+        )]));
 
         for line in message.content.lines() {
             lines.push(Line::from(Span::styled(line, style)));
@@ -46,13 +45,24 @@ fn render_messages(frame: &mut Frame, area: Rect, state: &AppState) {
     if let Some(ref response) = state.current_response {
         if state.is_loading() {
             lines.push(Line::from(vec![
-                Span::styled("Claude: ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
-                Span::styled(format!("{} ", state.throbber_char()), Style::default().fg(Color::Yellow)),
+                Span::styled(
+                    "Claude: ",
+                    Style::default()
+                        .fg(Color::Green)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    format!("{} ", state.throbber_char()),
+                    Style::default().fg(Color::Yellow),
+                ),
             ]));
         }
 
         for line in response.lines() {
-            lines.push(Line::from(Span::styled(line, Style::default().fg(Color::Green))));
+            lines.push(Line::from(Span::styled(
+                line,
+                Style::default().fg(Color::Green),
+            )));
         }
     }
 
@@ -66,13 +76,14 @@ fn render_messages(frame: &mut Frame, area: Rect, state: &AppState) {
 
 fn render_input(frame: &mut Frame, area: Rect, state: &AppState) {
     let input = Paragraph::new(state.input.as_str())
-        .block(Block::default().borders(Borders::ALL).title(" Input (Enter to send, Ctrl+C to quit) "))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Input (Enter to send, Ctrl+C to quit) "),
+        )
         .style(Style::default().fg(Color::White));
 
     frame.render_widget(input, area);
 
-    frame.set_cursor_position((
-        area.x + state.input.len() as u16 + 1,
-        area.y + 1,
-    ));
+    frame.set_cursor_position((area.x + state.input.len() as u16 + 1, area.y + 1));
 }

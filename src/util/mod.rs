@@ -1,21 +1,18 @@
 //! Utility functions and helpers
 
-use std::path::PathBuf;
 use directories::ProjectDirs;
+use std::path::PathBuf;
 
 pub fn get_config_dir() -> Option<PathBuf> {
-    ProjectDirs::from("dev", "rct", "rct")
-        .map(|dirs| dirs.config_dir().to_path_buf())
+    ProjectDirs::from("dev", "rct", "rct").map(|dirs| dirs.config_dir().to_path_buf())
 }
 
 pub fn get_data_dir() -> Option<PathBuf> {
-    ProjectDirs::from("dev", "rct", "rct")
-        .map(|dirs| dirs.data_dir().to_path_buf())
+    ProjectDirs::from("dev", "rct", "rct").map(|dirs| dirs.data_dir().to_path_buf())
 }
 
 pub fn get_cache_dir() -> Option<PathBuf> {
-    ProjectDirs::from("dev", "rct", "rct")
-        .map(|dirs| dirs.cache_dir().to_path_buf())
+    ProjectDirs::from("dev", "rct", "rct").map(|dirs| dirs.cache_dir().to_path_buf())
 }
 
 pub fn get_plugins_dir() -> Option<PathBuf> {

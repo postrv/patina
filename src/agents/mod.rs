@@ -28,7 +28,6 @@ pub struct SubagentOrchestrator {
 
 struct ActiveSubagent {
     config: SubagentConfig,
-    messages: Vec<String>,
     status: SubagentStatus,
 }
 
@@ -56,17 +55,21 @@ impl SubagentOrchestrator {
     pub fn spawn(&mut self, config: SubagentConfig) -> Uuid {
         let id = Uuid::new_v4();
 
-        self.active_agents.insert(id, ActiveSubagent {
-            config,
-            messages: Vec::new(),
-            status: SubagentStatus::Pending,
-        });
+        self.active_agents.insert(
+            id,
+            ActiveSubagent {
+                config,
+                status: SubagentStatus::Pending,
+            },
+        );
 
         id
     }
 
     pub async fn run(&mut self, id: Uuid) -> Result<SubagentResult> {
-        let agent = self.active_agents.get_mut(&id)
+        let agent = self
+            .active_agents
+            .get_mut(&id)
             .ok_or_else(|| anyhow::anyhow!("Subagent not found: {}", id))?;
 
         agent.status = SubagentStatus::Running;
@@ -91,9 +94,22 @@ impl SubagentOrchestrator {
     }
 
     pub fn active_count(&self) -> usize {
-        self.active_agents.values()
+        self.active_agents
+            .values()
             .filter(|a| a.status == SubagentStatus::Running)
             .count()
+    }
+
+    /// Marks a subagent as failed.
+    ///
+    /// Returns `true` if the agent was found and marked, `false` otherwise.
+    pub fn mark_failed(&mut self, id: Uuid) -> bool {
+        if let Some(agent) = self.active_agents.get_mut(&id) {
+            agent.status = SubagentStatus::Failed;
+            true
+        } else {
+            false
+        }
     }
 }
 

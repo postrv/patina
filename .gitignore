@@ -28,3 +28,11 @@ Thumbs.db
 
 # Initial replit files (reference only)
 /initial_replit_files/
+
+# Ralph Automation Suite
+.ralph/
+.archive/
+.claude/CLAUDE.local.md
+context*.txt
+sbom.json
+*.log
