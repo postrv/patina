@@ -154,6 +154,7 @@ async fn test_bash_missing_command() {
 // =============================================================================
 
 /// Test that rm -rf / is blocked by security policy.
+#[cfg(unix)]
 #[tokio::test]
 async fn test_bash_blocks_rm_rf() {
     let ctx = TestContext::new();
@@ -182,6 +183,7 @@ async fn test_bash_blocks_rm_rf() {
 }
 
 /// Test that sudo commands are blocked by security policy.
+#[cfg(unix)]
 #[tokio::test]
 async fn test_bash_blocks_sudo() {
     let ctx = TestContext::new();
@@ -210,6 +212,7 @@ async fn test_bash_blocks_sudo() {
 }
 
 /// Test that chmod 777 is blocked by security policy.
+#[cfg(unix)]
 #[tokio::test]
 async fn test_bash_blocks_chmod_777() {
     let ctx = TestContext::new();
@@ -238,6 +241,7 @@ async fn test_bash_blocks_chmod_777() {
 }
 
 /// Test that dangerous commands in pipelines are blocked.
+#[cfg(unix)]
 #[tokio::test]
 async fn test_bash_blocks_dangerous_in_pipeline() {
     let ctx = TestContext::new();
@@ -294,6 +298,7 @@ async fn test_bash_allows_safe_commands() {
 }
 
 /// Test that curl piped to shell is blocked.
+#[cfg(unix)]
 #[tokio::test]
 async fn test_bash_blocks_curl_pipe_bash() {
     let ctx = TestContext::new();
@@ -322,6 +327,7 @@ async fn test_bash_blocks_curl_pipe_bash() {
 }
 
 /// Test that mkfs commands are blocked.
+#[cfg(unix)]
 #[tokio::test]
 async fn test_bash_blocks_mkfs() {
     let ctx = TestContext::new();
@@ -350,6 +356,7 @@ async fn test_bash_blocks_mkfs() {
 }
 
 /// Test that shutdown commands are blocked.
+#[cfg(unix)]
 #[tokio::test]
 async fn test_bash_blocks_shutdown() {
     let ctx = TestContext::new();
@@ -378,6 +385,7 @@ async fn test_bash_blocks_shutdown() {
 }
 
 /// Test that dd commands targeting devices are blocked.
+#[cfg(unix)]
 #[tokio::test]
 async fn test_bash_blocks_dd_device_write() {
     let ctx = TestContext::new();
@@ -1719,6 +1727,7 @@ async fn test_grep_file_filter() {
 use rct::hooks::HookManager;
 
 /// Test that HookedToolExecutor fires PreToolUse hook before execution.
+#[cfg(unix)]
 #[tokio::test]
 async fn test_hooked_executor_fires_pre_tool_use() {
     let ctx = TestContext::new();
@@ -1752,6 +1761,7 @@ async fn test_hooked_executor_fires_pre_tool_use() {
 }
 
 /// Test that HookedToolExecutor fires PostToolUse hook after successful execution.
+#[cfg(unix)]
 #[tokio::test]
 async fn test_hooked_executor_fires_post_tool_use() {
     let ctx = TestContext::new();
@@ -1781,6 +1791,7 @@ async fn test_hooked_executor_fires_post_tool_use() {
 }
 
 /// Test that HookedToolExecutor fires PostToolUseFailure hook after failed execution.
+#[cfg(unix)]
 #[tokio::test]
 async fn test_hooked_executor_fires_post_tool_use_failure() {
     let ctx = TestContext::new();
@@ -1849,6 +1860,7 @@ async fn test_hooked_executor_pre_tool_use_blocks() {
 }
 
 /// Test that matcher patterns filter which tools hooks apply to.
+#[cfg(unix)]
 #[tokio::test]
 async fn test_hooked_executor_matcher_filters_tools() {
     let ctx = TestContext::new();
@@ -1891,6 +1903,7 @@ async fn test_hooked_executor_matcher_filters_tools() {
 }
 
 /// Test that PreToolUse hook receives tool context.
+#[cfg(unix)]
 #[tokio::test]
 async fn test_hooked_executor_pre_tool_use_receives_context() {
     let ctx = TestContext::new();
@@ -1920,6 +1933,7 @@ async fn test_hooked_executor_pre_tool_use_receives_context() {
 }
 
 /// Test that PostToolUse hook receives tool response.
+#[cfg(unix)]
 #[tokio::test]
 async fn test_hooked_executor_post_tool_use_receives_response() {
     let ctx = TestContext::new();
@@ -2057,6 +2071,7 @@ async fn test_list_files_blocks_absolute_path() {
 /// during interpretation, resulting in `rm -rf /` being executed.
 ///
 /// This is a security test - should be BLOCKED by policy.
+#[cfg(unix)]
 #[tokio::test]
 async fn test_bash_blocks_escaped_rm() {
     let ctx = TestContext::new();
@@ -2094,6 +2109,7 @@ async fn test_bash_blocks_escaped_rm() {
 /// and execute it, bypassing direct pattern matching on "rm".
 ///
 /// This is a security test - should be BLOCKED by policy.
+#[cfg(unix)]
 #[tokio::test]
 async fn test_bash_blocks_command_substitution() {
     let ctx = TestContext::new();
@@ -2130,6 +2146,7 @@ async fn test_bash_blocks_command_substitution() {
 /// which is equally dangerous as it escalates to root privileges.
 ///
 /// This is a security test - should be BLOCKED by policy.
+#[cfg(unix)]
 #[tokio::test]
 async fn test_bash_blocks_su_root() {
     let ctx = TestContext::new();
@@ -2170,6 +2187,7 @@ async fn test_bash_blocks_su_root() {
 /// inject malicious commands into the variable.
 ///
 /// This is a security test - should be BLOCKED by policy.
+#[cfg(unix)]
 #[tokio::test]
 async fn test_bash_blocks_eval_quoted_variable() {
     let ctx = TestContext::new();
@@ -2212,6 +2230,7 @@ async fn test_bash_blocks_eval_quoted_variable() {
 /// could bypass `$(...)` pattern checks.
 ///
 /// This is a security test - should be BLOCKED by policy.
+#[cfg(unix)]
 #[tokio::test]
 async fn test_bash_blocks_backtick_substitution() {
     let ctx = TestContext::new();
@@ -2248,6 +2267,7 @@ async fn test_bash_blocks_backtick_substitution() {
 /// bypass literal pattern matching.
 ///
 /// This is a security test - should be BLOCKED by policy.
+#[cfg(unix)]
 #[tokio::test]
 async fn test_bash_blocks_hex_encoded_command() {
     let ctx = TestContext::new();
@@ -2285,6 +2305,7 @@ async fn test_bash_blocks_hex_encoded_command() {
 /// pattern matching.
 ///
 /// This is a security test - should be BLOCKED by policy.
+#[cfg(unix)]
 #[tokio::test]
 async fn test_bash_blocks_base64_command() {
     let ctx = TestContext::new();
@@ -2322,6 +2343,7 @@ async fn test_bash_blocks_base64_command() {
 /// similar to sudo.
 ///
 /// This is a security test - should be BLOCKED by policy.
+#[cfg(unix)]
 #[tokio::test]
 async fn test_bash_blocks_pkexec() {
     let ctx = TestContext::new();
@@ -2425,6 +2447,7 @@ async fn test_allowlist_mode_allows_listed_commands() {
 }
 
 /// Test that allowlist mode still blocks dangerous commands even if they match allowlist.
+#[cfg(unix)]
 #[tokio::test]
 async fn test_allowlist_mode_still_blocks_dangerous() {
     let ctx = TestContext::new();
@@ -3110,6 +3133,7 @@ async fn test_edit_file_no_write_permission() {
 /// 4. Waiting briefly and verifying no additional writes occur (process killed)
 ///
 /// This is an error path test - verifies timeout behavior.
+#[cfg(unix)]
 #[tokio::test]
 async fn test_bash_timeout_kills_process() {
     let ctx = TestContext::new();
