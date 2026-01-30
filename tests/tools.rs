@@ -431,7 +431,9 @@ async fn test_bash_timeout() {
     assert!(result.is_err(), "long-running command should timeout");
     let err = result.unwrap_err();
     assert!(
-        err.to_string().contains("deadline") || err.to_string().contains("elapsed"),
+        err.to_string().contains("deadline")
+            || err.to_string().contains("elapsed")
+            || err.to_string().contains("timed out"),
         "error should indicate timeout, got: {err}"
     );
 }
@@ -2413,6 +2415,473 @@ async fn test_file_read_rejects_internal_symlinks() {
         }
         ToolResult::Success(s) => {
             panic!("read_file should reject ALL symlinks for defense in depth, but read: {s}")
+        }
+        ToolResult::Cancelled => panic!("expected error, got cancelled"),
+    }
+}
+
+// =============================================================================
+// Error Path Tests (3.1.1) - File Operation Error Handling
+// =============================================================================
+
+/// Test that read_file returns proper error when file permissions deny read access.
+///
+/// This test creates a file and removes read permissions, then verifies that
+/// the read_file tool returns an appropriate error rather than panicking or
+/// returning an empty result.
+///
+/// This is an error path test - verifies error handling.
+#[cfg(unix)]
+#[tokio::test]
+async fn test_read_file_permission_denied() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let ctx = TestContext::new();
+    let file_path = ctx.create_file("no_read_perms.txt", "secret content");
+
+    // Remove read permissions (write-only)
+    let mut perms = std::fs::metadata(&file_path)
+        .expect("file should exist")
+        .permissions();
+    perms.set_mode(0o200); // Write-only
+    std::fs::set_permissions(&file_path, perms).expect("failed to set permissions");
+
+    // Ensure permissions are restored on cleanup
+    struct Cleanup(std::path::PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            use std::os::unix::fs::PermissionsExt;
+            if let Ok(mut perms) = std::fs::metadata(&self.0).map(|m| m.permissions()) {
+                perms.set_mode(0o644);
+                let _ = std::fs::set_permissions(&self.0, perms);
+            }
+        }
+    }
+    let _cleanup = Cleanup(file_path);
+
+    let executor = ToolExecutor::new(ctx.path());
+
+    let call = ToolCall {
+        name: "read_file".to_string(),
+        input: json!({ "path": "no_read_perms.txt" }),
+    };
+
+    let result = executor
+        .execute(call)
+        .await
+        .expect("execution should not error");
+
+    match result {
+        ToolResult::Error(e) => {
+            assert!(
+                e.contains("Permission denied")
+                    || e.contains("permission denied")
+                    || e.contains("Failed to read"),
+                "error should indicate permission denied, got: {e}"
+            );
+        }
+        ToolResult::Success(s) => {
+            panic!("read_file should fail with permission denied, got success: {s}")
+        }
+        ToolResult::Cancelled => panic!("expected error, got cancelled"),
+    }
+}
+
+/// Test that write_file returns proper error when writing to a read-only directory.
+///
+/// This simulates disk/permission issues by attempting to write to a directory
+/// where we don't have write permissions. This is a more practical test than
+/// simulating actual disk full conditions.
+///
+/// This is an error path test - verifies error handling.
+#[cfg(unix)]
+#[tokio::test]
+async fn test_write_file_to_readonly_directory() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let ctx = TestContext::new();
+
+    // Create a subdirectory and make it read-only
+    let readonly_dir = ctx.path().join("readonly_subdir");
+    std::fs::create_dir(&readonly_dir).expect("failed to create directory");
+
+    let mut perms = std::fs::metadata(&readonly_dir)
+        .expect("dir should exist")
+        .permissions();
+    perms.set_mode(0o555); // Read + execute only, no write
+    std::fs::set_permissions(&readonly_dir, perms.clone()).expect("failed to set permissions");
+
+    // Ensure permissions are restored on cleanup
+    struct Cleanup(std::path::PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            use std::os::unix::fs::PermissionsExt;
+            if let Ok(mut perms) = std::fs::metadata(&self.0).map(|m| m.permissions()) {
+                perms.set_mode(0o755);
+                let _ = std::fs::set_permissions(&self.0, perms);
+            }
+        }
+    }
+    let _cleanup = Cleanup(readonly_dir.clone());
+
+    let executor = ToolExecutor::new(ctx.path());
+
+    // Attempt to write to the read-only directory
+    let call = ToolCall {
+        name: "write_file".to_string(),
+        input: json!({ "path": "readonly_subdir/new_file.txt", "content": "should fail" }),
+    };
+
+    let result = executor
+        .execute(call)
+        .await
+        .expect("execution should not error");
+
+    match result {
+        ToolResult::Error(e) => {
+            assert!(
+                e.contains("Permission denied")
+                    || e.contains("permission denied")
+                    || e.contains("Failed to write")
+                    || e.contains("Read-only"),
+                "error should indicate write failure, got: {e}"
+            );
+        }
+        ToolResult::Success(s) => {
+            panic!("write_file should fail on read-only directory, got success: {s}")
+        }
+        ToolResult::Cancelled => panic!("expected error, got cancelled"),
+    }
+}
+
+/// Test that edit tool returns proper error when file has no read permission.
+///
+/// The edit operation requires reading the file first. This test verifies that
+/// proper error is returned when the file cannot be read.
+///
+/// This is an error path test - verifies error handling.
+#[cfg(unix)]
+#[tokio::test]
+async fn test_edit_file_no_read_permission() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let ctx = TestContext::new();
+    let file_path = ctx.create_file("no_edit_perms.txt", "original content");
+
+    // Remove read permissions
+    let mut perms = std::fs::metadata(&file_path)
+        .expect("file should exist")
+        .permissions();
+    perms.set_mode(0o200); // Write-only
+    std::fs::set_permissions(&file_path, perms).expect("failed to set permissions");
+
+    // Ensure permissions are restored on cleanup
+    struct Cleanup(std::path::PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            use std::os::unix::fs::PermissionsExt;
+            if let Ok(mut perms) = std::fs::metadata(&self.0).map(|m| m.permissions()) {
+                perms.set_mode(0o644);
+                let _ = std::fs::set_permissions(&self.0, perms);
+            }
+        }
+    }
+    let _cleanup = Cleanup(file_path);
+
+    let executor = ToolExecutor::new(ctx.path());
+
+    let call = ToolCall {
+        name: "edit".to_string(),
+        input: json!({
+            "path": "no_edit_perms.txt",
+            "old_string": "original",
+            "new_string": "modified"
+        }),
+    };
+
+    let result = executor
+        .execute(call)
+        .await
+        .expect("execution should not error");
+
+    match result {
+        ToolResult::Error(e) => {
+            assert!(
+                e.contains("Permission denied")
+                    || e.contains("permission denied")
+                    || e.contains("Failed to read"),
+                "error should indicate permission denied, got: {e}"
+            );
+        }
+        ToolResult::Success(s) => {
+            panic!("edit should fail with permission denied, got success: {s}")
+        }
+        ToolResult::Cancelled => panic!("expected error, got cancelled"),
+    }
+}
+
+/// Test that edit tool returns proper error when file has no write permission.
+///
+/// The edit operation reads the file successfully but fails when trying to write.
+/// This tests a different error path than the read permission test.
+///
+/// This is an error path test - verifies error handling.
+#[cfg(unix)]
+#[tokio::test]
+async fn test_edit_file_no_write_permission() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let ctx = TestContext::new();
+    let file_path = ctx.create_file("no_write_perms.txt", "original content here");
+
+    // Make file read-only
+    let mut perms = std::fs::metadata(&file_path)
+        .expect("file should exist")
+        .permissions();
+    perms.set_mode(0o444); // Read-only
+    std::fs::set_permissions(&file_path, perms).expect("failed to set permissions");
+
+    // Ensure permissions are restored on cleanup
+    struct Cleanup(std::path::PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            use std::os::unix::fs::PermissionsExt;
+            if let Ok(mut perms) = std::fs::metadata(&self.0).map(|m| m.permissions()) {
+                perms.set_mode(0o644);
+                let _ = std::fs::set_permissions(&self.0, perms);
+            }
+        }
+    }
+    let _cleanup = Cleanup(file_path);
+
+    let executor = ToolExecutor::new(ctx.path());
+
+    let call = ToolCall {
+        name: "edit".to_string(),
+        input: json!({
+            "path": "no_write_perms.txt",
+            "old_string": "original",
+            "new_string": "modified"
+        }),
+    };
+
+    let result = executor
+        .execute(call)
+        .await
+        .expect("execution should not error");
+
+    match result {
+        ToolResult::Error(e) => {
+            assert!(
+                e.contains("Permission denied")
+                    || e.contains("permission denied")
+                    || e.contains("Failed to write")
+                    || e.contains("Failed to create backup"),
+                "error should indicate write failure, got: {e}"
+            );
+        }
+        ToolResult::Success(s) => {
+            panic!("edit should fail with permission denied, got success: {s}")
+        }
+        ToolResult::Cancelled => panic!("expected error, got cancelled"),
+    }
+}
+
+/// Test that bash timeout actually kills the spawned process.
+///
+/// This test verifies not just that the command times out, but that the
+/// underlying process is actually terminated and not left running as a
+/// zombie or orphan process.
+///
+/// We verify this by:
+/// 1. Running a command that writes a marker file then sleeps
+/// 2. Timing out before the sleep completes
+/// 3. Verifying the marker file exists (process started)
+/// 4. Waiting briefly and verifying no additional writes occur (process killed)
+///
+/// This is an error path test - verifies timeout behavior.
+#[tokio::test]
+async fn test_bash_timeout_kills_process() {
+    let ctx = TestContext::new();
+    let marker_file = ctx.path().join("timeout_marker.txt");
+    let counter_file = ctx.path().join("timeout_counter.txt");
+
+    let policy = ToolExecutionPolicy {
+        command_timeout: Duration::from_millis(200),
+        ..Default::default()
+    };
+    let executor = ToolExecutor::new(ctx.path()).with_policy(policy);
+
+    // Command that writes to a file every 100ms in a loop
+    // If the process isn't killed, it would keep incrementing
+    let command = format!(
+        r#"echo "started" > {:?}; for i in 1 2 3 4 5 6 7 8 9 10; do echo $i >> {:?}; sleep 0.1; done"#,
+        marker_file, counter_file
+    );
+
+    let call = ToolCall {
+        name: "bash".to_string(),
+        input: json!({ "command": command }),
+    };
+
+    let result = executor.execute(call).await;
+
+    // Should error due to timeout
+    assert!(result.is_err(), "command should timeout");
+
+    // Wait a moment for any lingering process activity
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    // Marker file should exist (process started)
+    assert!(
+        marker_file.exists(),
+        "process should have started and created marker file"
+    );
+
+    // Counter file might exist with some entries, but should have stopped incrementing
+    if counter_file.exists() {
+        let initial_content = std::fs::read_to_string(&counter_file).unwrap_or_default();
+        let initial_lines = initial_content.lines().count();
+
+        // Wait a bit more to ensure process is truly dead
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        let final_content = std::fs::read_to_string(&counter_file).unwrap_or_default();
+        let final_lines = final_content.lines().count();
+
+        // If process was killed, line count should not have increased
+        assert_eq!(
+            initial_lines, final_lines,
+            "process should be killed - counter file should stop growing (initial: {}, final: {})",
+            initial_lines, final_lines
+        );
+
+        // Should not have completed all 10 iterations (that would take 1 second)
+        assert!(
+            final_lines < 10,
+            "process should have been killed before completing all iterations, got {} lines",
+            final_lines
+        );
+    }
+}
+
+/// Test that read_file handles large files gracefully.
+///
+/// While there's no explicit size limit on reads, this test ensures that
+/// reading a moderately large file doesn't cause issues.
+///
+/// This is a boundary condition test - verifies handling of edge cases.
+#[tokio::test]
+async fn test_read_file_large_file() {
+    let ctx = TestContext::new();
+
+    // Create a 1MB file
+    let large_content = "x".repeat(1024 * 1024);
+    ctx.create_file("large_file.txt", &large_content);
+
+    let executor = ToolExecutor::new(ctx.path());
+
+    let call = ToolCall {
+        name: "read_file".to_string(),
+        input: json!({ "path": "large_file.txt" }),
+    };
+
+    let result = executor
+        .execute(call)
+        .await
+        .expect("execution should not error");
+
+    match result {
+        ToolResult::Success(content) => {
+            assert_eq!(
+                content.len(),
+                1024 * 1024,
+                "should read full 1MB file content"
+            );
+        }
+        ToolResult::Error(e) => panic!("expected success for large file, got error: {e}"),
+        ToolResult::Cancelled => panic!("expected success, got cancelled"),
+    }
+}
+
+/// Test that write_file enforces max file size limit.
+///
+/// The policy has a max_file_size setting. This test verifies that
+/// attempting to write a file larger than the limit returns an error.
+///
+/// This is a boundary condition test - verifies size limit enforcement.
+#[tokio::test]
+async fn test_write_file_exceeds_size_limit() {
+    let ctx = TestContext::new();
+    let policy = ToolExecutionPolicy {
+        max_file_size: 100, // Very small limit for testing
+        ..Default::default()
+    };
+    let executor = ToolExecutor::new(ctx.path()).with_policy(policy);
+
+    // Content larger than the limit
+    let large_content = "x".repeat(200);
+
+    let call = ToolCall {
+        name: "write_file".to_string(),
+        input: json!({ "path": "too_large.txt", "content": large_content }),
+    };
+
+    let result = executor
+        .execute(call)
+        .await
+        .expect("execution should not error");
+
+    match result {
+        ToolResult::Error(e) => {
+            assert!(
+                e.contains("exceeds limit") || e.contains("size"),
+                "error should mention size limit, got: {e}"
+            );
+        }
+        ToolResult::Success(s) => {
+            panic!("write should fail due to size limit, got success: {s}")
+        }
+        ToolResult::Cancelled => panic!("expected error, got cancelled"),
+    }
+
+    // Verify file was NOT created
+    assert!(
+        !ctx.path().join("too_large.txt").exists(),
+        "file should not have been created"
+    );
+}
+
+/// Test that list_files handles nonexistent directory gracefully.
+///
+/// This is an error path test - verifies error handling.
+#[tokio::test]
+async fn test_list_files_nonexistent_directory() {
+    let ctx = TestContext::new();
+    let executor = ToolExecutor::new(ctx.path());
+
+    let call = ToolCall {
+        name: "list_files".to_string(),
+        input: json!({ "path": "nonexistent_dir" }),
+    };
+
+    let result = executor
+        .execute(call)
+        .await
+        .expect("execution should not error");
+
+    match result {
+        ToolResult::Error(e) => {
+            assert!(
+                e.contains("not found")
+                    || e.contains("No such file")
+                    || e.contains("canonicalize")
+                    || e.contains("Failed"),
+                "error should indicate directory not found, got: {e}"
+            );
+        }
+        ToolResult::Success(s) => {
+            panic!("list_files should fail for nonexistent directory, got success: {s}")
         }
         ToolResult::Cancelled => panic!("expected error, got cancelled"),
     }
