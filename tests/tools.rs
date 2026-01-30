@@ -2533,8 +2533,8 @@ use regex::Regex;
 // Symlink Security Tests (1.3.1) - TOCTOU Mitigation
 // =============================================================================
 
-#[cfg(unix)]
-use std::os::unix::fs::symlink;
+// Use cross-platform symlink helpers from common module
+use common::{create_symlink, symlinks_available};
 
 /// Test that read_file rejects symlinks to prevent TOCTOU attacks.
 ///
@@ -2546,9 +2546,18 @@ use std::os::unix::fs::symlink;
 /// and verifies that read_file rejects it.
 ///
 /// This is a security test - should be BLOCKED.
-#[cfg(unix)]
+///
+/// # Platform Notes
+///
+/// On Windows, this test requires Developer Mode or admin rights to create symlinks.
+/// The test will skip gracefully if symlinks cannot be created.
 #[tokio::test]
 async fn test_file_read_rejects_symlinks() {
+    if !symlinks_available() {
+        eprintln!("Skipping: symlinks require Developer Mode or admin on Windows");
+        return;
+    }
+
     let ctx = TestContext::new();
     let working_dir = ctx.path();
 
@@ -2568,7 +2577,7 @@ async fn test_file_read_rejects_symlinks() {
 
     // Create a symlink inside working directory pointing to external file
     let symlink_path = working_dir.join("link_to_external.txt");
-    symlink(&external_file, &symlink_path).expect("failed to create symlink");
+    create_symlink(&external_file, &symlink_path).expect("failed to create symlink");
 
     let executor = ToolExecutor::new(working_dir);
 
@@ -2612,9 +2621,17 @@ async fn test_file_read_rejects_symlinks() {
 /// and verifies that write_file rejects writing through it.
 ///
 /// This is a security test - should be BLOCKED.
-#[cfg(unix)]
+///
+/// # Platform Notes
+///
+/// On Windows, this test requires Developer Mode or admin rights to create symlinks.
 #[tokio::test]
 async fn test_file_write_rejects_symlinks() {
+    if !symlinks_available() {
+        eprintln!("Skipping: symlinks require Developer Mode or admin on Windows");
+        return;
+    }
+
     let ctx = TestContext::new();
     let working_dir = ctx.path();
 
@@ -2634,7 +2651,7 @@ async fn test_file_write_rejects_symlinks() {
 
     // Create a symlink inside working directory pointing to external file
     let symlink_path = working_dir.join("link_to_target.txt");
-    symlink(&external_file, &symlink_path).expect("failed to create symlink");
+    create_symlink(&external_file, &symlink_path).expect("failed to create symlink");
 
     let executor = ToolExecutor::new(working_dir);
 
@@ -2680,9 +2697,17 @@ async fn test_file_write_rejects_symlinks() {
 /// that edit operations on symlinks are rejected.
 ///
 /// This is a security test - should be BLOCKED.
-#[cfg(unix)]
+///
+/// # Platform Notes
+///
+/// On Windows, this test requires Developer Mode or admin rights to create symlinks.
 #[tokio::test]
 async fn test_edit_rejects_symlinks() {
+    if !symlinks_available() {
+        eprintln!("Skipping: symlinks require Developer Mode or admin on Windows");
+        return;
+    }
+
     let ctx = TestContext::new();
     let working_dir = ctx.path();
 
@@ -2703,7 +2728,7 @@ async fn test_edit_rejects_symlinks() {
 
     // Create a symlink inside working directory pointing to external file
     let symlink_path = working_dir.join("link_to_edit.txt");
-    symlink(&external_file, &symlink_path).expect("failed to create symlink");
+    create_symlink(&external_file, &symlink_path).expect("failed to create symlink");
 
     let executor = ToolExecutor::new(working_dir);
 
@@ -2753,9 +2778,17 @@ async fn test_edit_rejects_symlinks() {
 /// reject all symlinks uniformly for defense in depth.
 ///
 /// This is a security test - should be BLOCKED.
-#[cfg(unix)]
+///
+/// # Platform Notes
+///
+/// On Windows, this test requires Developer Mode or admin rights to create symlinks.
 #[tokio::test]
 async fn test_file_read_rejects_internal_symlinks() {
+    if !symlinks_available() {
+        eprintln!("Skipping: symlinks require Developer Mode or admin on Windows");
+        return;
+    }
+
     let ctx = TestContext::new();
     let working_dir = ctx.path();
 
@@ -2765,7 +2798,7 @@ async fn test_file_read_rejects_internal_symlinks() {
     // Create a symlink to the real file (both inside working directory)
     let symlink_path = working_dir.join("link_to_real.txt");
     let real_file_path = working_dir.join("real_file.txt");
-    symlink(&real_file_path, &symlink_path).expect("failed to create symlink");
+    create_symlink(&real_file_path, &symlink_path).expect("failed to create symlink");
 
     let executor = ToolExecutor::new(working_dir);
 
