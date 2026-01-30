@@ -182,8 +182,9 @@ Steps:
   - Add: Block shell injection patterns in non-interpreter arguments
   - Acceptance: All 9 MCP security tests pass
 
-- [ ] 1.2.3 Commit MCP validation
+- [x] 1.2.3 Commit MCP validation
   - Message: `feat(mcp): Add command validation to MCP transport`
+  - Commit: 63aced4
 
 ### 1.3 TOCTOU Mitigation (MEDIUM M-2)
 
@@ -472,6 +473,15 @@ Steps:
   - Created docs/security-model.md documentation
   - 13 security tests added
   - Commit: b430478
+
+- [x] 1.2.1-1.2.3 MCP Command Validation (M-1)
+  - Added validate_mcp_command() to src/mcp/client.rs
+  - Blocks dangerous commands (rm, sudo, dd, etc.) even with absolute paths
+  - Requires absolute paths for interpreters (bash, python, etc.)
+  - Blocks path traversal and relative paths
+  - Validates arguments for shell injection on non-interpreters
+  - 9 security tests added
+  - Commit: 63aced4
 
 ---
 
