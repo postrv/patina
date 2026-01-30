@@ -339,19 +339,21 @@ Steps:
 
 ### 3.5 TUI Functional Tests
 
-- [ ] 3.5.1 Write TUI rendering tests (RED)
-  - Path: `tests/unit/tui_test.rs`
-  - Test: `test_tui_renders_messages_correctly`
+- [x] 3.5.1 Write TUI rendering tests (RED)
+  - Path: `tests/unit/tui_snapshot_test.rs`
   - Test: `test_tui_handles_unicode`
+  - Test: `test_tui_unicode_input`
   - Test: `test_tui_scrolls_long_content`
   - Test: `test_tui_input_cursor_visible`
+  - Test: `test_tui_cursor_movement`
   - Acceptance: TUI logic verified
 
-- [ ] 3.5.2 Write TUI event tests (RED)
-  - Path: `tests/unit/tui_test.rs`
+- [x] 3.5.2 Write TUI event tests (RED)
+  - Path: `tests/unit/tui_snapshot_test.rs`
   - Test: `test_tui_key_events`
   - Test: `test_tui_resize_event`
   - Test: `test_tui_paste_event`
+  - Test: `test_dirty_flags`
   - Acceptance: Event handling verified
 
 ### 3.6 Concurrency Tests
@@ -558,6 +560,18 @@ Steps:
   - Added test_session_concurrent_reads: verifies concurrent reads work
   - Verified error recovery: integrity checking, schema validation, atomic writes
   - 4 new tests added
+
+- [x] 3.5.1-3.5.2 TUI Functional Tests
+  - Added test_tui_handles_unicode: verifies unicode messages render correctly
+  - Added test_tui_unicode_input: verifies unicode input handling
+  - Added test_tui_scrolls_long_content: verifies scroll behavior
+  - Added test_tui_input_cursor_visible: verifies cursor tracking
+  - Added test_tui_cursor_movement: verifies cursor navigation
+  - Added test_tui_key_events: verifies key event processing
+  - Added test_tui_resize_event: verifies resize handling
+  - Added test_tui_paste_event: verifies paste behavior
+  - Added test_dirty_flags: verifies dirty flag system
+  - 9 new tests added
 
 ---
 
