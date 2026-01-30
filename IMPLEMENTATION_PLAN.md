@@ -643,8 +643,13 @@ Steps:
 
 ### 7.4 Enterprise Features
 
-- [ ] 7.4.1 Implement audit logging
+- [x] 7.4.1 Implement audit logging
   - Path: `src/enterprise/audit.rs`
+  - AuditLogger with configurable levels (All, ApiOnly, ToolsOnly, SessionOnly)
+  - AuditEntry for tool use, API calls, session lifecycle
+  - AuditQuery for filtering and statistics
+  - File persistence with JSON format
+  - **Completed: 2026-01-30** - 11 integration tests, 5 unit tests
 
 - [ ] 7.4.2 Implement cost controls
   - Path: `src/enterprise/cost.rs`
