@@ -255,19 +255,21 @@ Add project-specific notes below. This section is preserved during regeneration.
 ### RCT-Specific Notes
 
 **Current State (2026-01-30):**
-- **Phase 1 Complete:** TUI, API streaming, tools, MCP, hooks, skills, commands, agents, plugins
-- **Test Coverage:** 84.38% (491 tests)
-- **Current Sprint:** Security Hardening & Quality Improvements
+- **All Phases Complete:** TUI, API streaming, tools, MCP, hooks, skills, commands, agents, plugins
+- **Test Coverage:** 85.84% (624 tests)
+- **Release:** v0.2.0-security tagged
 
-**Security Audit Findings (2026-01-30):**
-| ID | Severity | Status | Issue |
-|----|----------|--------|-------|
-| H-3 | HIGH | 🔴 OPEN | list_files path traversal |
-| H-1 | HIGH | 🔴 OPEN | Plain string API key in multi_model |
-| H-2 | HIGH | 🔴 OPEN | Unsandboxed hook execution |
-| C-1 | CRITICAL | 🔴 OPEN | Bypassable bash command filter |
-| M-1 | MEDIUM | 🔴 OPEN | Unvalidated MCP commands |
-| M-2 | MEDIUM | 🔴 OPEN | TOCTOU race in path validation |
+**Security Audit (2026-01-30) - ALL RESOLVED:**
+| ID | Severity | Status | Issue | Resolution |
+|----|----------|--------|-------|------------|
+| C-1 | CRITICAL | ✅ FIXED | Bypassable bash command filter | Normalization + allowlist mode |
+| H-1 | HIGH | ✅ FIXED | Plain string API key in multi_model | SecretString |
+| H-2 | HIGH | ✅ FIXED | Unsandboxed hook execution | Dangerous command filtering |
+| H-3 | HIGH | ✅ FIXED | list_files path traversal | validate_path() |
+| M-1 | MEDIUM | ✅ FIXED | Unvalidated MCP commands | validate_mcp_command() |
+| M-2 | MEDIUM | ✅ FIXED | TOCTOU race in path validation | Symlink rejection |
+| L-1 | LOW | ✅ FIXED | Runtime regex compilation | once_cell::sync::Lazy |
+| L-2 | LOW | ✅ FIXED | Session deserialization trust | HMAC-SHA256 integrity |
 
 **Archived Plans:**
 - `docs/archive/implementation-plans/IMPLEMENTATION_PLAN_v1_2026-01-30.md` - Original 8-phase TDD plan (COMPLETE)
