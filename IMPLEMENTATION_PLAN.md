@@ -2,7 +2,7 @@
 
 > Ralph uses this file to track task progress. Update checkboxes as work completes.
 
-## Status: PHASE 6.5 COMPLETE - PHASE 7 READY
+## Status: PHASE 7 IN PROGRESS
 
 ## Baseline Metrics (Updated: 2026-01-30)
 
@@ -603,11 +603,13 @@ Steps:
 
 ### 7.1 Performance Benchmarks
 
-- [ ] 7.1.1 Set up criterion benchmarks
+- [x] 7.1.1 Set up criterion benchmarks
   - Path: `benches/rendering.rs`
-  - Benchmark: `full_redraw_100_messages` (<1ms target)
-  - Benchmark: `streaming_token_append` (<100μs target)
-  - Benchmark: `input_character_echo` (<10μs target)
+  - Benchmark: `full_redraw_100_messages` (<1ms target) - **229µs** ✅
+  - Benchmark: `streaming_token_append` (<100μs target) - **352ns** ✅
+  - Benchmark: `input_character_echo` (<10μs target) - **68ns** ✅
+  - Additional benchmarks: `streaming_cycle`, `cursor_movement`, `scroll_operations`, `large_message_rendering`
+  - **Completed: 2026-01-30** - All targets met, criterion configured
 
 ### 7.2 Session Persistence
 

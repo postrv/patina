@@ -239,7 +239,8 @@ impl PluginRegistry {
     pub fn unload_plugin(&mut self, name: &str) -> bool {
         if self.plugins.remove(name).is_some() {
             // Remove commands from this plugin
-            self.commands.retain(|_, (plugin_name, _)| plugin_name != name);
+            self.commands
+                .retain(|_, (plugin_name, _)| plugin_name != name);
 
             // Remove skills from this plugin
             self.skills.retain(|(plugin_name, _)| plugin_name != name);
@@ -263,7 +264,8 @@ impl PluginRegistry {
 
         for cmd in &plugin.commands {
             let key = format!("{}:{}", loaded_name, cmd.name);
-            self.commands.insert(key, (loaded_name.clone(), cmd.clone()));
+            self.commands
+                .insert(key, (loaded_name.clone(), cmd.clone()));
         }
 
         for skill in &plugin.skills {
