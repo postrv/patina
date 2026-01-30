@@ -9,9 +9,9 @@
 | Metric | Value | Command |
 |--------|-------|---------|
 | Unit Tests | 182 | `cargo test --lib` |
-| Integration Tests | 278 | `cargo test --test '*'` |
+| Integration Tests | 281 | `cargo test --test '*'` |
 | Doc Tests | 19 | `cargo test --doc` |
-| Total Tests | 491 | `cargo test` |
+| Total Tests | 494 | `cargo test` |
 | Test Files | 33 | `find tests -name '*.rs' \| wc -l` |
 | Clippy Warnings | 0 | `cargo clippy --all-targets -- -D warnings` |
 | Source Files | 30 | `find src -name '*.rs' \| wc -l` |
@@ -70,19 +70,19 @@ Steps:
 
 ### 0.1 Path Traversal in list_files (HIGH H-3)
 
-- [ ] 0.1.1 Write path traversal tests for list_files (RED)
+- [x] 0.1.1 Write path traversal tests for list_files (RED)
   - Path: `tests/tools.rs`
   - Test: `test_list_files_blocks_path_traversal`
   - Test: `test_list_files_blocks_absolute_path`
   - Test: `test_list_files_blocks_parent_escape`
   - Acceptance: All tests fail initially (no validation exists)
 
-- [ ] 0.1.2 Add validate_path call to list_files (GREEN)
+- [x] 0.1.2 Add validate_path call to list_files (GREEN)
   - Path: `src/tools/mod.rs:431-448`
   - Change: Add `validate_path()` call before `read_dir()`
   - Acceptance: All new tests pass
 
-- [ ] 0.1.3 Commit path traversal fix
+- [x] 0.1.3 Commit path traversal fix
   - Message: `fix(tools): Prevent path traversal in list_files`
 
 ### 0.2 Plain String API Keys (HIGH H-1)
@@ -438,6 +438,12 @@ Steps:
 ## Completed
 
 <!-- Move completed tasks here with completion date -->
+
+### 2026-01-30
+- [x] 0.1.1-0.1.3 Path Traversal fix for list_files (H-3)
+  - Added validate_path() to list_files
+  - 3 security tests added
+  - Commit: 953e40d
 
 ---
 
