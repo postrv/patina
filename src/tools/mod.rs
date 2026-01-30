@@ -371,30 +371,42 @@ impl ToolExecutor {
             }
         }
 
-        let output = tokio::time::timeout(
-            self.policy.command_timeout,
-            Command::new("sh")
-                .arg("-c")
-                .arg(command)
-                .current_dir(&self.working_dir)
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .output(),
-        )
-        .await??;
+        // Spawn the command with kill_on_drop to ensure process cleanup on timeout
+        let child = Command::new("sh")
+            .arg("-c")
+            .arg(command)
+            .current_dir(&self.working_dir)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()?;
 
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let stderr = String::from_utf8_lossy(&output.stderr);
+        // Wait for the child with timeout
+        // When timeout occurs, the future (and child) is dropped, triggering kill_on_drop
+        match tokio::time::timeout(self.policy.command_timeout, child.wait_with_output()).await {
+            Ok(Ok(output)) => {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let stderr = String::from_utf8_lossy(&output.stderr);
 
-        if output.status.success() {
-            Ok(ToolResult::Success(format!("{}{}", stdout, stderr)))
-        } else {
-            Ok(ToolResult::Error(format!(
-                "Exit code {}: {}{}",
-                output.status.code().unwrap_or(-1),
-                stdout,
-                stderr
-            )))
+                if output.status.success() {
+                    Ok(ToolResult::Success(format!("{}{}", stdout, stderr)))
+                } else {
+                    Ok(ToolResult::Error(format!(
+                        "Exit code {}: {}{}",
+                        output.status.code().unwrap_or(-1),
+                        stdout,
+                        stderr
+                    )))
+                }
+            }
+            Ok(Err(e)) => Err(e.into()),
+            Err(_) => {
+                // Timeout occurred - child is automatically killed by kill_on_drop
+                Err(anyhow::anyhow!(
+                    "Command timed out after {:?}",
+                    self.policy.command_timeout
+                ))
+            }
         }
     }
 
@@ -605,14 +617,38 @@ impl ToolExecutor {
             Err(e) => return Ok(ToolResult::Error(e)),
         };
 
-        let mut entries = Vec::new();
-        let mut dir = tokio::fs::read_dir(&full_path).await?;
+        // Open directory, handling errors gracefully
+        let mut dir = match tokio::fs::read_dir(&full_path).await {
+            Ok(d) => d,
+            Err(e) => {
+                return Ok(ToolResult::Error(format!(
+                    "Failed to list directory '{}': {}",
+                    path, e
+                )))
+            }
+        };
 
-        while let Some(entry) = dir.next_entry().await? {
-            let name = entry.file_name().to_string_lossy().to_string();
-            let file_type = entry.file_type().await?;
-            let prefix = if file_type.is_dir() { "d " } else { "- " };
-            entries.push(format!("{}{}", prefix, name));
+        let mut entries = Vec::new();
+
+        loop {
+            match dir.next_entry().await {
+                Ok(Some(entry)) => {
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    let file_type = match entry.file_type().await {
+                        Ok(ft) => ft,
+                        Err(_) => continue, // Skip entries we can't get file type for
+                    };
+                    let prefix = if file_type.is_dir() { "d " } else { "- " };
+                    entries.push(format!("{}{}", prefix, name));
+                }
+                Ok(None) => break,
+                Err(e) => {
+                    return Ok(ToolResult::Error(format!(
+                        "Error reading directory entries: {}",
+                        e
+                    )))
+                }
+            }
         }
 
         entries.sort();
