@@ -386,11 +386,12 @@ Steps:
   - Add: Conversion from anyhow errors
   - Commit: 6c69842
 
-- [ ] 4.1.2 Update modules to use error types
-  - Update: `src/tools/mod.rs`
-  - Update: `src/mcp/mod.rs`
-  - Update: `src/session/mod.rs`
-  - Acceptance: Consistent error handling
+- [x] 4.1.2 Update modules to use error types
+  - Updated: `src/mcp/client.rs` - validate_mcp_command returns RctError::McpValidation
+  - Updated: `src/session/mod.rs` - validate_session_id returns RctError::SessionValidation
+  - Updated: `src/session/mod.rs` - SessionFile::verify returns RctError::SessionIntegrity
+  - Added: 7 integration tests verifying error type usage
+  - Acceptance: Consistent error handling ✓
 
 ### 4.2 Error Recovery
 

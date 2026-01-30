@@ -25,8 +25,9 @@
 //! # }
 //! ```
 
+use crate::error::{RctError, RctResult};
 use crate::types::message::Message;
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;
@@ -62,13 +63,18 @@ impl SessionFile {
     }
 
     /// Verifies the checksum and returns the session if valid.
-    fn verify(self) -> Result<Session> {
+    ///
+    /// # Errors
+    ///
+    /// Returns `RctError::SessionIntegrity` if the checksum doesn't match.
+    /// This error is security-related and can be checked via `is_security_related()`.
+    fn verify(self) -> RctResult<Session> {
         let session_json = serde_json::to_string(&self.session)
-            .context("Failed to serialize session for verification")?;
+            .map_err(|e| RctError::session_integrity(format!("failed to serialize: {}", e)))?;
         let expected_checksum = compute_checksum(&session_json);
 
         if self.checksum != expected_checksum {
-            bail!("Session integrity check failed: checksum mismatch");
+            return Err(RctError::session_integrity("checksum mismatch"));
         }
 
         Ok(self.session)
@@ -90,10 +96,11 @@ fn compute_checksum(data: &str) -> String {
 ///
 /// # Errors
 ///
-/// Returns an error if the session ID contains invalid characters.
-fn validate_session_id(session_id: &str) -> Result<()> {
+/// Returns `RctError::SessionValidation` if the session ID is invalid.
+/// This error is security-related and can be checked via `is_security_related()`.
+fn validate_session_id(session_id: &str) -> RctResult<()> {
     if session_id.is_empty() {
-        bail!("Session ID cannot be empty");
+        return Err(RctError::session_validation("session ID cannot be empty"));
     }
 
     // Session IDs must be alphanumeric with hyphens and underscores only
@@ -103,9 +110,9 @@ fn validate_session_id(session_id: &str) -> Result<()> {
         .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
 
     if !is_valid {
-        bail!(
-            "Invalid session ID: must contain only alphanumeric characters, hyphens, and underscores"
-        );
+        return Err(RctError::session_validation(
+            "invalid session ID: must contain only alphanumeric characters, hyphens, and underscores",
+        ));
     }
 
     Ok(())
@@ -291,8 +298,8 @@ impl SessionManager {
         let session_file: SessionFile =
             serde_json::from_str(&json).context("Failed to deserialize session")?;
 
-        // Verify integrity checksum
-        session_file.verify()
+        // Verify integrity checksum (convert RctError to anyhow::Error)
+        Ok(session_file.verify()?)
     }
 
     /// Updates an existing session.

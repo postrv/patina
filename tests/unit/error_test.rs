@@ -270,3 +270,214 @@ mod error_type_tests {
         assert!(debug.contains("Tool") || debug.contains("tool") || debug.contains("Timeout"));
     }
 }
+
+/// Integration tests verifying modules use proper RctError types.
+///
+/// These tests ensure that the modules return typed errors (RctError) instead
+/// of generic string or anyhow errors. This enables:
+/// - Error categorization via is_security_related(), is_retryable()
+/// - Proper error handling in calling code
+/// - Consistent error messages across the codebase
+#[cfg(test)]
+mod module_integration_tests {
+    use super::*;
+
+    // ============== MCP Module Integration Tests ==============
+
+    /// Test that MCP validation returns RctError::McpValidation for dangerous commands.
+    #[test]
+    fn test_mcp_validation_returns_typed_error_for_dangerous_command() {
+        use rct::mcp::client::validate_mcp_command;
+
+        let result = validate_mcp_command("rm", &["-rf".to_string(), "/".to_string()]);
+
+        assert!(result.is_err(), "Expected validation to fail for 'rm'");
+
+        let err = result.unwrap_err();
+        // The error should be security-related
+        assert!(
+            err.is_security_related(),
+            "MCP validation errors should be security-related"
+        );
+        // The error should be from the MCP module
+        assert_eq!(err.module(), "mcp", "Error should come from MCP module");
+    }
+
+    /// Test that MCP validation returns RctError::McpValidation for path traversal.
+    #[test]
+    fn test_mcp_validation_returns_typed_error_for_path_traversal() {
+        use rct::mcp::client::validate_mcp_command;
+
+        let result = validate_mcp_command("../../../bin/sh", &[]);
+
+        assert!(
+            result.is_err(),
+            "Expected validation to fail for path traversal"
+        );
+
+        let err = result.unwrap_err();
+        assert!(
+            err.is_security_related(),
+            "Path traversal errors should be security-related"
+        );
+        assert_eq!(err.module(), "mcp", "Error should come from MCP module");
+    }
+
+    /// Test that MCP validation returns RctError::McpValidation for relative paths.
+    #[test]
+    fn test_mcp_validation_returns_typed_error_for_relative_path() {
+        use rct::mcp::client::validate_mcp_command;
+
+        let result = validate_mcp_command("./malicious", &[]);
+
+        assert!(
+            result.is_err(),
+            "Expected validation to fail for relative path"
+        );
+
+        let err = result.unwrap_err();
+        assert!(err.is_security_related());
+        assert_eq!(err.module(), "mcp");
+    }
+
+    /// Test that MCP validation returns RctError::McpValidation when interpreter lacks absolute path.
+    #[test]
+    fn test_mcp_validation_returns_typed_error_for_interpreter_without_absolute_path() {
+        use rct::mcp::client::validate_mcp_command;
+
+        // 'bash' without absolute path should fail
+        let result = validate_mcp_command("bash", &["-c".to_string(), "echo hello".to_string()]);
+
+        assert!(
+            result.is_err(),
+            "Expected validation to fail for 'bash' without absolute path"
+        );
+
+        let err = result.unwrap_err();
+        assert!(err.is_security_related());
+        assert_eq!(err.module(), "mcp");
+    }
+
+    // ============== Session Module Integration Tests ==============
+
+    /// Verifies that an anyhow::Error contains an RctError with expected properties.
+    ///
+    /// The session module's public API returns anyhow::Result, but internally
+    /// uses RctError. This helper verifies the underlying error properties.
+    fn verify_rct_error(
+        err: &anyhow::Error,
+        expected_module: &str,
+        expect_security_related: bool,
+    ) -> bool {
+        // Try to downcast directly to RctError
+        if let Some(rct_err) = err.downcast_ref::<RctError>() {
+            return rct_err.module() == expected_module
+                && rct_err.is_security_related() == expect_security_related;
+        }
+        // If that fails, check the error chain
+        for cause in err.chain() {
+            if let Some(rct_err) = cause.downcast_ref::<RctError>() {
+                return rct_err.module() == expected_module
+                    && rct_err.is_security_related() == expect_security_related;
+            }
+        }
+        false
+    }
+
+    /// Test that session validation returns RctError::SessionValidation for invalid IDs.
+    ///
+    /// Note: SessionValidation errors are not classified as security-related in the
+    /// error module, even though path traversal is a security concern. The validation
+    /// still blocks the attack, but the error categorization could be improved.
+    #[tokio::test]
+    async fn test_session_validation_returns_typed_error_for_invalid_id() {
+        use rct::session::SessionManager;
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let manager = SessionManager::new(temp_dir.path().to_path_buf());
+
+        // Try to load with an invalid session ID containing path traversal
+        let result = manager.load("../../../etc/passwd").await;
+
+        assert!(
+            result.is_err(),
+            "Expected validation to fail for path traversal ID"
+        );
+
+        let err = result.unwrap_err();
+        // SessionValidation is currently not classified as security-related,
+        // but the validation still blocks the path traversal attack
+        assert!(
+            verify_rct_error(&err, "session", false),
+            "Session validation error should come from 'session' module. Got: {}",
+            err
+        );
+    }
+
+    /// Test that session validation returns RctError::SessionValidation for empty IDs.
+    #[tokio::test]
+    async fn test_session_validation_returns_typed_error_for_empty_id() {
+        use rct::session::SessionManager;
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let manager = SessionManager::new(temp_dir.path().to_path_buf());
+
+        let result = manager.load("").await;
+
+        assert!(result.is_err(), "Expected validation to fail for empty ID");
+
+        let err = result.unwrap_err();
+        // Empty session ID validation is not security-related (just invalid input)
+        // but it should still come from the session module
+        assert!(
+            verify_rct_error(&err, "session", false),
+            "Session validation error should come from 'session' module. Got: {}",
+            err
+        );
+    }
+
+    /// Test that session integrity returns RctError::SessionIntegrity for tampered sessions.
+    #[tokio::test]
+    async fn test_session_integrity_returns_typed_error_for_tampered_session() {
+        use rct::session::{Session, SessionManager};
+        use std::path::PathBuf;
+        use tokio::fs;
+
+        let temp_dir = tempfile::TempDir::new().expect("Failed to create temp dir");
+        let manager = SessionManager::new(temp_dir.path().to_path_buf());
+
+        // Create and save a valid session
+        let session = Session::new(PathBuf::from("/test"));
+        let session_id = manager
+            .save(&session)
+            .await
+            .expect("Failed to save session");
+
+        // Tamper with the session file
+        let session_path = temp_dir.path().join(format!("{}.json", session_id));
+        let content = fs::read_to_string(&session_path)
+            .await
+            .expect("Failed to read session");
+        let tampered = content.replace("test", "tampered_test");
+        fs::write(&session_path, tampered)
+            .await
+            .expect("Failed to write tampered session");
+
+        // Try to load the tampered session
+        let result = manager.load(&session_id).await;
+
+        assert!(
+            result.is_err(),
+            "Expected integrity check to fail for tampered session"
+        );
+
+        let err = result.unwrap_err();
+        assert!(
+            verify_rct_error(&err, "session", true),
+            "Session integrity error should come from 'session' module and be security-related. Got: {}",
+            err
+        );
+    }
+}
