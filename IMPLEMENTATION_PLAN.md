@@ -9,9 +9,9 @@
 | Metric | Value | Command |
 |--------|-------|---------|
 | Unit Tests | 193 | `cargo test --lib` |
-| Integration Tests | 318 | `cargo test --test '*'` |
+| Integration Tests | 331 | `cargo test --test '*'` |
 | Doc Tests | 20 | `cargo test --doc` |
-| Total Tests | 598 | `cargo test` |
+| Total Tests | 611 | `cargo test` |
 | Test Files | 33 | `find tests -name '*.rs' \| wc -l` |
 | Clippy Warnings | 0 | `cargo clippy --all-targets -- -D warnings` |
 | Source Files | 30 | `find src -name '*.rs' \| wc -l` |
@@ -395,11 +395,12 @@ Steps:
 
 ### 4.2 Error Recovery
 
-- [ ] 4.2.1 Add graceful degradation for non-critical failures
+- [x] 4.2.1 Add graceful degradation for non-critical failures
   - Path: Various modules
   - Add: Fallback behavior when optional features fail
   - Add: Clear error messages for users
   - Acceptance: App doesn't crash on recoverable errors
+  - Commit: 919656c
 
 ### 4.3 Error Logging
 
@@ -598,6 +599,14 @@ Steps:
   - Added From<anyhow::Error> conversion for gradual migration
   - 34 new tests added (29 in error_test.rs + 5 in module)
   - Commit: 6c69842
+
+- [x] 4.2.1 Add graceful degradation for non-critical failures
+  - Context loading: continue when CLAUDE.md unreadable, skip inaccessible dirs
+  - Plugin loading: handle WalkDir errors, skip unreadable command files
+  - Hook loading: add load_config_graceful() for optional config
+  - Uses tracing::warn! and tracing::debug! for error visibility
+  - 6 new tests added
+  - Commit: 919656c
 
 ---
 
