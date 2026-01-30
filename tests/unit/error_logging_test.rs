@@ -66,6 +66,7 @@ async fn test_path_traversal_returns_error() {
 }
 
 /// Symlink rejections should return errors for TOCTOU security.
+#[cfg(unix)]
 #[tokio::test]
 async fn test_symlink_rejection_returns_error() {
     let temp_dir = TempDir::new().unwrap();

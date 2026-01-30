@@ -1,6 +1,9 @@
 //! Integration tests for the hooks system.
 //!
 //! Tests lifecycle hooks including pre-tool-use and post-tool-use events.
+//!
+//! Note: These tests are Unix-only as they depend on shell command execution via `sh -c`.
+#![cfg(unix)]
 
 use rct::hooks::{HookCommand, HookContext, HookDecision, HookDefinition, HookEvent, HookExecutor};
 use serde_json::json;
