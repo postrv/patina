@@ -2,20 +2,20 @@
 
 > Ralph uses this file to track task progress. Update checkboxes as work completes.
 
-## Status: PHASE 4 COMPLETE - PHASE 5 READY
+## Status: PHASE 5 COMPLETE - PHASE 6 READY
 
 ## Baseline Metrics (Updated: 2026-01-30)
 
 | Metric | Value | Command |
 |--------|-------|---------|
 | Unit Tests | 17 | `cargo test --lib` |
-| Integration Tests | 216 | `cargo test --test '*'` |
-| Doc Tests | 13 | `cargo test --doc` |
-| Total Tests | 246 | `cargo test` |
-| Test Files | 16 | `find tests -name '*.rs' \| wc -l` |
+| Integration Tests | 270 | `cargo test --test '*'` |
+| Doc Tests | 14 | `cargo test --doc` |
+| Total Tests | 301 | `cargo test` |
+| Test Files | 17 | `find tests -name '*.rs' \| wc -l` |
 | Clippy Warnings | 0 | `cargo clippy --all-targets -- -D warnings` |
 | Source Files | 23 | `find src -name '*.rs' \| wc -l` |
-| LOC | ~4700 | `tokei src` |
+| LOC | ~4800 | `tokei src` |
 
 **Baseline Rule:** Test count must never decrease. Clippy warnings must reach 0.
 
@@ -519,8 +519,9 @@ Steps:
 
 ### 5.4 Narsil Reindex Checkpoint
 
-- [ ] 5.4.1 Run narsil reindex after Phase 5
+- [x] 5.4.1 Run narsil reindex after Phase 5
   - Run: `scan_security` - full codebase scan
+  - **Completed: 2026-01-30** - Security scan: 0 CRITICAL/HIGH, 2 LOW (unmaintained transitive deps: bincode, yaml-rust via syntect)
 
 ---
 
@@ -530,26 +531,31 @@ Steps:
 
 ### 6.1 Subagent Tests
 
-- [ ] 6.1.1 Write subagent spawn tests (RED)
-  - Path: `tests/integration/subagent_test.rs`
+- [x] 6.1.1 Write subagent spawn tests (RED)
+  - Path: `tests/subagent_integration.rs`
   - Test: `test_subagent_spawn`
   - Test: `test_subagent_config`
+  - **Completed: 2026-01-30** - 15 tests for spawn, status, run, config, mark_failed
 
-- [ ] 6.1.2 Write isolation tests (RED)
+- [x] 6.1.2 Write isolation tests (RED)
   - Test: `test_subagent_context_isolation`
   - Test: `test_subagent_tool_restrictions`
+  - **Completed: 2026-01-30** - 9 tests for context isolation and tool restrictions, added get_config/is_tool_allowed/get_allowed_tools methods
 
-- [ ] 6.1.3 Write concurrency tests (RED)
+- [x] 6.1.3 Write concurrency tests (RED)
   - Test: `test_parallel_subagent_execution`
   - Test: `test_subagent_max_turns`
+  - **Completed: 2026-01-30** - 12 tests for concurrency, added max_concurrent/can_spawn/list_agents/remove_agent methods
 
-- [ ] 6.1.4 Implement subagent orchestrator (GREEN)
+- [x] 6.1.4 Implement subagent orchestrator (GREEN)
   - Path: `src/agents/mod.rs`
   - Remove unused code warnings
+  - **Completed: 2026-01-30** - Full documentation, module-level example, all methods documented, clippy clean
 
 ### 6.2 Narsil Reindex Checkpoint
 
-- [ ] 6.2.1 Run narsil reindex after Phase 6
+- [x] 6.2.1 Run narsil reindex after Phase 6
+  - **Completed: 2026-01-30** - Security scan: 0 CRITICAL/HIGH, 2 LOW (unmaintained transitive deps: bincode, yaml-rust via syntect)
 
 ---
 
