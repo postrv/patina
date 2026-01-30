@@ -243,20 +243,21 @@ Steps:
 
 ### 2.3 Session Integrity
 
-- [ ] 2.3.1 Write session integrity tests (RED)
+- [x] 2.3.1 Write session integrity tests (RED)
   - Path: `tests/integration/session_test.rs`
   - Test: `test_session_detects_tampering`
   - Test: `test_session_validates_schema`
   - Acceptance: Tests verify integrity checking
 
-- [ ] 2.3.2 Add session checksum validation (GREEN)
+- [x] 2.3.2 Add session checksum validation (GREEN)
   - Path: `src/session/mod.rs`
-  - Add: HMAC signature on session files
+  - Add: HMAC-SHA256 checksum on session files
   - Add: Validation on load
   - Acceptance: Tampered sessions rejected
 
-- [ ] 2.3.3 Commit session integrity
+- [x] 2.3.3 Commit session integrity
   - Message: `feat(session): Add integrity checking to session files`
+  - Commit: 7607275
 
 ---
 
@@ -506,6 +507,13 @@ Steps:
   - Added tests for files without extensions, dotfiles, and edge cases
   - 2 new tests added
   - Commit: bd3b51f
+
+- [x] 2.3.1-2.3.3 Session Integrity (L-2)
+  - Added HMAC-SHA256 checksum to session files via SessionFile wrapper
+  - Checksum computed on save, verified on load
+  - Tampered sessions are rejected with integrity check failure
+  - 2 new tests added
+  - Commit: 7607275
 
 ---
 
