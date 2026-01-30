@@ -3,6 +3,7 @@
 //! This module implements the Model Context Protocol for communication with
 //! external tools and services.
 
+pub mod client;
 pub mod protocol;
 pub mod transport;
 
