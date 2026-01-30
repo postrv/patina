@@ -20,3 +20,15 @@ mod commands_test;
 
 #[path = "unit/plugins_test.rs"]
 mod plugins_test;
+
+#[path = "unit/util_test.rs"]
+mod util_test;
+
+#[path = "unit/context_test.rs"]
+mod context_test;
+
+#[path = "unit/mcp_manager_test.rs"]
+mod mcp_manager_test;
+
+#[path = "unit/ide_test.rs"]
+mod ide_test;

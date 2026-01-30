@@ -1,0 +1,26 @@
+Source: rct
+Section: utils
+Priority: optional
+Maintainer: RCT Developers <rct@example.com>
+Build-Depends: debhelper-compat (= 13), cargo, rustc (>= 1.75)
+Standards-Version: 4.6.0
+Homepage: https://github.com/postrv/rct
+Vcs-Browser: https://github.com/postrv/rct
+Vcs-Git: https://github.com/postrv/rct.git
+Rules-Requires-Root: no
+
+Package: rct
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: High-performance Rust CLI for Claude API
+ RCT (Rust Claude Terminal) is a high-performance command-line interface
+ for interacting with the Anthropic Claude API. It features streaming
+ responses, syntax highlighting, tool execution, and a modern TUI.
+ .
+ Features:
+  - Streaming API responses with real-time display
+  - Syntax highlighting for code blocks
+  - Built-in tools (bash, file operations, search)
+  - MCP protocol support
+  - Plugin and skill system
+  - Session persistence

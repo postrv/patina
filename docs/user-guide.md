@@ -4,11 +4,33 @@ Rust Claude Terminal - A high-performance CLI for the Claude API.
 
 ## Installation
 
+### Homebrew (macOS)
+
+```bash
+# Add the tap (first time only)
+brew tap postrv/tap
+
+# Install RCT
+brew install rct
+```
+
+Or install directly from the formula:
+
+```bash
+brew install postrv/tap/rct
+```
+
+### Cargo (All Platforms)
+
+```bash
+cargo install rct
+```
+
 ### From Source
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-org/rct.git
+git clone https://github.com/postrv/rct.git
 cd rct
 
 # Build release binary
@@ -16,6 +38,83 @@ cargo build --release
 
 # Install to ~/.cargo/bin
 cargo install --path .
+```
+
+### Pre-built Binaries
+
+Download the latest release from [GitHub Releases](https://github.com/postrv/rct/releases).
+
+Available binaries:
+- `rct-linux-x86_64.tar.gz` - Linux x86_64 (glibc)
+- `rct-linux-x86_64-musl.tar.gz` - Linux x86_64 (musl, static)
+- `rct-macos-x86_64.tar.gz` - macOS Intel
+- `rct-macos-aarch64.tar.gz` - macOS Apple Silicon
+- `rct-windows-x86_64.zip` - Windows x64
+
+### Docker
+
+```bash
+# Pull from GitHub Container Registry
+docker pull ghcr.io/postrv/rct:latest
+
+# Run with API key
+docker run -it --rm \
+  -e ANTHROPIC_API_KEY="your-api-key" \
+  -v "$(pwd):/workspace" \
+  ghcr.io/postrv/rct:latest
+```
+
+Or build locally:
+
+```bash
+docker build -t rct .
+docker run -it --rm \
+  -e ANTHROPIC_API_KEY="your-api-key" \
+  -v "$(pwd):/workspace" \
+  rct
+```
+
+### Debian/Ubuntu (apt)
+
+Download the `.deb` package from [GitHub Releases](https://github.com/postrv/rct/releases):
+
+```bash
+# Download the package (replace VERSION with latest)
+wget https://github.com/postrv/rct/releases/download/v0.1.0/rct_0.1.0_amd64.deb
+
+# Install
+sudo dpkg -i rct_0.1.0_amd64.deb
+```
+
+### Fedora/RHEL/CentOS (dnf/yum)
+
+Download the `.rpm` package from [GitHub Releases](https://github.com/postrv/rct/releases):
+
+```bash
+# Download the package (replace VERSION with latest)
+wget https://github.com/postrv/rct/releases/download/v0.1.0/rct-0.1.0-1.x86_64.rpm
+
+# Install with dnf
+sudo dnf install rct-0.1.0-1.x86_64.rpm
+
+# Or with yum
+sudo yum localinstall rct-0.1.0-1.x86_64.rpm
+```
+
+### Windows (Scoop)
+
+```powershell
+# Add the bucket (first time only)
+scoop bucket add rct https://github.com/postrv/scoop-rct
+
+# Install
+scoop install rct
+```
+
+### Windows (WinGet)
+
+```powershell
+winget install postrv.rct
 ```
 
 ### Requirements
