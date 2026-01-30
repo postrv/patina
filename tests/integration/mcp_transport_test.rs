@@ -419,3 +419,89 @@ async fn test_mcp_tool_call_error() {
 
     transport.stop().await.expect("Should stop");
 }
+
+// ============================================================================
+// Server Lifecycle Tests (Task 3.3.1)
+// ============================================================================
+
+use rct::mcp::client::McpClient;
+
+/// Tests that MCP server can be started and stopped cleanly.
+#[tokio::test]
+async fn test_mcp_server_start_stop() {
+    let (cmd, args) = mock_mcp_server_command();
+
+    let mut client = McpClient::new("test-server", cmd, args);
+
+    // Start the server
+    client.start().await.expect("Server should start");
+
+    // Verify it's connected and initialized
+    assert!(client.is_connected(), "Client should be connected");
+    assert!(client.is_initialized(), "Client should be initialized");
+
+    // Stop the server
+    client.stop().await.expect("Server should stop cleanly");
+
+    // Verify disconnected
+    assert!(!client.is_connected(), "Client should be disconnected");
+}
+
+/// Tests that MCP client recovers from server crash.
+#[tokio::test]
+async fn test_mcp_server_crash_recovery() {
+    let (cmd, args) = mock_mcp_server_command();
+
+    let mut client = McpClient::new("test-server", cmd, args.clone());
+    client.start().await.expect("Server should start");
+
+    // Simulate crash by stopping without proper shutdown
+    client.force_stop().await;
+
+    // Verify client knows it's disconnected
+    assert!(!client.is_connected(), "Client should detect disconnection");
+
+    // Client should be able to reconnect
+    let mut client2 = McpClient::new("test-server", cmd, args);
+    client2
+        .start()
+        .await
+        .expect("Should be able to start new client");
+    assert!(client2.is_connected());
+
+    client2.stop().await.expect("Should stop");
+}
+
+/// Tests that MCP server can be restarted after clean stop.
+#[tokio::test]
+async fn test_mcp_server_restart() {
+    let (cmd, args) = mock_mcp_server_command();
+
+    let mut client = McpClient::new("test-server", cmd, args.clone());
+
+    // First start
+    client.start().await.expect("First start should succeed");
+    assert!(client.is_connected());
+
+    // List tools to verify functional
+    let tools = client.list_tools().await.expect("Should list tools");
+    assert!(!tools.is_empty());
+
+    // Stop
+    client.stop().await.expect("Stop should succeed");
+    assert!(!client.is_connected());
+
+    // Restart
+    let mut client2 = McpClient::new("test-server", cmd, args);
+    client2.start().await.expect("Restart should succeed");
+    assert!(client2.is_connected());
+
+    // Verify still functional
+    let tools2 = client2
+        .list_tools()
+        .await
+        .expect("Should list tools after restart");
+    assert!(!tools2.is_empty());
+
+    client2.stop().await.expect("Should stop");
+}
