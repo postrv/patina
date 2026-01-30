@@ -129,7 +129,7 @@ Steps:
 
 ### 1.1 Bash Command Filter Strengthening (CRITICAL C-1 - Mitigation)
 
-- [ ] 1.1.1 Write bypass attempt tests (RED)
+- [x] 1.1.1 Write bypass attempt tests (RED)
   - Path: `tests/tools.rs`
   - Test: `test_bash_blocks_escaped_rm` (`r\m -rf /`)
   - Test: `test_bash_blocks_command_substitution` (`$(which rm) -rf /`)
@@ -137,27 +137,27 @@ Steps:
   - Test: `test_bash_blocks_eval_variable` (`eval $dangerous`)
   - Acceptance: Tests demonstrate bypass vulnerabilities
 
-- [ ] 1.1.2 Implement enhanced command validation (GREEN)
+- [x] 1.1.2 Implement enhanced command validation (GREEN)
   - Path: `src/tools/mod.rs`
   - Add: Normalize command before pattern matching (remove escapes)
   - Add: Block command substitution patterns
   - Add: More comprehensive privilege escalation patterns
   - Acceptance: All bypass tests pass
 
-- [ ] 1.1.3 Add allowlist mode option (GREEN)
+- [x] 1.1.3 Add allowlist mode option (GREEN)
   - Path: `src/tools/mod.rs`
   - Add: `ToolExecutionPolicy::allowlist_mode: bool`
   - Add: `ToolExecutionPolicy::allowed_commands: Vec<Regex>`
   - Add: When allowlist_mode=true, only allow matching commands
   - Acceptance: Allowlist tests pass
 
-- [ ] 1.1.4 Document security model (REFACTOR)
+- [x] 1.1.4 Document security model (REFACTOR)
   - Path: `docs/security-model.md`
   - Document: Blocklist vs allowlist tradeoffs
   - Document: How to enable strict mode
   - Document: Known limitations
 
-- [ ] 1.1.5 Commit enhanced bash security
+- [x] 1.1.5 Commit enhanced bash security
   - Message: `feat(tools): Enhance bash command security with allowlist mode`
 
 ### 1.2 MCP Command Validation (MEDIUM M-1)
@@ -456,6 +456,16 @@ Steps:
   - Reuses ToolExecutionPolicy::dangerous_patterns
   - 4 security tests added (blocks rm -rf, sudo, curl|bash, allows safe)
   - Commit: cd53187
+
+- [x] 1.1.1-1.1.5 Bash Command Filter Strengthening (C-1 Mitigation)
+  - Added command normalization for escape bypass detection (r\m -> rm)
+  - Expanded privilege escalation patterns (su root, pkexec, runuser)
+  - Added command substitution detection ($(...), backticks)
+  - Added encoded command detection (base64, hex via printf)
+  - Implemented allowlist mode for strict security environments
+  - Created docs/security-model.md documentation
+  - 13 security tests added
+  - Commit: b430478
 
 ---
 
