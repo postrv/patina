@@ -285,6 +285,7 @@ mod module_integration_tests {
     // ============== MCP Module Integration Tests ==============
 
     /// Test that MCP validation returns RctError::McpValidation for dangerous commands.
+    #[cfg(unix)]
     #[test]
     fn test_mcp_validation_returns_typed_error_for_dangerous_command() {
         use rct::mcp::client::validate_mcp_command;
@@ -341,6 +342,7 @@ mod module_integration_tests {
     }
 
     /// Test that MCP validation returns RctError::McpValidation when interpreter lacks absolute path.
+    #[cfg(unix)]
     #[test]
     fn test_mcp_validation_returns_typed_error_for_interpreter_without_absolute_path() {
         use rct::mcp::client::validate_mcp_command;
