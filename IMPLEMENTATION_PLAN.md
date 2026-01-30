@@ -94,14 +94,15 @@ Steps:
 
 ### 0.1 Shell Abstraction Module
 
-- [ ] 0.1.1 Create shell abstraction types (RED)
+- [x] 0.1.1 Create shell abstraction types (RED)
   - Path: `src/shell/mod.rs` (new file)
   - Test: `tests/unit/shell_test.rs` (new file)
   - Test: `test_shell_config_returns_sh_on_unix`
   - Test: `test_shell_config_returns_cmd_on_windows`
   - Acceptance: Tests fail (module doesn't exist)
+  - Completed: 2026-01-30
 
-- [ ] 0.1.2 Implement ShellConfig struct (GREEN)
+- [x] 0.1.2 Implement ShellConfig struct (GREEN)
   - Path: `src/shell/mod.rs`
   - Add: `ShellConfig` struct with `command`, `args`, `exit_flag`
   - Add: `ShellConfig::default()` using conditional compilation
@@ -125,39 +126,45 @@ Steps:
   }
   ```
   - Acceptance: Platform detection tests pass
+  - Completed: 2026-01-30
 
-- [ ] 0.1.3 Add shell execution helper (GREEN)
+- [x] 0.1.3 Add shell execution helper (GREEN)
   - Path: `src/shell/mod.rs`
   - Add: `async fn execute_shell_command(command: &str, stdin: Option<&str>) -> Result<ShellOutput>`
   - Add: `ShellOutput` struct with `exit_code`, `stdout`, `stderr`
   - Add: Platform-agnostic process spawning
   - Acceptance: Basic shell execution works
+  - Completed: 2026-01-30
 
-- [ ] 0.1.4 Export shell module from lib.rs
+- [x] 0.1.4 Export shell module from lib.rs
   - Path: `src/lib.rs`
   - Add: `pub mod shell;`
   - Acceptance: Module accessible from tests
+  - Completed: 2026-01-30
 
 ### 0.2 Command Translation Layer
 
-- [ ] 0.2.1 Create command translator tests (RED)
+- [x] 0.2.1 Create command translator tests (RED)
   - Path: `tests/unit/shell_test.rs`
   - Test: `test_translate_echo_command`
   - Test: `test_translate_exit_command`
   - Test: `test_translate_chained_commands`
   - Acceptance: Tests document expected translations
+  - Completed: 2026-01-30
 
-- [ ] 0.2.2 Implement basic command translation (GREEN)
+- [x] 0.2.2 Implement basic command translation (GREEN)
   - Path: `src/shell/mod.rs`
   - Add: `fn translate_command(cmd: &str) -> String`
   - Handle: `echo` (works same on both)
   - Handle: `exit N` → `exit /b N` on Windows
-  - Handle: `&&` → `&` on Windows cmd.exe
+  - Handle: `&&` → `&` on Windows cmd.exe (kept `&&` as it works in cmd.exe too)
   - Handle: `export VAR=val` → `set VAR=val` on Windows
   - Acceptance: Translation tests pass
+  - Completed: 2026-01-30
 
-- [ ] 0.2.3 Commit shell abstraction
-  - Message: `feat(shell): Add cross-platform shell abstraction layer`
+- [x] 0.2.3 Commit shell abstraction
+  - Message: `feat(shell): Add cross-platform command translation`
+  - Completed: 2026-01-30
 
 ---
 

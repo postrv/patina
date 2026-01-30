@@ -13,6 +13,10 @@
 //! // On Windows: command = "cmd.exe", args = ["/C"]
 //! ```
 
+#[cfg(windows)]
+use once_cell::sync::Lazy;
+#[cfg(windows)]
+use regex::Regex;
 use std::io;
 use std::process::{Command, Stdio};
 use tokio::io::AsyncWriteExt;
@@ -202,6 +206,70 @@ pub async fn execute_shell_command(command: &str, stdin: Option<&str>) -> io::Re
         stdout: String::from_utf8_lossy(&output.stdout).to_string(),
         stderr: String::from_utf8_lossy(&output.stderr).to_string(),
     })
+}
+
+/// Translates shell commands from Unix syntax to the current platform's syntax.
+///
+/// On Unix, this function returns the command unchanged. On Windows, it translates
+/// common Unix shell patterns to their Windows `cmd.exe` equivalents:
+///
+/// - `exit N` → `exit /b N` (batch file exit syntax)
+/// - `export VAR=val` → `set VAR=val` (environment variable syntax)
+///
+/// # Arguments
+///
+/// * `command` - The shell command to translate
+///
+/// # Returns
+///
+/// The translated command string appropriate for the current platform.
+///
+/// # Examples
+///
+/// ```
+/// use rct::shell::translate_command;
+///
+/// let cmd = translate_command("echo hello");
+/// // Returns "echo hello" on all platforms
+///
+/// let cmd = translate_command("exit 1");
+/// // Returns "exit 1" on Unix, "exit /b 1" on Windows
+/// ```
+#[must_use]
+pub fn translate_command(command: &str) -> String {
+    #[cfg(unix)]
+    {
+        command.to_string()
+    }
+
+    #[cfg(windows)]
+    {
+        translate_command_for_windows(command)
+    }
+}
+
+/// Regex for matching `exit N` commands.
+#[cfg(windows)]
+static EXIT_REGEX: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"\bexit\s+(\d+)").expect("exit regex should compile"));
+
+/// Regex for matching `export VAR=val` commands.
+#[cfg(windows)]
+static EXPORT_REGEX: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"\bexport\s+(\w+)=").expect("export regex should compile"));
+
+/// Translates Unix shell command patterns to Windows cmd.exe equivalents.
+#[cfg(windows)]
+fn translate_command_for_windows(command: &str) -> String {
+    let mut result = command.to_string();
+
+    // Translate `exit N` to `exit /b N`
+    result = EXIT_REGEX.replace_all(&result, "exit /b $1").to_string();
+
+    // Translate `export VAR=` to `set VAR=`
+    result = EXPORT_REGEX.replace_all(&result, "set $1=").to_string();
+
+    result
 }
 
 #[cfg(test)]

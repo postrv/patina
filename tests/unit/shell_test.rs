@@ -3,7 +3,7 @@
 //! These tests verify the `ShellConfig` type correctly detects the platform
 //! and provides appropriate shell configuration.
 
-use rct::shell::{execute_shell_command, ShellConfig, ShellOutput};
+use rct::shell::{execute_shell_command, translate_command, ShellConfig, ShellOutput};
 
 // ============================================================================
 // ShellConfig Tests
@@ -132,4 +132,83 @@ async fn test_execute_shell_command_with_stdin() {
     let output = result.expect("stdin piping should work");
 
     assert!(output.stdout.contains("hello from stdin"));
+}
+
+// ============================================================================
+// Command Translation Tests
+// ============================================================================
+
+#[test]
+fn test_translate_echo_command() {
+    // echo works the same on both platforms (when using shell)
+    let cmd = "echo hello world";
+    let translated = translate_command(cmd);
+
+    // On Unix, no translation needed
+    #[cfg(unix)]
+    assert_eq!(translated, cmd);
+
+    // On Windows, echo also works as-is in cmd.exe
+    #[cfg(windows)]
+    assert_eq!(translated, cmd);
+}
+
+#[test]
+fn test_translate_exit_command() {
+    let cmd = "exit 42";
+    let translated = translate_command(cmd);
+
+    #[cfg(unix)]
+    assert_eq!(translated, "exit 42");
+
+    #[cfg(windows)]
+    assert_eq!(translated, "exit /b 42");
+}
+
+#[test]
+fn test_translate_chained_commands() {
+    let cmd = "echo first && echo second";
+    let translated = translate_command(cmd);
+
+    // On both platforms, && works in the shell
+    // On Unix: sh supports &&
+    // On Windows: cmd.exe also supports &&
+    #[cfg(unix)]
+    assert_eq!(translated, "echo first && echo second");
+
+    #[cfg(windows)]
+    assert_eq!(translated, "echo first && echo second");
+}
+
+#[test]
+fn test_translate_export_command() {
+    let cmd = "export FOO=bar";
+    let translated = translate_command(cmd);
+
+    #[cfg(unix)]
+    assert_eq!(translated, "export FOO=bar");
+
+    #[cfg(windows)]
+    assert_eq!(translated, "set FOO=bar");
+}
+
+#[test]
+fn test_translate_multiple_exports() {
+    let cmd = "export FOO=bar && export BAZ=qux";
+    let translated = translate_command(cmd);
+
+    #[cfg(unix)]
+    assert_eq!(translated, "export FOO=bar && export BAZ=qux");
+
+    #[cfg(windows)]
+    assert_eq!(translated, "set FOO=bar && set BAZ=qux");
+}
+
+#[test]
+fn test_translate_preserves_other_commands() {
+    let cmd = "ls -la";
+    let translated = translate_command(cmd);
+
+    // Commands that don't need translation should pass through
+    assert_eq!(translated, cmd);
 }
