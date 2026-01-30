@@ -8,8 +8,7 @@ use crossterm::{
 };
 use futures::StreamExt;
 use ratatui::{backend::CrosstermBackend, Terminal};
-use secrecy::SecretString;
-use std::{io, path::PathBuf, time::Duration};
+use std::{io, time::Duration};
 use tokio::time::interval;
 
 pub mod state;
@@ -18,11 +17,8 @@ use state::AppState;
 use crate::api::AnthropicClient;
 use crate::tui;
 
-pub struct Config {
-    pub api_key: SecretString,
-    pub model: String,
-    pub working_dir: PathBuf,
-}
+// Re-export Config for backward compatibility
+pub use crate::types::Config;
 
 pub async fn run(config: Config) -> Result<()> {
     enable_raw_mode()?;

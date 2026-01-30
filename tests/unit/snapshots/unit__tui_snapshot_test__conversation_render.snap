@@ -1,0 +1,29 @@
+---
+source: tests/unit/tui_snapshot_test.rs
+expression: output
+---
+┌ Messages ────────────────────────────────────────────────────────────────────┐
+│You:                                                                          │
+│What is Rust?                                                                 │
+│                                                                              │
+│Claude:                                                                       │
+│Rust is a systems programming language focused on safety, speed, and          │
+│concurrency.                                                                  │
+│                                                                              │
+│You:                                                                          │
+│What are its main features?                                                   │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+┌ Input (Enter to send, Ctrl+C to quit) ───────────────────────────────────────┐
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘

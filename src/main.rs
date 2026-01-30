@@ -4,20 +4,8 @@ use anyhow::Result;
 use clap::Parser;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-mod app;
-mod api;
-mod tui;
-mod skills;
-mod hooks;
-mod mcp;
-mod plugins;
-mod commands;
-mod context;
-mod tools;
-mod agents;
-mod update;
-mod ide;
-mod util;
+// Use the library crate
+use rct::app;
 
 #[derive(Parser, Debug)]
 #[command(name = "rct")]
@@ -47,20 +35,23 @@ async fn main() -> Result<()> {
 
     let filter = if args.debug { "debug" } else { "info" };
     tracing_subscriber::registry()
-        .with(tracing_subscriber::EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| filter.into()))
+        .with(
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| filter.into()),
+        )
         .with(tracing_subscriber::fmt::layer().with_target(false))
         .init();
 
-    let api_key = args.api_key
+    let api_key = args
+        .api_key
         .or_else(|| std::env::var("ANTHROPIC_API_KEY").ok().map(Into::into))
-        .ok_or_else(|| anyhow::anyhow!(
-            "API key required. Set ANTHROPIC_API_KEY or use --api-key"
-        ))?;
+        .ok_or_else(|| {
+            anyhow::anyhow!("API key required. Set ANTHROPIC_API_KEY or use --api-key")
+        })?;
 
     app::run(app::Config {
         api_key,
         model: args.model,
         working_dir: args.directory,
-    }).await
+    })
+    .await
 }

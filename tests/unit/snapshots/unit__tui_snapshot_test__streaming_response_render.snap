@@ -1,0 +1,24 @@
+---
+source: tests/unit/tui_snapshot_test.rs
+expression: output
+---
+┌ Messages ────────────────────────────────────────────────┐
+│You:                                                      │
+│Tell me about Rust                                        │
+│                                                          │
+│Rust is a systems programming language that...            │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+└──────────────────────────────────────────────────────────┘
+┌ Input (Enter to send, Ctrl+C to quit) ───────────────────┐
+│                                                          │
+└──────────────────────────────────────────────────────────┘

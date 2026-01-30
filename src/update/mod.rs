@@ -2,7 +2,7 @@
 
 use anyhow::Result;
 use serde::Deserialize;
-use sha2::{Sha256, Digest};
+use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -38,7 +38,6 @@ pub struct PlatformRelease {
 
 pub struct UpdateChecker {
     current_version: semver::Version,
-    channel: ReleaseChannel,
     manifest_url: String,
 }
 
@@ -46,7 +45,6 @@ impl UpdateChecker {
     pub fn new(current_version: &str, channel: ReleaseChannel) -> Result<Self> {
         Ok(Self {
             current_version: semver::Version::parse(current_version)?,
-            channel,
             manifest_url: format!(
                 "https://releases.rct.dev/{}/manifest.json",
                 channel.as_str()
@@ -74,15 +72,25 @@ impl UpdateChecker {
 
     pub fn get_platform_key() -> &'static str {
         #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-        { "linux-x86_64" }
+        {
+            "linux-x86_64"
+        }
         #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
-        { "linux-aarch64" }
+        {
+            "linux-aarch64"
+        }
         #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
-        { "darwin-x86_64" }
+        {
+            "darwin-x86_64"
+        }
         #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-        { "darwin-aarch64" }
+        {
+            "darwin-aarch64"
+        }
         #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
-        { "windows-x86_64" }
+        {
+            "windows-x86_64"
+        }
         #[cfg(not(any(
             all(target_os = "linux", target_arch = "x86_64"),
             all(target_os = "linux", target_arch = "aarch64"),
@@ -90,7 +98,9 @@ impl UpdateChecker {
             all(target_os = "macos", target_arch = "aarch64"),
             all(target_os = "windows", target_arch = "x86_64"),
         )))]
-        { "unknown" }
+        {
+            "unknown"
+        }
     }
 }
 

@@ -1,7 +1,7 @@
 //! Project context management (CLAUDE.md support)
 
-use std::path::{Path, PathBuf};
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 pub struct ProjectContext {
     root_context: Option<String>,

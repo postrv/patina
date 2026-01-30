@@ -1,8 +1,8 @@
 //! Slash commands - user-triggered workflows
 
 use serde::Deserialize;
-use std::path::PathBuf;
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 #[derive(Debug, Deserialize)]
 pub struct SlashCommand {
@@ -52,7 +52,7 @@ impl CommandExecutor {
             let entry = entry?;
             let path = entry.path();
 
-            if path.extension().map_or(false, |e| e == "md") {
+            if path.extension().is_some_and(|e| e == "md") {
                 if let Ok(cmd) = self.parse_command_file(&path) {
                     self.commands.insert(cmd.name.clone(), cmd);
                 }
@@ -65,12 +65,10 @@ impl CommandExecutor {
     fn parse_command_file(&self, path: &PathBuf) -> anyhow::Result<SlashCommand> {
         let content = std::fs::read_to_string(path)?;
 
-        let (frontmatter, body) = if content.starts_with("---") {
-            let end = content[3..].find("---")
-                .map(|i| i + 3)
-                .unwrap_or(0);
-            let yaml = &content[3..end];
-            let body = content[end + 3..].trim();
+        let (frontmatter, body) = if let Some(after_open) = content.strip_prefix("---") {
+            let end = after_open.find("---").unwrap_or(after_open.len());
+            let yaml = &after_open[..end];
+            let body = after_open[end..].strip_prefix("---").unwrap_or("").trim();
             (yaml, body)
         } else {
             ("", content.as_str())
@@ -80,7 +78,8 @@ impl CommandExecutor {
             serde_yaml::from_str(frontmatter)?
         } else {
             SlashCommand {
-                name: path.file_stem()
+                name: path
+                    .file_stem()
                     .and_then(|s| s.to_str())
                     .unwrap_or("unknown")
                     .to_string(),
@@ -97,12 +96,10 @@ impl CommandExecutor {
         Ok(cmd)
     }
 
-    pub fn execute(
-        &self,
-        name: &str,
-        args: HashMap<String, String>,
-    ) -> anyhow::Result<String> {
-        let cmd = self.commands.get(name)
+    pub fn execute(&self, name: &str, args: HashMap<String, String>) -> anyhow::Result<String> {
+        let cmd = self
+            .commands
+            .get(name)
             .ok_or_else(|| anyhow::anyhow!("Unknown command: /{}", name))?;
 
         let mut result = cmd.content.clone();
@@ -114,7 +111,8 @@ impl CommandExecutor {
     }
 
     pub fn list(&self) -> Vec<(&str, &str)> {
-        self.commands.iter()
+        self.commands
+            .iter()
             .map(|(name, cmd)| (name.as_str(), cmd.description.as_str()))
             .collect()
     }

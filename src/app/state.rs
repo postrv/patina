@@ -1,21 +1,10 @@
 //! Application state management
 
 use crate::api::{AnthropicClient, StreamEvent};
+use crate::types::{Message, Role};
 use anyhow::Result;
 use std::path::PathBuf;
 use tokio::sync::mpsc;
-
-#[derive(Debug, Clone)]
-pub struct Message {
-    pub role: Role,
-    pub content: String,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Role {
-    User,
-    Assistant,
-}
 
 pub struct AppState {
     pub messages: Vec<Message>,
@@ -24,6 +13,7 @@ pub struct AppState {
     pub working_dir: PathBuf,
     pub current_response: Option<String>,
 
+    cursor_pos: usize,
     loading: bool,
     throbber_frame: usize,
     streaming_rx: Option<mpsc::Receiver<StreamEvent>>,
@@ -55,27 +45,86 @@ impl AppState {
             input: String::new(),
             scroll_offset: 0,
             working_dir,
+            cursor_pos: 0,
             loading: false,
             throbber_frame: 0,
             streaming_rx: None,
             current_response: None,
-            dirty: DirtyFlags { full: true, ..Default::default() },
+            dirty: DirtyFlags {
+                full: true,
+                ..Default::default()
+            },
         }
     }
 
+    /// Inserts a character at the current cursor position.
     pub fn insert_char(&mut self, c: char) {
-        self.input.push(c);
+        // Get byte position from char position
+        let byte_pos = self
+            .input
+            .char_indices()
+            .nth(self.cursor_pos)
+            .map(|(i, _)| i)
+            .unwrap_or(self.input.len());
+        self.input.insert(byte_pos, c);
+        self.cursor_pos += 1;
         self.dirty.input = true;
     }
 
+    /// Deletes the character before the cursor (backspace behavior).
     pub fn delete_char(&mut self) {
-        self.input.pop();
+        if self.cursor_pos > 0 {
+            // Get byte position of the character to delete (one before cursor)
+            let byte_pos = self
+                .input
+                .char_indices()
+                .nth(self.cursor_pos - 1)
+                .map(|(i, _)| i)
+                .unwrap_or(0);
+            self.input.remove(byte_pos);
+            self.cursor_pos -= 1;
+        }
         self.dirty.input = true;
     }
 
+    /// Takes and returns the current input, clearing the buffer and resetting cursor.
     pub fn take_input(&mut self) -> String {
         self.dirty.input = true;
+        self.cursor_pos = 0;
         std::mem::take(&mut self.input)
+    }
+
+    /// Returns the current cursor position (character index, not byte index).
+    #[must_use]
+    pub fn cursor_position(&self) -> usize {
+        self.cursor_pos
+    }
+
+    /// Moves the cursor left by one character.
+    pub fn cursor_left(&mut self) {
+        self.cursor_pos = self.cursor_pos.saturating_sub(1);
+        self.dirty.input = true;
+    }
+
+    /// Moves the cursor right by one character.
+    pub fn cursor_right(&mut self) {
+        let char_count = self.input.chars().count();
+        if self.cursor_pos < char_count {
+            self.cursor_pos += 1;
+        }
+        self.dirty.input = true;
+    }
+
+    /// Moves the cursor to the beginning of the input.
+    pub fn cursor_home(&mut self) {
+        self.cursor_pos = 0;
+        self.dirty.input = true;
+    }
+
+    /// Moves the cursor to the end of the input.
+    pub fn cursor_end(&mut self) {
+        self.cursor_pos = self.input.chars().count();
+        self.dirty.input = true;
     }
 
     pub fn scroll_up(&mut self, lines: usize) {
@@ -113,12 +162,23 @@ impl AppState {
         self.dirty.full = true;
     }
 
-    pub async fn submit_message(&mut self, client: &AnthropicClient, content: String) -> Result<()> {
-        self.messages.push(Message {
+    /// Adds a message to the conversation history.
+    ///
+    /// This sets the dirty flag so the UI will re-render.
+    pub fn add_message(&mut self, message: Message) {
+        self.messages.push(message);
+        self.dirty.messages = true;
+    }
+
+    pub async fn submit_message(
+        &mut self,
+        client: &AnthropicClient,
+        content: String,
+    ) -> Result<()> {
+        self.add_message(Message {
             role: Role::User,
             content,
         });
-        self.dirty.messages = true;
 
         self.loading = true;
         self.current_response = Some(String::new());

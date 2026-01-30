@@ -123,9 +123,8 @@ impl PluginRegistry {
 
     fn load_plugin(&self, plugin_dir: &Path) -> Result<Plugin> {
         let manifest_path = plugin_dir.join(".claude-plugin/plugin.json");
-        let manifest: PluginManifest = serde_json::from_str(
-            &std::fs::read_to_string(&manifest_path)?
-        )?;
+        let manifest: PluginManifest =
+            serde_json::from_str(&std::fs::read_to_string(&manifest_path)?)?;
 
         let commands = self.load_commands(plugin_dir)?;
         let skills = self.load_skills(plugin_dir)?;
