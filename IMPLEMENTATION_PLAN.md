@@ -285,7 +285,7 @@ Steps:
 
 ### 3.1 Create Rust-Based Mock MCP Server
 
-- [ ] 3.1.1 Design mock server architecture
+- [x] 3.1.1 Design mock server architecture
   - Path: `tests/helpers/mock_mcp_server.rs` (new)
   - Purpose: Rust binary that acts as MCP server
   - Features:
@@ -293,49 +293,51 @@ Steps:
     - Respond with appropriate messages
     - Configurable via command-line args
   - Acceptance: Design documented
+  - Completed: 2026-01-30
 
-- [ ] 3.1.2 Implement mock MCP server binary (GREEN)
+- [x] 3.1.2 Implement mock MCP server binary (GREEN)
   - Path: `tests/helpers/mock_mcp_server.rs`
   - Add: Basic JSON-RPC parsing
   - Add: Initialize response
   - Add: Tool call response
   - Add: Configurable behavior (crash, timeout, etc.)
   - Acceptance: Binary compiles
+  - Completed: 2026-01-30
 
-- [ ] 3.1.3 Add mock server to Cargo.toml as test binary
+- [x] 3.1.3 Add mock server to Cargo.toml as test binary
   - Path: `Cargo.toml`
   - Add:
   ```toml
-  [[test]]
+  [[bin]]
   name = "mock_mcp_server"
   path = "tests/helpers/mock_mcp_server.rs"
   ```
-  - Acceptance: `cargo build --test mock_mcp_server` works
+  - Acceptance: `cargo build --bin mock_mcp_server` works
+  - Completed: 2026-01-30
 
 ### 3.2 Update MCP Transport Tests
 
-- [ ] 3.2.1 Create cross-platform mock server helper (GREEN)
+- [x] 3.2.1 Create cross-platform mock server helper (GREEN)
   - Path: `tests/integration/mcp_transport_test.rs`
-  - Add: `fn mock_mcp_command() -> (String, Vec<String>)`
-  ```rust
-  fn mock_mcp_command() -> (String, Vec<String>) {
-      let exe = env!("CARGO_BIN_EXE_mock_mcp_server");
-      (exe.to_string(), vec![])
-  }
-  ```
+  - Add: `fn mock_mcp_server_path() -> &'static str` using `env!("CARGO_BIN_EXE_mock_mcp_server")`
+  - Add: `fn mock_mcp_server_command() -> (&'static str, Vec<&'static str>)`
   - Acceptance: Returns platform-appropriate path
+  - Completed: 2026-01-30
 
-- [ ] 3.2.2 Update MCP tests to use Rust mock server (REFACTOR)
+- [x] 3.2.2 Update MCP tests to use Rust mock server (REFACTOR)
   - Path: `tests/integration/mcp_transport_test.rs`
   - Change: Replace bash script mock with Rust binary
   - Remove: `#![cfg(unix)]`
   - Acceptance: Tests compile on Windows
+  - Completed: 2026-01-30
 
-- [ ] 3.2.3 Update mcp_test.rs for cross-platform (REFACTOR)
+- [x] 3.2.3 Update mcp_test.rs for cross-platform (REFACTOR)
   - Path: `tests/integration/mcp_test.rs`
-  - Change: Update path assumptions
-  - Remove: `#![cfg(unix)]`
+  - Change: Remove module-level `#![cfg(unix)]`, add `#[cfg(unix)]` to individual tests using Unix paths
+  - Note: Data structure tests (`test_mcp_transport_validation`, `test_mcp_filters_dangerous_env_vars`) are cross-platform
+  - Note: Async tests using Unix paths remain Unix-only until Windows security tests added in Phase 4
   - Acceptance: Tests compile on Windows
+  - Completed: 2026-01-30
 
 - [ ] 3.2.4 Commit MCP cross-platform tests
   - Message: `feat(mcp): Add cross-platform MCP test infrastructure`
