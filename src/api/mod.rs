@@ -1,5 +1,7 @@
 //! Anthropic API client
 
+pub mod multi_model;
+
 use std::time::Duration;
 
 use anyhow::Result;

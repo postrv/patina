@@ -8,14 +8,14 @@
 
 | Metric | Value | Command |
 |--------|-------|---------|
-| Unit Tests | 27 | `cargo test --lib` |
-| Integration Tests | 328 | `cargo test --test '*'` |
-| Doc Tests | 15 | `cargo test --doc` |
-| Total Tests | 370 | `cargo test` |
-| Test Files | 21 | `find tests -name '*.rs' \| wc -l` |
+| Unit Tests | 32 | `cargo test --lib` |
+| Integration Tests | 341 | `cargo test --test '*'` |
+| Doc Tests | 16 | `cargo test --doc` |
+| Total Tests | 389 | `cargo test` |
+| Test Files | 23 | `find tests -name '*.rs' \| wc -l` |
 | Clippy Warnings | 0 | `cargo clippy --all-targets -- -D warnings` |
-| Source Files | 26 | `find src -name '*.rs' \| wc -l` |
-| LOC | ~5400 | `tokei src` |
+| Source Files | 27 | `find src -name '*.rs' \| wc -l` |
+| LOC | ~5600 | `tokei src` |
 
 **Baseline Rule:** Test count must never decrease. Clippy warnings must reach 0.
 
@@ -628,12 +628,18 @@ Steps:
 
 ### 7.3 Multi-Model Support
 
-- [ ] 7.3.1 Write provider switching tests (RED)
-  - Test: `test_model_switching`
-  - Test: `test_bedrock_provider`
+- [x] 7.3.1 Write provider switching tests (RED)
+  - Test: `test_model_switching`, `test_bedrock_provider`
+  - Additional tests: `test_model_list`, `test_model_get_current`, `test_model_config_retrieval`, `test_bedrock_provider_config`, `test_bedrock_provider_region`, `test_bedrock_provider_with_role`, `test_provider_switching`, `test_model_aliases`, `test_list_providers`, `test_default_model`, `test_model_validation`, `test_model_max_tokens`
+  - **Completed: 2026-01-30** - 13 integration tests
 
-- [ ] 7.3.2 Implement multi-model client (GREEN)
+- [x] 7.3.2 Implement multi-model client (GREEN)
   - Path: `src/api/multi_model.rs`
+  - MultiModelClient with model switching and alias support
+  - ModelProvider enum (Anthropic, Bedrock)
+  - ProviderConfig for provider-specific settings
+  - BedrockConfig for AWS Bedrock support
+  - **Completed: 2026-01-30** - Full implementation with 5 unit tests
 
 ### 7.4 Enterprise Features
 
