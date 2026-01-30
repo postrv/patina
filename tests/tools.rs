@@ -1667,6 +1667,489 @@ async fn test_list_files_blocks_absolute_path() {
     }
 }
 
+// =============================================================================
+// Bash Command Filter Bypass Tests (1.1.1) - Security Hardening
+// =============================================================================
+
+/// Test that bash blocks escaped rm commands.
+///
+/// The pattern `r\m -rf /` uses shell escape sequences to bypass naive
+/// pattern matching. The backslash before 'm' is removed by the shell
+/// during interpretation, resulting in `rm -rf /` being executed.
+///
+/// This is a security test - should be BLOCKED by policy.
+#[tokio::test]
+async fn test_bash_blocks_escaped_rm() {
+    let ctx = TestContext::new();
+    let executor = ToolExecutor::new(ctx.path());
+
+    // Backslash escaping can bypass naive pattern matching
+    // Shell interprets r\m as rm
+    let call = ToolCall {
+        name: "bash".to_string(),
+        input: json!({ "command": r"r\m -rf /" }),
+    };
+
+    let result = executor
+        .execute(call)
+        .await
+        .expect("execution should not error");
+
+    match result {
+        ToolResult::Error(e) => {
+            assert!(
+                e.contains("blocked by security policy"),
+                "error should mention security policy, got: {e}"
+            );
+        }
+        ToolResult::Success(s) => {
+            panic!("escaped rm should be blocked (r\\m -> rm), got success: {s}")
+        }
+        ToolResult::Cancelled => panic!("expected error, got cancelled"),
+    }
+}
+
+/// Test that bash blocks command substitution to invoke dangerous commands.
+///
+/// `$(which rm) -rf /` uses command substitution to find the rm binary
+/// and execute it, bypassing direct pattern matching on "rm".
+///
+/// This is a security test - should be BLOCKED by policy.
+#[tokio::test]
+async fn test_bash_blocks_command_substitution() {
+    let ctx = TestContext::new();
+    let executor = ToolExecutor::new(ctx.path());
+
+    // Command substitution bypasses direct pattern matching
+    let call = ToolCall {
+        name: "bash".to_string(),
+        input: json!({ "command": "$(which rm) -rf /" }),
+    };
+
+    let result = executor
+        .execute(call)
+        .await
+        .expect("execution should not error");
+
+    match result {
+        ToolResult::Error(e) => {
+            assert!(
+                e.contains("blocked by security policy"),
+                "error should mention security policy, got: {e}"
+            );
+        }
+        ToolResult::Success(s) => {
+            panic!("command substitution $(which rm) should be blocked, got success: {s}")
+        }
+        ToolResult::Cancelled => panic!("expected error, got cancelled"),
+    }
+}
+
+/// Test that bash blocks `su root` privilege escalation.
+///
+/// The current pattern `su\s+-` only blocks `su -` but not `su root`
+/// which is equally dangerous as it escalates to root privileges.
+///
+/// This is a security test - should be BLOCKED by policy.
+#[tokio::test]
+async fn test_bash_blocks_su_root() {
+    let ctx = TestContext::new();
+    let executor = ToolExecutor::new(ctx.path());
+
+    // `su root` is as dangerous as `su -` but bypasses the current pattern
+    let call = ToolCall {
+        name: "bash".to_string(),
+        input: json!({ "command": "su root" }),
+    };
+
+    let result = executor
+        .execute(call)
+        .await
+        .expect("execution should not error");
+
+    match result {
+        ToolResult::Error(e) => {
+            assert!(
+                e.contains("blocked by security policy"),
+                "error should mention security policy, got: {e}"
+            );
+        }
+        ToolResult::Success(s) => {
+            panic!("su root should be blocked by security policy, got success: {s}")
+        }
+        ToolResult::Cancelled => panic!("expected error, got cancelled"),
+    }
+}
+
+/// Test that bash blocks eval with quoted variable references.
+///
+/// The pattern `eval\s+\$` blocks `eval $var` but not `eval "$var"` or
+/// `eval $(command)` which are equally dangerous.
+///
+/// This test demonstrates that eval with quoted variable expansion CAN
+/// execute arbitrary code, which is dangerous because an attacker could
+/// inject malicious commands into the variable.
+///
+/// This is a security test - should be BLOCKED by policy.
+#[tokio::test]
+async fn test_bash_blocks_eval_quoted_variable() {
+    let ctx = TestContext::new();
+    let executor = ToolExecutor::new(ctx.path());
+
+    // Quoted variable reference bypasses the pattern `eval\s+\$`
+    // Using a harmless command to demonstrate that eval "$var" executes
+    // If this succeeds, it means we could put ANY command in the variable
+    let call = ToolCall {
+        name: "bash".to_string(),
+        input: json!({ "command": r#"cmd='echo EVAL_BYPASS_SUCCESSFUL'; eval "$cmd""# }),
+    };
+
+    let result = executor
+        .execute(call)
+        .await
+        .expect("execution should not error");
+
+    match result {
+        ToolResult::Error(e) => {
+            assert!(
+                e.contains("blocked by security policy"),
+                "error should mention security policy, got: {e}"
+            );
+        }
+        ToolResult::Success(s) => {
+            // If we get here, the bypass worked - eval executed the command
+            // This demonstrates the vulnerability exists
+            panic!(
+                "eval with quoted variable should be blocked by security policy, but executed: {s}"
+            )
+        }
+        ToolResult::Cancelled => panic!("expected error, got cancelled"),
+    }
+}
+
+/// Test that bash blocks backtick command substitution.
+///
+/// Backticks are an alternative syntax for command substitution that
+/// could bypass `$(...)` pattern checks.
+///
+/// This is a security test - should be BLOCKED by policy.
+#[tokio::test]
+async fn test_bash_blocks_backtick_substitution() {
+    let ctx = TestContext::new();
+    let executor = ToolExecutor::new(ctx.path());
+
+    // Backticks are alternative command substitution syntax
+    let call = ToolCall {
+        name: "bash".to_string(),
+        input: json!({ "command": "`which rm` -rf /" }),
+    };
+
+    let result = executor
+        .execute(call)
+        .await
+        .expect("execution should not error");
+
+    match result {
+        ToolResult::Error(e) => {
+            assert!(
+                e.contains("blocked by security policy"),
+                "error should mention security policy, got: {e}"
+            );
+        }
+        ToolResult::Success(s) => {
+            panic!("backtick command substitution should be blocked, got success: {s}")
+        }
+        ToolResult::Cancelled => panic!("expected error, got cancelled"),
+    }
+}
+
+/// Test that bash blocks hex-encoded dangerous commands.
+///
+/// Commands can be constructed using printf with hex escapes to
+/// bypass literal pattern matching.
+///
+/// This is a security test - should be BLOCKED by policy.
+#[tokio::test]
+async fn test_bash_blocks_hex_encoded_command() {
+    let ctx = TestContext::new();
+    let executor = ToolExecutor::new(ctx.path());
+
+    // printf with hex escapes can construct dangerous commands
+    // \x72\x6d = "rm"
+    let call = ToolCall {
+        name: "bash".to_string(),
+        input: json!({ "command": r#"$(printf '\x72\x6d') -rf /"# }),
+    };
+
+    let result = executor
+        .execute(call)
+        .await
+        .expect("execution should not error");
+
+    match result {
+        ToolResult::Error(e) => {
+            assert!(
+                e.contains("blocked by security policy"),
+                "error should mention security policy, got: {e}"
+            );
+        }
+        ToolResult::Success(s) => {
+            panic!("hex-encoded command should be blocked, got success: {s}")
+        }
+        ToolResult::Cancelled => panic!("expected error, got cancelled"),
+    }
+}
+
+/// Test that bash blocks base64-decoded dangerous commands.
+///
+/// Commands encoded in base64 can be decoded at runtime to bypass
+/// pattern matching.
+///
+/// This is a security test - should be BLOCKED by policy.
+#[tokio::test]
+async fn test_bash_blocks_base64_command() {
+    let ctx = TestContext::new();
+    let executor = ToolExecutor::new(ctx.path());
+
+    // base64 decoding can construct dangerous commands
+    // "cm0gLXJmIC8=" is base64 for "rm -rf /"
+    let call = ToolCall {
+        name: "bash".to_string(),
+        input: json!({ "command": "echo cm0gLXJmIC8= | base64 -d | sh" }),
+    };
+
+    let result = executor
+        .execute(call)
+        .await
+        .expect("execution should not error");
+
+    match result {
+        ToolResult::Error(e) => {
+            assert!(
+                e.contains("blocked by security policy"),
+                "error should mention security policy, got: {e}"
+            );
+        }
+        ToolResult::Success(s) => {
+            panic!("base64-decoded command should be blocked, got success: {s}")
+        }
+        ToolResult::Cancelled => panic!("expected error, got cancelled"),
+    }
+}
+
+/// Test that bash blocks indirect sudo via pkexec.
+///
+/// pkexec is a PolicyKit utility that can run commands as another user,
+/// similar to sudo.
+///
+/// This is a security test - should be BLOCKED by policy.
+#[tokio::test]
+async fn test_bash_blocks_pkexec() {
+    let ctx = TestContext::new();
+    let executor = ToolExecutor::new(ctx.path());
+
+    // pkexec is an alternative privilege escalation method
+    // Using cat /etc/shadow which requires root and avoids matching rm patterns
+    let call = ToolCall {
+        name: "bash".to_string(),
+        input: json!({ "command": "pkexec cat /etc/shadow" }),
+    };
+
+    let result = executor
+        .execute(call)
+        .await
+        .expect("execution should not error");
+
+    match result {
+        ToolResult::Error(e) => {
+            assert!(
+                e.contains("blocked by security policy"),
+                "error should mention security policy, got: {e}"
+            );
+        }
+        ToolResult::Success(s) => {
+            panic!("pkexec should be blocked by security policy, got success: {s}")
+        }
+        ToolResult::Cancelled => panic!("expected error, got cancelled"),
+    }
+}
+
+// =============================================================================
+// Allowlist Mode Tests (1.1.3) - Security Hardening
+// =============================================================================
+
+/// Test that allowlist mode blocks commands not in the allowlist.
+#[tokio::test]
+async fn test_allowlist_mode_blocks_unlisted_commands() {
+    let ctx = TestContext::new();
+    let policy = ToolExecutionPolicy {
+        allowlist_mode: true,
+        allowed_commands: vec![Regex::new(r"^echo\s+").unwrap()],
+        ..Default::default()
+    };
+    let executor = ToolExecutor::new(ctx.path()).with_policy(policy);
+
+    // Command not in allowlist
+    let call = ToolCall {
+        name: "bash".to_string(),
+        input: json!({ "command": "ls -la" }),
+    };
+
+    let result = executor
+        .execute(call)
+        .await
+        .expect("execution should not error");
+
+    match result {
+        ToolResult::Error(e) => {
+            assert!(
+                e.contains("not in allowlist") || e.contains("blocked"),
+                "error should indicate command not in allowlist, got: {e}"
+            );
+        }
+        ToolResult::Success(s) => {
+            panic!("command should be blocked in allowlist mode, got success: {s}")
+        }
+        ToolResult::Cancelled => panic!("expected error, got cancelled"),
+    }
+}
+
+/// Test that allowlist mode allows commands in the allowlist.
+#[tokio::test]
+async fn test_allowlist_mode_allows_listed_commands() {
+    let ctx = TestContext::new();
+    let policy = ToolExecutionPolicy {
+        allowlist_mode: true,
+        allowed_commands: vec![Regex::new(r"^echo\s+").unwrap()],
+        ..Default::default()
+    };
+    let executor = ToolExecutor::new(ctx.path()).with_policy(policy);
+
+    // Command in allowlist
+    let call = ToolCall {
+        name: "bash".to_string(),
+        input: json!({ "command": "echo hello" }),
+    };
+
+    let result = executor
+        .execute(call)
+        .await
+        .expect("execution should not error");
+
+    match result {
+        ToolResult::Success(output) => {
+            assert!(output.contains("hello"), "output should contain 'hello'");
+        }
+        ToolResult::Error(e) => panic!("allowed command should succeed, got error: {e}"),
+        ToolResult::Cancelled => panic!("expected success, got cancelled"),
+    }
+}
+
+/// Test that allowlist mode still blocks dangerous commands even if they match allowlist.
+#[tokio::test]
+async fn test_allowlist_mode_still_blocks_dangerous() {
+    let ctx = TestContext::new();
+    let policy = ToolExecutionPolicy {
+        allowlist_mode: true,
+        // Allowlist that would match dangerous command
+        allowed_commands: vec![Regex::new(r".*").unwrap()],
+        ..Default::default()
+    };
+    let executor = ToolExecutor::new(ctx.path()).with_policy(policy);
+
+    // Dangerous command that matches allowlist but should still be blocked
+    let call = ToolCall {
+        name: "bash".to_string(),
+        input: json!({ "command": "sudo rm -rf /" }),
+    };
+
+    let result = executor
+        .execute(call)
+        .await
+        .expect("execution should not error");
+
+    match result {
+        ToolResult::Error(e) => {
+            assert!(
+                e.contains("blocked by security policy"),
+                "error should mention security policy, got: {e}"
+            );
+        }
+        ToolResult::Success(s) => {
+            panic!("dangerous command should be blocked even with allowlist, got: {s}")
+        }
+        ToolResult::Cancelled => panic!("expected error, got cancelled"),
+    }
+}
+
+/// Test that allowlist mode with empty allowlist blocks all commands.
+#[tokio::test]
+async fn test_allowlist_mode_empty_blocks_all() {
+    let ctx = TestContext::new();
+    let policy = ToolExecutionPolicy {
+        allowlist_mode: true,
+        allowed_commands: vec![], // Empty allowlist
+        ..Default::default()
+    };
+    let executor = ToolExecutor::new(ctx.path()).with_policy(policy);
+
+    let call = ToolCall {
+        name: "bash".to_string(),
+        input: json!({ "command": "echo test" }),
+    };
+
+    let result = executor
+        .execute(call)
+        .await
+        .expect("execution should not error");
+
+    match result {
+        ToolResult::Error(e) => {
+            assert!(
+                e.contains("not in allowlist") || e.contains("blocked"),
+                "error should indicate command blocked, got: {e}"
+            );
+        }
+        ToolResult::Success(s) => {
+            panic!("empty allowlist should block all commands, got success: {s}")
+        }
+        ToolResult::Cancelled => panic!("expected error, got cancelled"),
+    }
+}
+
+/// Test that allowlist mode disabled (default) allows safe commands.
+#[tokio::test]
+async fn test_allowlist_mode_disabled_allows_safe() {
+    let ctx = TestContext::new();
+    // Default policy has allowlist_mode = false
+    let executor = ToolExecutor::new(ctx.path());
+
+    let call = ToolCall {
+        name: "bash".to_string(),
+        input: json!({ "command": "ls" }),
+    };
+
+    let result = executor
+        .execute(call)
+        .await
+        .expect("execution should not error");
+
+    match result {
+        ToolResult::Success(_) => {
+            // Expected - command executed successfully
+        }
+        ToolResult::Error(e) => {
+            // ls might fail for other reasons but should not be blocked by policy
+            if e.contains("blocked") || e.contains("allowlist") {
+                panic!("safe command should not be blocked with allowlist disabled, got: {e}")
+            }
+        }
+        ToolResult::Cancelled => panic!("expected success or non-policy error"),
+    }
+}
+
+use regex::Regex;
+
 /// Test that list_files blocks complex parent directory escapes.
 ///
 /// This tests escapes like `subdir/../../` which could bypass naive checks.

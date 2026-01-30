@@ -27,11 +27,38 @@ pub struct ToolExecutor {
     policy: ToolExecutionPolicy,
 }
 
+/// Security policy for tool execution.
+///
+/// # Security Modes
+///
+/// The policy supports two security modes:
+///
+/// - **Blocklist mode** (default): Commands are allowed unless they match a dangerous pattern.
+///   Good for general-purpose use where flexibility is needed.
+///
+/// - **Allowlist mode**: Commands are blocked unless they match an allowed pattern.
+///   More restrictive, suitable for high-security environments. Enable by setting
+///   `allowlist_mode = true` and providing patterns in `allowed_commands`.
+///
+/// In both modes, dangerous patterns are always checked and will block matching commands.
 pub struct ToolExecutionPolicy {
+    /// Patterns that match dangerous commands (always blocked).
     pub dangerous_patterns: Vec<Regex>,
+    /// Paths that are protected from write operations.
     pub protected_paths: Vec<PathBuf>,
+    /// Maximum allowed file size for write operations.
     pub max_file_size: usize,
+    /// Timeout for command execution.
     pub command_timeout: Duration,
+    /// Enable allowlist mode (default: false).
+    ///
+    /// When enabled, only commands matching `allowed_commands` will be permitted.
+    /// Dangerous patterns are still enforced on top of the allowlist.
+    pub allowlist_mode: bool,
+    /// Patterns for commands that are allowed in allowlist mode.
+    ///
+    /// Only used when `allowlist_mode` is true.
+    pub allowed_commands: Vec<Regex>,
 }
 
 impl Default for ToolExecutionPolicy {
@@ -42,10 +69,14 @@ impl Default for ToolExecutionPolicy {
                 Regex::new(r"rm\s+-rf\s+/").unwrap(),
                 Regex::new(r"rm\s+-fr\s+/").unwrap(),
                 Regex::new(r"rm\s+--no-preserve-root").unwrap(),
-                // Privilege escalation
+                // Privilege escalation - comprehensive patterns
                 Regex::new(r"sudo\s+").unwrap(),
-                Regex::new(r"su\s+-").unwrap(),
+                Regex::new(r"\bsu\s+-").unwrap(), // su - (login shell)
+                Regex::new(r"\bsu\s+root\b").unwrap(), // su root
+                Regex::new(r"\bsu\s*$").unwrap(), // bare su (defaults to root)
                 Regex::new(r"doas\s+").unwrap(),
+                Regex::new(r"\bpkexec\b").unwrap(), // PolicyKit privilege escalation
+                Regex::new(r"\brunuser\b").unwrap(), // runuser privilege escalation
                 // Dangerous permissions
                 Regex::new(r"chmod\s+777").unwrap(),
                 Regex::new(r"chmod\s+-R\s+777").unwrap(),
@@ -70,8 +101,17 @@ impl Default for ToolExecutionPolicy {
                 // History manipulation (hiding tracks)
                 Regex::new(r"history\s+-c").unwrap(),
                 Regex::new(r">\s*~/\.bash_history").unwrap(),
-                // Dangerous eval patterns
-                Regex::new(r"\beval\s+\$").unwrap(),
+                // Dangerous eval patterns - expanded to catch more bypasses
+                Regex::new(r"\beval\s+\$").unwrap(), // eval $var
+                Regex::new(r#"\beval\s+["'$]"#).unwrap(), // eval "$var" or eval 'cmd' or eval $(...)
+                // Command substitution patterns - can execute arbitrary code
+                Regex::new(r"\$\(\s*which\s+").unwrap(), // $(which cmd) - find then execute
+                Regex::new(r"`\s*which\s+").unwrap(),    // `which cmd` - backtick version
+                Regex::new(r"\$\(\s*printf\s+").unwrap(), // $(printf ...) - can encode commands
+                // Encoded command execution patterns
+                Regex::new(r"base64\s+(-d|--decode).*\|\s*(ba)?sh").unwrap(), // base64 decode to shell
+                Regex::new(r"\|\s*base64\s+(-d|--decode).*\|\s*(ba)?sh").unwrap(), // piped decode
+                Regex::new(r#"printf\s+["']\\x[0-9a-fA-F]"#).unwrap(), // hex-encoded via printf
             ],
             protected_paths: vec![
                 PathBuf::from("/etc"),
@@ -80,8 +120,51 @@ impl Default for ToolExecutionPolicy {
             ],
             max_file_size: 10 * 1024 * 1024,
             command_timeout: Duration::from_secs(300),
+            allowlist_mode: false,
+            allowed_commands: vec![],
         }
     }
+}
+
+/// Normalizes a command string by removing shell escape characters.
+///
+/// This helps detect bypass attempts where characters are escaped to avoid
+/// pattern matching (e.g., `r\m` becoming `rm` after shell processing).
+fn normalize_command(cmd: &str) -> String {
+    let mut result = String::with_capacity(cmd.len());
+    let mut chars = cmd.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            // Skip the backslash and include the next character literally
+            // unless it's a special escape sequence we want to preserve
+            if let Some(&next) = chars.peek() {
+                match next {
+                    // Preserve common escape sequences that don't affect command names
+                    'n' | 't' | 'r' | '0' | 'x' => {
+                        result.push(c);
+                        result.push(chars.next().unwrap());
+                    }
+                    // For letters, the backslash is often used to bypass filters
+                    // e.g., r\m -> rm, so we skip the backslash
+                    'a'..='z' | 'A'..='Z' => {
+                        result.push(chars.next().unwrap());
+                    }
+                    // For other characters, preserve both
+                    _ => {
+                        result.push(c);
+                        result.push(chars.next().unwrap());
+                    }
+                }
+            } else {
+                result.push(c);
+            }
+        } else {
+            result.push(c);
+        }
+    }
+
+    result
 }
 
 #[derive(Debug)]
@@ -209,12 +292,30 @@ impl ToolExecutor {
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("Missing command"))?;
 
+        // Normalize the command to detect escape-based bypasses (e.g., r\m -> rm)
+        let normalized = normalize_command(command);
+
+        // Check both original and normalized command against dangerous patterns
         for pattern in &self.policy.dangerous_patterns {
-            if pattern.is_match(command) {
+            if pattern.is_match(command) || pattern.is_match(&normalized) {
                 return Ok(ToolResult::Error(format!(
                     "Command blocked by security policy: matches {:?}",
                     pattern.as_str()
                 )));
+            }
+        }
+
+        // In allowlist mode, only allow commands that match an allowed pattern
+        if self.policy.allowlist_mode {
+            let is_allowed = self
+                .policy
+                .allowed_commands
+                .iter()
+                .any(|pattern| pattern.is_match(command) || pattern.is_match(&normalized));
+            if !is_allowed {
+                return Ok(ToolResult::Error(
+                    "Command blocked: not in allowlist".to_string(),
+                ));
             }
         }
 
