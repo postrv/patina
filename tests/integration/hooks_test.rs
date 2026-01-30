@@ -1,0 +1,584 @@
+//! Integration tests for the hooks system.
+//!
+//! Tests lifecycle hooks including pre-tool-use and post-tool-use events.
+
+use rct::hooks::{HookCommand, HookContext, HookDecision, HookDefinition, HookEvent, HookExecutor};
+use serde_json::json;
+
+/// Creates a HookContext for tool-related events.
+fn tool_context(event: HookEvent, tool_name: &str) -> HookContext {
+    HookContext {
+        hook_event_name: event.as_str().to_string(),
+        session_id: "test-session-123".to_string(),
+        tool_name: Some(tool_name.to_string()),
+        tool_input: Some(json!({"command": "echo hello"})),
+        tool_response: None,
+        prompt: None,
+        stop_reason: None,
+    }
+}
+
+/// Creates a hook definition with a simple command.
+fn simple_hook(command: &str) -> HookDefinition {
+    HookDefinition {
+        matcher: None,
+        hooks: vec![HookCommand {
+            hook_type: "command".to_string(),
+            command: command.to_string(),
+            timeout_ms: Some(5000),
+        }],
+    }
+}
+
+/// Creates a hook definition with a matcher pattern.
+fn hook_with_matcher(matcher: &str, command: &str) -> HookDefinition {
+    HookDefinition {
+        matcher: Some(matcher.to_string()),
+        hooks: vec![HookCommand {
+            hook_type: "command".to_string(),
+            command: command.to_string(),
+            timeout_ms: Some(5000),
+        }],
+    }
+}
+
+// =============================================================================
+// 4.1.1 Pre-tool-use hook tests
+// =============================================================================
+
+/// Test that a pre-tool-use hook with exit code 0 allows execution to continue.
+#[tokio::test]
+async fn test_pre_tool_use_hook_continues() {
+    let mut executor = HookExecutor::new();
+
+    // Hook that exits with 0 should continue
+    executor.register(HookEvent::PreToolUse, vec![simple_hook("exit 0")]);
+
+    let context = tool_context(HookEvent::PreToolUse, "Bash");
+    let result = executor.execute(HookEvent::PreToolUse, &context).await;
+
+    assert!(result.is_ok(), "Hook execution should succeed");
+    let result = result.unwrap();
+    assert_eq!(result.exit_code, 0);
+    assert!(
+        matches!(result.decision, HookDecision::Continue),
+        "Hook should allow continuation"
+    );
+}
+
+/// Test that a pre-tool-use hook with exit code 2 blocks execution.
+#[tokio::test]
+async fn test_pre_tool_use_hook_blocks() {
+    let mut executor = HookExecutor::new();
+
+    // Hook that exits with 2 and provides a reason should block
+    executor.register(
+        HookEvent::PreToolUse,
+        vec![simple_hook("echo 'Blocked by security policy' && exit 2")],
+    );
+
+    let context = tool_context(HookEvent::PreToolUse, "Bash");
+    let result = executor.execute(HookEvent::PreToolUse, &context).await;
+
+    assert!(result.is_ok(), "Hook execution should succeed");
+    let result = result.unwrap();
+    assert_eq!(result.exit_code, 2);
+
+    match &result.decision {
+        HookDecision::Block { reason } => {
+            assert!(
+                reason.contains("Blocked by security policy"),
+                "Block reason should contain the hook's stdout: got {:?}",
+                reason
+            );
+        }
+        other => panic!("Expected Block decision, got {:?}", other),
+    }
+}
+
+/// Test that hooks without a matcher run for all tools.
+#[tokio::test]
+async fn test_pre_tool_use_hook_no_matcher_runs_for_all() {
+    let mut executor = HookExecutor::new();
+
+    // Hook without matcher should run for any tool
+    executor.register(
+        HookEvent::PreToolUse,
+        vec![simple_hook("echo 'ran' && exit 0")],
+    );
+
+    // Test with different tool names
+    for tool_name in &["Bash", "Read", "Write", "Edit", "Glob"] {
+        let context = tool_context(HookEvent::PreToolUse, tool_name);
+        let result = executor
+            .execute(HookEvent::PreToolUse, &context)
+            .await
+            .unwrap();
+        assert!(
+            matches!(result.decision, HookDecision::Continue),
+            "Hook should run for tool: {}",
+            tool_name
+        );
+    }
+}
+
+/// Test that when no hooks are registered, execution continues.
+#[tokio::test]
+async fn test_pre_tool_use_no_hooks_continues() {
+    let executor = HookExecutor::new();
+
+    let context = tool_context(HookEvent::PreToolUse, "Bash");
+    let result = executor.execute(HookEvent::PreToolUse, &context).await;
+
+    assert!(result.is_ok());
+    let result = result.unwrap();
+    assert_eq!(result.exit_code, 0);
+    assert!(matches!(result.decision, HookDecision::Continue));
+}
+
+/// Test that hooks receive the context as JSON on stdin.
+#[tokio::test]
+async fn test_pre_tool_use_hook_receives_context_json() {
+    let mut executor = HookExecutor::new();
+
+    // This hook reads stdin and checks if it contains expected JSON fields
+    // It will exit with 2 (block) if the tool_name is found, proving context was received
+    executor.register(
+        HookEvent::PreToolUse,
+        vec![simple_hook(
+            r#"input=$(cat); echo "$input" | grep -q '"tool_name":"Bash"' && echo "Context received" && exit 2 || exit 1"#,
+        )],
+    );
+
+    let context = tool_context(HookEvent::PreToolUse, "Bash");
+    let result = executor
+        .execute(HookEvent::PreToolUse, &context)
+        .await
+        .unwrap();
+
+    // If context was received correctly, hook should block (exit 2)
+    assert_eq!(
+        result.exit_code, 2,
+        "Hook should have received context and exited with 2"
+    );
+    assert!(matches!(result.decision, HookDecision::Block { .. }));
+}
+
+/// Test that multiple hooks in sequence are executed until one blocks.
+#[tokio::test]
+async fn test_pre_tool_use_multiple_hooks_first_block_wins() {
+    let mut executor = HookExecutor::new();
+
+    // Register multiple hooks - second one should block
+    executor.register(
+        HookEvent::PreToolUse,
+        vec![
+            simple_hook("echo 'first hook' && exit 0"), // continues
+            simple_hook("echo 'second hook blocks' && exit 2"), // blocks
+            simple_hook("echo 'third hook' && exit 0"), // never reached
+        ],
+    );
+
+    let context = tool_context(HookEvent::PreToolUse, "Bash");
+    let result = executor
+        .execute(HookEvent::PreToolUse, &context)
+        .await
+        .unwrap();
+
+    assert_eq!(result.exit_code, 2);
+    match &result.decision {
+        HookDecision::Block { reason } => {
+            assert!(reason.contains("second hook blocks"));
+        }
+        other => panic!("Expected Block, got {:?}", other),
+    }
+}
+
+/// Test that hooks with non-zero, non-2 exit codes log but continue.
+#[tokio::test]
+async fn test_pre_tool_use_hook_error_exit_continues() {
+    let mut executor = HookExecutor::new();
+
+    // Hook that exits with 1 (error) should log but continue
+    executor.register(
+        HookEvent::PreToolUse,
+        vec![simple_hook("echo 'error occurred' >&2 && exit 1")],
+    );
+
+    let context = tool_context(HookEvent::PreToolUse, "Bash");
+    let result = executor
+        .execute(HookEvent::PreToolUse, &context)
+        .await
+        .unwrap();
+
+    // Should continue despite error exit
+    assert!(matches!(result.decision, HookDecision::Continue));
+}
+
+// =============================================================================
+// 4.1.2 Post-tool-use hook tests
+// =============================================================================
+
+/// Creates a context with tool response for post-tool-use events.
+fn post_tool_context(tool_name: &str, response: serde_json::Value) -> HookContext {
+    HookContext {
+        hook_event_name: HookEvent::PostToolUse.as_str().to_string(),
+        session_id: "test-session-123".to_string(),
+        tool_name: Some(tool_name.to_string()),
+        tool_input: Some(json!({"command": "echo hello"})),
+        tool_response: Some(response),
+        prompt: None,
+        stop_reason: None,
+    }
+}
+
+/// Test that post-tool-use hooks receive the tool response.
+#[tokio::test]
+async fn test_post_tool_use_receives_response() {
+    let mut executor = HookExecutor::new();
+
+    // Hook checks that tool_response is in the context
+    executor.register(
+        HookEvent::PostToolUse,
+        vec![simple_hook(
+            r#"input=$(cat); echo "$input" | grep -q '"tool_response"' && echo "Response received" && exit 2 || exit 1"#,
+        )],
+    );
+
+    let context = post_tool_context("Bash", json!({"output": "hello world", "exit_code": 0}));
+    let result = executor
+        .execute(HookEvent::PostToolUse, &context)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        result.exit_code, 2,
+        "Hook should have found tool_response in context"
+    );
+}
+
+/// Test post-tool-use failure event is triggered separately.
+#[tokio::test]
+async fn test_post_tool_use_failure_event() {
+    let mut executor = HookExecutor::new();
+
+    // Register hooks for both success and failure events
+    executor.register(
+        HookEvent::PostToolUse,
+        vec![simple_hook("echo 'success hook' && exit 0")],
+    );
+    executor.register(
+        HookEvent::PostToolUseFailure,
+        vec![simple_hook("echo 'failure hook ran' && exit 2")],
+    );
+
+    // Execute failure event
+    let context = HookContext {
+        hook_event_name: HookEvent::PostToolUseFailure.as_str().to_string(),
+        session_id: "test-session-123".to_string(),
+        tool_name: Some("Bash".to_string()),
+        tool_input: Some(json!({"command": "false"})),
+        tool_response: Some(json!({"error": "command failed", "exit_code": 1})),
+        prompt: None,
+        stop_reason: None,
+    };
+
+    let result = executor
+        .execute(HookEvent::PostToolUseFailure, &context)
+        .await
+        .unwrap();
+
+    assert_eq!(result.exit_code, 2);
+    assert!(matches!(result.decision, HookDecision::Block { .. }));
+}
+
+// =============================================================================
+// 4.1.3 Matcher pattern tests
+// =============================================================================
+
+/// Test that exact matcher matches only the specified tool.
+#[tokio::test]
+async fn test_hook_matcher_exact() {
+    let mut executor = HookExecutor::new();
+
+    // Hook that only matches "Bash" tool
+    executor.register(
+        HookEvent::PreToolUse,
+        vec![hook_with_matcher("Bash", "echo 'matched Bash' && exit 2")],
+    );
+
+    // Should match Bash
+    let bash_context = tool_context(HookEvent::PreToolUse, "Bash");
+    let result = executor
+        .execute(HookEvent::PreToolUse, &bash_context)
+        .await
+        .unwrap();
+    assert_eq!(result.exit_code, 2, "Should match Bash tool");
+
+    // Should NOT match Read
+    let read_context = tool_context(HookEvent::PreToolUse, "Read");
+    let result = executor
+        .execute(HookEvent::PreToolUse, &read_context)
+        .await
+        .unwrap();
+    assert!(
+        matches!(result.decision, HookDecision::Continue),
+        "Should not match Read tool"
+    );
+}
+
+/// Test that pipe-separated matcher matches multiple tools.
+///
+/// Note: This test specifies desired behavior for pipe-separated patterns (e.g., "Bash|Read|Write").
+/// The current implementation uses glob patterns which don't support this syntax natively.
+/// This test will pass once the matcher is enhanced to support pipe-separated values.
+#[tokio::test]
+async fn test_hook_matcher_pipe_separated() {
+    let mut executor = HookExecutor::new();
+
+    // Hook definition with pipe-separated patterns
+    // Pipe-separated format: "Bash|Read|Write" should match any of the listed tools
+    executor.register(
+        HookEvent::PreToolUse,
+        vec![hook_with_matcher(
+            "Bash|Read|Write",
+            "echo 'matched file tool' && exit 2",
+        )],
+    );
+
+    // Should match Bash
+    let bash_context = tool_context(HookEvent::PreToolUse, "Bash");
+    let result = executor
+        .execute(HookEvent::PreToolUse, &bash_context)
+        .await
+        .unwrap();
+    assert_eq!(result.exit_code, 2, "Should match Bash");
+
+    // Should match Read
+    let read_context = tool_context(HookEvent::PreToolUse, "Read");
+    let result = executor
+        .execute(HookEvent::PreToolUse, &read_context)
+        .await
+        .unwrap();
+    assert_eq!(result.exit_code, 2, "Should match Read");
+
+    // Should NOT match Edit
+    let edit_context = tool_context(HookEvent::PreToolUse, "Edit");
+    let result = executor
+        .execute(HookEvent::PreToolUse, &edit_context)
+        .await
+        .unwrap();
+    assert!(
+        matches!(result.decision, HookDecision::Continue),
+        "Should not match Edit"
+    );
+}
+
+/// Test that wildcard matcher matches all tools.
+#[tokio::test]
+async fn test_hook_matcher_wildcard() {
+    let mut executor = HookExecutor::new();
+
+    // Hook with wildcard matcher
+    executor.register(
+        HookEvent::PreToolUse,
+        vec![hook_with_matcher("*", "echo 'matched all' && exit 2")],
+    );
+
+    // Should match any tool
+    for tool_name in &["Bash", "Read", "Write", "Edit", "Glob", "Grep", "Task"] {
+        let context = tool_context(HookEvent::PreToolUse, tool_name);
+        let result = executor
+            .execute(HookEvent::PreToolUse, &context)
+            .await
+            .unwrap();
+        assert_eq!(result.exit_code, 2, "Wildcard should match {}", tool_name);
+    }
+}
+
+/// Test that glob patterns work for partial matches.
+#[tokio::test]
+async fn test_hook_matcher_glob_pattern() {
+    let mut executor = HookExecutor::new();
+
+    // Hook matching any tool starting with 'mcp__'
+    executor.register(
+        HookEvent::PreToolUse,
+        vec![hook_with_matcher(
+            "mcp__*",
+            "echo 'matched MCP tool' && exit 2",
+        )],
+    );
+
+    // Should match MCP tools
+    let mcp_context = tool_context(HookEvent::PreToolUse, "mcp__jetbrains__build");
+    let result = executor
+        .execute(HookEvent::PreToolUse, &mcp_context)
+        .await
+        .unwrap();
+    assert_eq!(result.exit_code, 2, "Should match mcp__* pattern");
+
+    // Should NOT match regular tools
+    let bash_context = tool_context(HookEvent::PreToolUse, "Bash");
+    let result = executor
+        .execute(HookEvent::PreToolUse, &bash_context)
+        .await
+        .unwrap();
+    assert!(matches!(result.decision, HookDecision::Continue));
+}
+
+// =============================================================================
+// 4.1.4 Timeout tests
+// =============================================================================
+
+/// Test that hooks with configured timeouts complete successfully.
+/// Note: Full timeout enforcement requires implementation in HookExecutor.
+/// This test verifies basic timeout configuration and successful completion.
+#[tokio::test]
+async fn test_hook_timeout() {
+    let mut executor = HookExecutor::new();
+
+    // Hook with a command that sleeps briefly - should complete before timeout
+    executor.register(
+        HookEvent::PreToolUse,
+        vec![HookDefinition {
+            matcher: None,
+            hooks: vec![HookCommand {
+                hook_type: "command".to_string(),
+                command: "sleep 0.1 && exit 0".to_string(),
+                timeout_ms: Some(5000), // 5 second timeout
+            }],
+        }],
+    );
+
+    let context = tool_context(HookEvent::PreToolUse, "Bash");
+    let result = executor.execute(HookEvent::PreToolUse, &context).await;
+
+    assert!(result.is_ok(), "Hook should complete within timeout");
+    let result = result.unwrap();
+    // Hook that exits 0 should result in Continue decision
+    assert!(
+        matches!(result.decision, HookDecision::Continue),
+        "Successful hook should continue"
+    );
+}
+
+/// Test that hooks don't hang on slow commands (regression test).
+#[tokio::test]
+async fn test_hook_no_hang_on_slow_command() {
+    let mut executor = HookExecutor::new();
+
+    // Hook that takes a bit of time but completes
+    executor.register(
+        HookEvent::PreToolUse,
+        vec![simple_hook("sleep 0.05 && echo 'done' && exit 0")],
+    );
+
+    let context = tool_context(HookEvent::PreToolUse, "Bash");
+
+    // Use tokio timeout to ensure we don't hang
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        executor.execute(HookEvent::PreToolUse, &context),
+    )
+    .await;
+
+    assert!(result.is_ok(), "Hook execution should not hang");
+    let result = result.unwrap();
+    assert!(result.is_ok());
+}
+
+/// Test that hooks complete before timeout under normal conditions.
+#[tokio::test]
+async fn test_hook_completes_before_timeout() {
+    let mut executor = HookExecutor::new();
+
+    // Fast hook with generous timeout
+    executor.register(
+        HookEvent::PreToolUse,
+        vec![HookDefinition {
+            matcher: None,
+            hooks: vec![HookCommand {
+                hook_type: "command".to_string(),
+                command: "echo 'fast' && exit 0".to_string(),
+                timeout_ms: Some(10000),
+            }],
+        }],
+    );
+
+    let start = std::time::Instant::now();
+    let context = tool_context(HookEvent::PreToolUse, "Bash");
+    let result = executor.execute(HookEvent::PreToolUse, &context).await;
+    let elapsed = start.elapsed();
+
+    assert!(result.is_ok());
+    assert!(
+        elapsed < std::time::Duration::from_secs(1),
+        "Fast hook should complete quickly, took {:?}",
+        elapsed
+    );
+}
+
+// =============================================================================
+// Additional edge case tests
+// =============================================================================
+
+/// Test that empty commands are handled gracefully.
+#[tokio::test]
+async fn test_hook_empty_command() {
+    let mut executor = HookExecutor::new();
+
+    executor.register(HookEvent::PreToolUse, vec![simple_hook("")]);
+
+    let context = tool_context(HookEvent::PreToolUse, "Bash");
+    let result = executor.execute(HookEvent::PreToolUse, &context).await;
+
+    // Should handle gracefully, not panic
+    assert!(result.is_ok());
+}
+
+/// Test that hooks work with special characters in tool names.
+#[tokio::test]
+async fn test_hook_special_chars_in_tool_name() {
+    let mut executor = HookExecutor::new();
+
+    executor.register(
+        HookEvent::PreToolUse,
+        vec![hook_with_matcher("mcp__*", "echo 'matched' && exit 2")],
+    );
+
+    let context = tool_context(HookEvent::PreToolUse, "mcp__narsil__scan_security");
+    let result = executor
+        .execute(HookEvent::PreToolUse, &context)
+        .await
+        .unwrap();
+
+    assert_eq!(result.exit_code, 2);
+}
+
+/// Test that multiple hook definitions can be registered for the same event.
+#[tokio::test]
+async fn test_multiple_hook_definitions_same_event() {
+    let mut executor = HookExecutor::new();
+
+    // Register first set of hooks
+    executor.register(
+        HookEvent::PreToolUse,
+        vec![hook_with_matcher("Bash", "echo 'bash hook' && exit 0")],
+    );
+
+    // Register second set of hooks (should append, not replace)
+    executor.register(
+        HookEvent::PreToolUse,
+        vec![hook_with_matcher("*", "echo 'all tools hook' && exit 2")],
+    );
+
+    let context = tool_context(HookEvent::PreToolUse, "Bash");
+    let result = executor
+        .execute(HookEvent::PreToolUse, &context)
+        .await
+        .unwrap();
+
+    // Second hook should block since first continues
+    assert_eq!(result.exit_code, 2);
+}

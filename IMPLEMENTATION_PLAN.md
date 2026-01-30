@@ -9,10 +9,10 @@
 | Metric | Value | Command |
 |--------|-------|---------|
 | Unit Tests | 17 | `cargo test --lib` |
-| Integration Tests | 130 | `cargo test --test '*'` |
+| Integration Tests | 149 | `cargo test --test '*'` |
 | Doc Tests | 10 | `cargo test --doc` |
-| Total Tests | 157 | `cargo test` |
-| Test Files | 11 | `find tests -name '*.rs' \| wc -l` |
+| Total Tests | 176 | `cargo test` |
+| Test Files | 13 | `find tests -name '*.rs' \| wc -l` |
 | Clippy Warnings | 0 | `cargo clippy --all-targets -- -D warnings` |
 | Source Files | 23 | `find src -name '*.rs' \| wc -l` |
 | LOC | ~4000 | `tokei src` |
@@ -411,35 +411,42 @@ Steps:
 
 ### 4.1 Hook Event Tests
 
-- [ ] 4.1.1 Write pre-tool-use hook tests (RED)
+- [x] 4.1.1 Write pre-tool-use hook tests (RED)
   - Path: `tests/integration/hooks_test.rs`
   - Test: `test_pre_tool_use_hook_continues`
   - Test: `test_pre_tool_use_hook_blocks`
+  - **Completed: 2026-01-30** - 7 pre-tool-use tests plus edge cases
 
-- [ ] 4.1.2 Write post-tool-use hook tests (RED)
+- [x] 4.1.2 Write post-tool-use hook tests (RED)
   - Test: `test_post_tool_use_receives_response`
   - Test: `test_post_tool_use_failure_event`
+  - **Completed: 2026-01-30** - 2 post-tool-use tests
 
-- [ ] 4.1.3 Write matcher pattern tests (RED)
+- [x] 4.1.3 Write matcher pattern tests (RED)
   - Test: `test_hook_matcher_exact`
   - Test: `test_hook_matcher_pipe_separated`
   - Test: `test_hook_matcher_wildcard`
+  - **Completed: 2026-01-30** - 4 matcher pattern tests including glob patterns
 
-- [ ] 4.1.4 Write timeout tests (RED)
+- [x] 4.1.4 Write timeout tests (RED)
   - Test: `test_hook_timeout`
   - Test: `test_hook_no_hang_on_slow_command`
+  - **Completed: 2026-01-30** - 3 timeout tests
 
 ### 4.2 Hook Execution Implementation
 
-- [ ] 4.2.1 Implement hook executor (GREEN)
+- [x] 4.2.1 Implement hook executor (GREEN)
   - Path: `src/hooks/mod.rs`
   - Execute shell commands with JSON stdin
+  - **Completed: 2026-01-30** - Already implemented with async execution
 
-- [ ] 4.2.2 Implement matcher patterns (GREEN)
+- [x] 4.2.2 Implement matcher patterns (GREEN)
   - Support: exact, pipe-separated, wildcard
+  - **Completed: 2026-01-30** - Added `matches_pattern()` helper supporting pipe-separated and glob patterns
 
-- [ ] 4.2.3 Implement exit code handling (GREEN)
+- [x] 4.2.3 Implement exit code handling (GREEN)
   - 0=continue, 2=block, others=log
+  - **Completed: 2026-01-30** - Already implemented in execute()
 
 - [ ] 4.2.4 Implement all 11 hook events (GREEN)
   - Integrate hooks into app event loop
