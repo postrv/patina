@@ -8,14 +8,14 @@
 
 | Metric | Value | Command |
 |--------|-------|---------|
-| Unit Tests | 37 | `cargo test --lib` |
-| Integration Tests | 352 | `cargo test --test '*'` |
-| Doc Tests | 18 | `cargo test --doc` |
-| Total Tests | 407 | `cargo test` |
-| Test Files | 26 | `find tests -name '*.rs' \| wc -l` |
+| Unit Tests | 47 | `cargo test --lib` |
+| Integration Tests | 360 | `cargo test --test '*'` |
+| Doc Tests | 19 | `cargo test --doc` |
+| Total Tests | 426 | `cargo test` |
+| Test Files | 28 | `find tests -name '*.rs' \| wc -l` |
 | Clippy Warnings | 0 | `cargo clippy --all-targets -- -D warnings` |
 | Source Files | 28 | `find src -name '*.rs' \| wc -l` |
-| LOC | ~6100 | `tokei src` |
+| LOC | ~6600 | `tokei src` |
 
 **Baseline Rule:** Test count must never decrease. Clippy warnings must reach 0.
 
@@ -691,12 +691,17 @@ Steps:
 
 ### 8.3 Auto-Update System
 
-- [ ] 8.3.1 Write update check tests (RED)
+- [x] 8.3.1 Write update check tests (RED)
   - Test: `test_auto_update_check`
   - Test: `test_auto_update_verify_signature`
+  - Additional tests: `test_auto_update_check_already_current`, `test_auto_update_check_current_is_newer`, `test_auto_update_check_server_error`, `test_auto_update_check_not_found`, `test_auto_update_check_channels`, `test_platform_key_detection`, `test_auto_update_checksum_mismatch`, `test_auto_update_download_server_error`, `test_release_channel_as_str`, `test_release_channel_equality`
+  - **Completed: 2026-01-30** - 12 integration tests + 5 unit tests
 
-- [ ] 8.3.2 Implement update manager (GREEN)
+- [x] 8.3.2 Implement update manager (GREEN)
   - Path: `src/update/mod.rs`
+  - Added `new_with_base_url()` for testing with mock servers
+  - Added comprehensive documentation
+  - **Completed: 2026-01-30** - Full TDD implementation
 
 ### 8.4 Final Quality Gate
 
