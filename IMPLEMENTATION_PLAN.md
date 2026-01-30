@@ -2,20 +2,20 @@
 
 > Ralph uses this file to track task progress. Update checkboxes as work completes.
 
-## Status: PHASE 3 COMPLETE - PHASE 4 READY
+## Status: PHASE 4 COMPLETE - PHASE 5 READY
 
 ## Baseline Metrics (Updated: 2026-01-30)
 
 | Metric | Value | Command |
 |--------|-------|---------|
 | Unit Tests | 17 | `cargo test --lib` |
-| Integration Tests | 149 | `cargo test --test '*'` |
+| Integration Tests | 171 | `cargo test --test '*'` |
 | Doc Tests | 10 | `cargo test --doc` |
-| Total Tests | 176 | `cargo test` |
+| Total Tests | 198 | `cargo test` |
 | Test Files | 13 | `find tests -name '*.rs' \| wc -l` |
 | Clippy Warnings | 0 | `cargo clippy --all-targets -- -D warnings` |
 | Source Files | 23 | `find src -name '*.rs' \| wc -l` |
-| LOC | ~4000 | `tokei src` |
+| LOC | ~4500 | `tokei src` |
 
 **Baseline Rule:** Test count must never decrease. Clippy warnings must reach 0.
 
@@ -448,12 +448,14 @@ Steps:
   - 0=continue, 2=block, others=log
   - **Completed: 2026-01-30** - Already implemented in execute()
 
-- [ ] 4.2.4 Implement all 11 hook events (GREEN)
+- [x] 4.2.4 Implement all 11 hook events (GREEN)
   - Integrate hooks into app event loop
+  - **Completed: 2026-01-30** - Added `HookManager` with fire methods for all 11 events, `HookedToolExecutor` for tool integration, TOML config loading
 
 ### 4.3 Narsil Reindex Checkpoint
 
-- [ ] 4.3.1 Run narsil reindex after Phase 4
+- [x] 4.3.1 Run narsil reindex after Phase 4
+  - **Completed: 2026-01-30** - Security scan: 0 CRITICAL/HIGH, 2 LOW (unmaintained transitive deps: bincode, yaml-rust via syntect)
 
 ---
 
