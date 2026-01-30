@@ -2,7 +2,7 @@
 
 > Ralph uses this file to track task progress. Update checkboxes as work completes.
 
-## Status: PHASE 2 COMPLETE - PHASE 3 READY
+## Status: PHASE 3 COMPLETE - PHASE 4 READY
 
 ## Baseline Metrics (Updated: 2026-01-30)
 
@@ -400,7 +400,8 @@ Steps:
 
 ### 3.4 Narsil Reindex Checkpoint
 
-- [ ] 3.4.1 Run narsil reindex after Phase 3
+- [x] 3.4.1 Run narsil reindex after Phase 3
+  - **Completed: 2026-01-30** - Security scan: 0 CRITICAL/HIGH, 2 LOW (unmaintained transitive deps: bincode, yaml-rust via syntect)
 
 ---
 
