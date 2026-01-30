@@ -5,3 +5,4 @@
 //! - Cost controls for budget management
 
 pub mod audit;
+pub mod cost;

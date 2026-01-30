@@ -8,14 +8,14 @@
 
 | Metric | Value | Command |
 |--------|-------|---------|
-| Unit Tests | 32 | `cargo test --lib` |
-| Integration Tests | 341 | `cargo test --test '*'` |
-| Doc Tests | 16 | `cargo test --doc` |
-| Total Tests | 389 | `cargo test` |
-| Test Files | 23 | `find tests -name '*.rs' \| wc -l` |
+| Unit Tests | 37 | `cargo test --lib` |
+| Integration Tests | 352 | `cargo test --test '*'` |
+| Doc Tests | 18 | `cargo test --doc` |
+| Total Tests | 407 | `cargo test` |
+| Test Files | 26 | `find tests -name '*.rs' \| wc -l` |
 | Clippy Warnings | 0 | `cargo clippy --all-targets -- -D warnings` |
-| Source Files | 27 | `find src -name '*.rs' \| wc -l` |
-| LOC | ~5600 | `tokei src` |
+| Source Files | 28 | `find src -name '*.rs' \| wc -l` |
+| LOC | ~6100 | `tokei src` |
 
 **Baseline Rule:** Test count must never decrease. Clippy warnings must reach 0.
 
@@ -651,8 +651,13 @@ Steps:
   - File persistence with JSON format
   - **Completed: 2026-01-30** - 11 integration tests, 5 unit tests
 
-- [ ] 7.4.2 Implement cost controls
+- [x] 7.4.2 Implement cost controls
   - Path: `src/enterprise/cost.rs`
+  - CostTracker with token tracking, cost calculation, and budget enforcement
+  - ModelPricing for Opus/Sonnet/Haiku with configurable custom pricing
+  - BudgetLimit for session/daily/monthly limits
+  - CostAlert for warnings and exceeded notifications
+  - **Completed: 2026-01-30** - 19 integration tests, 5 unit tests
 
 ### 7.5 Narsil Reindex Checkpoint
 
