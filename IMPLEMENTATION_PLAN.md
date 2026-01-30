@@ -214,14 +214,15 @@ Steps:
 
 ### 2.1 Regex Pattern Safety
 
-- [ ] 2.1.1 Use lazy_static for regex patterns (REFACTOR)
+- [x] 2.1.1 Use lazy_static for regex patterns (REFACTOR)
   - Path: `src/tools/mod.rs:40-75`
-  - Change: Move patterns to `lazy_static!` block
+  - Change: Move patterns to `once_cell::sync::Lazy` static
   - Benefit: Compile-time validation, no runtime panics
   - Acceptance: Clippy clean, tests pass
 
-- [ ] 2.1.2 Commit regex refactor
-  - Message: `refactor(tools): Use lazy_static for dangerous patterns`
+- [x] 2.1.2 Commit regex refactor
+  - Message: `refactor(tools): Use once_cell Lazy for dangerous patterns`
+  - Commit: b5576ae
 
 ### 2.2 Plugin file_stem Safety
 
@@ -492,6 +493,12 @@ Steps:
   - Added symlink checks to read_file, write_file, and edit_file operations
   - 4 security tests added
   - Commit: d54046f
+
+- [x] 2.1.1-2.1.2 Regex Pattern Safety (L-1)
+  - Refactored dangerous_patterns to use once_cell::sync::Lazy
+  - Patterns compile once on first access, not on every Default impl call
+  - Eliminates runtime panics from invalid regex after initialization
+  - Commit: b5576ae
 
 ---
 
