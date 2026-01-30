@@ -1,6 +1,7 @@
 # Build stage
-# Note: ratatui-crossterm requires edition2024 which needs Rust 1.85+
-FROM rust:1.85-bookworm AS builder
+# Note: ratatui 0.30+ requires Rust 1.86+, time 0.3.46+ requires Rust 1.88+
+# Using Rust 1.93 (current stable LTS)
+FROM rust:1.93-bookworm AS builder
 
 WORKDIR /app
 
