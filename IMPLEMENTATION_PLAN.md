@@ -404,7 +404,7 @@ Steps:
 
 ### 4.3 Error Logging
 
-- [ ] 4.3.1 Ensure all errors are logged appropriately
+- [x] 4.3.1 Ensure all errors are logged appropriately
   - Add: `tracing::error!` for critical failures
   - Add: `tracing::warn!` for recoverable issues
   - Verify: No silent failures
@@ -607,6 +607,16 @@ Steps:
   - Uses tracing::warn! and tracing::debug! for error visibility
   - 6 new tests added
   - Commit: 919656c
+
+- [x] 4.3.1 Ensure all errors are logged appropriately
+  - Tools module: Added warn! for security violations, path traversal, symlink rejection
+  - Tools module: Added warn! for timeouts, allowlist blocks, size limits
+  - Tools module: Added debug! for file read/write failures, directory listing, invalid patterns
+  - Session module: Added error! for integrity check failures (security)
+  - Session module: Added warn! for validation failures (path traversal attempts)
+  - 13 new error handling tests added (verify behavior + document log messages)
+  - Log messages are documented in tests/unit/error_logging_test.rs
+  - Commit: 35b5299
 
 ---
 

@@ -38,3 +38,6 @@ mod multi_model_test;
 
 #[path = "unit/error_test.rs"]
 mod error_test;
+
+#[path = "unit/error_logging_test.rs"]
+mod error_logging_test;
