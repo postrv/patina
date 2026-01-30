@@ -39,10 +39,11 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::time::Duration;
 
-/// Commands that are ALWAYS blocked, even with absolute paths.
+/// Commands that are ALWAYS blocked, even with absolute paths (Unix).
 ///
 /// These commands have no legitimate use as MCP servers and could cause
 /// system damage or privilege escalation.
+#[cfg(unix)]
 fn always_blocked_commands() -> Vec<Regex> {
     vec![
         // Destructive file operations
@@ -71,11 +72,35 @@ fn always_blocked_commands() -> Vec<Regex> {
     ]
 }
 
-/// Commands that require an absolute path to be used.
+/// Commands that are ALWAYS blocked, even with absolute paths (Windows).
+///
+/// These commands have no legitimate use as MCP servers and could cause
+/// system damage or privilege escalation.
+#[cfg(windows)]
+fn always_blocked_commands() -> Vec<Regex> {
+    vec![
+        // Registry manipulation (case-insensitive for Windows)
+        Regex::new(r"(?i)^reg\.exe$").unwrap(),
+        Regex::new(r"(?i)^reg$").unwrap(),
+        // System control
+        Regex::new(r"(?i)^shutdown\.exe$").unwrap(),
+        Regex::new(r"(?i)^shutdown$").unwrap(),
+        // Disk formatting
+        Regex::new(r"(?i)^format\.com$").unwrap(),
+        Regex::new(r"(?i)^format$").unwrap(),
+        // Destructive file operations when used as MCP server
+        Regex::new(r"(?i)^del\.exe$").unwrap(),
+        Regex::new(r"(?i)^rmdir\.exe$").unwrap(),
+        Regex::new(r"(?i)^rd\.exe$").unwrap(),
+    ]
+}
+
+/// Commands that require an absolute path to be used (Unix).
 ///
 /// These are interpreters that could be legitimate MCP server hosts
 /// when specified with an absolute path, showing clear intent.
 /// Without an absolute path, they could be PATH-hijacked.
+#[cfg(unix)]
 fn require_absolute_path_commands() -> Vec<Regex> {
     vec![
         // Shell interpreters
@@ -95,7 +120,37 @@ fn require_absolute_path_commands() -> Vec<Regex> {
     ]
 }
 
-/// Dangerous argument patterns that indicate shell injection attempts.
+/// Commands that require an absolute path to be used (Windows).
+///
+/// These are interpreters that could be legitimate MCP server hosts
+/// when specified with an absolute path, showing clear intent.
+/// Without an absolute path, they could be PATH-hijacked.
+#[cfg(windows)]
+fn require_absolute_path_commands() -> Vec<Regex> {
+    vec![
+        // Windows shell interpreters (case-insensitive)
+        Regex::new(r"(?i)^cmd\.exe$").unwrap(),
+        Regex::new(r"(?i)^cmd$").unwrap(),
+        Regex::new(r"(?i)^powershell\.exe$").unwrap(),
+        Regex::new(r"(?i)^powershell$").unwrap(),
+        Regex::new(r"(?i)^pwsh\.exe$").unwrap(),
+        Regex::new(r"(?i)^pwsh$").unwrap(),
+        // Script interpreters (also on Windows)
+        Regex::new(r"(?i)^python[0-9.]*\.exe$").unwrap(),
+        Regex::new(r"(?i)^python[0-9.]*$").unwrap(),
+        Regex::new(r"(?i)^perl\.exe$").unwrap(),
+        Regex::new(r"(?i)^perl$").unwrap(),
+        Regex::new(r"(?i)^ruby\.exe$").unwrap(),
+        Regex::new(r"(?i)^ruby$").unwrap(),
+        Regex::new(r"(?i)^node\.exe$").unwrap(),
+        Regex::new(r"(?i)^node$").unwrap(),
+        Regex::new(r"(?i)^php\.exe$").unwrap(),
+        Regex::new(r"(?i)^php$").unwrap(),
+    ]
+}
+
+/// Dangerous argument patterns that indicate shell injection attempts (Unix).
+#[cfg(unix)]
 fn dangerous_argument_patterns() -> Vec<Regex> {
     vec![
         // Shell command chaining
@@ -110,6 +165,70 @@ fn dangerous_argument_patterns() -> Vec<Regex> {
         Regex::new(r">\s*/dev/").unwrap(),
         Regex::new(r">\s*/etc/").unwrap(),
     ]
+}
+
+/// Dangerous argument patterns that indicate shell injection attempts (Windows).
+///
+/// These patterns detect:
+/// - PowerShell encoded commands (-EncodedCommand, -enc, -e)
+/// - Invoke-Expression (iex) for arbitrary code execution
+/// - Destructive commands (del /s, format, rd /s)
+/// - Registry manipulation (reg delete, reg add)
+#[cfg(windows)]
+fn dangerous_argument_patterns() -> Vec<Regex> {
+    vec![
+        // PowerShell encoded commands (base64 bypass)
+        Regex::new(r"(?i)-e(nc(odedcommand)?)?(\s|$)").unwrap(),
+        // PowerShell Invoke-Expression (arbitrary code execution)
+        Regex::new(r"(?i)\biex\s*\(").unwrap(),
+        Regex::new(r"(?i)\binvoke-expression\b").unwrap(),
+        // Destructive file operations
+        Regex::new(r"(?i)\bdel\s+/[sq]").unwrap(),
+        Regex::new(r"(?i)\bdel\s+.*/[sq]").unwrap(),
+        Regex::new(r"(?i)\brd\s+/[sq]").unwrap(),
+        Regex::new(r"(?i)\brmdir\s+/[sq]").unwrap(),
+        // Disk formatting
+        Regex::new(r"(?i)\bformat\s+[a-z]:").unwrap(),
+        // Registry manipulation
+        Regex::new(r"(?i)\breg\s+(delete|add)\b").unwrap(),
+        // Command chaining with dangerous commands
+        Regex::new(r"(?i)&\s*del\s").unwrap(),
+        Regex::new(r"(?i)&\s*format\s").unwrap(),
+    ]
+}
+
+/// Checks if a path is absolute on the current platform.
+///
+/// # Unix
+/// - Paths starting with `/` are absolute
+///
+/// # Windows
+/// - Paths starting with drive letter (e.g., `C:\`) are absolute
+/// - UNC paths (e.g., `\\server\share`) are absolute
+fn is_absolute_path(path: &str) -> bool {
+    // Unix: starts with /
+    if path.starts_with('/') {
+        return true;
+    }
+
+    // Windows: drive letter (e.g., C:\ or C:/)
+    // Check for pattern like "X:" where X is a letter, followed by \ or /
+    let bytes = path.as_bytes();
+    if bytes.len() >= 2 {
+        let first = bytes[0];
+        let second = bytes[1];
+        if first.is_ascii_alphabetic() && second == b':' {
+            // It's a drive letter path (absolute on Windows)
+            return true;
+        }
+    }
+
+    // Windows: UNC path (\\server\share)
+    if path.starts_with(r"\\") {
+        return true;
+    }
+
+    false
 }
 
 /// Validates that an MCP command is safe to execute.
@@ -130,27 +249,36 @@ fn dangerous_argument_patterns() -> Vec<Regex> {
 /// 5. **Argument validation**: Arguments are checked for shell injection
 ///    patterns like `; rm -rf /` or `$(malicious)`.
 ///
+/// # Platform Support
+///
+/// - **Unix**: Recognizes `/path/to/command` as absolute
+/// - **Windows**: Recognizes `C:\path\to\command` and `\\server\share\command` as absolute
+///
 /// # Errors
 ///
 /// Returns `RctError::McpValidation` if validation fails. The error is
 /// security-related and can be checked via `is_security_related()`.
 pub fn validate_mcp_command(command: &str, args: &[String]) -> RctResult<()> {
-    // Check for path traversal
+    // Check for path traversal (works for both Unix and Windows separators)
     if command.contains("..") {
         return Err(RctError::mcp_validation(
             "path traversal not allowed in MCP command",
         ));
     }
 
-    // Check for relative paths (starts with ./)
-    if command.starts_with("./") {
+    // Check for relative paths
+    // Unix: starts with ./
+    // Windows: starts with .\ or ./
+    if command.starts_with("./") || command.starts_with(r".\") {
         return Err(RctError::mcp_validation(
-            "relative paths not allowed for MCP servers; use absolute paths like /usr/bin/command",
+            "relative paths not allowed for MCP servers; use absolute paths",
         ));
     }
 
     // Determine if this is an absolute path
-    let is_absolute = command.starts_with('/');
+    // Unix: starts with /
+    // Windows: starts with drive letter (C:\) or UNC path (\\server)
+    let is_absolute = is_absolute_path(command);
 
     // Get the command basename for pattern matching
     let command_name = Path::new(command)
@@ -553,5 +681,102 @@ impl McpClient {
             .send_request(request, DEFAULT_TIMEOUT)
             .await
             .context("Failed to send request")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // =============================================================================
+    // is_absolute_path tests - Cross-platform path detection
+    // =============================================================================
+
+    #[test]
+    fn test_unix_absolute_path() {
+        assert!(is_absolute_path("/bin/bash"));
+        assert!(is_absolute_path("/usr/bin/python"));
+        assert!(is_absolute_path("/"));
+    }
+
+    #[test]
+    fn test_unix_relative_path() {
+        assert!(!is_absolute_path("./script.sh"));
+        assert!(!is_absolute_path("../bin/program"));
+        assert!(!is_absolute_path("program"));
+        assert!(!is_absolute_path("bin/program"));
+    }
+
+    #[test]
+    fn test_windows_drive_letter_path() {
+        // Windows drive letter paths should be recognized as absolute
+        assert!(is_absolute_path(r"C:\Windows\System32\cmd.exe"));
+        assert!(is_absolute_path(r"D:\Program Files\app.exe"));
+        assert!(is_absolute_path("C:/Windows/System32/cmd.exe")); // Forward slash variant
+        assert!(is_absolute_path("c:")); // Just drive letter
+    }
+
+    #[test]
+    fn test_windows_unc_path() {
+        // UNC paths should be recognized as absolute
+        assert!(is_absolute_path(r"\\server\share\file.exe"));
+        assert!(is_absolute_path(r"\\192.168.1.1\share"));
+    }
+
+    #[test]
+    fn test_windows_relative_path() {
+        // Relative paths on Windows
+        assert!(!is_absolute_path(r".\script.bat"));
+        assert!(!is_absolute_path(r"..\bin\program.exe"));
+        assert!(!is_absolute_path("program.exe"));
+        assert!(!is_absolute_path(r"bin\program.exe"));
+    }
+
+    // =============================================================================
+    // validate_mcp_command tests - Security validation
+    // =============================================================================
+
+    #[test]
+    fn test_blocks_path_traversal() {
+        let result = validate_mcp_command("../../../bin/rm", &[]);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string().to_lowercase();
+        assert!(err.contains("traversal"));
+    }
+
+    #[test]
+    fn test_blocks_relative_unix_path() {
+        let result = validate_mcp_command("./malicious", &[]);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string().to_lowercase();
+        assert!(err.contains("relative"));
+    }
+
+    #[test]
+    fn test_blocks_relative_windows_path() {
+        let result = validate_mcp_command(r".\malicious.exe", &[]);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string().to_lowercase();
+        assert!(err.contains("relative"));
+    }
+
+    #[test]
+    fn test_allows_unix_absolute_path() {
+        // Valid absolute path should pass security checks (will fail on Windows due to blocked commands)
+        #[cfg(unix)]
+        {
+            let result = validate_mcp_command("/usr/bin/legitimate-mcp-server", &[]);
+            assert!(result.is_ok());
+        }
+    }
+
+    #[test]
+    fn test_allows_windows_absolute_path() {
+        // Windows absolute paths should be recognized correctly
+        #[cfg(windows)]
+        {
+            let result = validate_mcp_command(r"C:\Program Files\mcp-server.exe", &[]);
+            assert!(result.is_ok());
+        }
     }
 }
