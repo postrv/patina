@@ -661,9 +661,13 @@ Steps:
 
 ### 7.5 Narsil Reindex Checkpoint
 
-- [ ] 7.5.1 Run narsil reindex after Phase 7
+- [x] 7.5.1 Run narsil reindex after Phase 7
   - Run: Full security scan
   - Run: Supply chain analysis
+  - **Completed: 2026-01-30**
+    - Security scan: 0 CRITICAL, 0 HIGH, 3 MEDIUM (code quality)
+    - Supply chain: 412 deps, 0 vulnerabilities, 2 unmaintained warnings (syntect transitive deps)
+    - All MEDIUM findings are defensive coding recommendations, not exploitable vulnerabilities
 
 ---
 
