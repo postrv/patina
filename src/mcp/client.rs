@@ -29,6 +29,7 @@
 //! }
 //! ```
 
+use crate::error::{RctError, RctResult};
 use crate::mcp::protocol::{JsonRpcRequest, JsonRpcResponse};
 use crate::mcp::transport::{StdioTransport, Transport};
 use anyhow::{anyhow, Context, Result};
@@ -131,20 +132,20 @@ fn dangerous_argument_patterns() -> Vec<Regex> {
 ///
 /// # Errors
 ///
-/// Returns an error with a security-related message if validation fails.
-pub fn validate_mcp_command(command: &str, args: &[String]) -> Result<()> {
+/// Returns `RctError::McpValidation` if validation fails. The error is
+/// security-related and can be checked via `is_security_related()`.
+pub fn validate_mcp_command(command: &str, args: &[String]) -> RctResult<()> {
     // Check for path traversal
     if command.contains("..") {
-        return Err(anyhow!(
-            "Security policy blocked: path traversal not allowed in MCP command"
+        return Err(RctError::mcp_validation(
+            "path traversal not allowed in MCP command",
         ));
     }
 
     // Check for relative paths (starts with ./)
     if command.starts_with("./") {
-        return Err(anyhow!(
-            "Security policy blocked: relative paths not allowed for MCP servers. \
-             Use absolute paths like /usr/bin/command"
+        return Err(RctError::mcp_validation(
+            "relative paths not allowed for MCP servers; use absolute paths like /usr/bin/command",
         ));
     }
 
@@ -160,10 +161,10 @@ pub fn validate_mcp_command(command: &str, args: &[String]) -> Result<()> {
     // Check against always-blocked commands (even with absolute paths)
     for pattern in always_blocked_commands() {
         if pattern.is_match(command_name) {
-            return Err(anyhow!(
-                "Security policy blocked: '{}' is not allowed as an MCP server command",
+            return Err(RctError::mcp_validation(format!(
+                "security policy blocked '{}': command not allowed as MCP server",
                 command_name
-            ));
+            )));
         }
     }
 
@@ -171,12 +172,10 @@ pub fn validate_mcp_command(command: &str, args: &[String]) -> Result<()> {
     // These are interpreters that are legitimate when explicitly specified
     for pattern in require_absolute_path_commands() {
         if pattern.is_match(command_name) && !is_absolute {
-            return Err(anyhow!(
-                "Security policy blocked: '{}' requires an absolute path (e.g., /bin/{}) \
-                 to prevent PATH hijacking",
-                command_name,
-                command_name
-            ));
+            return Err(RctError::mcp_validation(format!(
+                "'{}' requires an absolute path (e.g., /bin/{}) to prevent PATH hijacking",
+                command_name, command_name
+            )));
         }
     }
 
@@ -195,8 +194,8 @@ pub fn validate_mcp_command(command: &str, args: &[String]) -> Result<()> {
         for arg in args {
             for pattern in &arg_patterns {
                 if pattern.is_match(arg) {
-                    return Err(anyhow!(
-                        "Security policy blocked: dangerous pattern detected in argument"
+                    return Err(RctError::mcp_validation(
+                        "security policy blocked: potential shell injection in argument",
                     ));
                 }
             }
