@@ -473,8 +473,7 @@ async fn test_mcp_server_crash_recovery() {
 #[tokio::test]
 async fn test_stdio_invalid_json() {
     // Create a server that outputs invalid JSON for first message
-    let mut transport =
-        StdioTransport::new(mock_mcp_server_path(), vec!["--invalid-json-at", "1"]);
+    let mut transport = StdioTransport::new(mock_mcp_server_path(), vec!["--invalid-json-at", "1"]);
 
     transport.start().await.expect("Transport should start");
 

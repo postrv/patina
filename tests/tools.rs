@@ -894,6 +894,205 @@ async fn test_file_write_blocks_protected_paths() {
     }
 }
 
+// =============================================================================
+// Windows Path Traversal Tests (Phase 4.2.1)
+// =============================================================================
+
+/// Test that UNC path traversal is blocked on Windows.
+///
+/// UNC paths like `\\server\share\..\..` could allow escaping to other shares
+/// or network locations.
+#[cfg(windows)]
+#[tokio::test]
+async fn test_blocks_windows_unc_traversal() {
+    let ctx = TestContext::new();
+    let executor = ToolExecutor::new(ctx.path());
+
+    // Attempt to use UNC path traversal to escape
+    let call = ToolCall {
+        name: "read_file".to_string(),
+        input: json!({ "path": r"\\server\share\..\..\..\etc\passwd" }),
+    };
+
+    let result = executor
+        .execute(call)
+        .await
+        .expect("execution should not error");
+
+    match result {
+        ToolResult::Error(e) => {
+            // Should be blocked as UNC absolute path or traversal
+            assert!(
+                e.to_lowercase().contains("path")
+                    || e.to_lowercase().contains("absolute")
+                    || e.to_lowercase().contains("traversal"),
+                "error should mention path issue, got: {e}"
+            );
+        }
+        ToolResult::Success(s) => {
+            panic!("UNC path traversal should be blocked, got success: {s}")
+        }
+        ToolResult::Cancelled => panic!("expected error, got cancelled"),
+    }
+}
+
+/// Test that Windows drive letter path traversal is blocked.
+///
+/// Paths like `C:\..\..` use the drive letter to start from a different root,
+/// then traverse up to potentially access system files.
+#[cfg(windows)]
+#[tokio::test]
+async fn test_blocks_windows_drive_traversal() {
+    let ctx = TestContext::new();
+    let executor = ToolExecutor::new(ctx.path());
+
+    // Attempt to use drive letter path to access system files
+    let call = ToolCall {
+        name: "read_file".to_string(),
+        input: json!({ "path": r"C:\..\..\..\Windows\System32\config\SAM" }),
+    };
+
+    let result = executor
+        .execute(call)
+        .await
+        .expect("execution should not error");
+
+    match result {
+        ToolResult::Error(e) => {
+            // Should be blocked as absolute path
+            assert!(
+                e.to_lowercase().contains("absolute")
+                    || e.to_lowercase().contains("path")
+                    || e.to_lowercase().contains("traversal"),
+                "error should mention path issue, got: {e}"
+            );
+        }
+        ToolResult::Success(s) => {
+            panic!("drive letter traversal should be blocked, got success: {s}")
+        }
+        ToolResult::Cancelled => panic!("expected error, got cancelled"),
+    }
+}
+
+/// Test that mixed path separators are handled correctly.
+///
+/// Paths like `/path\..\file` or `path/..\\file` use mixed separators
+/// to potentially bypass validation that only checks one separator type.
+#[cfg(windows)]
+#[tokio::test]
+async fn test_blocks_mixed_separators() {
+    let ctx = TestContext::new();
+    let executor = ToolExecutor::new(ctx.path());
+
+    // Create a file to test against
+    ctx.create_file("safe.txt", "safe content");
+
+    // Attempt to use mixed separators to traverse
+    let call = ToolCall {
+        name: "read_file".to_string(),
+        input: json!({ "path": r"subdir/..\..\outside.txt" }),
+    };
+
+    let result = executor
+        .execute(call)
+        .await
+        .expect("execution should not error");
+
+    match result {
+        ToolResult::Error(e) => {
+            // Should be blocked as path traversal
+            assert!(
+                e.to_lowercase().contains("path")
+                    || e.to_lowercase().contains("traversal")
+                    || e.to_lowercase().contains("outside"),
+                "error should mention path issue, got: {e}"
+            );
+        }
+        ToolResult::Success(s) => {
+            panic!("mixed separator traversal should be blocked, got success: {s}")
+        }
+        ToolResult::Cancelled => panic!("expected error, got cancelled"),
+    }
+}
+
+/// Test that Windows write operations block UNC path escapes.
+#[cfg(windows)]
+#[tokio::test]
+async fn test_write_blocks_windows_unc_traversal() {
+    let ctx = TestContext::new();
+    let executor = ToolExecutor::new(ctx.path());
+
+    // Attempt to write via UNC path traversal
+    let call = ToolCall {
+        name: "write_file".to_string(),
+        input: json!({
+            "path": r"\\server\share\..\malicious.txt",
+            "content": "malicious content"
+        }),
+    };
+
+    let result = executor
+        .execute(call)
+        .await
+        .expect("execution should not error");
+
+    match result {
+        ToolResult::Error(e) => {
+            assert!(
+                e.to_lowercase().contains("path")
+                    || e.to_lowercase().contains("absolute")
+                    || e.to_lowercase().contains("traversal"),
+                "error should mention path issue, got: {e}"
+            );
+        }
+        ToolResult::Success(s) => {
+            panic!("UNC write traversal should be blocked, got success: {s}")
+        }
+        ToolResult::Cancelled => panic!("expected error, got cancelled"),
+    }
+}
+
+/// Test that write operations block Windows drive letter escapes.
+#[cfg(windows)]
+#[tokio::test]
+async fn test_write_blocks_windows_drive_traversal() {
+    let ctx = TestContext::new();
+    let executor = ToolExecutor::new(ctx.path());
+
+    // Attempt to write via drive letter path
+    let call = ToolCall {
+        name: "write_file".to_string(),
+        input: json!({
+            "path": r"C:\Windows\malicious.txt",
+            "content": "malicious content"
+        }),
+    };
+
+    let result = executor
+        .execute(call)
+        .await
+        .expect("execution should not error");
+
+    match result {
+        ToolResult::Error(e) => {
+            assert!(
+                e.to_lowercase().contains("absolute")
+                    || e.to_lowercase().contains("path")
+                    || e.to_lowercase().contains("protected"),
+                "error should mention path issue, got: {e}"
+            );
+        }
+        ToolResult::Success(s) => {
+            panic!("drive letter write should be blocked, got success: {s}")
+        }
+        ToolResult::Cancelled => panic!("expected error, got cancelled"),
+    }
+}
+
+// =============================================================================
+// End Windows Path Traversal Tests
+// =============================================================================
+
 /// Test that write_file creates a backup when overwriting existing files.
 #[tokio::test]
 async fn test_file_write_creates_backup() {
