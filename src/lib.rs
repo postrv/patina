@@ -9,6 +9,7 @@ pub mod api;
 pub mod app;
 pub mod commands;
 pub mod context;
+pub mod enterprise;
 pub mod hooks;
 pub mod ide;
 pub mod mcp;
