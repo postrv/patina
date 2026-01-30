@@ -77,7 +77,7 @@ impl AnthropicClient {
     ///
     /// * `api_key` - The Anthropic API key
     /// * `model` - The model identifier (e.g., "claude-3-opus")
-    /// * `base_url` - The base URL for the API (e.g., "https://api.anthropic.com")
+    /// * `base_url` - The base URL for the API (e.g., `https://api.anthropic.com`)
     #[must_use]
     pub fn new_with_base_url(api_key: SecretString, model: &str, base_url: &str) -> Self {
         Self {
