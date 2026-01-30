@@ -358,16 +358,17 @@ Steps:
 
 ### 3.6 Concurrency Tests
 
-- [ ] 3.6.1 Write concurrent tool execution tests (RED)
-  - Path: `tests/integration/concurrency_test.rs`
+- [x] 3.6.1 Write concurrent tool execution tests (RED)
+  - Path: `tests/tools.rs`
   - Test: `test_parallel_file_operations`
   - Test: `test_parallel_bash_commands`
-  - Test: `test_parallel_mcp_calls`
+  - Test: `test_parallel_tool_calls`
   - Acceptance: No race conditions
 
-- [ ] 3.6.2 Write concurrent session tests (RED)
-  - Test: `test_concurrent_session_writes`
-  - Test: `test_concurrent_session_reads`
+- [x] 3.6.2 Write concurrent session tests (RED)
+  - Path: `tests/integration/session_test.rs` (completed in 3.4.1)
+  - Test: `test_session_concurrent_access` (writes)
+  - Test: `test_session_concurrent_reads` (reads)
   - Acceptance: Session thread-safe
 
 ---
@@ -572,6 +573,13 @@ Steps:
   - Added test_tui_paste_event: verifies paste behavior
   - Added test_dirty_flags: verifies dirty flag system
   - 9 new tests added
+
+- [x] 3.6.1-3.6.2 Concurrency Tests
+  - Added test_parallel_file_operations: verifies parallel file reads/writes
+  - Added test_parallel_bash_commands: verifies parallel bash execution
+  - Added test_parallel_tool_calls: verifies parallel tool executor calls
+  - Session concurrent tests already covered in 3.4.1
+  - 3 new tests added (+ 2 from 3.4.1)
 
 ---
 
