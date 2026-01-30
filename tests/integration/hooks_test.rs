@@ -582,3 +582,247 @@ async fn test_multiple_hook_definitions_same_event() {
     // Second hook should block since first continues
     assert_eq!(result.exit_code, 2);
 }
+
+// =============================================================================
+// 4.2.4 App-level hook integration tests
+// =============================================================================
+
+use rct::hooks::HookManager;
+use tempfile::TempDir;
+
+/// Test that HookManager can be created with configuration.
+#[tokio::test]
+async fn test_hook_manager_creation() {
+    let manager = HookManager::new("test-session-001".to_string());
+    assert!(manager.session_id() == "test-session-001");
+}
+
+/// Test that HookManager can load hooks from TOML configuration.
+#[tokio::test]
+async fn test_hook_manager_load_config() {
+    let temp_dir = TempDir::new().unwrap();
+    let config_path = temp_dir.path().join("hooks.toml");
+
+    // Create a hooks configuration file
+    let config_content = r#"
+[[PreToolUse]]
+matcher = "Bash"
+[[PreToolUse.hooks]]
+type = "command"
+command = "echo 'pre-tool hook'"
+timeout_ms = 5000
+"#;
+    std::fs::write(&config_path, config_content).unwrap();
+
+    let mut manager = HookManager::new("test-session".to_string());
+    let result = manager.load_config(&config_path);
+
+    assert!(
+        result.is_ok(),
+        "Should load config successfully: {:?}",
+        result.err()
+    );
+}
+
+/// Test that SessionStart hook fires on session initialization.
+#[tokio::test]
+async fn test_session_start_hook_fires() {
+    let mut manager = HookManager::new("test-session-start".to_string());
+
+    // Register a SessionStart hook that creates a marker file
+    manager.register_hook(
+        HookEvent::SessionStart,
+        simple_hook("echo 'session started' && exit 0"),
+    );
+
+    let result = manager.fire_session_start().await;
+
+    assert!(result.is_ok(), "SessionStart hook should succeed");
+    let result = result.unwrap();
+    assert!(matches!(result.decision, HookDecision::Continue));
+}
+
+/// Test that SessionStart hook can block session start.
+#[tokio::test]
+async fn test_session_start_hook_blocks() {
+    let mut manager = HookManager::new("test-session-blocked".to_string());
+
+    // Register a SessionStart hook that blocks
+    manager.register_hook(
+        HookEvent::SessionStart,
+        simple_hook("echo 'Session blocked: invalid environment' && exit 2"),
+    );
+
+    let result = manager.fire_session_start().await;
+
+    assert!(result.is_ok());
+    let result = result.unwrap();
+    assert!(matches!(result.decision, HookDecision::Block { .. }));
+}
+
+/// Test that SessionEnd hook fires on session shutdown.
+#[tokio::test]
+async fn test_session_end_hook_fires() {
+    let mut manager = HookManager::new("test-session-end".to_string());
+
+    manager.register_hook(
+        HookEvent::SessionEnd,
+        simple_hook("echo 'session ended' && exit 0"),
+    );
+
+    let result = manager.fire_session_end(None).await;
+
+    assert!(result.is_ok());
+    assert!(matches!(result.unwrap().decision, HookDecision::Continue));
+}
+
+/// Test that SessionEnd hook receives stop reason.
+#[tokio::test]
+async fn test_session_end_receives_stop_reason() {
+    let mut manager = HookManager::new("test-session-reason".to_string());
+
+    // Hook that checks for stop_reason in context
+    manager.register_hook(
+        HookEvent::SessionEnd,
+        simple_hook(
+            r#"input=$(cat); echo "$input" | grep -q '"stop_reason":"user_exit"' && exit 2 || exit 1"#,
+        ),
+    );
+
+    let result = manager.fire_session_end(Some("user_exit")).await;
+
+    assert!(result.is_ok());
+    // Exit 2 means stop_reason was found in context
+    assert_eq!(result.unwrap().exit_code, 2);
+}
+
+/// Test that UserPromptSubmit hook fires before message submission.
+#[tokio::test]
+async fn test_user_prompt_submit_hook_fires() {
+    let mut manager = HookManager::new("test-prompt-submit".to_string());
+
+    manager.register_hook(
+        HookEvent::UserPromptSubmit,
+        simple_hook("echo 'prompt submitted' && exit 0"),
+    );
+
+    let result = manager.fire_user_prompt_submit("Hello, Claude!").await;
+
+    assert!(result.is_ok());
+    assert!(matches!(result.unwrap().decision, HookDecision::Continue));
+}
+
+/// Test that UserPromptSubmit hook can block message submission.
+#[tokio::test]
+async fn test_user_prompt_submit_hook_blocks() {
+    let mut manager = HookManager::new("test-prompt-blocked".to_string());
+
+    // Hook that blocks prompts containing certain keywords
+    manager.register_hook(
+        HookEvent::UserPromptSubmit,
+        simple_hook(
+            r#"input=$(cat); echo "$input" | grep -q 'blocked_keyword' && echo 'Message blocked' && exit 2 || exit 0"#,
+        ),
+    );
+
+    // This prompt should be allowed
+    let allowed = manager
+        .fire_user_prompt_submit("Normal prompt")
+        .await
+        .unwrap();
+    assert!(matches!(allowed.decision, HookDecision::Continue));
+
+    // This prompt should be blocked
+    let blocked = manager
+        .fire_user_prompt_submit("This contains blocked_keyword")
+        .await
+        .unwrap();
+    assert!(matches!(blocked.decision, HookDecision::Block { .. }));
+}
+
+/// Test that UserPromptSubmit hook receives the prompt in context.
+#[tokio::test]
+async fn test_user_prompt_submit_receives_prompt() {
+    let mut manager = HookManager::new("test-prompt-context".to_string());
+
+    manager.register_hook(
+        HookEvent::UserPromptSubmit,
+        simple_hook(
+            r#"input=$(cat); echo "$input" | grep -q '"prompt":"Test message content"' && exit 2 || exit 1"#,
+        ),
+    );
+
+    let result = manager
+        .fire_user_prompt_submit("Test message content")
+        .await;
+
+    assert!(result.is_ok());
+    // Exit 2 means prompt was found in context
+    assert_eq!(result.unwrap().exit_code, 2);
+}
+
+/// Test Stop hook fires when stop is requested.
+#[tokio::test]
+async fn test_stop_hook_fires() {
+    let mut manager = HookManager::new("test-stop".to_string());
+
+    manager.register_hook(
+        HookEvent::Stop,
+        simple_hook("echo 'stop requested' && exit 0"),
+    );
+
+    let result = manager.fire_stop("user_interrupt").await;
+
+    assert!(result.is_ok());
+    assert!(matches!(result.unwrap().decision, HookDecision::Continue));
+}
+
+/// Test Notification hook fires.
+#[tokio::test]
+async fn test_notification_hook_fires() {
+    let mut manager = HookManager::new("test-notification".to_string());
+
+    manager.register_hook(
+        HookEvent::Notification,
+        simple_hook("echo 'notification sent' && exit 0"),
+    );
+
+    let result = manager.fire_notification("Task completed").await;
+
+    assert!(result.is_ok());
+    assert!(matches!(result.unwrap().decision, HookDecision::Continue));
+}
+
+/// Test PreCompact hook fires before context compaction.
+#[tokio::test]
+async fn test_pre_compact_hook_fires() {
+    let mut manager = HookManager::new("test-compact".to_string());
+
+    manager.register_hook(
+        HookEvent::PreCompact,
+        simple_hook("echo 'compacting context' && exit 0"),
+    );
+
+    let result = manager.fire_pre_compact().await;
+
+    assert!(result.is_ok());
+    assert!(matches!(result.unwrap().decision, HookDecision::Continue));
+}
+
+/// Test SubagentStop hook fires when subagent stops.
+#[tokio::test]
+async fn test_subagent_stop_hook_fires() {
+    let mut manager = HookManager::new("test-subagent-stop".to_string());
+
+    manager.register_hook(
+        HookEvent::SubagentStop,
+        simple_hook("echo 'subagent stopped' && exit 0"),
+    );
+
+    let result = manager
+        .fire_subagent_stop("subagent-001", "completed")
+        .await;
+
+    assert!(result.is_ok());
+    assert!(matches!(result.unwrap().decision, HookDecision::Continue));
+}

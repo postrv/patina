@@ -6,16 +6,20 @@
 //! - Edit operations with diff generation
 //! - Glob pattern matching for file discovery
 //! - Grep content search with regex support
+//! - Hook integration via `HookedToolExecutor`
 
 use anyhow::Result;
 use glob::Pattern;
 use regex::Regex;
+use serde_json::json;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 use tokio::process::Command;
 use walkdir::WalkDir;
+
+use crate::hooks::{HookDecision, HookManager};
 
 /// Tool executor with security policy enforcement.
 pub struct ToolExecutor {
@@ -672,5 +676,122 @@ impl ToolExecutor {
         }
 
         Ok(ToolResult::Success(results.join("\n")))
+    }
+}
+
+/// Tool executor with hook integration.
+///
+/// Wraps `ToolExecutor` to automatically fire lifecycle hooks before and after
+/// tool execution. Use this when hooks need to be integrated into tool execution.
+///
+/// # Hook Events
+///
+/// - `PreToolUse` - Fired before tool execution. Can block execution by returning exit code 2.
+/// - `PostToolUse` - Fired after successful tool execution.
+/// - `PostToolUseFailure` - Fired after failed tool execution.
+///
+/// # Examples
+///
+/// ```no_run
+/// use rct::tools::{HookedToolExecutor, ToolCall};
+/// use rct::hooks::HookManager;
+/// use std::path::PathBuf;
+/// use serde_json::json;
+///
+/// #[tokio::main]
+/// async fn main() -> anyhow::Result<()> {
+///     let manager = HookManager::new("session-123".to_string());
+///     let executor = HookedToolExecutor::new(PathBuf::from("."), manager);
+///
+///     let call = ToolCall {
+///         name: "bash".to_string(),
+///         input: json!({ "command": "echo hello" }),
+///     };
+///
+///     let result = executor.execute(call).await?;
+///     Ok(())
+/// }
+/// ```
+pub struct HookedToolExecutor {
+    inner: ToolExecutor,
+    hooks: HookManager,
+}
+
+impl HookedToolExecutor {
+    /// Creates a new hooked tool executor.
+    ///
+    /// # Arguments
+    ///
+    /// * `working_dir` - The working directory for tool execution
+    /// * `hook_manager` - The hook manager for firing lifecycle hooks
+    #[must_use]
+    pub fn new(working_dir: PathBuf, hook_manager: HookManager) -> Self {
+        Self {
+            inner: ToolExecutor::new(working_dir),
+            hooks: hook_manager,
+        }
+    }
+
+    /// Creates a new hooked tool executor with a custom policy.
+    #[must_use]
+    pub fn with_policy(mut self, policy: ToolExecutionPolicy) -> Self {
+        self.inner = self.inner.with_policy(policy);
+        self
+    }
+
+    /// Executes a tool call with hook integration.
+    ///
+    /// This method:
+    /// 1. Fires `PreToolUse` hook - if it returns Block, returns `ToolResult::Cancelled`
+    /// 2. Executes the actual tool
+    /// 3. Fires `PostToolUse` on success or `PostToolUseFailure` on failure
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if hook execution or tool execution fails.
+    pub async fn execute(&self, call: ToolCall) -> Result<ToolResult> {
+        let tool_input = call.input.clone();
+        let tool_name = call.name.clone();
+
+        // Fire PreToolUse hook
+        let pre_result = self
+            .hooks
+            .fire_pre_tool_use(&tool_name, tool_input.clone())
+            .await?;
+
+        // Check if hook blocked execution
+        if matches!(pre_result.decision, HookDecision::Block { .. }) {
+            return Ok(ToolResult::Cancelled);
+        }
+
+        // Execute the actual tool
+        let result = self.inner.execute(call).await?;
+
+        // Fire post-execution hooks based on result
+        match &result {
+            ToolResult::Success(output) => {
+                let response = json!({
+                    "status": "success",
+                    "output": output
+                });
+                self.hooks
+                    .fire_post_tool_use(&tool_name, tool_input, response)
+                    .await?;
+            }
+            ToolResult::Error(error) => {
+                let response = json!({
+                    "status": "error",
+                    "error": error
+                });
+                self.hooks
+                    .fire_post_tool_use_failure(&tool_name, tool_input, response)
+                    .await?;
+            }
+            ToolResult::Cancelled => {
+                // No hook for cancelled - it was already blocked by PreToolUse
+            }
+        }
+
+        Ok(result)
     }
 }
