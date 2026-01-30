@@ -26,12 +26,40 @@
 //! ```
 
 use crate::types::message::Message;
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::time::SystemTime;
 use tokio::fs;
 use uuid::Uuid;
+
+/// Validates a session ID to prevent path traversal attacks.
+///
+/// Session IDs must contain only alphanumeric characters, hyphens, and underscores.
+/// This prevents attacks like `../../etc/passwd` from escaping the sessions directory.
+///
+/// # Errors
+///
+/// Returns an error if the session ID contains invalid characters.
+fn validate_session_id(session_id: &str) -> Result<()> {
+    if session_id.is_empty() {
+        bail!("Session ID cannot be empty");
+    }
+
+    // Session IDs must be alphanumeric with hyphens and underscores only
+    // This is safe because UUIDs only contain hex digits and hyphens
+    let is_valid = session_id
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+
+    if !is_valid {
+        bail!(
+            "Invalid session ID: must contain only alphanumeric characters, hyphens, and underscores"
+        );
+    }
+
+    Ok(())
+}
 
 /// A conversation session with messages and metadata.
 ///
@@ -195,8 +223,9 @@ impl SessionManager {
     ///
     /// # Errors
     ///
-    /// Returns an error if the session doesn't exist or cannot be read.
+    /// Returns an error if the session ID is invalid, doesn't exist, or cannot be read.
     pub async fn load(&self, session_id: &str) -> Result<Session> {
+        validate_session_id(session_id)?;
         let path = self.session_path(session_id);
 
         let json = fs::read_to_string(&path)
@@ -218,8 +247,9 @@ impl SessionManager {
     ///
     /// # Errors
     ///
-    /// Returns an error if the session cannot be written.
+    /// Returns an error if the session ID is invalid or cannot be written.
     pub async fn update(&self, session_id: &str, session: &Session) -> Result<()> {
+        validate_session_id(session_id)?;
         // Create a copy with the correct ID
         let mut session_to_save = session.clone();
         session_to_save.id = Some(session_id.to_string());
@@ -244,8 +274,9 @@ impl SessionManager {
     ///
     /// # Errors
     ///
-    /// Returns an error if the session cannot be deleted.
+    /// Returns an error if the session ID is invalid or cannot be deleted.
     pub async fn delete(&self, session_id: &str) -> Result<()> {
+        validate_session_id(session_id)?;
         let path = self.session_path(session_id);
         fs::remove_file(&path)
             .await
@@ -306,8 +337,10 @@ impl SessionManager {
     ///
     /// # Errors
     ///
-    /// Returns an error if the session cannot be read.
+    /// Returns an error if the session ID is invalid or cannot be read.
     pub async fn get_metadata(&self, session_id: &str) -> Result<SessionMetadata> {
+        // Note: load() already validates session_id, but we validate here for clarity
+        validate_session_id(session_id)?;
         let session = self.load(session_id).await?;
 
         Ok(SessionMetadata {
@@ -395,5 +428,84 @@ mod tests {
         manager.delete(&id).await.unwrap();
 
         assert!(manager.load(&id).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_session_manager_rejects_path_traversal() {
+        let temp_dir = TempDir::new().unwrap();
+        let manager = SessionManager::new(temp_dir.path().to_path_buf());
+
+        // Attempt path traversal attacks - all should fail
+        let malicious_ids = [
+            "../../../etc/passwd",
+            "..\\..\\..\\windows\\system32\\config\\sam",
+            "valid/../../../escape",
+            "/absolute/path",
+            "session/with/slashes",
+            "session.with.dots.json",
+            "session with spaces",
+            "",
+        ];
+
+        for malicious_id in malicious_ids {
+            let result = manager.load(malicious_id).await;
+            assert!(
+                result.is_err(),
+                "Expected error for malicious ID: {:?}",
+                malicious_id
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_session_manager_accepts_valid_session_ids() {
+        let temp_dir = TempDir::new().unwrap();
+        let manager = SessionManager::new(temp_dir.path().to_path_buf());
+
+        // These are valid session ID formats (UUID-like)
+        let valid_ids = [
+            "550e8400-e29b-41d4-a716-446655440000",
+            "simple_session_id",
+            "session-with-dashes",
+            "MixedCase123",
+            "a",
+            "123",
+        ];
+
+        // Create sessions with these IDs and verify they work
+        for valid_id in valid_ids {
+            let mut session = Session::new(PathBuf::from("/test"));
+            session.id = Some(valid_id.to_string());
+
+            // Save should succeed
+            let saved_id = manager.save(&session).await.unwrap();
+            assert_eq!(saved_id, valid_id);
+
+            // Load should succeed
+            let loaded = manager.load(valid_id).await.unwrap();
+            assert_eq!(loaded.id(), Some(valid_id));
+        }
+    }
+
+    #[test]
+    fn test_validate_session_id_rejects_empty() {
+        assert!(super::validate_session_id("").is_err());
+    }
+
+    #[test]
+    fn test_validate_session_id_rejects_special_chars() {
+        assert!(super::validate_session_id("../parent").is_err());
+        assert!(super::validate_session_id("has/slash").is_err());
+        assert!(super::validate_session_id("has.dot").is_err());
+        assert!(super::validate_session_id("has space").is_err());
+        assert!(super::validate_session_id("has:colon").is_err());
+    }
+
+    #[test]
+    fn test_validate_session_id_accepts_valid() {
+        assert!(super::validate_session_id("valid-id").is_ok());
+        assert!(super::validate_session_id("valid_id").is_ok());
+        assert!(super::validate_session_id("ValidId123").is_ok());
+        assert!(super::validate_session_id("550e8400-e29b-41d4-a716-446655440000").is_ok());
     }
 }
