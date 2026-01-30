@@ -7,6 +7,8 @@ use std::process::Stdio;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
+use crate::tools::ToolExecutionPolicy;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum HookEvent {
     PreToolUse,
@@ -206,6 +208,30 @@ impl HookExecutor {
                 stderr: "Hook command is empty".to_string(),
                 decision: HookDecision::Continue,
             });
+        }
+
+        // Security validation: check against dangerous command patterns
+        // Reuses the same patterns as ToolExecutionPolicy to ensure consistent security
+        let policy = ToolExecutionPolicy::default();
+        for pattern in &policy.dangerous_patterns {
+            if pattern.is_match(trimmed) {
+                tracing::warn!(
+                    command = %trimmed,
+                    pattern = %pattern.as_str(),
+                    "Hook command blocked by security policy"
+                );
+                // Return exit_code 2 to indicate a block (consistent with hook semantics)
+                // The security policy message goes in stdout (block reason)
+                return Ok(HookResult {
+                    exit_code: 2,
+                    stdout: format!(
+                        "Hook command blocked by security policy: matches dangerous pattern '{}'",
+                        pattern.as_str()
+                    ),
+                    stderr: String::new(),
+                    decision: HookDecision::Continue,
+                });
+            }
         }
 
         // Log hook execution for audit trail
