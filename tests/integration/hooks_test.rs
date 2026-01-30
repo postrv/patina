@@ -193,6 +193,9 @@ async fn test_pre_tool_use_no_hooks_continues() {
 }
 
 /// Test that hooks receive the context as JSON on stdin.
+///
+/// Note: This test uses bash-specific constructs ($(cat), grep -q).
+#[cfg(unix)]
 #[tokio::test]
 async fn test_pre_tool_use_hook_receives_context_json() {
     let mut executor = HookExecutor::new();
@@ -289,6 +292,9 @@ fn post_tool_context(tool_name: &str, response: serde_json::Value) -> HookContex
 }
 
 /// Test that post-tool-use hooks receive the tool response.
+///
+/// Note: This test uses bash-specific constructs ($(cat), grep -q).
+#[cfg(unix)]
 #[tokio::test]
 async fn test_post_tool_use_receives_response() {
     let mut executor = HookExecutor::new();
@@ -801,6 +807,9 @@ async fn test_session_end_hook_fires() {
 }
 
 /// Test that SessionEnd hook receives stop reason.
+///
+/// Note: This test uses bash-specific constructs ($(cat), grep -q).
+#[cfg(unix)]
 #[tokio::test]
 async fn test_session_end_receives_stop_reason() {
     let mut manager = HookManager::new("test-session-reason".to_string());
@@ -842,6 +851,9 @@ async fn test_user_prompt_submit_hook_fires() {
 }
 
 /// Test that UserPromptSubmit hook can block message submission.
+///
+/// Note: This test uses bash-specific constructs ($(cat), grep -q).
+#[cfg(unix)]
 #[tokio::test]
 async fn test_user_prompt_submit_hook_blocks() {
     let mut manager = HookManager::new("test-prompt-blocked".to_string());
@@ -870,6 +882,9 @@ async fn test_user_prompt_submit_hook_blocks() {
 }
 
 /// Test that UserPromptSubmit hook receives the prompt in context.
+///
+/// Note: This test uses bash-specific constructs ($(cat), grep -q).
+#[cfg(unix)]
 #[tokio::test]
 async fn test_user_prompt_submit_receives_prompt() {
     let mut manager = HookManager::new("test-prompt-context".to_string());
@@ -967,10 +982,11 @@ async fn test_subagent_stop_hook_fires() {
 // These tests verify that hook commands are validated for dangerous patterns
 // before execution, reusing the same patterns from ToolExecutionPolicy.
 
-/// Test that hooks block `rm -rf /` commands.
+/// Test that hooks block `rm -rf /` commands (Unix).
 ///
 /// This is a critical security test - hooks should never be able to execute
 /// destructive filesystem commands that could destroy the system.
+#[cfg(unix)]
 #[tokio::test]
 async fn test_hook_blocks_rm_rf() {
     let mut executor = HookExecutor::new();
@@ -1019,9 +1035,10 @@ async fn test_hook_blocks_rm_rf() {
     );
 }
 
-/// Test that hooks block `sudo` commands.
+/// Test that hooks block `sudo` commands (Unix).
 ///
 /// Hooks should not be able to escalate privileges using sudo.
+#[cfg(unix)]
 #[tokio::test]
 async fn test_hook_blocks_sudo() {
     let mut executor = HookExecutor::new();
@@ -1057,10 +1074,11 @@ async fn test_hook_blocks_sudo() {
     );
 }
 
-/// Test that hooks block `curl | bash` (remote code execution) patterns.
+/// Test that hooks block `curl | bash` (remote code execution) patterns (Unix).
 ///
 /// This pattern is commonly used in attacks to download and execute
 /// malicious scripts. Hooks must never allow this.
+#[cfg(unix)]
 #[tokio::test]
 async fn test_hook_blocks_curl_pipe_bash() {
     let mut executor = HookExecutor::new();
@@ -1107,6 +1125,125 @@ async fn test_hook_blocks_curl_pipe_bash() {
     );
 }
 
+// =============================================================================
+// Windows-specific security tests
+// =============================================================================
+// These tests verify that Windows dangerous patterns are blocked.
+
+/// Test that hooks block `del /s /q` commands (Windows).
+///
+/// This is the Windows equivalent of `rm -rf` - recursive delete with quiet mode.
+#[cfg(windows)]
+#[tokio::test]
+async fn test_hook_blocks_del_recursive() {
+    let mut executor = HookExecutor::new();
+
+    executor.register(
+        HookEvent::SessionStart,
+        vec![simple_hook("del /s /q C:\\important")],
+    );
+
+    let context = HookContext {
+        hook_event_name: HookEvent::SessionStart.as_str().to_string(),
+        session_id: "test-security-del".to_string(),
+        tool_name: None,
+        tool_input: None,
+        tool_response: None,
+        prompt: None,
+        stop_reason: None,
+    };
+
+    let result = executor.execute(HookEvent::SessionStart, &context).await;
+
+    assert!(result.is_ok(), "Hook execution should not panic");
+    let result = result.unwrap();
+
+    assert!(
+        result.exit_code != 0,
+        "Dangerous del /s command should be blocked by security policy. \
+         Got exit_code={}, stdout='{}', stderr='{}'",
+        result.exit_code,
+        result.stdout,
+        result.stderr
+    );
+}
+
+/// Test that hooks block `powershell -enc` (encoded command) patterns (Windows).
+///
+/// Encoded PowerShell commands are a common attack vector that bypass security scanning.
+#[cfg(windows)]
+#[tokio::test]
+async fn test_hook_blocks_powershell_encoded() {
+    let mut executor = HookExecutor::new();
+
+    executor.register(
+        HookEvent::SessionStart,
+        vec![simple_hook("powershell -enc SGVsbG8gV29ybGQ=")],
+    );
+
+    let context = HookContext {
+        hook_event_name: HookEvent::SessionStart.as_str().to_string(),
+        session_id: "test-security-ps-enc".to_string(),
+        tool_name: None,
+        tool_input: None,
+        tool_response: None,
+        prompt: None,
+        stop_reason: None,
+    };
+
+    let result = executor.execute(HookEvent::SessionStart, &context).await;
+
+    assert!(result.is_ok(), "Hook execution should not panic");
+    let result = result.unwrap();
+
+    assert!(
+        result.exit_code != 0,
+        "Encoded PowerShell command should be blocked by security policy. \
+         Got exit_code={}, stdout='{}', stderr='{}'",
+        result.exit_code,
+        result.stdout,
+        result.stderr
+    );
+}
+
+/// Test that hooks block `Invoke-Expression` (iex) patterns (Windows).
+///
+/// iex executes arbitrary code and is commonly used in attacks.
+#[cfg(windows)]
+#[tokio::test]
+async fn test_hook_blocks_invoke_expression() {
+    let mut executor = HookExecutor::new();
+
+    executor.register(
+        HookEvent::SessionStart,
+        vec![simple_hook("iex(Get-Content malicious.ps1)")],
+    );
+
+    let context = HookContext {
+        hook_event_name: HookEvent::SessionStart.as_str().to_string(),
+        session_id: "test-security-iex".to_string(),
+        tool_name: None,
+        tool_input: None,
+        tool_response: None,
+        prompt: None,
+        stop_reason: None,
+    };
+
+    let result = executor.execute(HookEvent::SessionStart, &context).await;
+
+    assert!(result.is_ok(), "Hook execution should not panic");
+    let result = result.unwrap();
+
+    assert!(
+        result.exit_code != 0,
+        "Invoke-Expression pattern should be blocked by security policy. \
+         Got exit_code={}, stdout='{}', stderr='{}'",
+        result.exit_code,
+        result.stdout,
+        result.stderr
+    );
+}
+
 /// Test that hooks allow safe commands.
 ///
 /// While dangerous commands should be blocked, safe commands like echo,
@@ -1116,11 +1253,11 @@ async fn test_hook_blocks_curl_pipe_bash() {
 async fn test_hook_allows_safe_commands() {
     let mut executor = HookExecutor::new();
 
-    // Register a hook that writes to a temp file to prove it executed
-    // We use exit 2 to capture the output (continue doesn't capture stdout)
+    // Register a hook that echoes and exits with 2 to capture output
+    // Use cross-platform echo syntax
     executor.register(
         HookEvent::SessionStart,
-        vec![simple_hook("echo 'safe_command_executed' && exit 2")],
+        vec![simple_hook(&echo_and_exit("safe_command_executed", 2))],
     );
 
     let context = HookContext {

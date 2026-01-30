@@ -249,7 +249,12 @@ impl HookExecutor {
             .spawn()?;
 
         if let Some(mut stdin) = child.stdin.take() {
-            stdin.write_all(stdin_data.as_bytes()).await?;
+            // Ignore broken pipe errors - they occur when the process exits
+            // before we finish writing, which is fine (the process got what it needed
+            // or decided to exit early)
+            let _ = stdin.write_all(stdin_data.as_bytes()).await;
+            // Explicitly drop stdin to close the pipe and signal EOF to the child
+            drop(stdin);
         }
 
         let output = child.wait_with_output().await?;
