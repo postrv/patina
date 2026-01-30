@@ -431,7 +431,11 @@ impl ToolExecutor {
     async fn list_files(&self, input: &serde_json::Value) -> Result<ToolResult> {
         let path = input.get("path").and_then(|v| v.as_str()).unwrap_or(".");
 
-        let full_path = self.working_dir.join(path);
+        // Validate path is within working directory
+        let full_path = match self.validate_path(path) {
+            Ok(p) => p,
+            Err(e) => return Ok(ToolResult::Error(e)),
+        };
 
         let mut entries = Vec::new();
         let mut dir = tokio::fs::read_dir(&full_path).await?;
