@@ -319,6 +319,181 @@ async fn test_sse_transport_restart() {
 // SSE Transport Custom Headers Tests
 // ============================================================================
 
+// ============================================================================
+// SSE Transport Error Path Tests (Task 3.3.1)
+// ============================================================================
+
+/// Tests that SSE transport handles connection loss gracefully.
+///
+/// Verifies that:
+/// - After connection, if message endpoint fails, error is returned
+/// - The transport can be stopped cleanly after connection issues
+#[tokio::test]
+async fn test_sse_connection_lost() {
+    let server = MockServer::start().await;
+
+    // SSE endpoint works initially
+    Mock::given(method("GET"))
+        .and(path("/sse"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string("event: endpoint\ndata: /message\n\n"),
+        )
+        .mount(&server)
+        .await;
+
+    // Message endpoint returns 503 Service Unavailable (simulating connection loss)
+    Mock::given(method("POST"))
+        .and(path("/message"))
+        .respond_with(ResponseTemplate::new(503).set_body_string("Service Unavailable"))
+        .mount(&server)
+        .await;
+
+    let sse_url = format!("{}/sse", server.uri());
+    let mut transport = SseTransport::new(&sse_url);
+
+    // Connection should succeed (SSE endpoint works)
+    transport.start().await.expect("Should connect");
+    assert!(transport.is_connected());
+
+    // Request should fail because message endpoint returns 503
+    let request = JsonRpcRequest::new(1, "ping", json!({}));
+    let result = transport
+        .send_request(request, Duration::from_secs(5))
+        .await;
+
+    assert!(
+        result.is_err(),
+        "Request should fail when message endpoint is unavailable"
+    );
+
+    let err = result.unwrap_err();
+    // The error message may vary - just verify we got an error
+    assert!(
+        !err.to_string().is_empty(),
+        "Error should have a message: {}",
+        err
+    );
+
+    // Stop should still work
+    transport.stop().await.expect("Should stop cleanly");
+}
+
+/// Tests that SSE transport handles HTTP timeout on POST requests.
+///
+/// Verifies that:
+/// - Slow POST responses trigger timeout
+/// - Timeout error is returned appropriately
+#[tokio::test]
+async fn test_http_timeout() {
+    let server = MockServer::start().await;
+
+    // SSE endpoint responds immediately
+    Mock::given(method("GET"))
+        .and(path("/sse"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string("event: endpoint\ndata: /message\n\n"),
+        )
+        .mount(&server)
+        .await;
+
+    // Message endpoint is very slow (5 second delay)
+    Mock::given(method("POST"))
+        .and(path("/message"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_delay(Duration::from_secs(5))
+                .set_body_json(json!({"jsonrpc": "2.0", "id": 1, "result": {}})),
+        )
+        .mount(&server)
+        .await;
+
+    let sse_url = format!("{}/sse", server.uri());
+    let mut transport = SseTransport::new(&sse_url);
+
+    // Connection should succeed
+    transport.start().await.expect("Should connect");
+
+    // Request with short timeout should fail
+    let request = JsonRpcRequest::new(1, "ping", json!({}));
+    let result = transport
+        .send_request(request, Duration::from_millis(200))
+        .await;
+
+    assert!(result.is_err(), "Request should timeout");
+
+    let err = result.unwrap_err();
+    assert!(
+        err.to_string().to_lowercase().contains("timeout"),
+        "Error should mention timeout: {}",
+        err
+    );
+
+    // Stop should still work
+    transport.stop().await.expect("Should stop cleanly");
+}
+
+/// Tests that SSE transport handles invalid JSON response from message endpoint.
+///
+/// Verifies that:
+/// - Invalid JSON response causes an error
+/// - The transport doesn't crash
+#[tokio::test]
+async fn test_sse_invalid_json_response() {
+    let server = MockServer::start().await;
+
+    // SSE endpoint works
+    Mock::given(method("GET"))
+        .and(path("/sse"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string("event: endpoint\ndata: /message\n\n"),
+        )
+        .mount(&server)
+        .await;
+
+    // Message endpoint returns invalid JSON
+    Mock::given(method("POST"))
+        .and(path("/message"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "application/json")
+                .set_body_string("this is not valid json at all!!!"),
+        )
+        .mount(&server)
+        .await;
+
+    let sse_url = format!("{}/sse", server.uri());
+    let mut transport = SseTransport::new(&sse_url);
+
+    transport.start().await.expect("Should connect");
+
+    let request = JsonRpcRequest::new(1, "ping", json!({}));
+    let result = transport
+        .send_request(request, Duration::from_secs(5))
+        .await;
+
+    assert!(
+        result.is_err(),
+        "Request should fail on invalid JSON response"
+    );
+
+    let err = result.unwrap_err();
+    assert!(
+        err.to_string().to_lowercase().contains("parse")
+            || err.to_string().to_lowercase().contains("json")
+            || err.to_string().to_lowercase().contains("failed"),
+        "Error should indicate JSON parsing failure: {}",
+        err
+    );
+
+    transport.stop().await.expect("Should stop cleanly");
+}
+
 /// Tests that SSE transport sends custom headers.
 #[tokio::test]
 async fn test_sse_transport_custom_headers() {

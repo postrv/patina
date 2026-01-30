@@ -474,6 +474,124 @@ async fn test_mcp_server_crash_recovery() {
     client2.stop().await.expect("Should stop");
 }
 
+// ============================================================================
+// Error Path Tests (Task 3.3.1)
+// ============================================================================
+
+/// Tests that stdio transport handles invalid JSON from server gracefully.
+///
+/// Verifies that:
+/// - The transport doesn't crash on invalid JSON responses
+/// - Valid responses after invalid ones are still processed
+/// - Timeouts occur correctly when no valid response is received
+#[tokio::test]
+async fn test_stdio_invalid_json() {
+    // Create a server that outputs invalid JSON
+    let mut transport = StdioTransport::new(
+        "/bin/bash",
+        vec![
+            "-c",
+            r#"
+            while IFS= read -r line; do
+                # First response is invalid JSON
+                echo "this is not valid json!!!"
+                # Wait for next line
+                read -r line2 2>/dev/null || true
+                # Second response is valid
+                echo '{"jsonrpc":"2.0","id":2,"result":{"ok":true}}'
+            done
+            "#,
+        ],
+    );
+
+    transport.start().await.expect("Transport should start");
+
+    // First request - server will respond with invalid JSON
+    // The transport should timeout since invalid JSON is ignored
+    let request1 = JsonRpcRequest::new(1, "test", json!({}));
+    let result1 = transport
+        .send_request(request1, Duration::from_millis(200))
+        .await;
+
+    // Should timeout because invalid JSON is skipped
+    assert!(
+        result1.is_err(),
+        "Should fail/timeout on invalid JSON response"
+    );
+    let err = result1.unwrap_err();
+    assert!(
+        err.to_string().to_lowercase().contains("timeout")
+            || err.to_string().contains("Timeout"),
+        "Error should be timeout: {}",
+        err
+    );
+
+    // Send second request - should get valid response now
+    let request2 = JsonRpcRequest::new(2, "test", json!({}));
+    let result2 = transport
+        .send_request(request2, Duration::from_secs(2))
+        .await;
+
+    // This should succeed with valid JSON
+    assert!(result2.is_ok(), "Second request should succeed: {:?}", result2);
+    let response = result2.unwrap();
+    assert!(response.is_success(), "Should be success response");
+
+    transport.stop().await.expect("Should stop");
+}
+
+/// Tests that stdio transport handles process crash gracefully.
+///
+/// Verifies that:
+/// - The transport detects when the child process exits unexpectedly
+/// - Pending requests receive appropriate errors
+/// - The transport can be stopped cleanly after crash
+#[tokio::test]
+async fn test_stdio_process_crash() {
+    // Create a server that crashes immediately after first message
+    let mut transport = StdioTransport::new(
+        "/bin/bash",
+        vec![
+            "-c",
+            r#"
+            # Read first line and respond
+            read -r line
+            echo '{"jsonrpc":"2.0","id":1,"result":{}}'
+            # Then crash
+            exit 1
+            "#,
+        ],
+    );
+
+    transport.start().await.expect("Transport should start");
+
+    // First request should succeed
+    let request1 = JsonRpcRequest::new(1, "ping", json!({}));
+    let result1 = transport
+        .send_request(request1, Duration::from_secs(2))
+        .await;
+    assert!(result1.is_ok(), "First request should succeed");
+
+    // Give time for process to exit
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // Second request should fail (process crashed)
+    let request2 = JsonRpcRequest::new(2, "ping", json!({}));
+    let result2 = transport
+        .send_request(request2, Duration::from_millis(500))
+        .await;
+
+    // Should fail or timeout because process is gone
+    assert!(
+        result2.is_err(),
+        "Request after crash should fail"
+    );
+
+    // Stop should still work
+    let stop_result = transport.stop().await;
+    assert!(stop_result.is_ok(), "Stop should succeed even after crash");
+}
+
 /// Tests that MCP server can be restarted after clean stop.
 #[tokio::test]
 async fn test_mcp_server_restart() {
