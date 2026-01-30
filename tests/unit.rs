@@ -17,3 +17,6 @@ mod skills_test;
 
 #[path = "unit/commands_test.rs"]
 mod commands_test;
+
+#[path = "unit/plugins_test.rs"]
+mod plugins_test;

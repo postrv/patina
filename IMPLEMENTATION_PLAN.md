@@ -9,10 +9,10 @@
 | Metric | Value | Command |
 |--------|-------|---------|
 | Unit Tests | 17 | `cargo test --lib` |
-| Integration Tests | 200 | `cargo test --test '*'` |
+| Integration Tests | 216 | `cargo test --test '*'` |
 | Doc Tests | 13 | `cargo test --doc` |
-| Total Tests | 230 | `cargo test` |
-| Test Files | 15 | `find tests -name '*.rs' \| wc -l` |
+| Total Tests | 246 | `cargo test` |
+| Test Files | 16 | `find tests -name '*.rs' \| wc -l` |
 | Clippy Warnings | 0 | `cargo clippy --all-targets -- -D warnings` |
 | Source Files | 23 | `find src -name '*.rs' \| wc -l` |
 | LOC | ~4700 | `tokei src` |
@@ -503,16 +503,19 @@ Steps:
 
 ### 5.3 Plugin System Tests
 
-- [ ] 5.3.1 Write plugin discovery tests (RED)
-  - Path: `tests/integration/plugins_test.rs`
+- [x] 5.3.1 Write plugin discovery tests (RED)
+  - Path: `tests/unit/plugins_test.rs`
   - Test: `test_plugin_discovery`
   - Test: `test_plugin_version_compatibility`
+  - **Completed: 2026-01-30** - 7 discovery tests including multiple paths
 
-- [ ] 5.3.2 Write plugin namespacing tests (RED)
+- [x] 5.3.2 Write plugin namespacing tests (RED)
   - Test: `test_plugin_command_namespacing`
+  - **Completed: 2026-01-30** - 4 namespacing tests including short access
 
-- [ ] 5.3.3 Implement plugin registry (GREEN)
+- [x] 5.3.3 Implement plugin registry (GREEN)
   - Path: `src/plugins/mod.rs`
+  - **Completed: 2026-01-30** - Implementation already functional, 16 tests validate behavior
 
 ### 5.4 Narsil Reindex Checkpoint
 
