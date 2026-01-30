@@ -9,11 +9,13 @@ WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
 
 # Create dummy files to build dependencies (matching Cargo.toml structure)
-RUN mkdir -p src benches && \
+# Includes: main binary, benchmark, and test binary (mock_mcp_server)
+RUN mkdir -p src benches tests/helpers && \
     echo "fn main() {}" > src/main.rs && \
     echo "fn main() {}" > benches/rendering.rs && \
+    echo "fn main() {}" > tests/helpers/mock_mcp_server.rs && \
     cargo build --release && \
-    rm -rf src benches
+    rm -rf src benches tests
 
 # Copy actual source code
 COPY src ./src

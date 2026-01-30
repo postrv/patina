@@ -30,11 +30,40 @@ use crate::types::message::Message;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 use tokio::fs;
 use tracing::{error, warn};
 use uuid::Uuid;
+
+/// Writes data to a file atomically using write-to-temp-then-rename pattern.
+///
+/// This ensures that concurrent writes don't corrupt the file - each write
+/// either fully succeeds or the file remains unchanged.
+async fn atomic_write(path: &Path, contents: &str) -> Result<()> {
+    // Create temp file in same directory (ensures same filesystem for rename)
+    let parent = path.parent().unwrap_or(Path::new("."));
+    let temp_name = format!(
+        ".{}.tmp.{}",
+        path.file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("session"),
+        Uuid::new_v4()
+    );
+    let temp_path = parent.join(temp_name);
+
+    // Write to temp file
+    fs::write(&temp_path, contents)
+        .await
+        .context("Failed to write temp file")?;
+
+    // Atomic rename (on POSIX this is atomic, on Windows it's mostly atomic)
+    fs::rename(&temp_path, path)
+        .await
+        .context("Failed to rename temp file")?;
+
+    Ok(())
+}
 
 /// Static key used for session integrity HMAC.
 ///
@@ -280,7 +309,7 @@ impl SessionManager {
             serde_json::to_string_pretty(&session_file).context("Failed to serialize session")?;
 
         let path = self.session_path(&session_id);
-        fs::write(&path, json)
+        atomic_write(&path, &json)
             .await
             .context("Failed to write session file")?;
 
@@ -336,7 +365,7 @@ impl SessionManager {
             serde_json::to_string_pretty(&session_file).context("Failed to serialize session")?;
 
         let path = self.session_path(session_id);
-        fs::write(&path, json)
+        atomic_write(&path, &json)
             .await
             .context("Failed to write session file")?;
 
