@@ -1,24 +1,24 @@
-# Implementation Plan
+# Implementation Plan - Security Hardening & Quality Improvements
 
 > Ralph uses this file to track task progress. Update checkboxes as work completes.
 
-## Status: PHASE 8 COMPLETE
+## Status: PHASE 0 IN PROGRESS
 
 ## Baseline Metrics (Updated: 2026-01-30)
 
 | Metric | Value | Command |
 |--------|-------|---------|
-| Unit Tests | 47 | `cargo test --lib` |
-| Integration Tests | 424 | `cargo test --test '*'` |
+| Unit Tests | 182 | `cargo test --lib` |
+| Integration Tests | 278 | `cargo test --test '*'` |
 | Doc Tests | 19 | `cargo test --doc` |
-| Total Tests | 490 | `cargo test` |
+| Total Tests | 491 | `cargo test` |
 | Test Files | 33 | `find tests -name '*.rs' \| wc -l` |
 | Clippy Warnings | 0 | `cargo clippy --all-targets -- -D warnings` |
-| Source Files | 28 | `find src -name '*.rs' \| wc -l` |
-| LOC | ~6600 | `tokei src` |
+| Source Files | 30 | `find src -name '*.rs' \| wc -l` |
+| LOC | ~7900 | `wc -l src/**/*.rs` |
 | Coverage | 84.38% | `cargo tarpaulin --out Stdout` |
 
-**Baseline Rule:** Test count must never decrease. Clippy warnings must reach 0.
+**Baseline Rule:** Test count must never decrease. Clippy warnings must stay at 0.
 
 ---
 
@@ -29,7 +29,7 @@
 | Clippy | `cargo clippy --all-targets -- -D warnings` | 0 warnings |
 | Tests | `cargo test` | All pass |
 | Format | `cargo fmt -- --check` | No changes needed |
-| Security | narsil `scan_security` | 0 CRITICAL/HIGH |
+| Security | `cargo audit` | 0 CRITICAL/HIGH in direct deps |
 | TDD | Tests BEFORE implementation | Required |
 
 ---
@@ -55,693 +55,383 @@ Steps:
 
 | Phase | Focus | Priority | Est. Tasks |
 |-------|-------|----------|------------|
-| 0 | Narsil Index & Scaffolding | P0 | 3 |
-| 1 | Foundation Hardening | P0 | 20 |
-| 2 | Tool Execution | P0 | 15 |
-| 3 | MCP Protocol | P0 | 12 |
-| 4 | Hooks System | P0 | 10 |
-| 5 | Skills & Plugins | P1 | 15 |
-| 6 | Subagents | P1 | 10 |
-| 6.5 | Plugin Host API | P0 | 8 |
-| 7 | Beyond Parity | P2 | 20 |
-| 8 | Polish & Release | P2 | 10 |
+| 0 | Critical Security Fixes | P0 | 8 |
+| 1 | High Security Fixes | P0 | 12 |
+| 2 | Medium Security Fixes | P1 | 6 |
+| 3 | Test Coverage Expansion | P1 | 15 |
+| 4 | Error Handling Hardening | P2 | 10 |
+| 5 | Final Security Audit | P0 | 4 |
 
 ---
 
-## Phase 0: Narsil Index & Test Infrastructure
+## Phase 0: Critical Security Fixes
 
-### Goal: Set up code intelligence and test infrastructure
+### Goal: Fix the most severe security vulnerabilities
 
-### 0.1 Narsil Initial Indexing
+### 0.1 Path Traversal in list_files (HIGH H-3)
 
-- [x] 0.1.1 Run narsil index on project root
-  - Command: `narsil index --project /Users/laurence/RustroverProjects/rct`
-  - Path: Project root
-  - Acceptance: Index created, all Rust files indexed
-  - **Completed: 2026-01-29** - Codebase explored and indexed
-
-### 0.2 Test Infrastructure Setup
-
-- [x] 0.2.1 Create tests directory structure (RED)
-  - Path: `tests/`
-  - Create: `tests/common/mod.rs`, `tests/integration.rs`, `tests/api_client.rs`, `tests/tools.rs`
-  - **Completed: 2026-01-29** - Structure created with 4 test files
-
-- [x] 0.2.2 Add dev-dependencies to Cargo.toml (GREEN)
-  - Path: `Cargo.toml`
-  - Add: `mockall`, `wiremock`, `insta`, `proptest`, `criterion`
-  - **Completed: 2026-01-29** - All dependencies added
-
-- [x] 0.2.3 Create test harness module (GREEN)
-  - Path: `tests/common/mod.rs`
-  - Implement: Helper functions, mock factories, test fixtures
-  - **Completed: 2026-01-29** - TestContext with temp dir, file creation helpers
-
-### 0.3 CI Pipeline Setup
-
-- [x] 0.3.1 Create GitHub Actions workflow
-  - Path: `.github/workflows/ci.yml`
-  - Include: test, clippy, fmt, coverage, security audit
-  - Acceptance: All jobs pass on push/PR
-  - **Completed: 2026-01-29** - CI workflow already existed with full coverage
-
----
-
-## Phase 1: Foundation Hardening
-
-### Goal: Fix architecture, add comprehensive tests to existing working code
-
-### 1.1 Architectural Cleanup - Types Module
-
-- [x] 1.1.1 Create types module structure (RED)
-  - Write: `tests/unit/types_test.rs` with serialization tests
-  - Test: `test_message_serialization`, `test_role_display`
-  - **Completed: 2026-01-29** - 7 unit tests for Message/Role serialization/display
-
-- [x] 1.1.2 Extract Message and Role types (GREEN)
-  - Path: `src/types/message.rs`
-  - Move from: `src/api/mod.rs`
-  - Acceptance: No circular dependencies
-  - **Completed: 2026-01-29** - Types with Serialize/Deserialize/Display traits
-
-- [x] 1.1.3 Extract StreamEvent types (GREEN)
-  - Path: `src/types/stream.rs`
-  - Move from: `src/api/mod.rs`
-  - **Completed: 2026-01-29** - StreamEvent with helper methods and tests
-
-- [x] 1.1.4 Extract Config types (GREEN)
-  - Path: `src/types/config.rs`
-  - Consolidate app configuration
-  - **Completed: 2026-01-29** - Config struct with accessors and tests
-
-- [x] 1.1.5 Update imports across codebase (REFACTOR)
-  - Update: All modules to use `crate::types::*`
-  - Verify: `cargo check` passes
-  - **Completed: 2026-01-29** - All modules updated, clippy clean
-
-### 1.2 API Client Tests
-
-- [x] 1.2.1 Write API mock server tests (RED)
-  - Path: `tests/api_client.rs`
-  - Test: `test_stream_message_success`
-  - Test: `test_stream_message_error_handling`
-  - **Completed: 2026-01-29** - Using wiremock for mock HTTP server
-
-- [x] 1.2.2 Write retry logic tests (RED)
-  - Test: `test_retry_on_rate_limit`
-  - Test: `test_retry_exponential_backoff`
-  - Test: `test_retry_on_server_error`
-  - **Completed: 2026-01-29** - 3 retry tests with wiremock
-
-- [x] 1.2.3 Implement base URL configuration (GREEN)
-  - Path: `src/api/mod.rs`
-  - Add: `new_with_base_url()` constructor for testing
-  - **Completed: 2026-01-29** - Added configurable base_url field
-
-- [x] 1.2.4 Implement retry logic (GREEN)
-  - Path: `src/api/mod.rs`
-  - Add: Exponential backoff on 429/5xx errors
-  - **Completed: 2026-01-29** - 2 retries, 100ms base backoff
-
-- [x] 1.2.5 Remove `#[allow(dead_code)]` from ContentDelta (REFACTOR)
-  - Path: `src/api/mod.rs`
-  - Either use `delta_type` or remove it
-  - **Completed: 2026-01-29** - Removed unused field, serde ignores unknown JSON fields
-
-### 1.3 State Management Tests
-
-- [x] 1.3.1 Write input handling tests (RED)
-  - Path: `tests/unit/state_test.rs`
-  - Test: `test_input_handling` (insert, delete, take)
-  - Test: `test_input_cursor_movement`
-  - **Completed: 2026-01-30** - 6 input tests, 10 cursor tests
-
-- [x] 1.3.2 Write scroll bounds tests (RED)
-  - Test: `test_scroll_up_down`
-  - Test: `test_scroll_bounds_saturation`
-  - **Completed: 2026-01-30** - 4 scroll tests with saturation
-
-- [x] 1.3.3 Write dirty flag tests (RED)
-  - Test: `test_dirty_flag_tracking`
-  - Test: `test_dirty_flag_on_message_add`
-  - **Completed: 2026-01-30** - 7 dirty flag tests including message add
-
-- [x] 1.3.4 Implement any missing state methods (GREEN)
-  - Path: `src/app/state.rs`
-  - Ensure all test expectations are met
-  - **Completed: 2026-01-30** - Added add_message() method
-
-- [x] 1.3.5 Remove unused `working_dir` warning (REFACTOR)
-  - Path: `src/app/state.rs`
-  - Either use or remove field
-  - **Completed: 2026-01-30** - No warning present (clippy clean)
-
-### 1.4 TUI Snapshot Tests
-
-- [x] 1.4.1 Set up insta snapshot testing (RED)
-  - Path: `tests/unit/tui_snapshot_test.rs`
-  - Test: `test_empty_state_render`
-  - **Completed: 2026-01-30** - insta with yaml feature configured
-
-- [x] 1.4.2 Write message list snapshot tests (RED)
-  - Test: `test_single_message_render`
-  - Test: `test_conversation_render`
-  - **Completed: 2026-01-30** - 6 message rendering snapshot tests
-
-- [x] 1.4.3 Write streaming state snapshot tests (RED)
-  - Test: `test_streaming_response_render`
-  - Test: `test_throbber_animation`
-  - **Completed: 2026-01-30** - Streaming render and throbber tests
-
-- [x] 1.4.4 Generate baseline snapshots (GREEN)
-  - Run: `cargo insta test`
-  - Accept: `cargo insta accept`
-  - **Completed: 2026-01-30** - 7 snapshots accepted
-
-- [x] 1.4.5 Add snapshot tests to CI (REFACTOR)
-  - Update: `.github/workflows/ci.yml`
-  - **Completed: 2026-01-30** - CI already runs `cargo test` which includes insta tests
-
-### 1.5 Narsil Reindex Checkpoint
-
-- [x] 1.5.1 Run narsil reindex after Phase 1
-  - Command: `narsil reindex`
-  - Verify: All new test files indexed
-  - Run: `scan_security` - should show 0 issues
-  - **Completed: 2026-01-30** - narsil-mcp unavailable, used cargo audit instead
-  - Security audit: 0 CRITICAL/HIGH, 4 LOW (transitive deps)
-
----
-
-## Phase 2: Tool Execution
-
-### Goal: Full agentic capabilities with security hardening
-
-### 2.1 Tool Executor Core Tests
-
-- [x] 2.1.1 Write bash execution tests (RED)
+- [ ] 0.1.1 Write path traversal tests for list_files (RED)
   - Path: `tests/tools.rs`
-  - Test: `test_bash_execution_success`, `test_bash_captures_stdout_stderr`
-  - Test: `test_bash_execution_failure`, `test_bash_uses_working_directory`
-  - **Completed: 2026-01-30** - 5 bash execution tests
+  - Test: `test_list_files_blocks_path_traversal`
+  - Test: `test_list_files_blocks_absolute_path`
+  - Test: `test_list_files_blocks_parent_escape`
+  - Acceptance: All tests fail initially (no validation exists)
 
-- [x] 2.1.2 Write security blocking tests (RED)
-  - Test: `test_bash_blocks_rm_rf`, `test_bash_blocks_sudo`, `test_bash_blocks_chmod_777`
-  - Test: `test_bash_blocks_dangerous_in_pipeline`, `test_bash_allows_safe_commands`
-  - **Completed: 2026-01-30** - 5 security tests
+- [ ] 0.1.2 Add validate_path call to list_files (GREEN)
+  - Path: `src/tools/mod.rs:431-448`
+  - Change: Add `validate_path()` call before `read_dir()`
+  - Acceptance: All new tests pass
 
-- [x] 2.1.3 Write timeout tests (RED)
-  - Test: `test_bash_timeout`, `test_bash_custom_timeout_policy`
-  - Test: `test_bash_completes_before_timeout`
-  - **Completed: 2026-01-30** - 3 timeout tests
+- [ ] 0.1.3 Commit path traversal fix
+  - Message: `fix(tools): Prevent path traversal in list_files`
 
-- [x] 2.1.4 Implement bash execution (GREEN)
-  - Path: `src/tools/mod.rs`
-  - Implement: `execute_bash()` with Command spawning
-  - **Completed: 2026-01-30** - Already implemented, tests validate behavior
+### 0.2 Plain String API Keys (HIGH H-1)
 
-- [x] 2.1.5 Implement security policy enforcement (GREEN)
-  - Path: `src/tools/mod.rs`
-  - Implement: Pattern matching against dangerous commands
-  - **Completed: 2026-01-30** - Already implemented with regex patterns
+- [ ] 0.2.1 Write API key secrecy tests (RED)
+  - Path: `tests/unit/multi_model_test.rs`
+  - Test: `test_api_key_not_in_debug_output`
+  - Test: `test_api_key_uses_secret_string`
+  - Acceptance: Tests verify SecretString behavior
 
-### 2.2 File Operation Tools
+- [ ] 0.2.2 Change api_key to SecretString (GREEN)
+  - Path: `src/api/multi_model.rs:70-96`
+  - Change: `api_key: String` → `api_key: secrecy::SecretString`
+  - Update: All usages to call `.expose_secret()`
+  - Acceptance: Tests pass, no API key in Debug output
 
-- [x] 2.2.1 Write file read tests (RED)
-  - Test: `test_file_read_within_working_dir`
-  - Test: `test_file_read_blocks_path_traversal`
-  - Test: `test_file_read_nonexistent`
-  - **Completed: 2026-01-30** - 3 tests for file read with path traversal protection
+- [ ] 0.2.3 Commit SecretString fix
+  - Message: `fix(api): Use SecretString for API keys in multi_model`
 
-- [x] 2.2.2 Write file write tests (RED)
-  - Test: `test_file_write_creates_file`
-  - Test: `test_file_write_blocks_protected_paths`
-  - Test: `test_file_write_creates_backup`
-  - **Completed: 2026-01-30** - 4 tests including path traversal, protected paths, backup
+### 0.3 Unsandboxed Hook Execution (HIGH H-2)
 
-- [x] 2.2.3 Write edit tool tests (RED)
-  - Test: `test_edit_replaces_string`
-  - Test: `test_edit_generates_diff`
-  - Test: `test_edit_unique_match_required`
-  - **Completed: 2026-01-30** - 5 tests for edit with unique match requirement
-
-- [x] 2.2.4 Implement read_file tool (GREEN)
-  - Path: `src/tools/mod.rs`
-  - **Completed: 2026-01-30** - Added validate_path() with canonicalization
-
-- [x] 2.2.5 Implement write_file tool (GREEN)
-  - Path: `src/tools/mod.rs`
-  - Include: Checkpoint backup system
-  - **Completed: 2026-01-30** - Added backup to .rct_backups/, path traversal protection
-
-- [x] 2.2.6 Implement edit tool (GREEN)
-  - Path: `src/tools/mod.rs`
-  - Include: Diff generation
-  - **Completed: 2026-01-30** - String replacement with unique match, diff output
-
-### 2.3 Search Tools
-
-- [x] 2.3.1 Write glob tests (RED)
-  - Test: `test_glob_finds_files`
-  - Test: `test_glob_respects_gitignore`
-  - Test: `test_glob_no_matches`
-  - Test: `test_glob_blocks_path_traversal`
-  - **Completed: 2026-01-30** - 4 tests for glob patterns and gitignore
-
-- [x] 2.3.2 Write grep tests (RED)
-  - Test: `test_grep_finds_content`
-  - Test: `test_grep_regex_support`
-  - Test: `test_grep_case_insensitive`
-  - Test: `test_grep_no_matches`
-  - Test: `test_grep_file_filter`
-  - **Completed: 2026-01-30** - 5 tests for content search with regex
-
-- [x] 2.3.3 Implement glob tool (GREEN)
-  - Path: `src/tools/mod.rs`
-  - Features: Pattern matching, gitignore respect, path traversal protection
-  - **Completed: 2026-01-30** - Using glob and walkdir crates
-
-- [x] 2.3.4 Implement grep tool (GREEN)
-  - Path: `src/tools/mod.rs`
-  - Features: Regex patterns, case-insensitive, file filtering
-  - **Completed: 2026-01-30** - Using regex crate with file filtering
-
-### 2.4 Narsil Reindex Checkpoint
-
-- [x] 2.4.1 Run narsil reindex after Phase 2
-  - Run: `narsil reindex`
-  - Run: `scan_security` on tools module
-  - **Completed: 2026-01-30** - Security scan: 0 CRITICAL, 1 HIGH (unmaintained transitive dep yaml-rust), 3 MEDIUM
-
----
-
-## Phase 3: MCP Protocol Implementation
-
-### Goal: Full Model Context Protocol support
-
-### 3.1 JSON-RPC Protocol Tests
-
-- [x] 3.1.1 Write JSON-RPC serialization tests (RED)
-  - Path: `tests/unit/mcp_protocol_test.rs`
-  - Test: `test_jsonrpc_request_serialization`
-  - Test: `test_jsonrpc_response_parsing`
-  - Test: `test_jsonrpc_error_parsing`
-  - **Completed: 2026-01-30** - 13 unit tests for request/response/error handling
-
-- [x] 3.1.2 Implement JSON-RPC types (GREEN)
-  - Path: `src/mcp/protocol.rs`
-  - Types: JsonRpcRequest, JsonRpcResponse, JsonRpcError
-  - **Completed: 2026-01-30** - Full JSON-RPC 2.0 compliant types with standard error codes
-
-### 3.2 Transport Tests
-
-- [x] 3.2.1 Write stdio transport tests (RED)
-  - Path: `tests/integration/mcp_transport_test.rs`
-  - Test: `test_mcp_stdio_initialization`
-  - Test: `test_mcp_stdio_bidirectional`
-  - **Completed: 2026-01-30** - 5 integration tests including timeout, restart, error handling
-
-- [x] 3.2.2 Write tool discovery tests (RED)
-  - Test: `test_mcp_tool_discovery`
-  - Test: `test_mcp_tool_schema_parsing`
-  - **Completed: 2026-01-30** - 2 tests for tool catalog and schema validation
-
-- [x] 3.2.3 Write tool call tests (RED)
-  - Test: `test_mcp_tool_call`
-  - Test: `test_mcp_tool_call_error`
-  - **Completed: 2026-01-30** - 2 tests for tool execution and error handling
-
-- [x] 3.2.4 Implement stdio transport (GREEN)
-  - Path: `src/mcp/transport.rs`
-  - Spawn process, pipe JSON-RPC
-  - **Completed: 2026-01-30** - StdioTransport with Transport trait, async I/O, request correlation
-
-- [x] 3.2.5 Implement SSE transport (GREEN)
-  - Path: `src/mcp/transport.rs`
-  - **Completed: 2026-01-30** - SseTransport with HTTP POST for messages, relative URL resolution, custom headers support
-
-- [x] 3.2.6 Implement tool discovery (GREEN)
-  - Path: `src/mcp/client.rs`
-  - **Completed: 2026-01-30** - McpClient::list_tools() and McpClient::call_tool()
-
-### 3.3 Server Management Tests
-
-- [x] 3.3.1 Write server lifecycle tests (RED)
-  - Test: `test_mcp_server_start_stop`
-  - Test: `test_mcp_server_crash_recovery`
-  - Test: `test_mcp_server_restart`
-  - **Completed: 2026-01-30** - 3 tests for server lifecycle management
-
-- [x] 3.3.2 Implement server lifecycle (GREEN)
-  - Path: `src/mcp/client.rs`
-  - **Completed: 2026-01-30** - McpClient with start/stop/force_stop and tool operations
-
-- [x] 3.3.3 Remove `#[allow(dead_code)]` from MCP module (REFACTOR)
-  - **Completed: 2026-01-30** - No allow(dead_code) attributes present; clippy clean
-
-### 3.4 Narsil Reindex Checkpoint
-
-- [x] 3.4.1 Run narsil reindex after Phase 3
-  - **Completed: 2026-01-30** - Security scan: 0 CRITICAL/HIGH, 2 LOW (unmaintained transitive deps: bincode, yaml-rust via syntect)
-
----
-
-## Phase 4: Hooks System
-
-### Goal: Full lifecycle event hooks with all 11 events
-
-### 4.1 Hook Event Tests
-
-- [x] 4.1.1 Write pre-tool-use hook tests (RED)
+- [ ] 0.3.1 Write hook command validation tests (RED)
   - Path: `tests/integration/hooks_test.rs`
-  - Test: `test_pre_tool_use_hook_continues`
-  - Test: `test_pre_tool_use_hook_blocks`
-  - **Completed: 2026-01-30** - 7 pre-tool-use tests plus edge cases
+  - Test: `test_hook_blocks_rm_rf`
+  - Test: `test_hook_blocks_sudo`
+  - Test: `test_hook_blocks_curl_pipe_bash`
+  - Test: `test_hook_allows_safe_commands`
+  - Acceptance: Tests fail (no validation exists)
 
-- [x] 4.1.2 Write post-tool-use hook tests (RED)
-  - Test: `test_post_tool_use_receives_response`
-  - Test: `test_post_tool_use_failure_event`
-  - **Completed: 2026-01-30** - 2 post-tool-use tests
+- [ ] 0.3.2 Add dangerous command filtering to hooks (GREEN)
+  - Path: `src/hooks/mod.rs:199-234`
+  - Change: Reuse `ToolExecutionPolicy::dangerous_patterns`
+  - Add: Validation before shell execution
+  - Acceptance: All hook security tests pass
 
-- [x] 4.1.3 Write matcher pattern tests (RED)
-  - Test: `test_hook_matcher_exact`
-  - Test: `test_hook_matcher_pipe_separated`
-  - Test: `test_hook_matcher_wildcard`
-  - **Completed: 2026-01-30** - 4 matcher pattern tests including glob patterns
-
-- [x] 4.1.4 Write timeout tests (RED)
-  - Test: `test_hook_timeout`
-  - Test: `test_hook_no_hang_on_slow_command`
-  - **Completed: 2026-01-30** - 3 timeout tests
-
-### 4.2 Hook Execution Implementation
-
-- [x] 4.2.1 Implement hook executor (GREEN)
-  - Path: `src/hooks/mod.rs`
-  - Execute shell commands with JSON stdin
-  - **Completed: 2026-01-30** - Already implemented with async execution
-
-- [x] 4.2.2 Implement matcher patterns (GREEN)
-  - Support: exact, pipe-separated, wildcard
-  - **Completed: 2026-01-30** - Added `matches_pattern()` helper supporting pipe-separated and glob patterns
-
-- [x] 4.2.3 Implement exit code handling (GREEN)
-  - 0=continue, 2=block, others=log
-  - **Completed: 2026-01-30** - Already implemented in execute()
-
-- [x] 4.2.4 Implement all 11 hook events (GREEN)
-  - Integrate hooks into app event loop
-  - **Completed: 2026-01-30** - Added `HookManager` with fire methods for all 11 events, `HookedToolExecutor` for tool integration, TOML config loading
-
-### 4.3 Narsil Reindex Checkpoint
-
-- [x] 4.3.1 Run narsil reindex after Phase 4
-  - **Completed: 2026-01-30** - Security scan: 0 CRITICAL/HIGH, 2 LOW (unmaintained transitive deps: bincode, yaml-rust via syntect)
+- [ ] 0.3.3 Commit hook security fix
+  - Message: `fix(hooks): Add dangerous command filtering to hook executor`
 
 ---
 
-## Phase 5: Skills & Slash Commands
+## Phase 1: High Security Fixes
 
-### Goal: Full extensibility for skills and commands
+### Goal: Address remaining high-priority security issues
 
-### 5.1 Skill Engine Tests
+### 1.1 Bash Command Filter Strengthening (CRITICAL C-1 - Mitigation)
 
-- [x] 5.1.1 Write skill markdown parsing tests (RED)
-  - Path: `tests/unit/skills_test.rs`
-  - Test: `test_skill_md_parsing`
-  - Test: `test_skill_frontmatter_extraction`
-  - **Completed: 2026-01-30** - 15 tests for parsing and frontmatter extraction
+- [ ] 1.1.1 Write bypass attempt tests (RED)
+  - Path: `tests/tools.rs`
+  - Test: `test_bash_blocks_escaped_rm` (`r\m -rf /`)
+  - Test: `test_bash_blocks_command_substitution` (`$(which rm) -rf /`)
+  - Test: `test_bash_blocks_su_root` (`su root`)
+  - Test: `test_bash_blocks_eval_variable` (`eval $dangerous`)
+  - Acceptance: Tests demonstrate bypass vulnerabilities
 
-- [x] 5.1.2 Write skill matching tests (RED)
-  - Test: `test_skill_matching_keywords`
-  - Test: `test_skill_matching_file_patterns`
-  - **Completed: 2026-01-30** - 7 tests for keyword/file pattern matching, implemented match_skills_for_file()
+- [ ] 1.1.2 Implement enhanced command validation (GREEN)
+  - Path: `src/tools/mod.rs`
+  - Add: Normalize command before pattern matching (remove escapes)
+  - Add: Block command substitution patterns
+  - Add: More comprehensive privilege escalation patterns
+  - Acceptance: All bypass tests pass
 
-- [x] 5.1.3 Write skill context injection tests (RED)
-  - Test: `test_skill_context_injection`
-  - **Completed: 2026-01-30** - 6 context injection tests, implemented get_context_for_task() and get_context_for_file()
+- [ ] 1.1.3 Add allowlist mode option (GREEN)
+  - Path: `src/tools/mod.rs`
+  - Add: `ToolExecutionPolicy::allowlist_mode: bool`
+  - Add: `ToolExecutionPolicy::allowed_commands: Vec<Regex>`
+  - Add: When allowlist_mode=true, only allow matching commands
+  - Acceptance: Allowlist tests pass
 
-- [x] 5.1.4 Implement skill engine (GREEN)
-  - Path: `src/skills/mod.rs`
-  - **Completed: 2026-01-30** - Full implementation with matching and context injection, no unused code warnings
+- [ ] 1.1.4 Document security model (REFACTOR)
+  - Path: `docs/security-model.md`
+  - Document: Blocklist vs allowlist tradeoffs
+  - Document: How to enable strict mode
+  - Document: Known limitations
 
-### 5.2 Slash Command Tests
+- [ ] 1.1.5 Commit enhanced bash security
+  - Message: `feat(tools): Enhance bash command security with allowlist mode`
 
-- [x] 5.2.1 Write command parsing tests (RED)
-  - Path: `tests/unit/commands_test.rs`
-  - Test: `test_command_md_parsing`
-  - Test: `test_command_argument_parsing`
-  - **Completed: 2026-01-30** - 8 parsing tests including argument types
+### 1.2 MCP Command Validation (MEDIUM M-1)
 
-- [x] 5.2.2 Write command execution tests (RED)
-  - Test: `test_command_execution`
-  - Test: `test_command_default_arguments`
-  - **Completed: 2026-01-30** - 11 execution tests including error handling
+- [ ] 1.2.1 Write MCP command validation tests (RED)
+  - Path: `tests/integration/mcp_test.rs`
+  - Test: `test_mcp_blocks_dangerous_command`
+  - Test: `test_mcp_requires_absolute_path`
+  - Test: `test_mcp_warns_on_new_server`
+  - Acceptance: Tests fail initially
 
-- [x] 5.2.3 Implement command executor (GREEN)
-  - Path: `src/commands/mod.rs`
-  - **Completed: 2026-01-30** - Implementation already functional, tests validate behavior
+- [ ] 1.2.2 Add MCP command validation (GREEN)
+  - Path: `src/mcp/transport.rs`
+  - Add: Validate command path exists
+  - Add: Warn on first use of new server
+  - Add: Block dangerous patterns
+  - Acceptance: All MCP security tests pass
 
-### 5.3 Plugin System Tests
+- [ ] 1.2.3 Commit MCP validation
+  - Message: `feat(mcp): Add command validation to MCP transport`
 
-- [x] 5.3.1 Write plugin discovery tests (RED)
+### 1.3 TOCTOU Mitigation (MEDIUM M-2)
+
+- [ ] 1.3.1 Write symlink race condition tests (RED)
+  - Path: `tests/tools.rs`
+  - Test: `test_file_read_rejects_symlinks`
+  - Test: `test_file_write_rejects_symlinks`
+  - Test: `test_edit_rejects_symlinks`
+  - Acceptance: Tests verify symlink handling
+
+- [ ] 1.3.2 Add symlink detection to file operations (GREEN)
+  - Path: `src/tools/mod.rs`
+  - Add: Check `full_path.is_symlink()` before operations
+  - Add: Error if path is symlink pointing outside working dir
+  - Acceptance: All symlink tests pass
+
+- [ ] 1.3.3 Commit TOCTOU mitigation
+  - Message: `fix(tools): Reject symlinks in file operations`
+
+---
+
+## Phase 2: Medium Security & Code Quality
+
+### Goal: Address medium-priority issues and code quality
+
+### 2.1 Regex Pattern Safety
+
+- [ ] 2.1.1 Use lazy_static for regex patterns (REFACTOR)
+  - Path: `src/tools/mod.rs:40-75`
+  - Change: Move patterns to `lazy_static!` block
+  - Benefit: Compile-time validation, no runtime panics
+  - Acceptance: Clippy clean, tests pass
+
+- [ ] 2.1.2 Commit regex refactor
+  - Message: `refactor(tools): Use lazy_static for dangerous patterns`
+
+### 2.2 Plugin file_stem Safety
+
+- [ ] 2.2.1 Write plugin path edge case tests (RED)
   - Path: `tests/unit/plugins_test.rs`
-  - Test: `test_plugin_discovery`
-  - Test: `test_plugin_version_compatibility`
-  - **Completed: 2026-01-30** - 7 discovery tests including multiple paths
+  - Test: `test_plugin_handles_no_extension`
+  - Test: `test_plugin_handles_dotfile`
+  - Acceptance: Tests cover edge cases
 
-- [x] 5.3.2 Write plugin namespacing tests (RED)
-  - Test: `test_plugin_command_namespacing`
-  - **Completed: 2026-01-30** - 4 namespacing tests including short access
+- [ ] 2.2.2 Fix unsafe file_stem unwrap (GREEN)
+  - Path: `src/plugins/mod.rs:160`
+  - Change: `unwrap()` → `unwrap_or_else()` with default
+  - Acceptance: Tests pass, no panic possible
 
-- [x] 5.3.3 Implement plugin registry (GREEN)
-  - Path: `src/plugins/mod.rs`
-  - **Completed: 2026-01-30** - Implementation already functional, 16 tests validate behavior
+- [ ] 2.2.3 Commit plugin safety fix
+  - Message: `fix(plugins): Handle edge cases in plugin path parsing`
 
-### 5.4 Narsil Reindex Checkpoint
+### 2.3 Session Integrity
 
-- [x] 5.4.1 Run narsil reindex after Phase 5
-  - Run: `scan_security` - full codebase scan
-  - **Completed: 2026-01-30** - Security scan: 0 CRITICAL/HIGH, 2 LOW (unmaintained transitive deps: bincode, yaml-rust via syntect)
-
----
-
-## Phase 6: Subagent Orchestration
-
-### Goal: Parallel task execution with isolated contexts
-
-### 6.1 Subagent Tests
-
-- [x] 6.1.1 Write subagent spawn tests (RED)
-  - Path: `tests/subagent_integration.rs`
-  - Test: `test_subagent_spawn`
-  - Test: `test_subagent_config`
-  - **Completed: 2026-01-30** - 15 tests for spawn, status, run, config, mark_failed
-
-- [x] 6.1.2 Write isolation tests (RED)
-  - Test: `test_subagent_context_isolation`
-  - Test: `test_subagent_tool_restrictions`
-  - **Completed: 2026-01-30** - 9 tests for context isolation and tool restrictions, added get_config/is_tool_allowed/get_allowed_tools methods
-
-- [x] 6.1.3 Write concurrency tests (RED)
-  - Test: `test_parallel_subagent_execution`
-  - Test: `test_subagent_max_turns`
-  - **Completed: 2026-01-30** - 12 tests for concurrency, added max_concurrent/can_spawn/list_agents/remove_agent methods
-
-- [x] 6.1.4 Implement subagent orchestrator (GREEN)
-  - Path: `src/agents/mod.rs`
-  - Remove unused code warnings
-  - **Completed: 2026-01-30** - Full documentation, module-level example, all methods documented, clippy clean
-
-### 6.2 Narsil Reindex Checkpoint
-
-- [x] 6.2.1 Run narsil reindex after Phase 6
-  - **Completed: 2026-01-30** - Security scan: 0 CRITICAL/HIGH, 2 LOW (unmaintained transitive deps: bincode, yaml-rust via syntect)
-
----
-
-## Phase 6.5: Plugin Host API
-
-### Goal: Stable, documented API for plugins
-
-### 6.5.1 Plugin API Tests
-
-- [x] 6.5.1.1 Write plugin lifecycle tests (RED)
-  - Path: `tests/plugin_api_integration.rs`
-  - Test: `test_plugin_load_unload`
-  - Test: `test_plugin_isolation`
-  - **Completed: 2026-01-30** - 15 tests for load/unload/reload, isolation, manifests, added has_plugin/unload_plugin/reload_plugin/etc. methods
-
-- [x] 6.5.1.2 Write tool routing tests (RED)
-  - Test: `test_tool_routing_to_plugin`
-  - **Completed: 2026-01-30** - 7 tests for command routing, added list_commands/get_command_plugin/command_count methods
-
-- [x] 6.5.1.3 Implement plugin host (GREEN)
-  - Path: `src/plugins/host.rs`
-  - Stable API: RctPlugin, ToolProvider, CommandProvider traits
-  - **Completed: 2026-01-30** - Full host API with traits (RctPlugin, ToolProvider, CommandProvider, SkillProvider), PluginHost, PluginContext, 5 unit tests
-
-### 6.5.2 Plugin Documentation
-
-- [x] 6.5.2.1 Write plugin API documentation
-  - Path: `docs/plugin-api.md`
-  - **Completed: 2026-01-30** - Full plugin API reference with manifest format, commands, skills, host traits, best practices
-
-- [x] 6.5.2.2 Create example plugin
-  - Path: `examples/minimal-plugin/`
-  - **Completed: 2026-01-30** - Minimal plugin with manifest, 2 commands (hello, echo), 1 skill (greeting), README
-
-### 6.5.3 Narsil Reindex Checkpoint
-
-- [x] 6.5.3.1 Run narsil reindex after Phase 6.5
-  - **Completed: 2026-01-30** - Security scan: 0 CRITICAL/HIGH
-
----
-
-## Phase 7: Beyond Parity - Competitive Differentiation
-
-### Goal: Features Claude Code doesn't have
-
-### 7.1 Performance Benchmarks
-
-- [x] 7.1.1 Set up criterion benchmarks
-  - Path: `benches/rendering.rs`
-  - Benchmark: `full_redraw_100_messages` (<1ms target) - **229µs** ✅
-  - Benchmark: `streaming_token_append` (<100μs target) - **352ns** ✅
-  - Benchmark: `input_character_echo` (<10μs target) - **68ns** ✅
-  - Additional benchmarks: `streaming_cycle`, `cursor_movement`, `scroll_operations`, `large_message_rendering`
-  - **Completed: 2026-01-30** - All targets met, criterion configured
-
-### 7.2 Session Persistence
-
-- [x] 7.2.1 Write session save/load tests (RED)
+- [ ] 2.3.1 Write session integrity tests (RED)
   - Path: `tests/integration/session_test.rs`
-  - Test: `test_session_save`, `test_session_resume`
-  - Additional tests: `test_session_save_metadata`, `test_session_save_assigns_id`, `test_session_save_multiple`, `test_session_list`, `test_session_delete`, `test_session_update`, `test_session_metadata_working_dir`, `test_session_list_with_metadata`
-  - **Completed: 2026-01-30** - 11 integration tests
+  - Test: `test_session_detects_tampering`
+  - Test: `test_session_validates_schema`
+  - Acceptance: Tests verify integrity checking
 
-- [x] 7.2.2 Implement session manager (GREEN)
+- [ ] 2.3.2 Add session checksum validation (GREEN)
   - Path: `src/session/mod.rs`
-  - Session struct with messages, working_dir, timestamps
-  - SessionManager with save/load/update/delete/list operations
-  - SessionMetadata for lightweight session info
-  - **Completed: 2026-01-30** - Full implementation with 5 unit tests
+  - Add: HMAC signature on session files
+  - Add: Validation on load
+  - Acceptance: Tampered sessions rejected
 
-### 7.3 Multi-Model Support
-
-- [x] 7.3.1 Write provider switching tests (RED)
-  - Test: `test_model_switching`, `test_bedrock_provider`
-  - Additional tests: `test_model_list`, `test_model_get_current`, `test_model_config_retrieval`, `test_bedrock_provider_config`, `test_bedrock_provider_region`, `test_bedrock_provider_with_role`, `test_provider_switching`, `test_model_aliases`, `test_list_providers`, `test_default_model`, `test_model_validation`, `test_model_max_tokens`
-  - **Completed: 2026-01-30** - 13 integration tests
-
-- [x] 7.3.2 Implement multi-model client (GREEN)
-  - Path: `src/api/multi_model.rs`
-  - MultiModelClient with model switching and alias support
-  - ModelProvider enum (Anthropic, Bedrock)
-  - ProviderConfig for provider-specific settings
-  - BedrockConfig for AWS Bedrock support
-  - **Completed: 2026-01-30** - Full implementation with 5 unit tests
-
-### 7.4 Enterprise Features
-
-- [x] 7.4.1 Implement audit logging
-  - Path: `src/enterprise/audit.rs`
-  - AuditLogger with configurable levels (All, ApiOnly, ToolsOnly, SessionOnly)
-  - AuditEntry for tool use, API calls, session lifecycle
-  - AuditQuery for filtering and statistics
-  - File persistence with JSON format
-  - **Completed: 2026-01-30** - 11 integration tests, 5 unit tests
-
-- [x] 7.4.2 Implement cost controls
-  - Path: `src/enterprise/cost.rs`
-  - CostTracker with token tracking, cost calculation, and budget enforcement
-  - ModelPricing for Opus/Sonnet/Haiku with configurable custom pricing
-  - BudgetLimit for session/daily/monthly limits
-  - CostAlert for warnings and exceeded notifications
-  - **Completed: 2026-01-30** - 19 integration tests, 5 unit tests
-
-### 7.5 Narsil Reindex Checkpoint
-
-- [x] 7.5.1 Run narsil reindex after Phase 7
-  - Run: Full security scan
-  - Run: Supply chain analysis
-  - **Completed: 2026-01-30**
-    - Security scan: 0 CRITICAL, 0 HIGH, 3 MEDIUM (code quality)
-    - Supply chain: 412 deps, 0 vulnerabilities, 2 unmaintained warnings (syntect transitive deps)
-    - All MEDIUM findings are defensive coding recommendations, not exploitable vulnerabilities
+- [ ] 2.3.3 Commit session integrity
+  - Message: `feat(session): Add integrity checking to session files`
 
 ---
 
-## Phase 8: Polish & Release
+## Phase 3: Test Coverage Expansion
 
-### Goal: Production-ready release
+### Goal: Increase coverage to 90%+ with focus on error paths
 
-### 8.1 Documentation
+### 3.1 Error Path Tests for Tools
 
-- [x] 8.1.1 Write user guide
-  - Path: `docs/user-guide.md`
-  - **Completed: 2026-01-30** - Comprehensive user guide covering installation, CLI options, features, configuration, security
+- [ ] 3.1.1 Write file operation error tests (RED)
+  - Path: `tests/tools.rs`
+  - Test: `test_read_file_permission_denied`
+  - Test: `test_write_file_disk_full` (mock)
+  - Test: `test_edit_file_locked`
+  - Test: `test_bash_timeout_kills_process`
+  - Acceptance: Error paths properly tested
 
-- [x] 8.1.2 Write API documentation
-  - Path: `docs/api.md`
-  - **Completed: 2026-01-30** - Full library API reference with examples for all modules
+- [ ] 3.1.2 Implement any missing error handling (GREEN)
+  - Path: `src/tools/mod.rs`
+  - Verify: All error paths return proper ToolResult::Error
+  - Acceptance: All error tests pass
 
-- [x] 8.1.3 Write contributing guide
-  - Path: `CONTRIBUTING.md`
-  - **Completed: 2026-01-30** - Development setup, TDD workflow, code standards, PR process
+### 3.2 Error Path Tests for API
 
-- [x] 8.1.4 Write security policy
-  - Path: `SECURITY.md`
-  - **Completed: 2026-01-30** - Security model, vulnerability reporting, best practices
+- [ ] 3.2.1 Write API error tests (RED)
+  - Path: `tests/api_client.rs`
+  - Test: `test_api_network_timeout`
+  - Test: `test_api_invalid_json_response`
+  - Test: `test_api_rate_limit_retry`
+  - Test: `test_api_server_error_retry`
+  - Acceptance: Network errors properly handled
 
-### 8.2 Distribution
+- [ ] 3.2.2 Verify retry logic (GREEN)
+  - Path: `src/api/mod.rs`
+  - Verify: Retry on 429, 5xx errors
+  - Verify: Exponential backoff implemented
+  - Acceptance: Retry tests pass
 
-- [x] 8.2.1 Set up Homebrew formula
-  - Path: `Formula/rct.rb`
-  - GitHub workflow: `.github/workflows/release.yml`
-  - **Completed: 2026-01-30** - Formula with build-from-source, release workflow for binaries
-- [x] 8.2.2 Set up apt/dnf packages
-  - Path: `packaging/debian/`, `packaging/rpm/`
-  - **Completed: 2026-01-30** - Debian control/rules/changelog, RPM spec file
-- [x] 8.2.3 Set up WinGet/Scoop packages
-  - Path: `packaging/winget/`, `packaging/scoop/`
-  - **Completed: 2026-01-30** - WinGet manifests, Scoop bucket JSON
-- [x] 8.2.4 Create Docker image
-  - Path: `Dockerfile`, `.dockerignore`
-  - GitHub workflow: `.github/workflows/docker.yml`
-  - **Completed: 2026-01-30** - Multi-stage Dockerfile with distroless runtime
+### 3.3 Error Path Tests for MCP
 
-### 8.3 Auto-Update System
+- [ ] 3.3.1 Write MCP transport error tests (RED)
+  - Path: `tests/integration/mcp_transport_test.rs`
+  - Test: `test_stdio_process_crash`
+  - Test: `test_stdio_invalid_json`
+  - Test: `test_sse_connection_lost`
+  - Test: `test_http_timeout`
+  - Acceptance: Transport errors handled
 
-- [x] 8.3.1 Write update check tests (RED)
-  - Test: `test_auto_update_check`
-  - Test: `test_auto_update_verify_signature`
-  - Additional tests: `test_auto_update_check_already_current`, `test_auto_update_check_current_is_newer`, `test_auto_update_check_server_error`, `test_auto_update_check_not_found`, `test_auto_update_check_channels`, `test_platform_key_detection`, `test_auto_update_checksum_mismatch`, `test_auto_update_download_server_error`, `test_release_channel_as_str`, `test_release_channel_equality`
-  - **Completed: 2026-01-30** - 12 integration tests + 5 unit tests
+- [ ] 3.3.2 Implement error recovery (GREEN)
+  - Path: `src/mcp/transport.rs`
+  - Add: Automatic reconnection for SSE
+  - Add: Graceful handling of process crashes
+  - Acceptance: Error tests pass
 
-- [x] 8.3.2 Implement update manager (GREEN)
-  - Path: `src/update/mod.rs`
-  - Added `new_with_base_url()` for testing with mock servers
-  - Added comprehensive documentation
-  - **Completed: 2026-01-30** - Full TDD implementation
+### 3.4 Error Path Tests for Session
 
-### 8.4 Final Quality Gate
+- [ ] 3.4.1 Write session error tests (RED)
+  - Path: `tests/integration/session_test.rs`
+  - Test: `test_session_load_corrupted_json`
+  - Test: `test_session_save_permission_denied`
+  - Test: `test_session_concurrent_access`
+  - Acceptance: Session errors handled
 
-- [x] 8.4.1 Run full test suite
-  - **Completed: 2026-01-30** - 426 tests pass (118 unit + 12 integration + 19 doc + benchmarks)
-- [x] 8.4.2 Run narsil security scan
-  - **Completed: 2026-01-30** - 0 CRITICAL/HIGH, 2 unmaintained transitive deps (syntect)
-- [x] 8.4.3 Run supply chain audit
-  - **Completed: 2026-01-30** - 28 direct deps, no vulnerabilities
-- [x] 8.4.4 Generate coverage report (>90% target)
-  - **Completed: 2026-01-30** - 84.38% coverage (1740/2062 lines)
-  - Added tests for: util, context, mcp manager, IDE, state append_chunk
-  - Untested code is primarily entry points (main.rs, app event loop) and TCP server code
-  - Test count increased from 162 to 182 unit tests
-- [x] 8.4.5 Run performance benchmarks
-  - **Completed: 2026-01-30** - All targets met (redraw <1ms, streaming <100μs, input <10μs)
-- [x] 8.4.6 Final narsil reindex
-  - **Completed: 2026-01-30** - All files indexed, security scan clean
+- [ ] 3.4.2 Implement error recovery (GREEN)
+  - Path: `src/session/mod.rs`
+  - Add: Schema validation on load
+  - Add: File locking for concurrent access
+  - Acceptance: Error tests pass
+
+### 3.5 TUI Functional Tests
+
+- [ ] 3.5.1 Write TUI rendering tests (RED)
+  - Path: `tests/unit/tui_test.rs`
+  - Test: `test_tui_renders_messages_correctly`
+  - Test: `test_tui_handles_unicode`
+  - Test: `test_tui_scrolls_long_content`
+  - Test: `test_tui_input_cursor_visible`
+  - Acceptance: TUI logic verified
+
+- [ ] 3.5.2 Write TUI event tests (RED)
+  - Path: `tests/unit/tui_test.rs`
+  - Test: `test_tui_key_events`
+  - Test: `test_tui_resize_event`
+  - Test: `test_tui_paste_event`
+  - Acceptance: Event handling verified
+
+### 3.6 Concurrency Tests
+
+- [ ] 3.6.1 Write concurrent tool execution tests (RED)
+  - Path: `tests/integration/concurrency_test.rs`
+  - Test: `test_parallel_file_operations`
+  - Test: `test_parallel_bash_commands`
+  - Test: `test_parallel_mcp_calls`
+  - Acceptance: No race conditions
+
+- [ ] 3.6.2 Write concurrent session tests (RED)
+  - Test: `test_concurrent_session_writes`
+  - Test: `test_concurrent_session_reads`
+  - Acceptance: Session thread-safe
+
+---
+
+## Phase 4: Error Handling Hardening
+
+### Goal: Ensure robust error handling throughout
+
+### 4.1 Consistent Error Types
+
+- [ ] 4.1.1 Create error types module (REFACTOR)
+  - Path: `src/error.rs`
+  - Add: `RctError` enum with variants for each module
+  - Add: Proper `Display` and `Error` implementations
+  - Add: Conversion from anyhow errors
+
+- [ ] 4.1.2 Update modules to use error types
+  - Update: `src/tools/mod.rs`
+  - Update: `src/mcp/mod.rs`
+  - Update: `src/session/mod.rs`
+  - Acceptance: Consistent error handling
+
+### 4.2 Error Recovery
+
+- [ ] 4.2.1 Add graceful degradation for non-critical failures
+  - Path: Various modules
+  - Add: Fallback behavior when optional features fail
+  - Add: Clear error messages for users
+  - Acceptance: App doesn't crash on recoverable errors
+
+### 4.3 Error Logging
+
+- [ ] 4.3.1 Ensure all errors are logged appropriately
+  - Add: `tracing::error!` for critical failures
+  - Add: `tracing::warn!` for recoverable issues
+  - Verify: No silent failures
+  - Acceptance: Errors traceable in logs
+
+---
+
+## Phase 5: Final Security Audit
+
+### Goal: Verify all security issues are resolved
+
+### 5.1 Security Verification
+
+- [ ] 5.1.1 Run comprehensive security scan
+  - Command: `cargo audit`
+  - Verify: 0 CRITICAL/HIGH in direct dependencies
+  - Document: Any remaining transitive dependency issues
+
+- [ ] 5.1.2 Run all security-focused tests
+  - Command: `cargo test security`
+  - Verify: All security tests pass
+  - Note: Tag security tests with `#[test]` naming convention
+
+- [ ] 5.1.3 Manual penetration testing
+  - Test: All path traversal vectors
+  - Test: All command injection vectors
+  - Test: All privilege escalation vectors
+  - Document: Any remaining issues
+
+- [ ] 5.1.4 Generate final security report
+  - Path: `docs/SECURITY_AUDIT.md`
+  - Include: All findings and resolutions
+  - Include: Known limitations
+  - Include: Security recommendations
+
+### 5.2 Final Quality Gate
+
+- [ ] 5.2.1 Run full test suite
+  - Command: `cargo test`
+  - Target: >550 tests
+  - Verify: All pass
+
+- [ ] 5.2.2 Run coverage report
+  - Command: `cargo tarpaulin`
+  - Target: >90% coverage
+  - Document: Any intentionally untested code
+
+- [ ] 5.2.3 Final code review
+  - Verify: No forbidden patterns
+  - Verify: All public APIs documented
+  - Verify: No security regressions
+
+- [ ] 5.2.4 Tag release
+  - Tag: `v0.2.0-security`
+  - Message: Security hardening release
 
 ---
 
@@ -759,37 +449,36 @@ Steps:
 
 ## Notes
 
-### Narsil MCP Commands Reference
+### Security Issue Reference
+
+| ID | Severity | Module | Issue | Phase |
+|----|----------|--------|-------|-------|
+| H-3 | HIGH | tools | list_files path traversal | 0.1 |
+| H-1 | HIGH | api | Plain string API key | 0.2 |
+| H-2 | HIGH | hooks | Unsandboxed execution | 0.3 |
+| C-1 | CRITICAL | tools | Bypassable bash filter | 1.1 |
+| M-1 | MEDIUM | mcp | Unvalidated commands | 1.2 |
+| M-2 | MEDIUM | tools | TOCTOU race | 1.3 |
+| L-1 | LOW | tools | Runtime regex compilation | 2.1 |
+| L-2 | LOW | session | Deserialization trust | 2.3 |
+
+### Testing Commands
 
 ```bash
-# Code Intelligence
-reindex                      # Refresh code index
-get_call_graph <function>    # Function relationships
-find_references <symbol>     # Impact analysis
-get_dependencies            # Module dependencies
+# Run all tests
+cargo test
 
-# Security
-scan_security               # Full security audit
-find_injection_vulnerabilities  # SQL/XSS/command injection
-check_cwe_top25             # CWE vulnerability check
+# Run only security tests
+cargo test --test '*' -- security
 
-# Analysis
-get_type_hierarchy <type>   # Type inheritance
-find_dead_code              # Unused code detection
-get_complexity_report       # Cyclomatic complexity
-```
+# Run with coverage
+cargo tarpaulin --out Html
 
-### Ralph Operation
+# Run security audit
+cargo audit
 
-```bash
-# Analyze project (do first)
-ralph --project . analyze
-
-# Run build loop (main operation)
-ralph loop build --max-iterations 50
-
-# Debug mode (slower, more verbose)
-ralph loop debug --max-iterations 10
+# Run clippy
+cargo clippy --all-targets -- -D warnings
 ```
 
 ### Quality Checklist (Pre-Commit)
@@ -802,5 +491,6 @@ ralph loop debug --max-iterations 10
 - [ ] No `todo!()` or `unimplemented!()`
 - [ ] Public functions have doc comments
 - [ ] New code has test coverage
+- [ ] Security tests added for security-sensitive changes
 
 ---
