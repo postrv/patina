@@ -8,14 +8,14 @@
 
 | Metric | Value | Command |
 |--------|-------|---------|
-| Unit Tests | 22 | `cargo test --lib` |
-| Integration Tests | 317 | `cargo test --test '*'` |
-| Doc Tests | 14 | `cargo test --doc` |
-| Total Tests | 353 | `cargo test` |
-| Test Files | 18 | `find tests -name '*.rs' \| wc -l` |
+| Unit Tests | 27 | `cargo test --lib` |
+| Integration Tests | 328 | `cargo test --test '*'` |
+| Doc Tests | 15 | `cargo test --doc` |
+| Total Tests | 370 | `cargo test` |
+| Test Files | 21 | `find tests -name '*.rs' \| wc -l` |
 | Clippy Warnings | 0 | `cargo clippy --all-targets -- -D warnings` |
-| Source Files | 24 | `find src -name '*.rs' \| wc -l` |
-| LOC | ~5200 | `tokei src` |
+| Source Files | 26 | `find src -name '*.rs' \| wc -l` |
+| LOC | ~5400 | `tokei src` |
 
 **Baseline Rule:** Test count must never decrease. Clippy warnings must reach 0.
 
@@ -613,13 +613,18 @@ Steps:
 
 ### 7.2 Session Persistence
 
-- [ ] 7.2.1 Write session save/load tests (RED)
+- [x] 7.2.1 Write session save/load tests (RED)
   - Path: `tests/integration/session_test.rs`
-  - Test: `test_session_save`
-  - Test: `test_session_resume`
+  - Test: `test_session_save`, `test_session_resume`
+  - Additional tests: `test_session_save_metadata`, `test_session_save_assigns_id`, `test_session_save_multiple`, `test_session_list`, `test_session_delete`, `test_session_update`, `test_session_metadata_working_dir`, `test_session_list_with_metadata`
+  - **Completed: 2026-01-30** - 11 integration tests
 
-- [ ] 7.2.2 Implement session manager (GREEN)
+- [x] 7.2.2 Implement session manager (GREEN)
   - Path: `src/session/mod.rs`
+  - Session struct with messages, working_dir, timestamps
+  - SessionManager with save/load/update/delete/list operations
+  - SessionMetadata for lightweight session info
+  - **Completed: 2026-01-30** - Full implementation with 5 unit tests
 
 ### 7.3 Multi-Model Support
 
