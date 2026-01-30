@@ -1,0 +1,484 @@
+//! Unit tests for plugin system.
+//!
+//! These tests verify plugin discovery, loading, and namespacing.
+//! Following TDD approach for the plugin system.
+
+use rct::plugins::PluginRegistry;
+use std::fs;
+use tempfile::TempDir;
+
+/// Helper to create a plugin directory structure
+fn create_plugin(dir: &TempDir, plugin_name: &str, manifest: &str) -> std::path::PathBuf {
+    let plugin_dir = dir.path().join(plugin_name);
+    let claude_plugin_dir = plugin_dir.join(".claude-plugin");
+    fs::create_dir_all(&claude_plugin_dir).expect("Should create plugin dirs");
+    fs::write(claude_plugin_dir.join("plugin.json"), manifest).expect("Should write manifest");
+    plugin_dir
+}
+
+/// Helper to add a command to a plugin
+fn add_plugin_command(plugin_dir: &std::path::Path, cmd_name: &str, content: &str) {
+    let commands_dir = plugin_dir.join("commands");
+    fs::create_dir_all(&commands_dir).expect("Should create commands dir");
+    fs::write(commands_dir.join(format!("{}.md", cmd_name)), content)
+        .expect("Should write command file");
+}
+
+/// Helper to add a skill to a plugin
+fn add_plugin_skill(plugin_dir: &std::path::Path, skill_name: &str, skill_md: &str) {
+    let skills_dir = plugin_dir.join("skills").join(skill_name);
+    fs::create_dir_all(&skills_dir).expect("Should create skills dir");
+    fs::write(skills_dir.join("SKILL.md"), skill_md).expect("Should write skill file");
+}
+
+// =============================================================================
+// Test Group: Plugin Discovery
+// =============================================================================
+
+/// Tests discovering a single plugin from a directory.
+#[test]
+fn test_plugin_discovery_single() {
+    let temp_dir = TempDir::new().expect("Should create temp dir");
+    let manifest = r#"{
+        "name": "test-plugin",
+        "version": "1.0.0",
+        "description": "A test plugin"
+    }"#;
+
+    create_plugin(&temp_dir, "test-plugin", manifest);
+
+    let mut registry = PluginRegistry::new();
+    registry
+        .load_all(&[temp_dir.path().to_path_buf()])
+        .expect("Should load plugins");
+
+    // Plugin should be discovered - we can verify by checking commands
+    // Since there are no commands, skills will be empty
+    let skills: Vec<_> = registry.all_skills().collect();
+    assert!(
+        skills.is_empty(),
+        "Plugin with no skills should have empty skills"
+    );
+}
+
+/// Tests discovering multiple plugins from a directory.
+#[test]
+fn test_plugin_discovery_multiple() {
+    let temp_dir = TempDir::new().expect("Should create temp dir");
+
+    let manifest1 = r#"{
+        "name": "plugin-one",
+        "version": "1.0.0"
+    }"#;
+
+    let manifest2 = r#"{
+        "name": "plugin-two",
+        "version": "2.0.0"
+    }"#;
+
+    let plugin1 = create_plugin(&temp_dir, "plugin-one", manifest1);
+    let plugin2 = create_plugin(&temp_dir, "plugin-two", manifest2);
+
+    // Add commands to verify both plugins loaded
+    add_plugin_command(&plugin1, "cmd1", "Command 1 content");
+    add_plugin_command(&plugin2, "cmd2", "Command 2 content");
+
+    let mut registry = PluginRegistry::new();
+    registry
+        .load_all(&[temp_dir.path().to_path_buf()])
+        .expect("Should load plugins");
+
+    // Both commands should be accessible
+    assert!(
+        registry.get_command("plugin-one:cmd1").is_some(),
+        "Should find plugin-one command"
+    );
+    assert!(
+        registry.get_command("plugin-two:cmd2").is_some(),
+        "Should find plugin-two command"
+    );
+}
+
+/// Tests that directories without plugin manifest are ignored.
+#[test]
+fn test_plugin_discovery_ignores_non_plugins() {
+    let temp_dir = TempDir::new().expect("Should create temp dir");
+
+    // Create a valid plugin
+    let manifest = r#"{
+        "name": "valid-plugin",
+        "version": "1.0.0"
+    }"#;
+    let plugin_dir = create_plugin(&temp_dir, "valid-plugin", manifest);
+    add_plugin_command(&plugin_dir, "valid-cmd", "Valid command");
+
+    // Create a non-plugin directory
+    let non_plugin = temp_dir.path().join("not-a-plugin");
+    fs::create_dir_all(&non_plugin).expect("Should create dir");
+    fs::write(non_plugin.join("README.md"), "Not a plugin").expect("Should write file");
+
+    let mut registry = PluginRegistry::new();
+    registry
+        .load_all(&[temp_dir.path().to_path_buf()])
+        .expect("Should load plugins");
+
+    // Only valid plugin command should be found
+    assert!(
+        registry.get_command("valid-plugin:valid-cmd").is_some(),
+        "Should find valid plugin command"
+    );
+}
+
+/// Tests loading plugins from non-existent directory.
+#[test]
+fn test_plugin_discovery_nonexistent_dir() {
+    let temp_dir = TempDir::new().expect("Should create temp dir");
+    let nonexistent = temp_dir.path().join("does-not-exist");
+
+    let mut registry = PluginRegistry::new();
+    let result = registry.load_all(&[nonexistent]);
+
+    assert!(result.is_ok(), "Should succeed for non-existent directory");
+}
+
+/// Tests loading plugins from multiple search paths.
+#[test]
+fn test_plugin_discovery_multiple_paths() {
+    let temp_dir1 = TempDir::new().expect("Should create temp dir 1");
+    let temp_dir2 = TempDir::new().expect("Should create temp dir 2");
+
+    let manifest1 = r#"{
+        "name": "plugin-path1",
+        "version": "1.0.0"
+    }"#;
+    let manifest2 = r#"{
+        "name": "plugin-path2",
+        "version": "1.0.0"
+    }"#;
+
+    let plugin1 = create_plugin(&temp_dir1, "plugin-path1", manifest1);
+    let plugin2 = create_plugin(&temp_dir2, "plugin-path2", manifest2);
+
+    add_plugin_command(&plugin1, "from-path1", "Content 1");
+    add_plugin_command(&plugin2, "from-path2", "Content 2");
+
+    let mut registry = PluginRegistry::new();
+    registry
+        .load_all(&[
+            temp_dir1.path().to_path_buf(),
+            temp_dir2.path().to_path_buf(),
+        ])
+        .expect("Should load from multiple paths");
+
+    assert!(
+        registry.get_command("plugin-path1:from-path1").is_some(),
+        "Should find command from first path"
+    );
+    assert!(
+        registry.get_command("plugin-path2:from-path2").is_some(),
+        "Should find command from second path"
+    );
+}
+
+// =============================================================================
+// Test Group: Plugin Version Compatibility
+// =============================================================================
+
+/// Tests plugin manifest with version information.
+#[test]
+fn test_plugin_version_compatibility() {
+    let temp_dir = TempDir::new().expect("Should create temp dir");
+    let manifest = r#"{
+        "name": "versioned-plugin",
+        "version": "2.1.0",
+        "min_rct_version": "0.1.0"
+    }"#;
+
+    let plugin_dir = create_plugin(&temp_dir, "versioned-plugin", manifest);
+    add_plugin_command(&plugin_dir, "ver-cmd", "Versioned command");
+
+    let mut registry = PluginRegistry::new();
+    registry
+        .load_all(&[temp_dir.path().to_path_buf()])
+        .expect("Should load versioned plugin");
+
+    // Plugin should be loaded
+    assert!(
+        registry.get_command("versioned-plugin:ver-cmd").is_some(),
+        "Should find versioned plugin command"
+    );
+}
+
+/// Tests plugin with optional manifest fields.
+#[test]
+fn test_plugin_optional_manifest_fields() {
+    let temp_dir = TempDir::new().expect("Should create temp dir");
+    let manifest = r#"{
+        "name": "full-plugin",
+        "version": "1.0.0",
+        "description": "A fully documented plugin",
+        "author": "Test Author"
+    }"#;
+
+    let plugin_dir = create_plugin(&temp_dir, "full-plugin", manifest);
+    add_plugin_command(&plugin_dir, "full-cmd", "Full command");
+
+    let mut registry = PluginRegistry::new();
+    registry
+        .load_all(&[temp_dir.path().to_path_buf()])
+        .expect("Should load plugin with optional fields");
+
+    assert!(
+        registry.get_command("full-plugin:full-cmd").is_some(),
+        "Should find full plugin command"
+    );
+}
+
+// =============================================================================
+// Test Group: Command Namespacing
+// =============================================================================
+
+/// Tests command namespacing with plugin:command format.
+#[test]
+fn test_plugin_command_namespacing() {
+    let temp_dir = TempDir::new().expect("Should create temp dir");
+    let manifest = r#"{
+        "name": "ns-plugin",
+        "version": "1.0.0"
+    }"#;
+
+    let plugin_dir = create_plugin(&temp_dir, "ns-plugin", manifest);
+    add_plugin_command(&plugin_dir, "my-command", "My command content");
+    add_plugin_command(&plugin_dir, "another-cmd", "Another command content");
+
+    let mut registry = PluginRegistry::new();
+    registry
+        .load_all(&[temp_dir.path().to_path_buf()])
+        .expect("Should load plugins");
+
+    // Full namespaced access
+    let cmd1 = registry.get_command("ns-plugin:my-command");
+    assert!(cmd1.is_some(), "Should find command with full namespace");
+    assert_eq!(cmd1.unwrap().content, "My command content");
+
+    let cmd2 = registry.get_command("ns-plugin:another-cmd");
+    assert!(cmd2.is_some(), "Should find another command with namespace");
+}
+
+/// Tests short command access when name is unique.
+#[test]
+fn test_plugin_command_short_access() {
+    let temp_dir = TempDir::new().expect("Should create temp dir");
+    let manifest = r#"{
+        "name": "short-plugin",
+        "version": "1.0.0"
+    }"#;
+
+    let plugin_dir = create_plugin(&temp_dir, "short-plugin", manifest);
+    add_plugin_command(&plugin_dir, "unique-cmd", "Unique content");
+
+    let mut registry = PluginRegistry::new();
+    registry
+        .load_all(&[temp_dir.path().to_path_buf()])
+        .expect("Should load plugins");
+
+    // Short access without namespace
+    let cmd = registry.get_command("unique-cmd");
+    assert!(cmd.is_some(), "Should find command with short name");
+    assert_eq!(cmd.unwrap().content, "Unique content");
+}
+
+/// Tests loading commands from plugin with frontmatter.
+#[test]
+fn test_plugin_command_content() {
+    let temp_dir = TempDir::new().expect("Should create temp dir");
+    let manifest = r#"{
+        "name": "content-plugin",
+        "version": "1.0.0"
+    }"#;
+
+    let plugin_dir = create_plugin(&temp_dir, "content-plugin", manifest);
+    let command_content = r#"# My Command
+
+This is the command template.
+
+Use {{ arg }} to substitute.
+"#;
+    add_plugin_command(&plugin_dir, "template-cmd", command_content);
+
+    let mut registry = PluginRegistry::new();
+    registry
+        .load_all(&[temp_dir.path().to_path_buf()])
+        .expect("Should load plugins");
+
+    let cmd = registry.get_command("content-plugin:template-cmd");
+    assert!(cmd.is_some());
+    let cmd = cmd.unwrap();
+    assert!(cmd.content.contains("# My Command"));
+    assert!(cmd.content.contains("{{ arg }}"));
+}
+
+// =============================================================================
+// Test Group: Plugin Skills
+// =============================================================================
+
+/// Tests loading skills from a plugin.
+#[test]
+fn test_plugin_skills_loading() {
+    let temp_dir = TempDir::new().expect("Should create temp dir");
+    let manifest = r#"{
+        "name": "skills-plugin",
+        "version": "1.0.0"
+    }"#;
+
+    let plugin_dir = create_plugin(&temp_dir, "skills-plugin", manifest);
+    let skill_md = r#"---
+name: plugin-skill
+description: A skill from a plugin
+---
+
+Use this skill for plugin-related tasks.
+"#;
+    add_plugin_skill(&plugin_dir, "plugin-skill", skill_md);
+
+    let mut registry = PluginRegistry::new();
+    registry
+        .load_all(&[temp_dir.path().to_path_buf()])
+        .expect("Should load plugins");
+
+    let skills: Vec<_> = registry.all_skills().collect();
+    assert_eq!(skills.len(), 1, "Should have one skill from plugin");
+    assert_eq!(skills[0].name, "plugin-skill");
+    assert_eq!(skills[0].description, "A skill from a plugin");
+    assert!(skills[0].instructions.contains("plugin-related tasks"));
+}
+
+/// Tests loading multiple skills from a plugin.
+#[test]
+fn test_plugin_skills_multiple() {
+    let temp_dir = TempDir::new().expect("Should create temp dir");
+    let manifest = r#"{
+        "name": "multi-skills-plugin",
+        "version": "1.0.0"
+    }"#;
+
+    let plugin_dir = create_plugin(&temp_dir, "multi-skills-plugin", manifest);
+
+    let skill1 = r#"---
+name: skill-one
+description: First skill
+---
+First skill instructions.
+"#;
+
+    let skill2 = r#"---
+name: skill-two
+description: Second skill
+---
+Second skill instructions.
+"#;
+
+    add_plugin_skill(&plugin_dir, "skill-one", skill1);
+    add_plugin_skill(&plugin_dir, "skill-two", skill2);
+
+    let mut registry = PluginRegistry::new();
+    registry
+        .load_all(&[temp_dir.path().to_path_buf()])
+        .expect("Should load plugins");
+
+    let skills: Vec<_> = registry.all_skills().collect();
+    assert_eq!(skills.len(), 2, "Should have two skills from plugin");
+
+    let names: Vec<&str> = skills.iter().map(|s| s.name.as_str()).collect();
+    assert!(names.contains(&"skill-one"));
+    assert!(names.contains(&"skill-two"));
+}
+
+// =============================================================================
+// Test Group: Edge Cases
+// =============================================================================
+
+/// Tests PluginRegistry::new() creates empty registry.
+#[test]
+fn test_plugin_registry_new() {
+    let registry = PluginRegistry::new();
+    assert!(
+        registry.get_command("any").is_none(),
+        "New registry has no commands"
+    );
+    assert!(
+        registry.all_skills().count() == 0,
+        "New registry has no skills"
+    );
+}
+
+/// Tests PluginRegistry::default() creates empty registry.
+#[test]
+fn test_plugin_registry_default() {
+    let registry = PluginRegistry::default();
+    assert!(
+        registry.get_command("any").is_none(),
+        "Default registry has no commands"
+    );
+}
+
+/// Tests malformed plugin manifest is handled gracefully.
+#[test]
+fn test_plugin_malformed_manifest() {
+    // Use separate directories to ensure isolation
+    let valid_dir = TempDir::new().expect("Should create valid temp dir");
+    let invalid_dir = TempDir::new().expect("Should create invalid temp dir");
+
+    // Valid plugin - note: manifest name must match what we search for
+    let valid_manifest = r#"{"name": "valid-plugin", "version": "1.0.0"}"#;
+    let valid_plugin = create_plugin(&valid_dir, "valid-plugin-dir", valid_manifest);
+    add_plugin_command(&valid_plugin, "valid-cmd", "Valid");
+
+    // Invalid JSON manifest in separate directory
+    let invalid_plugin = invalid_dir.path().join("invalid-plugin");
+    let claude_dir = invalid_plugin.join(".claude-plugin");
+    fs::create_dir_all(&claude_dir).expect("Should create dirs");
+    fs::write(claude_dir.join("plugin.json"), "{ invalid json }").expect("Should write file");
+
+    let mut registry = PluginRegistry::new();
+    // Load from both paths - invalid should be skipped
+    registry
+        .load_all(&[
+            valid_dir.path().to_path_buf(),
+            invalid_dir.path().to_path_buf(),
+        ])
+        .expect("Should continue despite invalid plugin");
+
+    // Valid plugin should be loaded (using manifest name, not directory name)
+    assert!(
+        registry.get_command("valid-plugin:valid-cmd").is_some(),
+        "Should load valid plugin"
+    );
+}
+
+/// Tests getting non-existent command returns None.
+#[test]
+fn test_plugin_get_nonexistent_command() {
+    let temp_dir = TempDir::new().expect("Should create temp dir");
+    let manifest = r#"{
+        "name": "test-plugin",
+        "version": "1.0.0"
+    }"#;
+
+    let plugin_dir = create_plugin(&temp_dir, "test-plugin", manifest);
+    add_plugin_command(&plugin_dir, "existing", "Exists");
+
+    let mut registry = PluginRegistry::new();
+    registry
+        .load_all(&[temp_dir.path().to_path_buf()])
+        .expect("Should load plugins");
+
+    assert!(
+        registry.get_command("nonexistent").is_none(),
+        "Should return None for nonexistent command"
+    );
+    assert!(
+        registry.get_command("test-plugin:nonexistent").is_none(),
+        "Should return None for nonexistent namespaced command"
+    );
+}
