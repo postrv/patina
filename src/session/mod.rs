@@ -33,6 +33,7 @@ use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 use std::time::SystemTime;
 use tokio::fs;
+use tracing::{error, warn};
 use uuid::Uuid;
 
 /// Static key used for session integrity HMAC.
@@ -74,6 +75,10 @@ impl SessionFile {
         let expected_checksum = compute_checksum(&session_json);
 
         if self.checksum != expected_checksum {
+            error!(
+                session_id = ?self.session.id,
+                "Security: session integrity check failed - possible tampering detected"
+            );
             return Err(RctError::session_integrity("checksum mismatch"));
         }
 
@@ -100,6 +105,7 @@ fn compute_checksum(data: &str) -> String {
 /// This error is security-related and can be checked via `is_security_related()`.
 fn validate_session_id(session_id: &str) -> RctResult<()> {
     if session_id.is_empty() {
+        warn!("Session validation failed: empty session ID");
         return Err(RctError::session_validation("session ID cannot be empty"));
     }
 
@@ -110,6 +116,10 @@ fn validate_session_id(session_id: &str) -> RctResult<()> {
         .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
 
     if !is_valid {
+        warn!(
+            session_id = %session_id,
+            "Security: session validation failed - invalid characters (possible path traversal attempt)"
+        );
         return Err(RctError::session_validation(
             "invalid session ID: must contain only alphanumeric characters, hyphens, and underscores",
         ));

@@ -18,6 +18,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 use tokio::process::Command;
+use tracing::{debug, warn};
 use walkdir::WalkDir;
 
 use crate::hooks::{HookDecision, HookManager};
@@ -219,6 +220,10 @@ impl ToolExecutor {
     fn validate_path(&self, path: &str) -> std::result::Result<PathBuf, String> {
         // Reject absolute paths that don't start with working_dir
         if Path::new(path).is_absolute() {
+            warn!(
+                path = %path,
+                "Security: path traversal attempt - absolute path rejected"
+            );
             return Err(
                 "Absolute paths are not allowed: path traversal outside working directory"
                     .to_string(),
@@ -254,6 +259,10 @@ impl ToolExecutor {
             } else {
                 // Parent doesn't exist, check if the path contains ..
                 if path.contains("..") {
+                    warn!(
+                        path = %path,
+                        "Security: path traversal attempt - parent escape detected"
+                    );
                     return Err("Path traversal outside working directory".to_string());
                 }
                 full_path
@@ -262,6 +271,12 @@ impl ToolExecutor {
 
         // Verify the canonical path starts with the working directory
         if !canonical_full_path.starts_with(&canonical_working_dir) {
+            warn!(
+                path = %path,
+                canonical_path = %canonical_full_path.display(),
+                working_dir = %canonical_working_dir.display(),
+                "Security: path traversal attempt - path escapes working directory"
+            );
             return Err("Path traversal outside working directory".to_string());
         }
 
@@ -310,6 +325,10 @@ impl ToolExecutor {
         match std::fs::symlink_metadata(&full_path) {
             Ok(metadata) => {
                 if metadata.file_type().is_symlink() {
+                    warn!(
+                        path = %path,
+                        "Security: symlink rejected - TOCTOU mitigation"
+                    );
                     return Err(
                         "Symlink not allowed: file operations on symlinks are rejected for security (TOCTOU mitigation)"
                             .to_string(),
@@ -350,6 +369,11 @@ impl ToolExecutor {
         // Check both original and normalized command against dangerous patterns
         for pattern in &self.policy.dangerous_patterns {
             if pattern.is_match(command) || pattern.is_match(&normalized) {
+                warn!(
+                    pattern = %pattern.as_str(),
+                    command = %command,
+                    "Security violation: command blocked by dangerous pattern"
+                );
                 return Ok(ToolResult::Error(format!(
                     "Command blocked by security policy: matches {:?}",
                     pattern.as_str()
@@ -365,6 +389,10 @@ impl ToolExecutor {
                 .iter()
                 .any(|pattern| pattern.is_match(command) || pattern.is_match(&normalized));
             if !is_allowed {
+                warn!(
+                    command = %command,
+                    "Security: command blocked by allowlist policy"
+                );
                 return Ok(ToolResult::Error(
                     "Command blocked: not in allowlist".to_string(),
                 ));
@@ -399,9 +427,16 @@ impl ToolExecutor {
                     )))
                 }
             }
-            Ok(Err(e)) => Err(e.into()),
+            Ok(Err(e)) => {
+                warn!(error = %e, "Bash command execution failed");
+                Err(e.into())
+            }
             Err(_) => {
                 // Timeout occurred - child is automatically killed by kill_on_drop
+                warn!(
+                    timeout_ms = %self.policy.command_timeout.as_millis(),
+                    "Bash command timed out and was killed"
+                );
                 Err(anyhow::anyhow!(
                     "Command timed out after {:?}",
                     self.policy.command_timeout
@@ -429,7 +464,14 @@ impl ToolExecutor {
 
         match tokio::fs::read_to_string(&full_path).await {
             Ok(content) => Ok(ToolResult::Success(content)),
-            Err(e) => Ok(ToolResult::Error(format!("Failed to read file: {}", e))),
+            Err(e) => {
+                debug!(
+                    path = %path,
+                    error = %e,
+                    "File read failed"
+                );
+                Ok(ToolResult::Error(format!("Failed to read file: {}", e)))
+            }
         }
     }
 
@@ -445,6 +487,12 @@ impl ToolExecutor {
             .ok_or_else(|| anyhow::anyhow!("Missing content"))?;
 
         if content.len() > self.policy.max_file_size {
+            warn!(
+                path = %path,
+                size = content.len(),
+                limit = self.policy.max_file_size,
+                "File write blocked: size exceeds limit"
+            );
             return Ok(ToolResult::Error(format!(
                 "File size {} exceeds limit {}",
                 content.len(),
@@ -480,7 +528,14 @@ impl ToolExecutor {
                 content.len(),
                 path
             ))),
-            Err(e) => Ok(ToolResult::Error(format!("Failed to write file: {}", e))),
+            Err(e) => {
+                debug!(
+                    path = %path,
+                    error = %e,
+                    "File write failed"
+                );
+                Ok(ToolResult::Error(format!("Failed to write file: {}", e)))
+            }
         }
     }
 
@@ -621,10 +676,15 @@ impl ToolExecutor {
         let mut dir = match tokio::fs::read_dir(&full_path).await {
             Ok(d) => d,
             Err(e) => {
+                debug!(
+                    path = %path,
+                    error = %e,
+                    "Directory listing failed"
+                );
                 return Ok(ToolResult::Error(format!(
                     "Failed to list directory '{}': {}",
                     path, e
-                )))
+                )));
             }
         };
 
@@ -693,7 +753,14 @@ impl ToolExecutor {
         // Compile the glob pattern
         let glob_pattern = match Pattern::new(pattern) {
             Ok(p) => p,
-            Err(e) => return Ok(ToolResult::Error(format!("Invalid glob pattern: {e}"))),
+            Err(e) => {
+                debug!(
+                    pattern = %pattern,
+                    error = %e,
+                    "Invalid glob pattern"
+                );
+                return Ok(ToolResult::Error(format!("Invalid glob pattern: {e}")));
+            }
         };
 
         let mut matches = Vec::new();
@@ -825,7 +892,14 @@ impl ToolExecutor {
             Regex::new(pattern)
         } {
             Ok(r) => r,
-            Err(e) => return Ok(ToolResult::Error(format!("Invalid regex pattern: {e}"))),
+            Err(e) => {
+                debug!(
+                    pattern = %pattern,
+                    error = %e,
+                    "Invalid regex pattern"
+                );
+                return Ok(ToolResult::Error(format!("Invalid regex pattern: {e}")));
+            }
         };
 
         // Compile file filter pattern if provided
