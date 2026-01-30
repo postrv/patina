@@ -102,7 +102,10 @@ fn test_plugin_unload() {
 
     // Unload the plugin
     let unloaded = registry.unload_plugin("unload-test");
-    assert!(unloaded, "Should return true when unloading existing plugin");
+    assert!(
+        unloaded,
+        "Should return true when unloading existing plugin"
+    );
     assert!(!registry.has_plugin("unload-test"));
 }
 
