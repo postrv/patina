@@ -5,54 +5,37 @@
 //! - Send and receive JSON-RPC messages
 //! - Handle the MCP initialization protocol
 //!
-//! Note: These tests are Unix-only as they use `/bin/bash` for mock servers.
-#![cfg(unix)]
+//! These tests use a Rust-based mock MCP server for cross-platform compatibility.
 
 use rct::mcp::protocol::JsonRpcRequest;
 use rct::mcp::transport::{StdioTransport, Transport};
 use serde_json::json;
 use std::time::Duration;
 
+/// Returns the path to the mock MCP server binary.
+///
+/// This uses the `CARGO_BIN_EXE_mock_mcp_server` environment variable
+/// which is set by Cargo during test builds.
+///
+/// # Cross-Platform
+///
+/// This works on all platforms (Unix, Windows) because the mock server
+/// is a Rust binary that compiles for all targets.
+fn mock_mcp_server_path() -> &'static str {
+    env!("CARGO_BIN_EXE_mock_mcp_server")
+}
+
 /// Helper to create a mock MCP server command that echoes JSON-RPC responses.
 ///
-/// This uses a simple shell script that reads a line and responds with
-/// a proper JSON-RPC response.
-///
-/// Note: Uses absolute path `/bin/bash` for security compliance.
+/// Returns the path to the mock server binary and an empty args vector.
+/// The mock server responds to:
+/// - `initialize` - returns protocol version and capabilities
+/// - `tools/list` - returns list of available tools
+/// - `tools/call` - returns tool execution result
+/// - `ping` - returns empty result
+/// - Unknown methods - returns JSON-RPC error -32601
 fn mock_mcp_server_command() -> (&'static str, Vec<&'static str>) {
-    // Use bash with absolute path to create a simple echo server
-    // It reads a line, parses it as JSON-RPC, and responds
-    (
-        "/bin/bash",
-        vec![
-            "-c",
-            r#"
-            while IFS= read -r line; do
-                # Parse the method from the JSON-RPC request
-                method=$(echo "$line" | jq -r '.method // empty')
-                id=$(echo "$line" | jq -r '.id // empty')
-
-                case "$method" in
-                    "initialize")
-                        echo "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{\"tools\":{}},\"serverInfo\":{\"name\":\"mock-server\",\"version\":\"1.0.0\"}}}"
-                        ;;
-                    "tools/list")
-                        echo "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"tools\":[{\"name\":\"echo\",\"description\":\"Echo input\",\"inputSchema\":{\"type\":\"object\"}}]}}"
-                        ;;
-                    "tools/call")
-                        echo "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{\"content\":[{\"type\":\"text\",\"text\":\"Tool executed\"}]}}"
-                        ;;
-                    "ping")
-                        echo "{\"jsonrpc\":\"2.0\",\"id\":$id,\"result\":{}}"
-                        ;;
-                    *)
-                        echo "{\"jsonrpc\":\"2.0\",\"id\":$id,\"error\":{\"code\":-32601,\"message\":\"Method not found\"}}"
-                        ;;
-                esac
-            done
-            "#,
-        ],
-    )
+    (mock_mcp_server_path(), vec![])
 }
 
 /// Tests that stdio transport can initialize an MCP server.
@@ -192,8 +175,8 @@ async fn test_mcp_stdio_method_not_found() {
 /// Tests that transport handles timeout correctly.
 #[tokio::test]
 async fn test_mcp_stdio_timeout() {
-    // Use a server that doesn't respond - sleep waits forever without producing output
-    let mut transport = StdioTransport::new("sleep", vec!["3600"]);
+    // Use mock server with --no-response flag - reads input but never responds
+    let mut transport = StdioTransport::new(mock_mcp_server_path(), vec!["--no-response"]);
     transport.start().await.expect("Transport should start");
 
     let request = JsonRpcRequest::new(1, "ping", json!({}));
@@ -489,23 +472,9 @@ async fn test_mcp_server_crash_recovery() {
 /// - Timeouts occur correctly when no valid response is received
 #[tokio::test]
 async fn test_stdio_invalid_json() {
-    // Create a server that outputs invalid JSON
-    let mut transport = StdioTransport::new(
-        "/bin/bash",
-        vec![
-            "-c",
-            r#"
-            while IFS= read -r line; do
-                # First response is invalid JSON
-                echo "this is not valid json!!!"
-                # Wait for next line
-                read -r line2 2>/dev/null || true
-                # Second response is valid
-                echo '{"jsonrpc":"2.0","id":2,"result":{"ok":true}}'
-            done
-            "#,
-        ],
-    );
+    // Create a server that outputs invalid JSON for first message
+    let mut transport =
+        StdioTransport::new(mock_mcp_server_path(), vec!["--invalid-json-at", "1"]);
 
     transport.start().await.expect("Transport should start");
 
@@ -529,7 +498,7 @@ async fn test_stdio_invalid_json() {
     );
 
     // Send second request - should get valid response now
-    let request2 = JsonRpcRequest::new(2, "test", json!({}));
+    let request2 = JsonRpcRequest::new(2, "ping", json!({}));
     let result2 = transport
         .send_request(request2, Duration::from_secs(2))
         .await;
@@ -554,19 +523,10 @@ async fn test_stdio_invalid_json() {
 /// - The transport can be stopped cleanly after crash
 #[tokio::test]
 async fn test_stdio_process_crash() {
-    // Create a server that crashes immediately after first message
+    // Create a server that crashes after responding to first message
     let mut transport = StdioTransport::new(
-        "/bin/bash",
-        vec![
-            "-c",
-            r#"
-            # Read first line and respond
-            read -r line
-            echo '{"jsonrpc":"2.0","id":1,"result":{}}'
-            # Then crash
-            exit 1
-            "#,
-        ],
+        mock_mcp_server_path(),
+        vec!["--crash-after", "1", "--exit-code", "1"],
     );
 
     transport.start().await.expect("Transport should start");

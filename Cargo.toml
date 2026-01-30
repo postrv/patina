@@ -62,6 +62,10 @@ tokio-test = "0.4"
 tracing-test = "0.2"
 wiremock = "0.6"
 
+[[bin]]
+name = "mock_mcp_server"
+path = "tests/helpers/mock_mcp_server.rs"
+
 [[bench]]
 name = "rendering"
 harness = false

@@ -20,9 +20,13 @@
 //! the process doesn't respond to MCP protocol, not because of security checks.
 //! This is a critical vulnerability that these tests aim to fix.
 //!
-//! Note: These tests are Unix-only as they use Unix paths like `/bin/cat`.
-#![cfg(unix)]
+//! ## Platform Notes
+//!
+//! - Tests using Unix paths (`/bin/cat`, etc.) are marked `#[cfg(unix)]`
+//! - Data structure tests are cross-platform
+//! - Windows-specific security tests will be added in Phase 4
 
+#[cfg(unix)]
 use rct::mcp::client::McpClient;
 use rct::mcp::McpTransport;
 
@@ -41,6 +45,7 @@ use rct::mcp::McpTransport;
 ///
 /// The validation should block dangerous commands BEFORE spawning the process,
 /// returning an error that explicitly mentions security policy.
+#[cfg(unix)]
 #[tokio::test]
 async fn test_mcp_blocks_dangerous_command() {
     // Attempt to create an MCP client with a dangerous command
@@ -78,6 +83,7 @@ async fn test_mcp_blocks_dangerous_command() {
 /// Test that MCP blocks sudo commands as server executables.
 ///
 /// MCP servers should not be able to run with elevated privileges.
+#[cfg(unix)]
 #[tokio::test]
 async fn test_mcp_blocks_sudo_command() {
     let mut client = McpClient::new("sudo-server", "sudo", vec!["mcp-server"]);
@@ -112,6 +118,7 @@ async fn test_mcp_blocks_sudo_command() {
 /// Relative paths could be exploited by placing malicious scripts in
 /// specific locations. Requiring absolute paths ensures the user knows
 /// exactly what binary will be executed.
+#[cfg(unix)]
 #[tokio::test]
 async fn test_mcp_requires_absolute_path() {
     let mut client = McpClient::new("relative-server", "./malicious_server", vec![]);
@@ -143,6 +150,7 @@ async fn test_mcp_requires_absolute_path() {
 /// Test that MCP rejects parent directory traversal in paths.
 ///
 /// Paths like ../../../bin/rm could escape the expected directory.
+#[cfg(unix)]
 #[tokio::test]
 async fn test_mcp_blocks_path_traversal() {
     let mut client = McpClient::new("traversal-server", "../../../bin/rm", vec!["-rf", "/"]);
@@ -183,6 +191,7 @@ async fn test_mcp_blocks_path_traversal() {
 /// 3. Maintain a known-good server list
 ///
 /// This test verifies some form of new-server handling exists.
+#[cfg(unix)]
 #[tokio::test]
 async fn test_mcp_warns_on_new_server() {
     // Using 'cat' as a benign test command
@@ -229,6 +238,7 @@ async fn test_mcp_warns_on_new_server() {
 /// Legitimate MCP servers with absolute paths should NOT be blocked by security.
 /// They may fail for other reasons (like not speaking MCP protocol), but the
 /// error should NOT mention security policy.
+#[cfg(unix)]
 #[tokio::test]
 async fn test_mcp_allows_valid_absolute_path() {
     // Use 'cat' as a safe test command (though it won't respond to MCP protocol)
@@ -294,6 +304,7 @@ fn test_mcp_transport_validation() {
 /// 1. Block dangerous patterns in arguments
 /// 2. Properly escape arguments before use
 /// 3. Pass arguments directly without shell interpretation
+#[cfg(unix)]
 #[tokio::test]
 async fn test_mcp_blocks_shell_injection_in_args() {
     let mut client = McpClient::new(
