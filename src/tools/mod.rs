@@ -10,6 +10,7 @@
 
 use anyhow::Result;
 use glob::Pattern;
+use once_cell::sync::Lazy;
 use regex::Regex;
 use serde_json::json;
 use std::fs;
@@ -20,6 +21,65 @@ use tokio::process::Command;
 use walkdir::WalkDir;
 
 use crate::hooks::{HookDecision, HookManager};
+
+/// Static collection of dangerous command patterns.
+///
+/// These patterns are compiled once on first access, ensuring:
+/// - No runtime panics from invalid regex (patterns validated at initialization)
+/// - No repeated compilation cost when creating new `ToolExecutionPolicy` instances
+/// - Consistent pattern set across all policy instances
+static DANGEROUS_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
+    vec![
+        // Destructive file operations
+        Regex::new(r"rm\s+-rf\s+/").expect("invalid regex: rm -rf"),
+        Regex::new(r"rm\s+-fr\s+/").expect("invalid regex: rm -fr"),
+        Regex::new(r"rm\s+--no-preserve-root").expect("invalid regex: rm --no-preserve-root"),
+        // Privilege escalation - comprehensive patterns
+        Regex::new(r"sudo\s+").expect("invalid regex: sudo"),
+        Regex::new(r"\bsu\s+-").expect("invalid regex: su -"),
+        Regex::new(r"\bsu\s+root\b").expect("invalid regex: su root"),
+        Regex::new(r"\bsu\s*$").expect("invalid regex: bare su"),
+        Regex::new(r"doas\s+").expect("invalid regex: doas"),
+        Regex::new(r"\bpkexec\b").expect("invalid regex: pkexec"),
+        Regex::new(r"\brunuser\b").expect("invalid regex: runuser"),
+        // Dangerous permissions
+        Regex::new(r"chmod\s+777").expect("invalid regex: chmod 777"),
+        Regex::new(r"chmod\s+-R\s+777").expect("invalid regex: chmod -R 777"),
+        Regex::new(r"chmod\s+u\+s").expect("invalid regex: chmod setuid"),
+        // Disk/filesystem destruction
+        Regex::new(r"mkfs\.").expect("invalid regex: mkfs"),
+        Regex::new(r"dd\s+if=.+of=/dev/").expect("invalid regex: dd to device"),
+        Regex::new(r">\s*/dev/sd[a-z]").expect("invalid regex: redirect to sd"),
+        Regex::new(r">\s*/dev/nvme").expect("invalid regex: redirect to nvme"),
+        // Fork bombs and resource exhaustion
+        Regex::new(r":\(\)\s*\{\s*:\|:&\s*\}\s*;").expect("invalid regex: fork bomb"),
+        // Remote code execution patterns
+        Regex::new(r"curl\s+.+\|\s*(ba)?sh").expect("invalid regex: curl pipe sh"),
+        Regex::new(r"wget\s+.+\|\s*(ba)?sh").expect("invalid regex: wget pipe sh"),
+        Regex::new(r"curl\s+.+\|\s*sudo").expect("invalid regex: curl pipe sudo"),
+        Regex::new(r"wget\s+.+\|\s*sudo").expect("invalid regex: wget pipe sudo"),
+        // System disruption
+        Regex::new(r"\bshutdown\b").expect("invalid regex: shutdown"),
+        Regex::new(r"\breboot\b").expect("invalid regex: reboot"),
+        Regex::new(r"\bhalt\b").expect("invalid regex: halt"),
+        Regex::new(r"\bpoweroff\b").expect("invalid regex: poweroff"),
+        // History manipulation (hiding tracks)
+        Regex::new(r"history\s+-c").expect("invalid regex: history clear"),
+        Regex::new(r">\s*~/\.bash_history").expect("invalid regex: bash_history redirect"),
+        // Dangerous eval patterns
+        Regex::new(r"\beval\s+\$").expect("invalid regex: eval var"),
+        Regex::new(r#"\beval\s+["'$]"#).expect("invalid regex: eval string"),
+        // Command substitution patterns
+        Regex::new(r"\$\(\s*which\s+").expect("invalid regex: which substitution"),
+        Regex::new(r"`\s*which\s+").expect("invalid regex: which backtick"),
+        Regex::new(r"\$\(\s*printf\s+").expect("invalid regex: printf substitution"),
+        // Encoded command execution patterns
+        Regex::new(r"base64\s+(-d|--decode).*\|\s*(ba)?sh").expect("invalid regex: base64 decode"),
+        Regex::new(r"\|\s*base64\s+(-d|--decode).*\|\s*(ba)?sh")
+            .expect("invalid regex: piped base64"),
+        Regex::new(r#"printf\s+["']\\x[0-9a-fA-F]"#).expect("invalid regex: printf hex"),
+    ]
+});
 
 /// Tool executor with security policy enforcement.
 pub struct ToolExecutor {
@@ -64,55 +124,7 @@ pub struct ToolExecutionPolicy {
 impl Default for ToolExecutionPolicy {
     fn default() -> Self {
         Self {
-            dangerous_patterns: vec![
-                // Destructive file operations
-                Regex::new(r"rm\s+-rf\s+/").unwrap(),
-                Regex::new(r"rm\s+-fr\s+/").unwrap(),
-                Regex::new(r"rm\s+--no-preserve-root").unwrap(),
-                // Privilege escalation - comprehensive patterns
-                Regex::new(r"sudo\s+").unwrap(),
-                Regex::new(r"\bsu\s+-").unwrap(), // su - (login shell)
-                Regex::new(r"\bsu\s+root\b").unwrap(), // su root
-                Regex::new(r"\bsu\s*$").unwrap(), // bare su (defaults to root)
-                Regex::new(r"doas\s+").unwrap(),
-                Regex::new(r"\bpkexec\b").unwrap(), // PolicyKit privilege escalation
-                Regex::new(r"\brunuser\b").unwrap(), // runuser privilege escalation
-                // Dangerous permissions
-                Regex::new(r"chmod\s+777").unwrap(),
-                Regex::new(r"chmod\s+-R\s+777").unwrap(),
-                Regex::new(r"chmod\s+u\+s").unwrap(), // setuid
-                // Disk/filesystem destruction
-                Regex::new(r"mkfs\.").unwrap(),
-                Regex::new(r"dd\s+if=.+of=/dev/").unwrap(),
-                Regex::new(r">\s*/dev/sd[a-z]").unwrap(),
-                Regex::new(r">\s*/dev/nvme").unwrap(),
-                // Fork bombs and resource exhaustion
-                Regex::new(r":\(\)\s*\{\s*:\|:&\s*\}\s*;").unwrap(),
-                // Remote code execution patterns
-                Regex::new(r"curl\s+.+\|\s*(ba)?sh").unwrap(),
-                Regex::new(r"wget\s+.+\|\s*(ba)?sh").unwrap(),
-                Regex::new(r"curl\s+.+\|\s*sudo").unwrap(),
-                Regex::new(r"wget\s+.+\|\s*sudo").unwrap(),
-                // System disruption
-                Regex::new(r"\bshutdown\b").unwrap(),
-                Regex::new(r"\breboot\b").unwrap(),
-                Regex::new(r"\bhalt\b").unwrap(),
-                Regex::new(r"\bpoweroff\b").unwrap(),
-                // History manipulation (hiding tracks)
-                Regex::new(r"history\s+-c").unwrap(),
-                Regex::new(r">\s*~/\.bash_history").unwrap(),
-                // Dangerous eval patterns - expanded to catch more bypasses
-                Regex::new(r"\beval\s+\$").unwrap(), // eval $var
-                Regex::new(r#"\beval\s+["'$]"#).unwrap(), // eval "$var" or eval 'cmd' or eval $(...)
-                // Command substitution patterns - can execute arbitrary code
-                Regex::new(r"\$\(\s*which\s+").unwrap(), // $(which cmd) - find then execute
-                Regex::new(r"`\s*which\s+").unwrap(),    // `which cmd` - backtick version
-                Regex::new(r"\$\(\s*printf\s+").unwrap(), // $(printf ...) - can encode commands
-                // Encoded command execution patterns
-                Regex::new(r"base64\s+(-d|--decode).*\|\s*(ba)?sh").unwrap(), // base64 decode to shell
-                Regex::new(r"\|\s*base64\s+(-d|--decode).*\|\s*(ba)?sh").unwrap(), // piped decode
-                Regex::new(r#"printf\s+["']\\x[0-9a-fA-F]"#).unwrap(), // hex-encoded via printf
-            ],
+            dangerous_patterns: DANGEROUS_PATTERNS.clone(),
             protected_paths: vec![
                 PathBuf::from("/etc"),
                 PathBuf::from("/usr"),
