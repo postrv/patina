@@ -1,0 +1,7 @@
+{
+  "name": "minimal-plugin",
+  "version": "1.0.0",
+  "description": "A minimal example plugin demonstrating RCT plugin structure",
+  "author": "RCT Team",
+  "min_rct_version": "0.1.0"
+}
