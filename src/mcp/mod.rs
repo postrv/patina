@@ -4,6 +4,7 @@
 //! external tools and services.
 
 pub mod protocol;
+pub mod transport;
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
