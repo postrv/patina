@@ -8,6 +8,7 @@
 use rct::api::multi_model::{
     BedrockConfig, ModelConfig, ModelProvider, MultiModelClient, ProviderConfig,
 };
+use secrecy::SecretString;
 use std::collections::HashMap;
 
 // =============================================================================
@@ -17,7 +18,7 @@ use std::collections::HashMap;
 /// Creates a test provider configuration for Anthropic.
 fn anthropic_config() -> ProviderConfig {
     ProviderConfig::Anthropic {
-        api_key: "sk-ant-test-placeholder-not-real".to_string(),
+        api_key: SecretString::new("sk-ant-test-placeholder-not-real".into()),
     }
 }
 

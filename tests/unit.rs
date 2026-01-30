@@ -32,3 +32,6 @@ mod mcp_manager_test;
 
 #[path = "unit/ide_test.rs"]
 mod ide_test;
+
+#[path = "unit/multi_model_test.rs"]
+mod multi_model_test;

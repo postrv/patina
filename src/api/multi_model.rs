@@ -25,7 +25,9 @@
 //!
 //! // Create client
 //! let provider = ProviderConfig::Anthropic {
-//!     api_key: std::env::var("ANTHROPIC_API_KEY").unwrap_or_default().to_string(),
+//!     api_key: secrecy::SecretString::new(
+//!         std::env::var("ANTHROPIC_API_KEY").unwrap_or_default().into()
+//!     ),
 //! };
 //! let mut client = MultiModelClient::new(configs, provider);
 //!
@@ -34,7 +36,9 @@
 //! ```
 
 use anyhow::{bail, Result};
+use secrecy::SecretString;
 use std::collections::{HashMap, HashSet};
+use std::fmt;
 
 /// Supported AI providers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -66,10 +70,21 @@ pub struct Model {
 }
 
 /// Configuration for the Anthropic provider.
-#[derive(Debug, Clone)]
+///
+/// The API key is stored as a [`SecretString`] to prevent accidental exposure
+/// in logs, debug output, or memory dumps.
+#[derive(Clone)]
 pub struct AnthropicConfig {
-    /// API key for Anthropic.
-    pub api_key: String,
+    /// API key for Anthropic (protected by SecretString).
+    pub api_key: SecretString,
+}
+
+impl fmt::Debug for AnthropicConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AnthropicConfig")
+            .field("api_key", &"[REDACTED]")
+            .finish()
+    }
 }
 
 /// Configuration for AWS Bedrock provider.
@@ -84,15 +99,30 @@ pub struct BedrockConfig {
 }
 
 /// Provider configuration enum.
-#[derive(Debug, Clone)]
+///
+/// API keys are stored as [`SecretString`] to prevent accidental exposure
+/// in logs, debug output, or memory dumps.
+#[derive(Clone)]
 pub enum ProviderConfig {
     /// Anthropic direct API configuration.
     Anthropic {
-        /// API key.
-        api_key: String,
+        /// API key (protected by SecretString).
+        api_key: SecretString,
     },
     /// AWS Bedrock configuration.
     Bedrock(BedrockConfig),
+}
+
+impl fmt::Debug for ProviderConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Anthropic { .. } => f
+                .debug_struct("Anthropic")
+                .field("api_key", &"[REDACTED]")
+                .finish(),
+            Self::Bedrock(config) => f.debug_tuple("Bedrock").field(config).finish(),
+        }
+    }
 }
 
 /// Multi-model client supporting multiple providers.
@@ -282,7 +312,7 @@ mod tests {
     #[test]
     fn test_provider_config_variants() {
         let anthropic = ProviderConfig::Anthropic {
-            api_key: "sk-ant-test-placeholder".to_string(),
+            api_key: SecretString::new("sk-ant-test-placeholder".into()),
         };
         let bedrock = ProviderConfig::Bedrock(BedrockConfig {
             region: "us-east-1".to_string(),
@@ -298,7 +328,7 @@ mod tests {
     fn test_client_new_empty() {
         let configs = HashMap::new();
         let provider = ProviderConfig::Anthropic {
-            api_key: "sk-ant-test-placeholder".to_string(),
+            api_key: SecretString::new("sk-ant-test-placeholder".into()),
         };
         let client = MultiModelClient::new(configs, provider);
 
