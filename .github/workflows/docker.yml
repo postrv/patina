@@ -46,6 +46,8 @@ jobs:
             type=semver,pattern={{major}}
             type=sha
 
+      # Build multi-arch only for releases (arm64 via QEMU is very slow)
+      # Regular pushes build amd64 only for faster CI
       - name: Build and push
         uses: docker/build-push-action@v5
         with:
@@ -55,7 +57,7 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          platforms: linux/amd64,linux/arm64
+          platforms: ${{ startsWith(github.ref, 'refs/tags/') && 'linux/amd64,linux/arm64' || 'linux/amd64' }}
 
   test:
     name: Test Image

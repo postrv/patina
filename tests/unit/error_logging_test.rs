@@ -15,6 +15,7 @@ use tempfile::TempDir;
 // =============================================================================
 
 /// Security violations from dangerous command patterns should return errors.
+#[cfg(unix)]
 #[tokio::test]
 async fn test_bash_security_violation_returns_error() {
     let temp_dir = TempDir::new().unwrap();
@@ -186,6 +187,7 @@ async fn test_file_not_found_returns_error() {
 }
 
 /// Write to read-only directory should return error.
+#[cfg(unix)]
 #[tokio::test]
 async fn test_write_permission_denied_returns_error() {
     let temp_dir = TempDir::new().unwrap();
