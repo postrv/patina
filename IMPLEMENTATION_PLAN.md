@@ -118,7 +118,7 @@ Steps:
   - Add: Validation before shell execution
   - Acceptance: All hook security tests pass
 
-- [ ] 0.3.3 Commit hook security fix
+- [x] 0.3.3 Commit hook security fix
   - Message: `fix(hooks): Add dangerous command filtering to hook executor`
 
 ---
@@ -450,6 +450,12 @@ Steps:
   - Custom Debug impl shows [REDACTED]
   - 4 security tests added
   - Commit: b9d8301
+
+- [x] 0.3.1-0.3.3 Hook command security filtering (H-2)
+  - Added dangerous command validation to run_hook_command
+  - Reuses ToolExecutionPolicy::dangerous_patterns
+  - 4 security tests added (blocks rm -rf, sudo, curl|bash, allows safe)
+  - Commit: cd53187
 
 ---
 
