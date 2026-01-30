@@ -2150,6 +2150,274 @@ async fn test_allowlist_mode_disabled_allows_safe() {
 
 use regex::Regex;
 
+// =============================================================================
+// Symlink Security Tests (1.3.1) - TOCTOU Mitigation
+// =============================================================================
+
+#[cfg(unix)]
+use std::os::unix::fs::symlink;
+
+/// Test that read_file rejects symlinks to prevent TOCTOU attacks.
+///
+/// Symlinks can be used in TOCTOU (Time-of-Check-Time-of-Use) attacks where
+/// a file is replaced with a symlink between validation and operation.
+/// By rejecting symlinks entirely, we prevent this class of attack.
+///
+/// This test creates a symlink to a file outside the working directory
+/// and verifies that read_file rejects it.
+///
+/// This is a security test - should be BLOCKED.
+#[cfg(unix)]
+#[tokio::test]
+async fn test_file_read_rejects_symlinks() {
+    let ctx = TestContext::new();
+    let working_dir = ctx.path();
+
+    // Create a file outside the working directory
+    let parent_dir = working_dir.parent().expect("temp dir should have parent");
+    let external_file = parent_dir.join("external_secret_read.txt");
+    std::fs::write(&external_file, "external secret content").expect("failed to create test file");
+
+    // Ensure cleanup on drop
+    struct Cleanup(std::path::PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+    let _cleanup = Cleanup(external_file.clone());
+
+    // Create a symlink inside working directory pointing to external file
+    let symlink_path = working_dir.join("link_to_external.txt");
+    symlink(&external_file, &symlink_path).expect("failed to create symlink");
+
+    let executor = ToolExecutor::new(working_dir);
+
+    // Attempt to read via the symlink
+    let call = ToolCall {
+        name: "read_file".to_string(),
+        input: json!({ "path": "link_to_external.txt" }),
+    };
+
+    let result = executor
+        .execute(call)
+        .await
+        .expect("execution should not error");
+
+    match result {
+        ToolResult::Error(e) => {
+            assert!(
+                e.contains("symlink")
+                    || e.contains("Symlink")
+                    || e.contains("symbolic link")
+                    || e.contains("not allowed"),
+                "error should mention symlink rejection, got: {e}"
+            );
+        }
+        ToolResult::Success(s) => {
+            panic!(
+                "read_file should reject symlinks to prevent TOCTOU attacks, but read content: {s}"
+            )
+        }
+        ToolResult::Cancelled => panic!("expected error, got cancelled"),
+    }
+}
+
+/// Test that write_file rejects symlinks to prevent TOCTOU attacks.
+///
+/// An attacker could create a symlink pointing to a sensitive file (like
+/// /etc/passwd) and trick the tool into overwriting it. By rejecting
+/// symlinks, we prevent this attack vector.
+///
+/// This test creates a symlink to a file outside the working directory
+/// and verifies that write_file rejects writing through it.
+///
+/// This is a security test - should be BLOCKED.
+#[cfg(unix)]
+#[tokio::test]
+async fn test_file_write_rejects_symlinks() {
+    let ctx = TestContext::new();
+    let working_dir = ctx.path();
+
+    // Create a file outside the working directory that could be a target
+    let parent_dir = working_dir.parent().expect("temp dir should have parent");
+    let external_file = parent_dir.join("external_target_write.txt");
+    std::fs::write(&external_file, "original content").expect("failed to create test file");
+
+    // Ensure cleanup on drop
+    struct Cleanup(std::path::PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+    let _cleanup = Cleanup(external_file.clone());
+
+    // Create a symlink inside working directory pointing to external file
+    let symlink_path = working_dir.join("link_to_target.txt");
+    symlink(&external_file, &symlink_path).expect("failed to create symlink");
+
+    let executor = ToolExecutor::new(working_dir);
+
+    // Attempt to write via the symlink
+    let call = ToolCall {
+        name: "write_file".to_string(),
+        input: json!({ "path": "link_to_target.txt", "content": "malicious overwrite" }),
+    };
+
+    let result = executor
+        .execute(call)
+        .await
+        .expect("execution should not error");
+
+    match result {
+        ToolResult::Error(e) => {
+            assert!(
+                e.contains("symlink")
+                    || e.contains("Symlink")
+                    || e.contains("symbolic link")
+                    || e.contains("not allowed"),
+                "error should mention symlink rejection, got: {e}"
+            );
+            // Verify the external file was NOT modified
+            let content =
+                std::fs::read_to_string(&external_file).expect("external file should still exist");
+            assert_eq!(
+                content, "original content",
+                "external file should not have been modified"
+            );
+        }
+        ToolResult::Success(s) => {
+            panic!("write_file should reject symlinks to prevent TOCTOU attacks, but wrote: {s}")
+        }
+        ToolResult::Cancelled => panic!("expected error, got cancelled"),
+    }
+}
+
+/// Test that edit tool rejects symlinks to prevent TOCTOU attacks.
+///
+/// Similar to write_file, the edit tool could be tricked into modifying
+/// a file outside the working directory via a symlink. This test verifies
+/// that edit operations on symlinks are rejected.
+///
+/// This is a security test - should be BLOCKED.
+#[cfg(unix)]
+#[tokio::test]
+async fn test_edit_rejects_symlinks() {
+    let ctx = TestContext::new();
+    let working_dir = ctx.path();
+
+    // Create a file outside the working directory
+    let parent_dir = working_dir.parent().expect("temp dir should have parent");
+    let external_file = parent_dir.join("external_target_edit.txt");
+    std::fs::write(&external_file, "line one\noriginal line\nline three\n")
+        .expect("failed to create test file");
+
+    // Ensure cleanup on drop
+    struct Cleanup(std::path::PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+    let _cleanup = Cleanup(external_file.clone());
+
+    // Create a symlink inside working directory pointing to external file
+    let symlink_path = working_dir.join("link_to_edit.txt");
+    symlink(&external_file, &symlink_path).expect("failed to create symlink");
+
+    let executor = ToolExecutor::new(working_dir);
+
+    // Attempt to edit via the symlink
+    let call = ToolCall {
+        name: "edit".to_string(),
+        input: json!({
+            "path": "link_to_edit.txt",
+            "old_string": "original line",
+            "new_string": "malicious edit"
+        }),
+    };
+
+    let result = executor
+        .execute(call)
+        .await
+        .expect("execution should not error");
+
+    match result {
+        ToolResult::Error(e) => {
+            assert!(
+                e.contains("symlink")
+                    || e.contains("Symlink")
+                    || e.contains("symbolic link")
+                    || e.contains("not allowed"),
+                "error should mention symlink rejection, got: {e}"
+            );
+            // Verify the external file was NOT modified
+            let content =
+                std::fs::read_to_string(&external_file).expect("external file should still exist");
+            assert!(
+                content.contains("original line"),
+                "external file should not have been modified, got: {content}"
+            );
+        }
+        ToolResult::Success(s) => {
+            panic!("edit should reject symlinks to prevent TOCTOU attacks, but edited: {s}")
+        }
+        ToolResult::Cancelled => panic!("expected error, got cancelled"),
+    }
+}
+
+/// Test that symlinks within the working directory pointing to files
+/// inside the working directory are also rejected.
+///
+/// Even "safe" symlinks could be exploited in race conditions, so we
+/// reject all symlinks uniformly for defense in depth.
+///
+/// This is a security test - should be BLOCKED.
+#[cfg(unix)]
+#[tokio::test]
+async fn test_file_read_rejects_internal_symlinks() {
+    let ctx = TestContext::new();
+    let working_dir = ctx.path();
+
+    // Create a real file inside working directory
+    ctx.create_file("real_file.txt", "real file content");
+
+    // Create a symlink to the real file (both inside working directory)
+    let symlink_path = working_dir.join("link_to_real.txt");
+    let real_file_path = working_dir.join("real_file.txt");
+    symlink(&real_file_path, &symlink_path).expect("failed to create symlink");
+
+    let executor = ToolExecutor::new(working_dir);
+
+    // Attempt to read via the symlink
+    let call = ToolCall {
+        name: "read_file".to_string(),
+        input: json!({ "path": "link_to_real.txt" }),
+    };
+
+    let result = executor
+        .execute(call)
+        .await
+        .expect("execution should not error");
+
+    match result {
+        ToolResult::Error(e) => {
+            assert!(
+                e.contains("symlink")
+                    || e.contains("Symlink")
+                    || e.contains("symbolic link")
+                    || e.contains("not allowed"),
+                "error should mention symlink rejection, got: {e}"
+            );
+        }
+        ToolResult::Success(s) => {
+            panic!("read_file should reject ALL symlinks for defense in depth, but read: {s}")
+        }
+        ToolResult::Cancelled => panic!("expected error, got cancelled"),
+    }
+}
+
 /// Test that list_files blocks complex parent directory escapes.
 ///
 /// This tests escapes like `subdir/../../` which could bypass naive checks.
