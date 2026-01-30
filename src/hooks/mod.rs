@@ -97,6 +97,38 @@ pub struct HookExecutor {
     hooks: HashMap<HookEvent, Vec<HookDefinition>>,
 }
 
+/// Checks if a tool name matches a matcher pattern.
+///
+/// Supports three pattern types:
+/// - Pipe-separated: "Bash|Read|Write" matches any listed tool
+/// - Glob patterns: "mcp__*" matches tools starting with "mcp__"
+/// - Exact match: "Bash" matches only "Bash"
+///
+/// # Errors
+///
+/// Returns an error if a glob pattern is invalid.
+fn matches_pattern(matcher: &str, tool_name: &str) -> Result<bool> {
+    // Check for pipe-separated pattern first
+    if matcher.contains('|') {
+        return Ok(matcher.split('|').any(|part| {
+            let trimmed = part.trim();
+            if trimmed.contains('*') || trimmed.contains('?') || trimmed.contains('[') {
+                // Part is a glob pattern
+                glob::Pattern::new(trimmed)
+                    .map(|p| p.matches(tool_name))
+                    .unwrap_or(false)
+            } else {
+                // Exact match
+                trimmed == tool_name
+            }
+        }));
+    }
+
+    // Single pattern - could be glob or exact
+    let pattern = glob::Pattern::new(matcher)?;
+    Ok(pattern.matches(tool_name))
+}
+
 impl HookExecutor {
     pub fn new() -> Self {
         Self {
@@ -126,7 +158,7 @@ impl HookExecutor {
         for def in definitions {
             if let Some(ref matcher) = def.matcher {
                 if let Some(ref tool_name) = context.tool_name {
-                    if !glob::Pattern::new(matcher)?.matches(tool_name) {
+                    if !matches_pattern(matcher, tool_name)? {
                         continue;
                     }
                 }
