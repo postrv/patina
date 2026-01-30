@@ -360,3 +360,216 @@ async fn test_session_validates_schema() {
         "Loading session with invalid schema should fail"
     );
 }
+
+// =============================================================================
+// 3.4.1 Session Error Path Tests
+// =============================================================================
+
+/// Test that loading corrupted JSON returns an appropriate error.
+#[tokio::test]
+async fn test_session_load_corrupted_json() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let manager = SessionManager::new(temp_dir.path().to_path_buf());
+
+    // Create a session to get a valid path
+    let session = Session::new(PathBuf::from("/test"));
+    let session_id = manager
+        .save(&session)
+        .await
+        .expect("Failed to save session");
+
+    // Overwrite with completely corrupted (non-JSON) content
+    let session_file = temp_dir.path().join(format!("{}.json", session_id));
+    std::fs::write(&session_file, "this is not json at all {{{ invalid").expect("Failed to write");
+
+    // Loading should fail with deserialization error
+    let result = manager.load(&session_id).await;
+    assert!(
+        result.is_err(),
+        "Loading corrupted JSON should fail"
+    );
+
+    let err = result.unwrap_err();
+    let err_str = err.to_string().to_lowercase();
+    assert!(
+        err_str.contains("deserialize")
+            || err_str.contains("json")
+            || err_str.contains("parse")
+            || err_str.contains("expected"),
+        "Error should indicate JSON parsing failure: {}",
+        err
+    );
+}
+
+/// Test that saving to a read-only directory returns an appropriate error.
+#[tokio::test]
+#[cfg(unix)]
+async fn test_session_save_permission_denied() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let readonly_dir = temp_dir.path().join("readonly");
+    std::fs::create_dir(&readonly_dir).expect("Failed to create dir");
+
+    // Make the directory read-only
+    let mut perms = std::fs::metadata(&readonly_dir)
+        .expect("Failed to get metadata")
+        .permissions();
+    perms.set_mode(0o444); // r--r--r--
+    std::fs::set_permissions(&readonly_dir, perms).expect("Failed to set permissions");
+
+    let manager = SessionManager::new(readonly_dir.clone());
+    let session = Session::new(PathBuf::from("/test"));
+
+    // Saving should fail due to permission denied
+    let result = manager.save(&session).await;
+
+    // Restore permissions for cleanup
+    let mut perms = std::fs::metadata(&readonly_dir)
+        .expect("Failed to get metadata")
+        .permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&readonly_dir, perms).ok();
+
+    assert!(
+        result.is_err(),
+        "Saving to read-only directory should fail"
+    );
+
+    let err = result.unwrap_err();
+    let err_str = err.to_string().to_lowercase();
+    assert!(
+        err_str.contains("permission")
+            || err_str.contains("denied")
+            || err_str.contains("failed")
+            || err_str.contains("write"),
+        "Error should indicate permission issue: {}",
+        err
+    );
+}
+
+/// Test that concurrent saves to the same session don't corrupt data.
+///
+/// This test verifies that when multiple saves happen concurrently,
+/// all operations complete without panics and the final state is consistent.
+#[tokio::test]
+async fn test_session_concurrent_access() {
+    use tokio::sync::Barrier;
+    use std::sync::Arc;
+
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let sessions_dir = temp_dir.path().to_path_buf();
+
+    // Create an initial session
+    let manager = SessionManager::new(sessions_dir.clone());
+    let mut session = Session::new(PathBuf::from("/test"));
+    session.add_message(test_message(Role::User, "Initial message"));
+    let session_id = manager
+        .save(&session)
+        .await
+        .expect("Failed to save initial session");
+
+    // Launch multiple concurrent updates
+    let num_concurrent = 5;
+    let barrier = Arc::new(Barrier::new(num_concurrent));
+    let mut handles = Vec::new();
+
+    for i in 0..num_concurrent {
+        let sessions_dir = sessions_dir.clone();
+        let session_id = session_id.clone();
+        let barrier = Arc::clone(&barrier);
+
+        let handle = tokio::spawn(async move {
+            let manager = SessionManager::new(sessions_dir);
+
+            // Wait for all tasks to be ready
+            barrier.wait().await;
+
+            // Load, modify, and save
+            let loaded = manager.load(&session_id).await;
+            if let Ok(mut loaded) = loaded {
+                loaded.add_message(test_message(
+                    Role::Assistant,
+                    &format!("Concurrent update {}", i)
+                ));
+                // Update may fail due to concurrent access, that's ok
+                let _ = manager.update(&session_id, &loaded).await;
+            }
+        });
+        handles.push(handle);
+    }
+
+    // Wait for all tasks to complete
+    for handle in handles {
+        let result = handle.await;
+        assert!(result.is_ok(), "Concurrent task should not panic");
+    }
+
+    // Verify the session is still loadable and not corrupted
+    let final_session = manager
+        .load(&session_id)
+        .await
+        .expect("Session should be loadable after concurrent access");
+
+    // Should have at least the initial message
+    assert!(
+        !final_session.messages().is_empty(),
+        "Session should have at least one message"
+    );
+
+    // The session ID should be preserved
+    assert_eq!(
+        final_session.id(),
+        Some(session_id.as_str()),
+        "Session ID should be preserved"
+    );
+}
+
+/// Test that concurrent reads don't cause issues.
+#[tokio::test]
+async fn test_session_concurrent_reads() {
+    use std::sync::Arc;
+
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let sessions_dir = temp_dir.path().to_path_buf();
+
+    // Create a session with some content
+    let manager = SessionManager::new(sessions_dir.clone());
+    let mut session = Session::new(PathBuf::from("/test"));
+    for i in 0..10 {
+        session.add_message(test_message(Role::User, &format!("Message {}", i)));
+    }
+    let session_id = manager
+        .save(&session)
+        .await
+        .expect("Failed to save session");
+
+    // Launch multiple concurrent reads
+    let num_concurrent = 10;
+    let session_id = Arc::new(session_id);
+    let mut handles = Vec::new();
+
+    for _ in 0..num_concurrent {
+        let sessions_dir = sessions_dir.clone();
+        let session_id = Arc::clone(&session_id);
+
+        let handle = tokio::spawn(async move {
+            let manager = SessionManager::new(sessions_dir);
+            manager.load(&session_id).await
+        });
+        handles.push(handle);
+    }
+
+    // All reads should succeed
+    for handle in handles {
+        let result = handle.await.expect("Task should not panic");
+        assert!(
+            result.is_ok(),
+            "Concurrent read should succeed: {:?}",
+            result
+        );
+
+        let loaded = result.unwrap();
+        assert_eq!(loaded.messages().len(), 10, "Should have 10 messages");
+    }
+}
