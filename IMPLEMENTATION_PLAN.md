@@ -104,7 +104,7 @@ Steps:
 
 ### 0.3 Unsandboxed Hook Execution (HIGH H-2)
 
-- [ ] 0.3.1 Write hook command validation tests (RED)
+- [x] 0.3.1 Write hook command validation tests (RED)
   - Path: `tests/integration/hooks_test.rs`
   - Test: `test_hook_blocks_rm_rf`
   - Test: `test_hook_blocks_sudo`
@@ -112,7 +112,7 @@ Steps:
   - Test: `test_hook_allows_safe_commands`
   - Acceptance: Tests fail (no validation exists)
 
-- [ ] 0.3.2 Add dangerous command filtering to hooks (GREEN)
+- [x] 0.3.2 Add dangerous command filtering to hooks (GREEN)
   - Path: `src/hooks/mod.rs:199-234`
   - Change: Reuse `ToolExecutionPolicy::dangerous_patterns`
   - Add: Validation before shell execution
