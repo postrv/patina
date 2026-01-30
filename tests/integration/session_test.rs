@@ -300,3 +300,63 @@ async fn test_session_list_with_metadata() {
     assert_eq!(sessions.len(), 1);
     assert_eq!(sessions[0].1.message_count, 1);
 }
+
+// =============================================================================
+// 2.3 Session Integrity Tests
+// =============================================================================
+
+/// Test that session detects tampering (modified content).
+#[tokio::test]
+async fn test_session_detects_tampering() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let manager = SessionManager::new(temp_dir.path().to_path_buf());
+
+    // Create and save a valid session
+    let mut session = Session::new(PathBuf::from("/test"));
+    session.add_message(test_message(Role::User, "Original message"));
+    let session_id = manager
+        .save(&session)
+        .await
+        .expect("Failed to save session");
+
+    // Manually tamper with the session file
+    let session_file = temp_dir.path().join(format!("{}.json", session_id));
+    let original_content = std::fs::read_to_string(&session_file).expect("Failed to read file");
+
+    // Modify the message content
+    let tampered_content = original_content.replace("Original message", "TAMPERED MESSAGE");
+    std::fs::write(&session_file, tampered_content).expect("Failed to write tampered file");
+
+    // Loading should fail due to integrity check
+    let result = manager.load(&session_id).await;
+    assert!(
+        result.is_err(),
+        "Loading tampered session should fail integrity check"
+    );
+}
+
+/// Test that session validates schema (rejects invalid JSON structure).
+#[tokio::test]
+async fn test_session_validates_schema() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let manager = SessionManager::new(temp_dir.path().to_path_buf());
+
+    // Create a session to get a valid ID
+    let session = Session::new(PathBuf::from("/test"));
+    let session_id = manager
+        .save(&session)
+        .await
+        .expect("Failed to save session");
+
+    // Overwrite with invalid schema (missing required fields)
+    let session_file = temp_dir.path().join(format!("{}.json", session_id));
+    let invalid_json = r#"{"invalid": "schema", "no_messages": true}"#;
+    std::fs::write(&session_file, invalid_json).expect("Failed to write invalid file");
+
+    // Loading should fail due to schema validation
+    let result = manager.load(&session_id).await;
+    assert!(
+        result.is_err(),
+        "Loading session with invalid schema should fail"
+    );
+}
