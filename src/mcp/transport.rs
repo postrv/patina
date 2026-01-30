@@ -28,6 +28,7 @@
 use crate::mcp::protocol::{JsonRpcRequest, JsonRpcResponse};
 use anyhow::{anyhow, Context, Result};
 use std::collections::HashMap;
+use std::future::Future;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
@@ -40,24 +41,22 @@ use tokio::sync::{mpsc, oneshot, Mutex};
 /// Implementations of this trait provide the communication layer
 /// between the MCP client and server.
 ///
-/// This trait uses async fn syntax without explicit Send bounds because it is an
-/// internal trait only used within this crate. The associated futures don't need
-/// to be Send since they're consumed locally in single-threaded contexts.
-#[allow(async_fn_in_trait)]
+/// The trait methods return `impl Future + Send` to ensure compatibility
+/// with async runtimes that require Send futures.
 pub trait Transport {
     /// Starts the transport connection.
     ///
     /// # Errors
     ///
     /// Returns an error if the transport cannot be started.
-    async fn start(&mut self) -> Result<()>;
+    fn start(&mut self) -> impl Future<Output = Result<()>> + Send;
 
     /// Stops the transport connection.
     ///
     /// # Errors
     ///
     /// Returns an error if the transport cannot be cleanly stopped.
-    async fn stop(&mut self) -> Result<()>;
+    fn stop(&mut self) -> impl Future<Output = Result<()>> + Send;
 
     /// Sends a request and waits for a response.
     ///
@@ -69,11 +68,11 @@ pub trait Transport {
     /// # Errors
     ///
     /// Returns an error if the request cannot be sent or times out.
-    async fn send_request(
+    fn send_request(
         &mut self,
         request: JsonRpcRequest,
         timeout: Duration,
-    ) -> Result<JsonRpcResponse>;
+    ) -> impl Future<Output = Result<JsonRpcResponse>> + Send;
 
     /// Sends a notification (no response expected).
     ///
@@ -84,7 +83,10 @@ pub trait Transport {
     /// # Errors
     ///
     /// Returns an error if the notification cannot be sent.
-    async fn send_notification(&mut self, notification: JsonRpcRequest) -> Result<()>;
+    fn send_notification(
+        &mut self,
+        notification: JsonRpcRequest,
+    ) -> impl Future<Output = Result<()>> + Send;
 }
 
 /// Message sent to the writer task.
