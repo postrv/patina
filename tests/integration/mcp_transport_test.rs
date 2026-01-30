@@ -520,8 +520,7 @@ async fn test_stdio_invalid_json() {
     );
     let err = result1.unwrap_err();
     assert!(
-        err.to_string().to_lowercase().contains("timeout")
-            || err.to_string().contains("Timeout"),
+        err.to_string().to_lowercase().contains("timeout") || err.to_string().contains("Timeout"),
         "Error should be timeout: {}",
         err
     );
@@ -533,7 +532,11 @@ async fn test_stdio_invalid_json() {
         .await;
 
     // This should succeed with valid JSON
-    assert!(result2.is_ok(), "Second request should succeed: {:?}", result2);
+    assert!(
+        result2.is_ok(),
+        "Second request should succeed: {:?}",
+        result2
+    );
     let response = result2.unwrap();
     assert!(response.is_success(), "Should be success response");
 
@@ -582,10 +585,7 @@ async fn test_stdio_process_crash() {
         .await;
 
     // Should fail or timeout because process is gone
-    assert!(
-        result2.is_err(),
-        "Request after crash should fail"
-    );
+    assert!(result2.is_err(), "Request after crash should fail");
 
     // Stop should still work
     let stop_result = transport.stop().await;

@@ -2961,7 +2961,10 @@ async fn test_parallel_file_operations() {
 
     // Create test files
     for i in 0..5 {
-        ctx.create_file(&format!("file_{}.txt", i), &format!("initial content {}", i));
+        ctx.create_file(
+            &format!("file_{}.txt", i),
+            &format!("initial content {}", i),
+        );
     }
 
     let working_dir = ctx.path().to_path_buf();
@@ -3086,7 +3089,10 @@ async fn test_parallel_bash_commands() {
 
     let elapsed = start.elapsed();
 
-    assert_eq!(success_count, 5, "All parallel bash commands should succeed");
+    assert_eq!(
+        success_count, 5,
+        "All parallel bash commands should succeed"
+    );
 
     // If truly parallel, 5 commands with 0.1s each should take ~0.1-0.3s
     // If sequential, would take ~0.5s or more

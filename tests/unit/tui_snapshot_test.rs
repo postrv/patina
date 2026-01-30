@@ -252,7 +252,11 @@ fn test_tui_scrolls_long_content() {
     // Add many messages to create scrollable content
     for i in 0..20 {
         state.add_message(Message {
-            role: if i % 2 == 0 { Role::User } else { Role::Assistant },
+            role: if i % 2 == 0 {
+                Role::User
+            } else {
+                Role::Assistant
+            },
             content: format!("Message number {} with some content", i),
         });
     }
@@ -389,8 +393,14 @@ fn test_tui_resize_event() {
     let large_output = render_to_string(&state, 120, 30);
 
     // Both should produce output
-    assert!(!small_output.is_empty(), "Small render should produce output");
-    assert!(!large_output.is_empty(), "Large render should produce output");
+    assert!(
+        !small_output.is_empty(),
+        "Small render should produce output"
+    );
+    assert!(
+        !large_output.is_empty(),
+        "Large render should produce output"
+    );
 
     // Large output should have more characters (more area)
     assert!(
@@ -429,7 +439,10 @@ fn test_dirty_flags() {
 
     // After marking rendered, should not need render
     state.mark_rendered();
-    assert!(!state.needs_render(), "After render, should not need render");
+    assert!(
+        !state.needs_render(),
+        "After render, should not need render"
+    );
 
     // Typing should set dirty
     state.insert_char('a');

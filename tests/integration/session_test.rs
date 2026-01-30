@@ -384,10 +384,7 @@ async fn test_session_load_corrupted_json() {
 
     // Loading should fail with deserialization error
     let result = manager.load(&session_id).await;
-    assert!(
-        result.is_err(),
-        "Loading corrupted JSON should fail"
-    );
+    assert!(result.is_err(), "Loading corrupted JSON should fail");
 
     let err = result.unwrap_err();
     let err_str = err.to_string().to_lowercase();
@@ -431,10 +428,7 @@ async fn test_session_save_permission_denied() {
     perms.set_mode(0o755);
     std::fs::set_permissions(&readonly_dir, perms).ok();
 
-    assert!(
-        result.is_err(),
-        "Saving to read-only directory should fail"
-    );
+    assert!(result.is_err(), "Saving to read-only directory should fail");
 
     let err = result.unwrap_err();
     let err_str = err.to_string().to_lowercase();
@@ -454,8 +448,8 @@ async fn test_session_save_permission_denied() {
 /// all operations complete without panics and the final state is consistent.
 #[tokio::test]
 async fn test_session_concurrent_access() {
-    use tokio::sync::Barrier;
     use std::sync::Arc;
+    use tokio::sync::Barrier;
 
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     let sessions_dir = temp_dir.path().to_path_buf();
@@ -490,7 +484,7 @@ async fn test_session_concurrent_access() {
             if let Ok(mut loaded) = loaded {
                 loaded.add_message(test_message(
                     Role::Assistant,
-                    &format!("Concurrent update {}", i)
+                    &format!("Concurrent update {}", i),
                 ));
                 // Update may fail due to concurrent access, that's ok
                 let _ = manager.update(&session_id, &loaded).await;
