@@ -329,10 +329,11 @@
 
 ### 10.4 Auto-Save
 
-- [ ] 10.4.1 Implement auto-save on message (GREEN)
+- [x] 10.4.1 Implement auto-save on message (GREEN)
   - Path: `src/app/mod.rs`
   - Trigger: After each message sent/received
   - Acceptance: Sessions auto-save
+  - **Completed: 2026-01-31** - Added session_id tracking to AppState, to_session() method, auto_save_session() in event loop triggered after user message sent, assistant message completed, and on exit
 
 ---
 

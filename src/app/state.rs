@@ -26,6 +26,9 @@ pub struct AppState {
     worktree_modified: usize,
     worktree_ahead: usize,
     worktree_behind: usize,
+
+    // Session tracking for auto-save
+    session_id: Option<String>,
 }
 
 #[derive(Default)]
@@ -65,6 +68,7 @@ impl AppState {
             worktree_modified: 0,
             worktree_ahead: 0,
             worktree_behind: 0,
+            session_id: None,
         }
     }
 
@@ -300,14 +304,57 @@ impl AppState {
     }
 
     // ========================================================================
-    // Session Restoration
+    // Session Restoration and Auto-Save
     // ========================================================================
+
+    /// Returns the current session ID, if one has been assigned.
+    ///
+    /// A session ID is assigned when the session is first saved, or when
+    /// restoring from a previous session.
+    #[must_use]
+    pub fn session_id(&self) -> Option<&str> {
+        self.session_id.as_deref()
+    }
+
+    /// Sets the session ID.
+    ///
+    /// This is called after saving a session or when restoring from one.
+    pub fn set_session_id(&mut self, id: String) {
+        self.session_id = Some(id);
+    }
+
+    /// Creates a `Session` from the current application state.
+    ///
+    /// The resulting session includes:
+    /// - All conversation messages
+    /// - Current UI state (scroll position, input buffer, cursor position)
+    /// - Working directory
+    ///
+    /// This is used for auto-save functionality.
+    #[must_use]
+    pub fn to_session(&self) -> Session {
+        use crate::session::UiState;
+
+        let mut session = Session::new(self.working_dir.clone());
+
+        // Add all messages
+        for message in &self.messages {
+            session.add_message(message.clone());
+        }
+
+        // Capture UI state
+        let ui_state = UiState::with_state(self.scroll_offset, self.input.clone(), self.cursor_pos);
+        session.set_ui_state(Some(ui_state));
+
+        session
+    }
 
     /// Restores application state from a saved session.
     ///
     /// This restores:
     /// - Message history
     /// - UI state (scroll position, input buffer, cursor position) if saved
+    /// - Session ID for subsequent saves
     ///
     /// # Arguments
     ///
@@ -321,6 +368,11 @@ impl AppState {
             self.scroll_offset = ui_state.scroll_offset();
             self.input = ui_state.input_buffer().to_string();
             self.cursor_pos = ui_state.cursor_position();
+        }
+
+        // Restore session ID if available
+        if let Some(id) = session.id() {
+            self.session_id = Some(id.to_string());
         }
 
         // Mark for full redraw
@@ -410,5 +462,101 @@ mod tests {
         state.restore_from_session(&session);
 
         assert!(state.needs_render());
+    }
+
+    // ========================================================================
+    // Phase 10.4.1: Auto-save tests
+    // ========================================================================
+
+    #[test]
+    fn test_app_state_session_id_none_initially() {
+        let state = AppState::new(PathBuf::from("/test"));
+        assert!(state.session_id().is_none());
+    }
+
+    #[test]
+    fn test_app_state_set_session_id() {
+        let mut state = AppState::new(PathBuf::from("/test"));
+        state.set_session_id("abc123".to_string());
+        assert_eq!(state.session_id(), Some("abc123"));
+    }
+
+    #[test]
+    fn test_to_session_empty() {
+        let state = AppState::new(PathBuf::from("/project"));
+        let session = state.to_session();
+
+        assert!(session.messages().is_empty());
+        assert_eq!(session.working_dir(), &PathBuf::from("/project"));
+    }
+
+    #[test]
+    fn test_to_session_with_messages() {
+        let mut state = AppState::new(PathBuf::from("/project"));
+        state.add_message(test_message(Role::User, "Hello"));
+        state.add_message(test_message(Role::Assistant, "Hi!"));
+
+        let session = state.to_session();
+
+        assert_eq!(session.messages().len(), 2);
+        assert_eq!(session.messages()[0].content, "Hello");
+        assert_eq!(session.messages()[1].content, "Hi!");
+    }
+
+    #[test]
+    fn test_to_session_preserves_ui_state() {
+        let mut state = AppState::new(PathBuf::from("/project"));
+        state.scroll_offset = 42;
+        state.input = "draft text".to_string();
+        state.cursor_pos = 5;
+
+        let session = state.to_session();
+        let ui_state = session.ui_state().expect("UI state should be present");
+
+        assert_eq!(ui_state.scroll_offset(), 42);
+        assert_eq!(ui_state.input_buffer(), "draft text");
+        assert_eq!(ui_state.cursor_position(), 5);
+    }
+
+    #[test]
+    fn test_to_session_roundtrip() {
+        // Create state with data
+        let mut state = AppState::new(PathBuf::from("/project"));
+        state.add_message(test_message(Role::User, "Test message"));
+        state.scroll_offset = 100;
+        state.input = "unsent input".to_string();
+        state.cursor_pos = 6;
+
+        // Convert to session
+        let session = state.to_session();
+
+        // Create new state and restore
+        let mut new_state = AppState::new(PathBuf::from("/different"));
+        new_state.restore_from_session(&session);
+
+        // Verify roundtrip preserves data
+        assert_eq!(new_state.messages.len(), 1);
+        assert_eq!(new_state.messages[0].content, "Test message");
+        assert_eq!(new_state.scroll_offset, 100);
+        assert_eq!(new_state.input, "unsent input");
+        assert_eq!(new_state.cursor_position(), 6);
+    }
+
+    #[test]
+    fn test_restore_from_session_restores_session_id() {
+        let mut state = AppState::new(PathBuf::from("/test"));
+        assert!(state.session_id().is_none());
+
+        // Create session with an ID (simulating a saved session)
+        let mut session = Session::new(PathBuf::from("/project"));
+        session.add_message(test_message(Role::User, "Test"));
+        // Manually set the session ID via JSON (normally done by SessionManager::save)
+        let session_json = serde_json::to_string(&session).unwrap();
+        let json_with_id = session_json.replace(r#""id":null"#, r#""id":"test-session-id""#);
+        let session_with_id: Session = serde_json::from_str(&json_with_id).unwrap();
+
+        state.restore_from_session(&session_with_id);
+
+        assert_eq!(state.session_id(), Some("test-session-id"));
     }
 }

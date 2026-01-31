@@ -10,7 +10,7 @@ use futures::StreamExt;
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::{io, time::Duration};
 use tokio::time::interval;
-use tracing::info;
+use tracing::{debug, info, warn};
 
 pub mod state;
 use state::AppState;
@@ -24,6 +24,10 @@ use crate::types::config::ResumeMode;
 pub use crate::types::Config;
 
 pub async fn run(config: Config) -> Result<()> {
+    // Initialize session manager for auto-save
+    let sessions_dir = default_sessions_dir()?;
+    let session_manager = SessionManager::new(sessions_dir);
+
     // Check for session resume before initializing terminal
     let mut state = match &config.resume_mode {
         ResumeMode::None => AppState::new(config.working_dir.clone()),
@@ -38,7 +42,7 @@ pub async fn run(config: Config) -> Result<()> {
 
     let client = AnthropicClient::new(config.api_key, &config.model);
 
-    let result = event_loop(&mut terminal, &client, &mut state).await;
+    let result = event_loop(&mut terminal, &client, &mut state, &session_manager).await;
 
     disable_raw_mode()?;
     execute!(
@@ -92,6 +96,7 @@ async fn event_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     client: &AnthropicClient,
     state: &mut AppState,
+    session_manager: &SessionManager,
 ) -> Result<()> {
     let mut events = EventStream::new();
     let mut throbber_interval = interval(Duration::from_millis(250));
@@ -115,6 +120,8 @@ async fn event_loop(
                             (KeyCode::Enter, KeyModifiers::NONE) if !state.input.is_empty() => {
                                 let input = state.take_input();
                                 state.submit_message(client, input).await?;
+                                // Auto-save after user message
+                                auto_save_session(state, session_manager).await;
                             }
 
                             (KeyCode::Char(c), KeyModifiers::NONE | KeyModifiers::SHIFT) => {
@@ -145,7 +152,12 @@ async fn event_loop(
             }
 
             Some(chunk) = state.recv_api_chunk() => {
+                let is_message_complete = matches!(&chunk, crate::api::StreamEvent::MessageStop);
                 state.append_chunk(chunk)?;
+                // Auto-save after assistant message completes
+                if is_message_complete {
+                    auto_save_session(state, session_manager).await;
+                }
             }
 
             _ = throbber_interval.tick(), if state.is_loading() => {
@@ -154,5 +166,41 @@ async fn event_loop(
         }
     }
 
+    // Save session before exit
+    auto_save_session(state, session_manager).await;
+
     Ok(())
+}
+
+/// Auto-saves the current session.
+///
+/// Creates a new session or updates an existing one. Errors are logged
+/// but do not interrupt the application flow.
+async fn auto_save_session(state: &mut AppState, session_manager: &SessionManager) {
+    let session = state.to_session();
+
+    let result = if let Some(existing_id) = state.session_id() {
+        // Update existing session
+        session_manager
+            .update(existing_id, &session)
+            .await
+            .map(|()| existing_id.to_string())
+    } else {
+        // Create new session
+        session_manager.save(&session).await
+    };
+
+    match result {
+        Ok(id) => {
+            if state.session_id().is_none() {
+                debug!(session_id = %id, "Created new session");
+                state.set_session_id(id);
+            } else {
+                debug!(session_id = %id, "Updated session");
+            }
+        }
+        Err(e) => {
+            warn!(error = %e, "Failed to auto-save session");
+        }
+    }
 }
