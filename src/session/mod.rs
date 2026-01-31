@@ -359,6 +359,35 @@ pub struct SessionMetadata {
     pub message_count: usize,
 }
 
+/// Context information for restoring a session in a worktree.
+///
+/// When a session is linked to a worktree, this struct provides the
+/// information needed to restore the correct working context.
+#[derive(Debug, Clone)]
+pub struct WorktreeRestoreContext {
+    /// Name of the worktree to restore to.
+    pub worktree_name: String,
+
+    /// The original branch from which the worktree was created.
+    pub original_branch: String,
+
+    /// Commits made during the session.
+    pub commits: Vec<WorktreeCommit>,
+}
+
+/// Result of restoring a session with worktree context.
+///
+/// Contains the restored session and optional worktree context
+/// if the session was linked to a worktree.
+#[derive(Debug)]
+pub struct SessionRestoreResult {
+    /// The restored session.
+    pub session: Session,
+
+    /// Worktree context, if the session was linked to a worktree.
+    pub worktree_context: Option<WorktreeRestoreContext>,
+}
+
 /// Manages session persistence.
 ///
 /// The `SessionManager` handles saving and loading sessions to/from disk.
@@ -567,6 +596,149 @@ impl SessionManager {
     fn session_path(&self, session_id: &str) -> PathBuf {
         self.sessions_dir.join(format!("{}.json", session_id))
     }
+
+    /// Restores a session with its worktree context.
+    ///
+    /// Loads the session and extracts worktree context information if the
+    /// session is linked to a worktree. This enables the caller to switch
+    /// to the correct worktree context before resuming the session.
+    ///
+    /// # Arguments
+    ///
+    /// * `session_id` - The ID of the session to restore.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the session cannot be loaded.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use patina::session::SessionManager;
+    /// # use std::path::PathBuf;
+    /// # async fn example() -> anyhow::Result<()> {
+    /// let manager = SessionManager::new(PathBuf::from("~/.patina/sessions"));
+    /// let result = manager.restore_with_worktree("session-id").await?;
+    ///
+    /// if let Some(ctx) = result.worktree_context {
+    ///     println!("Session was in worktree: {}", ctx.worktree_name);
+    ///     // Switch to worktree before resuming...
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn restore_with_worktree(&self, session_id: &str) -> Result<SessionRestoreResult> {
+        let session = self.load(session_id).await?;
+
+        let worktree_context = session
+            .worktree_session
+            .as_ref()
+            .map(|wt| WorktreeRestoreContext {
+                worktree_name: wt.worktree_name.clone(),
+                original_branch: wt.original_branch.clone(),
+                commits: wt.commits.clone(),
+            });
+
+        Ok(SessionRestoreResult {
+            session,
+            worktree_context,
+        })
+    }
+
+    /// Finds all sessions linked to a specific worktree.
+    ///
+    /// Returns session IDs and metadata for all sessions that are linked
+    /// to the specified worktree name.
+    ///
+    /// # Arguments
+    ///
+    /// * `worktree_name` - The name of the worktree to search for.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if sessions cannot be read.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use patina::session::SessionManager;
+    /// # use std::path::PathBuf;
+    /// # async fn example() -> anyhow::Result<()> {
+    /// let manager = SessionManager::new(PathBuf::from("~/.patina/sessions"));
+    /// let sessions = manager.find_by_worktree("feature-branch").await?;
+    ///
+    /// for (id, metadata) in sessions {
+    ///     println!("Found session {} with {} messages", id, metadata.message_count);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn find_by_worktree(
+        &self,
+        worktree_name: &str,
+    ) -> Result<Vec<(String, SessionMetadata)>> {
+        let session_ids = self.list().await?;
+        let mut matching = Vec::new();
+
+        for id in session_ids {
+            if let Ok(session) = self.load(&id).await {
+                if let Some(wt) = session.worktree_session.as_ref() {
+                    if wt.worktree_name == worktree_name {
+                        matching.push((
+                            id.clone(),
+                            SessionMetadata {
+                                id,
+                                working_dir: session.working_dir,
+                                created_at: session.created_at,
+                                updated_at: session.updated_at,
+                                message_count: session.messages.len(),
+                            },
+                        ));
+                    }
+                }
+            }
+        }
+
+        Ok(matching)
+    }
+
+    /// Finds the most recently updated session for a worktree.
+    ///
+    /// Returns the session ID and metadata for the session with the most
+    /// recent `updated_at` timestamp that is linked to the specified worktree.
+    ///
+    /// # Arguments
+    ///
+    /// * `worktree_name` - The name of the worktree to search for.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if sessions cannot be read.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use patina::session::SessionManager;
+    /// # use std::path::PathBuf;
+    /// # async fn example() -> anyhow::Result<()> {
+    /// let manager = SessionManager::new(PathBuf::from("~/.patina/sessions"));
+    ///
+    /// if let Some((id, metadata)) = manager.find_latest_for_worktree("feature").await? {
+    ///     println!("Most recent session: {}", id);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn find_latest_for_worktree(
+        &self,
+        worktree_name: &str,
+    ) -> Result<Option<(String, SessionMetadata)>> {
+        let sessions = self.find_by_worktree(worktree_name).await?;
+
+        Ok(sessions
+            .into_iter()
+            .max_by_key(|(_, metadata)| metadata.updated_at))
+    }
 }
 
 #[cfg(test)]
@@ -682,6 +854,119 @@ mod tests {
         assert_eq!(wt.original_branch(), "main");
         assert_eq!(wt.commits().len(), 1);
         assert_eq!(wt.commits()[0].hash, "abc123");
+    }
+
+    // =========================================================================
+    // Session restore per worktree tests (8.5.2)
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_session_restore_in_worktree() {
+        let temp_dir = TempDir::new().unwrap();
+        let manager = SessionManager::new(temp_dir.path().to_path_buf());
+
+        // Create a session linked to a worktree
+        let mut session = Session::new(PathBuf::from("/project/.worktrees/feature-x"));
+        let wt_session = WorktreeSession::new("feature-x", "main");
+        session.set_worktree_session(Some(wt_session));
+        session.add_message(test_message(Role::User, "Working in worktree"));
+
+        let id = manager.save(&session).await.unwrap();
+
+        // Restore should return the session with worktree context
+        let restore_result = manager.restore_with_worktree(&id).await.unwrap();
+
+        assert_eq!(restore_result.session.messages().len(), 1);
+        assert!(restore_result.worktree_context.is_some());
+        let ctx = restore_result.worktree_context.unwrap();
+        assert_eq!(ctx.worktree_name, "feature-x");
+        assert_eq!(ctx.original_branch, "main");
+    }
+
+    #[tokio::test]
+    async fn test_find_sessions_by_worktree() {
+        let temp_dir = TempDir::new().unwrap();
+        let manager = SessionManager::new(temp_dir.path().to_path_buf());
+
+        // Create sessions for different worktrees
+        let mut session1 = Session::new(PathBuf::from("/project/.worktrees/feature-a"));
+        session1.set_worktree_session(Some(WorktreeSession::new("feature-a", "main")));
+        session1.add_message(test_message(Role::User, "Session 1"));
+
+        let mut session2 = Session::new(PathBuf::from("/project/.worktrees/feature-a"));
+        session2.set_worktree_session(Some(WorktreeSession::new("feature-a", "main")));
+        session2.add_message(test_message(Role::User, "Session 2"));
+
+        let mut session3 = Session::new(PathBuf::from("/project/.worktrees/feature-b"));
+        session3.set_worktree_session(Some(WorktreeSession::new("feature-b", "develop")));
+        session3.add_message(test_message(Role::User, "Session 3"));
+
+        // Session without worktree
+        let mut session4 = Session::new(PathBuf::from("/project"));
+        session4.add_message(test_message(Role::User, "Session 4"));
+
+        manager.save(&session1).await.unwrap();
+        manager.save(&session2).await.unwrap();
+        manager.save(&session3).await.unwrap();
+        manager.save(&session4).await.unwrap();
+
+        // Find sessions for feature-a
+        let feature_a_sessions = manager.find_by_worktree("feature-a").await.unwrap();
+        assert_eq!(feature_a_sessions.len(), 2);
+
+        // Find sessions for feature-b
+        let feature_b_sessions = manager.find_by_worktree("feature-b").await.unwrap();
+        assert_eq!(feature_b_sessions.len(), 1);
+
+        // Find sessions for non-existent worktree
+        let no_sessions = manager.find_by_worktree("non-existent").await.unwrap();
+        assert!(no_sessions.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_restore_session_without_worktree() {
+        let temp_dir = TempDir::new().unwrap();
+        let manager = SessionManager::new(temp_dir.path().to_path_buf());
+
+        // Create a session without worktree
+        let mut session = Session::new(PathBuf::from("/project"));
+        session.add_message(test_message(Role::User, "Regular session"));
+
+        let id = manager.save(&session).await.unwrap();
+
+        // Restore should work but have no worktree context
+        let restore_result = manager.restore_with_worktree(&id).await.unwrap();
+
+        assert_eq!(restore_result.session.messages().len(), 1);
+        assert!(restore_result.worktree_context.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_find_latest_session_for_worktree() {
+        let temp_dir = TempDir::new().unwrap();
+        let manager = SessionManager::new(temp_dir.path().to_path_buf());
+
+        // Create two sessions for the same worktree at different times
+        let mut session1 = Session::new(PathBuf::from("/project/.worktrees/feature"));
+        session1.set_worktree_session(Some(WorktreeSession::new("feature", "main")));
+        session1.add_message(test_message(Role::User, "First session"));
+        let id1 = manager.save(&session1).await.unwrap();
+
+        // Small delay to ensure different timestamps
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+
+        let mut session2 = Session::new(PathBuf::from("/project/.worktrees/feature"));
+        session2.set_worktree_session(Some(WorktreeSession::new("feature", "main")));
+        session2.add_message(test_message(Role::User, "Second session"));
+        let id2 = manager.save(&session2).await.unwrap();
+
+        // Find latest should return the most recently updated session
+        let latest = manager.find_latest_for_worktree("feature").await.unwrap();
+        assert!(latest.is_some());
+        assert_eq!(latest.unwrap().0, id2);
+
+        // Verify it's not the first session
+        assert_ne!(id1, id2);
     }
 
     #[test]
