@@ -2,11 +2,11 @@
 
 > Ralph uses this file to track task progress. Update checkboxes as work completes.
 
-## Status: PHASE 7 ACTIVE
+## Status: PHASE 8 ACTIVE
 
 ## Current State Summary
 
-RCT (being renamed to **Patina**) has achieved feature parity with Claude Code:
+**Patina** has achieved feature parity with Claude Code:
 
 | Metric | Value |
 |--------|-------|
@@ -38,70 +38,71 @@ RCT (being renamed to **Patina**) has achieved feature parity with Claude Code:
 
 ---
 
-## Phase 7: v0.3.0 Release & Rebrand to Patina
+## Phase 7: v0.3.0 Release & Rebrand to Patina (MOSTLY COMPLETE)
 
 **Objective:** Ship public release under new "Patina" branding
+**Status:** Rebrand complete, GitHub release published. Distribution & announcements pending.
 
 ### 7.1 Rebrand to Patina
 
-- [ ] 7.1.1 Update Cargo.toml
+- [x] 7.1.1 Update Cargo.toml
   - Path: `Cargo.toml`
   - Change: `name = "rct"` to `name = "patina"`
   - Change: description to reference Patina
   - Acceptance: `cargo build` produces `patina` binary
 
-- [ ] 7.1.2 Update README.md branding
+- [x] 7.1.2 Update README.md branding
   - Path: `README.md`
   - Change: All references from RCT to Patina
   - Acceptance: No "RCT" references in README
 
-- [ ] 7.1.3 Update CI workflow binary names
+- [x] 7.1.3 Update CI workflow binary names
   - Path: `.github/workflows/ci.yml`, `.github/workflows/release.yml`
   - Change: All `rct` references to `patina`
   - Acceptance: CI builds produce `patina` binaries
 
-- [ ] 7.1.4 Update Docker configuration
+- [x] 7.1.4 Update Docker configuration
   - Path: `Dockerfile`, `.github/workflows/docker.yml`
   - Change: Image name to `patina`
   - Change: Binary references
   - Acceptance: `docker build` works
 
-- [ ] 7.1.5 Update Homebrew formula
+- [x] 7.1.5 Update Homebrew formula
   - Path: `Formula/rct.rb`
   - Rename: To `Formula/patina.rb`
   - Change: All references to patina
   - Acceptance: Formula syntax valid
 
-- [ ] 7.1.6 Update source code references
+- [x] 7.1.6 Update source code references
   - Paths: `src/main.rs`, `src/lib.rs`, `src/tui/mod.rs`
   - Change: User-visible "RCT" strings to "Patina"
   - Acceptance: No user-visible "RCT" strings
 
-- [ ] 7.1.7 Update CLAUDE.md project documentation
+- [x] 7.1.7 Update CLAUDE.md project documentation
   - Path: `.claude/CLAUDE.md`
   - Change: Project name references
   - Acceptance: Documentation accurate
 
 ### 7.2 Release Preparation
 
-- [ ] 7.2.1 Clean up .gitignore
+- [x] 7.2.1 Clean up .gitignore
   - Path: `.gitignore`
   - Add: `.mcp.json`, `.ralph/`, `.cowork/`, `coverage/`
   - Remove: Any personal paths
   - Acceptance: Sensitive files excluded
 
-- [ ] 7.2.2 Remove sensitive files from git tracking
+- [x] 7.2.2 Remove sensitive files from git tracking
   - Command: `git rm --cached .mcp.json` (if tracked)
   - Acceptance: No sensitive paths in repo
 
-- [ ] 7.2.3 Tag v0.3.0-patina
-  - Command: `git tag -a v0.3.0-patina -m "Patina v0.3.0 - Public Release"`
+- [x] 7.2.3 Tag v0.3.0
+  - Command: `git tag -a v0.3.0 -m "Patina v0.3.0 - Public Release"`
   - Acceptance: Tag created
 
-- [ ] 7.2.4 Create GitHub Release
+- [x] 7.2.4 Create GitHub Release
   - Platform: GitHub Releases via `gh release create`
   - Include: Changelog, platform binaries
-  - Acceptance: Release visible on GitHub
+  - Acceptance: Release visible on GitHub (https://github.com/postrv/patina/releases/tag/v0.3.0)
 
 ### 7.3 Distribution
 
