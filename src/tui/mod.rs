@@ -1,5 +1,7 @@
 //! Terminal UI rendering
 
+pub mod widgets;
+
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
