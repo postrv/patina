@@ -197,7 +197,7 @@
 
 ### 8.4 TUI Integration
 
-- [ ] 8.4.1 Add worktree picker widget (GREEN)
+- [x] 8.4.1 Add worktree picker widget (GREEN)
   - Path: `src/tui/widgets/worktree_picker.rs` (new)
   - Display: List worktrees with status indicators
   - Keybindings: n=new, s=switch, d=delete, c=clean
