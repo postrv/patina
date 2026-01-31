@@ -1,6 +1,6 @@
 //! Application core
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use crossterm::{
     event::{DisableMouseCapture, EnableMouseCapture, Event, EventStream, KeyCode, KeyModifiers},
     execute,
@@ -10,17 +10,26 @@ use futures::StreamExt;
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::{io, time::Duration};
 use tokio::time::interval;
+use tracing::info;
 
 pub mod state;
 use state::AppState;
 
 use crate::api::AnthropicClient;
+use crate::session::{default_sessions_dir, SessionManager};
 use crate::tui;
+use crate::types::config::ResumeMode;
 
 // Re-export Config for backward compatibility
 pub use crate::types::Config;
 
 pub async fn run(config: Config) -> Result<()> {
+    // Check for session resume before initializing terminal
+    let mut state = match &config.resume_mode {
+        ResumeMode::None => AppState::new(config.working_dir.clone()),
+        ResumeMode::Last | ResumeMode::SessionId(_) => load_session_state(&config).await?,
+    };
+
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
@@ -28,7 +37,6 @@ pub async fn run(config: Config) -> Result<()> {
     let mut terminal = Terminal::new(backend)?;
 
     let client = AnthropicClient::new(config.api_key, &config.model);
-    let mut state = AppState::new(config.working_dir);
 
     let result = event_loop(&mut terminal, &client, &mut state).await;
 
@@ -41,6 +49,43 @@ pub async fn run(config: Config) -> Result<()> {
     terminal.show_cursor()?;
 
     result
+}
+
+/// Loads session state based on the resume mode.
+async fn load_session_state(config: &Config) -> Result<AppState> {
+    let sessions_dir = default_sessions_dir()?;
+    let manager = SessionManager::new(sessions_dir);
+
+    let session_id = match &config.resume_mode {
+        ResumeMode::None => unreachable!("load_session_state called with ResumeMode::None"),
+        ResumeMode::Last => {
+            let (id, metadata) = manager
+                .find_latest()
+                .await?
+                .context("No sessions found to resume")?;
+            info!(
+                session_id = %id,
+                message_count = metadata.message_count,
+                "Resuming most recent session"
+            );
+            id
+        }
+        ResumeMode::SessionId(id) => {
+            info!(session_id = %id, "Resuming session by ID");
+            id.clone()
+        }
+    };
+
+    let session = manager
+        .load(&session_id)
+        .await
+        .context(format!("Failed to load session '{}'", session_id))?;
+
+    // Create AppState from the loaded session
+    let mut state = AppState::new(session.working_dir().clone());
+    state.restore_from_session(&session);
+
+    Ok(state)
 }
 
 async fn event_loop(

@@ -28,6 +28,7 @@
 use crate::error::{RctError, RctResult};
 use crate::types::message::Message;
 use anyhow::{Context, Result};
+use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
@@ -35,6 +36,22 @@ use std::time::SystemTime;
 use tokio::fs;
 use tracing::{error, warn};
 use uuid::Uuid;
+
+/// Returns the default sessions directory for Patina.
+///
+/// This uses the platform-specific data directory:
+/// - Linux: `~/.local/share/patina/sessions`
+/// - macOS: `~/Library/Application Support/patina/sessions`
+/// - Windows: `C:\Users\<User>\AppData\Roaming\patina\sessions`
+///
+/// # Errors
+///
+/// Returns an error if the project directories cannot be determined.
+pub fn default_sessions_dir() -> Result<PathBuf> {
+    let project_dirs = ProjectDirs::from("com", "patina", "patina")
+        .context("Failed to determine application data directory")?;
+    Ok(project_dirs.data_dir().join("sessions"))
+}
 
 /// Writes data to a file atomically using write-to-temp-then-rename pattern.
 ///
@@ -1135,6 +1152,37 @@ impl SessionManager {
             .into_iter()
             .max_by_key(|(_, metadata)| metadata.updated_at))
     }
+
+    /// Finds the most recently updated session across all sessions.
+    ///
+    /// Returns the session ID and metadata for the session with the most
+    /// recent `updated_at` timestamp, or `None` if no sessions exist.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if sessions cannot be read.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use patina::session::SessionManager;
+    /// # use std::path::PathBuf;
+    /// # async fn example() -> anyhow::Result<()> {
+    /// let manager = SessionManager::new(PathBuf::from("~/.patina/sessions"));
+    ///
+    /// if let Some((id, metadata)) = manager.find_latest().await? {
+    ///     println!("Most recent session: {}", id);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn find_latest(&self) -> Result<Option<(String, SessionMetadata)>> {
+        let sessions = self.list_with_metadata().await?;
+
+        Ok(sessions
+            .into_iter()
+            .max_by_key(|(_, metadata)| metadata.updated_at))
+    }
 }
 
 #[cfg(test)]
@@ -1903,5 +1951,65 @@ mod tests {
         assert_eq!(result.restored_files.len(), 1);
         assert!(result.changed_files.is_empty());
         assert_eq!(result.missing_files.len(), 1);
+    }
+
+    // =========================================================================
+    // Phase 10.3.1: Resume flag tests
+    // =========================================================================
+
+    #[test]
+    fn test_default_sessions_dir() {
+        // Should return a valid path on all platforms
+        let result = super::default_sessions_dir();
+        assert!(result.is_ok());
+        let path = result.unwrap();
+        assert!(path.to_string_lossy().contains("sessions"));
+    }
+
+    #[tokio::test]
+    async fn test_find_latest_empty() {
+        let temp_dir = TempDir::new().unwrap();
+        let manager = SessionManager::new(temp_dir.path().to_path_buf());
+
+        let result = manager.find_latest().await.unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_find_latest_single_session() {
+        let temp_dir = TempDir::new().unwrap();
+        let manager = SessionManager::new(temp_dir.path().to_path_buf());
+
+        let mut session = Session::new(PathBuf::from("/test"));
+        session.add_message(test_message(Role::User, "Hello"));
+        let id = manager.save(&session).await.unwrap();
+
+        let result = manager.find_latest().await.unwrap();
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().0, id);
+    }
+
+    #[tokio::test]
+    async fn test_find_latest_multiple_sessions() {
+        let temp_dir = TempDir::new().unwrap();
+        let manager = SessionManager::new(temp_dir.path().to_path_buf());
+
+        // Create first session
+        let mut session1 = Session::new(PathBuf::from("/test1"));
+        session1.add_message(test_message(Role::User, "First"));
+        let _id1 = manager.save(&session1).await.unwrap();
+
+        // Small delay to ensure different timestamps
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+
+        // Create second session (should be latest)
+        let mut session2 = Session::new(PathBuf::from("/test2"));
+        session2.add_message(test_message(Role::User, "Second"));
+        let id2 = manager.save(&session2).await.unwrap();
+
+        let result = manager.find_latest().await.unwrap();
+        assert!(result.is_some());
+        let (latest_id, _) = result.unwrap();
+        assert_eq!(latest_id, id2);
     }
 }

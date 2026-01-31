@@ -315,10 +315,11 @@
 
 ### 10.3 Resume Commands
 
-- [ ] 10.3.1 Implement --resume flag (GREEN)
+- [x] 10.3.1 Implement --resume flag (GREEN)
   - Path: `src/main.rs`
   - Syntax: `--resume last` or `--resume <session-id>`
   - Acceptance: Sessions can be resumed
+  - **Completed: 2026-01-31** - Added ResumeMode enum, --resume CLI flag, session loading logic, AppState restoration
 
 - [ ] 10.3.2 Implement --list-sessions flag (GREEN)
   - Path: `src/main.rs`
