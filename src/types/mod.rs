@@ -1,4 +1,4 @@
-//! Core type definitions for RCT.
+//! Core type definitions for Patina.
 //!
 //! This module contains the fundamental data types used throughout the application,
 //! organized into submodules by domain:

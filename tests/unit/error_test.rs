@@ -1,4 +1,4 @@
-//! Tests for RCT error types.
+//! Tests for Patina error types.
 //!
 //! These tests verify the behavior of the centralized error types module,
 //! ensuring proper Display, Error trait implementations, and conversions.

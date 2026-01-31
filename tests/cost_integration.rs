@@ -1,4 +1,4 @@
-//! Cost controls integration test suite for RCT.
+//! Cost controls integration test suite for Patina.
 //!
 //! Tests for enterprise cost control functionality.
 

@@ -1,4 +1,4 @@
-//! Multi-model integration test suite for RCT.
+//! Multi-model integration test suite for Patina.
 //!
 //! Tests for multi-model provider support.
 

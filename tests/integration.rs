@@ -1,4 +1,4 @@
-//! Integration tests for RCT.
+//! Integration tests for Patina.
 //!
 //! Tests that verify component interactions and end-to-end behavior.
 

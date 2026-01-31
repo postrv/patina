@@ -1,4 +1,4 @@
-//! Common test utilities and fixtures for RCT.
+//! Common test utilities and fixtures for Patina.
 //!
 //! This module provides shared test infrastructure including:
 //! - Mock factories for common types

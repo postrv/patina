@@ -1,10 +1,10 @@
-# RCT Plugin API
+# Patina Plugin API
 
-This document describes the stable API for developing RCT plugins.
+This document describes the stable API for developing Patina plugins.
 
 ## Overview
 
-RCT plugins extend functionality through:
+Patina plugins extend functionality through:
 - **Commands**: Slash commands invoked by users (e.g., `/my-plugin:greet`)
 - **Tools**: Agent tools that the AI can use
 - **Skills**: Context-aware instructions for specific tasks
@@ -48,7 +48,7 @@ The `plugin.json` file is required and defines plugin metadata:
 | `version` | Yes | Semantic version string |
 | `description` | No | Brief description |
 | `author` | No | Plugin author |
-| `min_rct_version` | No | Minimum RCT version required |
+| `min_rct_version` | No | Minimum Patina version required |
 
 ## Commands
 
@@ -120,7 +120,7 @@ For advanced plugins, implement the Rust traits directly:
 ### RctPlugin Trait
 
 ```rust
-use rct::plugins::host::{RctPlugin, PluginInfo};
+use patina::plugins::host::{RctPlugin, PluginInfo};
 
 impl RctPlugin for MyPlugin {
     fn info(&self) -> PluginInfo {
@@ -146,7 +146,7 @@ impl RctPlugin for MyPlugin {
 ### CommandProvider Trait
 
 ```rust
-use rct::plugins::host::{CommandProvider, PluginCommand};
+use patina::plugins::host::{CommandProvider, PluginCommand};
 
 impl CommandProvider for MyPlugin {
     fn commands(&self) -> Vec<PluginCommand> {
@@ -169,7 +169,7 @@ impl CommandProvider for MyPlugin {
 ### ToolProvider Trait
 
 ```rust
-use rct::plugins::host::{ToolProvider, PluginTool};
+use patina::plugins::host::{ToolProvider, PluginTool};
 
 impl ToolProvider for MyPlugin {
     fn tools(&self) -> Vec<PluginTool> {
@@ -207,7 +207,7 @@ impl ToolProvider for MyPlugin {
 
 ## Plugin Discovery
 
-RCT searches for plugins in these locations (in order):
+Patina searches for plugins in these locations (in order):
 1. `.claude/plugins/` in the current project
 2. `~/.config/claude/plugins/` for user plugins
 3. `/usr/share/claude/plugins/` for system plugins
@@ -224,12 +224,12 @@ Short names (without namespace) work when unambiguous.
 ## Version Compatibility
 
 - Plugins specify `min_rct_version` in their manifest
-- RCT checks compatibility before loading
+- Patina checks compatibility before loading
 - Incompatible plugins are skipped with a warning
 
 ## Security
 
-Plugins run with the same permissions as RCT:
+Plugins run with the same permissions as Patina:
 - Can read/write files in the working directory
 - Can execute commands (subject to tool restrictions)
 - Cannot bypass security policies

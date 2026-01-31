@@ -247,7 +247,7 @@ async fn test_auto_update_verify_signature() {
     let install_path = temp_dir.path().join("rct");
 
     // Create test binary content
-    let binary_content = b"#!/bin/sh\necho 'RCT v2.0.0'";
+    let binary_content = b"#!/bin/sh\necho 'Patina v2.0.0'";
 
     // Calculate actual SHA256
     let mut hasher = Sha256::new();
@@ -289,7 +289,7 @@ async fn test_auto_update_checksum_mismatch() {
     let install_path = temp_dir.path().join("rct");
 
     // Create test binary content
-    let binary_content = b"#!/bin/sh\necho 'RCT v2.0.0'";
+    let binary_content = b"#!/bin/sh\necho 'Patina v2.0.0'";
 
     // Mock the download endpoint
     Mock::given(method("GET"))

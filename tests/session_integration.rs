@@ -1,4 +1,4 @@
-//! Session integration test suite for RCT.
+//! Session integration test suite for Patina.
 //!
 //! Tests for session persistence (save/load).
 

@@ -1,4 +1,4 @@
-//! Multi-model provider support for RCT.
+//! Multi-model provider support for Patina.
 //!
 //! This module provides support for multiple AI providers and models,
 //! allowing users to switch between different backends like Anthropic

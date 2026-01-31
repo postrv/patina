@@ -1,4 +1,4 @@
-//! Centralized error types for RCT.
+//! Centralized error types for Patina.
 //!
 //! This module provides a unified error type (`RctError`) that encompasses
 //! all error conditions across the application. Using a single error type
@@ -38,7 +38,7 @@ use std::fmt;
 /// Result type alias using `RctError`.
 pub type RctResult<T> = Result<T, RctError>;
 
-/// Centralized error type for RCT.
+/// Centralized error type for Patina.
 ///
 /// This enum provides variants for all error categories across modules,
 /// enabling consistent error handling and categorization.
