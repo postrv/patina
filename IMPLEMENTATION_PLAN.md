@@ -307,10 +307,11 @@
   - Acceptance: Context files recorded
   - **Completed: 2026-01-31** - Added ContextFile and SessionContext structs with full test coverage
 
-- [ ] 10.2.2 Restore context on resume (GREEN)
+- [x] 10.2.2 Restore context on resume (GREEN)
   - Path: `src/session/mod.rs`
   - Restore: Re-read context files if unchanged
   - Acceptance: Context restored on --resume
+  - **Completed: 2026-01-31** - Added ContextFile::compute_hash(), ContextFile::is_unchanged(), SessionContext::restore(), and ContextRestoreResult with full test coverage
 
 ### 10.3 Resume Commands
 
