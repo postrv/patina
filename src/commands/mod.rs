@@ -1,5 +1,7 @@
 //! Slash commands - user-triggered workflows
 
+pub mod worktree;
+
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::PathBuf;

@@ -3,7 +3,9 @@
 //! These tests verify the `WorktreeManager` correctly detects git repositories
 //! and manages worktrees for parallel development workflows.
 
-use patina::worktree::{WorktreeConfig, WorktreeError, WorktreeInfo, WorktreeManager};
+use patina::worktree::{
+    WorktreeConfig, WorktreeError, WorktreeInfo, WorktreeManager, WorktreeStatus,
+};
 use std::path::PathBuf;
 use tempfile::TempDir;
 
@@ -341,4 +343,142 @@ fn test_remove_worktree_not_found() {
         matches!(result, Err(WorktreeError::WorktreeNotFound(_))),
         "Should return WorktreeNotFound error"
     );
+}
+
+// ============================================================================
+// Worktree Status Tests
+// ============================================================================
+
+#[test]
+fn test_worktree_status_clean() {
+    // A repo with no uncommitted changes should have clean status
+    let temp_dir = TempDir::new().unwrap();
+    let repo_path = temp_dir.path().to_path_buf();
+    create_git_repo_with_commit(&repo_path);
+
+    let manager = WorktreeManager::new(repo_path).unwrap();
+
+    // Get status of the main worktree
+    let worktrees = manager.list().unwrap();
+    let main = worktrees.iter().find(|w| w.is_main).unwrap();
+
+    let status = manager.status(&main.path).unwrap();
+
+    // Clean repo should have all zeros
+    assert_eq!(
+        status.modified, 0,
+        "Clean repo should have 0 modified files"
+    );
+    assert_eq!(status.staged, 0, "Clean repo should have 0 staged files");
+    assert_eq!(
+        status.untracked, 0,
+        "Clean repo should have 0 untracked files"
+    );
+    assert!(status.is_clean(), "Status should report as clean");
+}
+
+#[test]
+fn test_worktree_status_dirty() {
+    // A repo with uncommitted changes should report them
+    let temp_dir = TempDir::new().unwrap();
+    let repo_path = temp_dir.path().to_path_buf();
+    create_git_repo_with_commit(&repo_path);
+
+    // Create modified file (modify tracked file)
+    std::fs::write(repo_path.join("README.md"), "# Modified Content").unwrap();
+
+    // Create untracked file
+    std::fs::write(repo_path.join("new_file.txt"), "untracked content").unwrap();
+
+    // Create staged file
+    std::fs::write(repo_path.join("staged.txt"), "staged content").unwrap();
+    std::process::Command::new("git")
+        .args(["add", "staged.txt"])
+        .current_dir(&repo_path)
+        .output()
+        .expect("Failed to stage file");
+
+    let manager = WorktreeManager::new(repo_path.clone()).unwrap();
+
+    let status = manager.status(&repo_path).unwrap();
+
+    // Should detect all changes
+    assert_eq!(status.modified, 1, "Should have 1 modified file");
+    assert_eq!(status.staged, 1, "Should have 1 staged file");
+    assert_eq!(status.untracked, 1, "Should have 1 untracked file");
+    assert!(!status.is_clean(), "Status should NOT report as clean");
+}
+
+#[test]
+fn test_worktree_status_ahead_behind() {
+    // Test ahead/behind counting with a local tracking branch
+    let temp_dir = TempDir::new().unwrap();
+    let repo_path = temp_dir.path().to_path_buf();
+    create_git_repo_with_commit(&repo_path);
+
+    // Create a bare repo to act as a remote
+    let remote_dir = TempDir::new().unwrap();
+    let remote_path = remote_dir.path().to_path_buf();
+    std::process::Command::new("git")
+        .args(["clone", "--bare", repo_path.to_str().unwrap(), "."])
+        .current_dir(&remote_path)
+        .output()
+        .expect("Failed to create bare clone");
+
+    // Add the remote to original repo
+    std::process::Command::new("git")
+        .args(["remote", "add", "origin", remote_path.to_str().unwrap()])
+        .current_dir(&repo_path)
+        .output()
+        .expect("Failed to add remote");
+
+    // Fetch and set up tracking
+    std::process::Command::new("git")
+        .args(["fetch", "origin"])
+        .current_dir(&repo_path)
+        .output()
+        .expect("Failed to fetch");
+
+    std::process::Command::new("git")
+        .args(["branch", "--set-upstream-to=origin/master", "master"])
+        .current_dir(&repo_path)
+        .output()
+        .ok(); // May fail if branch is "main" not "master"
+
+    std::process::Command::new("git")
+        .args(["branch", "--set-upstream-to=origin/main", "main"])
+        .current_dir(&repo_path)
+        .output()
+        .ok(); // May fail if branch is "master" not "main"
+
+    // Create a local commit (ahead by 1)
+    std::fs::write(repo_path.join("local.txt"), "local change").unwrap();
+    std::process::Command::new("git")
+        .args(["add", "local.txt"])
+        .current_dir(&repo_path)
+        .output()
+        .expect("Failed to stage");
+    std::process::Command::new("git")
+        .args(["commit", "-m", "Local commit"])
+        .current_dir(&repo_path)
+        .output()
+        .expect("Failed to commit");
+
+    let manager = WorktreeManager::new(repo_path.clone()).unwrap();
+    let status = manager.status(&repo_path).unwrap();
+
+    // Should be ahead by at least 1
+    assert!(status.ahead >= 1, "Should be ahead by at least 1 commit");
+}
+
+#[test]
+fn test_worktree_status_default() {
+    let status = WorktreeStatus::default();
+
+    assert_eq!(status.modified, 0);
+    assert_eq!(status.staged, 0);
+    assert_eq!(status.untracked, 0);
+    assert_eq!(status.ahead, 0);
+    assert_eq!(status.behind, 0);
+    assert!(status.is_clean());
 }
