@@ -171,7 +171,6 @@ impl Config {
 struct JsonRpcRequest {
     id: Option<serde_json::Value>,
     method: String,
-    #[allow(dead_code)]
     params: serde_json::Value,
 }
 
@@ -260,14 +259,21 @@ fn handle_tools_list(id: &serde_json::Value) -> String {
 }
 
 /// Handle the "tools/call" method.
-fn handle_tools_call(id: &serde_json::Value) -> String {
+fn handle_tools_call(id: &serde_json::Value, params: &serde_json::Value) -> String {
+    // Extract text from params if provided, otherwise use default message
+    let text = params
+        .get("arguments")
+        .and_then(|args| args.get("text"))
+        .and_then(|t| t.as_str())
+        .unwrap_or("Tool executed successfully");
+
     success_response(
         id,
         serde_json::json!({
             "content": [
                 {
                     "type": "text",
-                    "text": "Tool executed successfully"
+                    "text": text
                 }
             ]
         }),
@@ -296,7 +302,7 @@ fn route_request(request: &JsonRpcRequest) -> Option<String> {
     let response = match request.method.as_str() {
         "initialize" => handle_initialize(id),
         "tools/list" => handle_tools_list(id),
-        "tools/call" => handle_tools_call(id),
+        "tools/call" => handle_tools_call(id, &request.params),
         "ping" => handle_ping(id),
         _ => handle_unknown(id),
     };
