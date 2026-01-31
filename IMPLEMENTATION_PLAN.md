@@ -215,7 +215,7 @@
   - Add: `WorktreeSession` struct with worktree_name, original_branch, commits
   - Acceptance: Sessions can be linked to worktrees
 
-- [ ] 8.5.2 Implement session restore per worktree (GREEN)
+- [x] 8.5.2 Implement session restore per worktree (GREEN)
   - Path: `src/session/mod.rs`
   - Feature: Resume session in correct worktree context
   - Test: `test_session_restore_in_worktree`
