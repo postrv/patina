@@ -1,0 +1,26 @@
+Source: patina
+Section: utils
+Priority: optional
+Maintainer: Patina Developers <patina@example.com>
+Build-Depends: debhelper-compat (= 13), cargo, rustc (>= 1.75)
+Standards-Version: 4.6.0
+Homepage: https://github.com/postrv/patina
+Vcs-Browser: https://github.com/postrv/patina
+Vcs-Git: https://github.com/postrv/patina.git
+Rules-Requires-Root: no
+
+Package: patina
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}
+Description: High-performance Rust CLI for Claude API
+ Patina (Rust Claude Terminal) is a high-performance command-line interface
+ for interacting with the Anthropic Claude API. It features streaming
+ responses, syntax highlighting, tool execution, and a modern TUI.
+ .
+ Features:
+  - Streaming API responses with real-time display
+  - Syntax highlighting for code blocks
+  - Built-in tools (bash, file operations, search)
+  - MCP protocol support
+  - Plugin and skill system
+  - Session persistence

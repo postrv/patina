@@ -1,0 +1,44 @@
+# Build artifacts
+target/
+*.rs.bk
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Documentation
+*.md
+!README.md
+docs/
+
+# CI/CD
+.github/
+
+# Development files
+.archive/
+.claude/
+scripts/
+Formula/
+examples/
+
+# Test fixtures
+tests/fixtures/
+
+# Coverage and benchmarks
+coverage/
+*.profraw
+*.profdata
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Environment files
+.env
+.env.*
