@@ -53,3 +53,6 @@ mod worktree_command_test;
 
 #[path = "unit/experiment_test.rs"]
 mod experiment_test;
+
+#[path = "unit/worktree_picker_test.rs"]
+mod worktree_picker_test;
