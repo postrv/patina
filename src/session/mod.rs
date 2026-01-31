@@ -152,6 +152,77 @@ impl WorktreeSession {
     }
 }
 
+/// UI state for session resume.
+///
+/// Captures the terminal UI state so it can be restored when resuming a session.
+/// This allows users to continue exactly where they left off, including their
+/// scroll position, any unsent input, and cursor position.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct UiState {
+    /// Vertical scroll offset in the message view.
+    scroll_offset: usize,
+
+    /// Content of the input buffer (unsent text).
+    input_buffer: String,
+
+    /// Cursor position within the input buffer.
+    cursor_position: usize,
+}
+
+impl UiState {
+    /// Creates a new UI state with default values.
+    ///
+    /// Default state has scroll at top, empty input, cursor at position 0.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            scroll_offset: 0,
+            input_buffer: String::new(),
+            cursor_position: 0,
+        }
+    }
+
+    /// Creates a UI state with specified values.
+    ///
+    /// # Arguments
+    ///
+    /// * `scroll_offset` - Vertical scroll position in the message view.
+    /// * `input_buffer` - Current text in the input field.
+    /// * `cursor_position` - Cursor position within the input buffer.
+    #[must_use]
+    pub fn with_state(scroll_offset: usize, input_buffer: String, cursor_position: usize) -> Self {
+        Self {
+            scroll_offset,
+            input_buffer,
+            cursor_position,
+        }
+    }
+
+    /// Returns the scroll offset.
+    #[must_use]
+    pub fn scroll_offset(&self) -> usize {
+        self.scroll_offset
+    }
+
+    /// Returns the input buffer contents.
+    #[must_use]
+    pub fn input_buffer(&self) -> &str {
+        &self.input_buffer
+    }
+
+    /// Returns the cursor position.
+    #[must_use]
+    pub fn cursor_position(&self) -> usize {
+        self.cursor_position
+    }
+}
+
+impl Default for UiState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Wrapper for session files that includes integrity checksum.
 ///
 /// This struct is used for serialization/deserialization of session files,
@@ -266,6 +337,13 @@ pub struct Session {
     /// enabling isolated development and session resume in the correct context.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     worktree_session: Option<WorktreeSession>,
+
+    /// Optional UI state for session resume.
+    ///
+    /// When present, stores the TUI state (scroll position, input buffer, cursor)
+    /// so users can resume exactly where they left off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ui_state: Option<UiState>,
 }
 
 impl Session {
@@ -284,6 +362,7 @@ impl Session {
             created_at: now,
             updated_at: now,
             worktree_session: None,
+            ui_state: None,
         }
     }
 
@@ -336,6 +415,25 @@ impl Session {
     /// * `worktree_session` - The worktree session to link, or `None` to unlink.
     pub fn set_worktree_session(&mut self, worktree_session: Option<WorktreeSession>) {
         self.worktree_session = worktree_session;
+        self.updated_at = SystemTime::now();
+    }
+
+    /// Returns the UI state, if saved.
+    ///
+    /// The UI state captures scroll position, input buffer, and cursor position
+    /// so the session can be resumed exactly where it was left off.
+    #[must_use]
+    pub fn ui_state(&self) -> Option<&UiState> {
+        self.ui_state.as_ref()
+    }
+
+    /// Sets the UI state.
+    ///
+    /// # Arguments
+    ///
+    /// * `ui_state` - The UI state to save, or `None` to clear it.
+    pub fn set_ui_state(&mut self, ui_state: Option<UiState>) {
+        self.ui_state = ui_state;
         self.updated_at = SystemTime::now();
     }
 }
@@ -1097,5 +1195,87 @@ mod tests {
         assert!(super::validate_session_id("valid_id").is_ok());
         assert!(super::validate_session_id("ValidId123").is_ok());
         assert!(super::validate_session_id("550e8400-e29b-41d4-a716-446655440000").is_ok());
+    }
+
+    // =========================================================================
+    // Phase 10.1.1: UI State tests
+    // =========================================================================
+
+    #[test]
+    fn test_ui_state_new() {
+        let ui_state = UiState::new();
+        assert_eq!(ui_state.scroll_offset(), 0);
+        assert!(ui_state.input_buffer().is_empty());
+        assert_eq!(ui_state.cursor_position(), 0);
+    }
+
+    #[test]
+    fn test_ui_state_with_values() {
+        let ui_state = UiState::with_state(42, "Hello, world!".to_string(), 7);
+        assert_eq!(ui_state.scroll_offset(), 42);
+        assert_eq!(ui_state.input_buffer(), "Hello, world!");
+        assert_eq!(ui_state.cursor_position(), 7);
+    }
+
+    #[test]
+    fn test_ui_state_serialization() {
+        let ui_state = UiState::with_state(100, "Test input".to_string(), 5);
+
+        let json = serde_json::to_string(&ui_state).expect("Failed to serialize");
+        let deserialized: UiState = serde_json::from_str(&json).expect("Failed to deserialize");
+
+        assert_eq!(deserialized.scroll_offset(), 100);
+        assert_eq!(deserialized.input_buffer(), "Test input");
+        assert_eq!(deserialized.cursor_position(), 5);
+    }
+
+    #[test]
+    fn test_session_with_ui_state() {
+        let mut session = Session::new(PathBuf::from("/test"));
+        assert!(session.ui_state().is_none());
+
+        let ui_state = UiState::with_state(50, "Draft message".to_string(), 13);
+        session.set_ui_state(Some(ui_state));
+
+        assert!(session.ui_state().is_some());
+        assert_eq!(session.ui_state().unwrap().scroll_offset(), 50);
+        assert_eq!(session.ui_state().unwrap().input_buffer(), "Draft message");
+    }
+
+    #[test]
+    fn test_session_ui_state_serialization() {
+        let mut session = Session::new(PathBuf::from("/project"));
+        let ui_state = UiState::with_state(200, "Unsent draft".to_string(), 12);
+        session.set_ui_state(Some(ui_state));
+        session.add_message(test_message(Role::User, "Previous message"));
+
+        let json = serde_json::to_string(&session).expect("Failed to serialize");
+        let deserialized: Session = serde_json::from_str(&json).expect("Failed to deserialize");
+
+        assert!(deserialized.ui_state().is_some());
+        let ui = deserialized.ui_state().unwrap();
+        assert_eq!(ui.scroll_offset(), 200);
+        assert_eq!(ui.input_buffer(), "Unsent draft");
+        assert_eq!(ui.cursor_position(), 12);
+    }
+
+    #[tokio::test]
+    async fn test_session_ui_state_persistence() {
+        let temp_dir = TempDir::new().unwrap();
+        let manager = SessionManager::new(temp_dir.path().to_path_buf());
+
+        let mut session = Session::new(PathBuf::from("/test"));
+        let ui_state = UiState::with_state(75, "Work in progress".to_string(), 16);
+        session.set_ui_state(Some(ui_state));
+        session.add_message(test_message(Role::User, "Hello"));
+
+        let id = manager.save(&session).await.unwrap();
+        let loaded = manager.load(&id).await.unwrap();
+
+        assert!(loaded.ui_state().is_some());
+        let ui = loaded.ui_state().unwrap();
+        assert_eq!(ui.scroll_offset(), 75);
+        assert_eq!(ui.input_buffer(), "Work in progress");
+        assert_eq!(ui.cursor_position(), 16);
     }
 }
