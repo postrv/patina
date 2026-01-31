@@ -243,7 +243,7 @@
 
 ### 9.2 Plugin Registry
 
-- [ ] 9.2.1 Implement plugin discovery (GREEN)
+- [x] 9.2.1 Implement plugin discovery (GREEN)
   - Path: `src/plugins/registry.rs`
   - Scan: `~/.config/patina/plugins/` for manifests
   - Test: `test_discover_plugins`

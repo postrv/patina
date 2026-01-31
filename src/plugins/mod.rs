@@ -8,6 +8,7 @@
 
 pub mod host;
 pub mod manifest;
+pub mod registry;
 
 use anyhow::Result;
 use serde::Deserialize;
