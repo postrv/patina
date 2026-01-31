@@ -10,10 +10,11 @@
 
 | Metric | Value |
 |--------|-------|
-| Tests | 624 |
+| Tests | 922 |
 | Coverage | 85%+ |
 | Clippy Warnings | 0 |
 | Security Findings | 0 (8/8 resolved) |
+| Unmaintained Deps | 2 (transitive from syntect) |
 | Unsafe Blocks | 0 |
 
 **Completed Phases (1-6):**
