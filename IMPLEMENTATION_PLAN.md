@@ -229,14 +229,14 @@
 
 ### 9.1 Plugin Manifest Format
 
-- [ ] 9.1.1 Define plugin manifest schema (RED)
+- [x] 9.1.1 Define plugin manifest schema (RED)
   - Path: `src/plugins/manifest.rs` (new)
   - Test: `test_parse_plugin_manifest`
   - Test: `test_validate_plugin_capabilities`
   - Format: `rct-plugin.toml`
   - Acceptance: Tests document manifest structure
 
-- [ ] 9.1.2 Implement manifest parsing (GREEN)
+- [x] 9.1.2 Implement manifest parsing (GREEN)
   - Path: `src/plugins/manifest.rs`
   - Parse: name, version, description, capabilities, config
   - Acceptance: Manifests parse correctly
