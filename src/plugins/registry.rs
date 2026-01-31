@@ -121,11 +121,305 @@ pub fn default_plugins_dir() -> Option<std::path::PathBuf> {
     crate::util::get_plugins_dir()
 }
 
+/// Manages plugin lifecycle: loading, unloading, and tracking enabled plugins.
+///
+/// The `PluginManager` wraps plugin discovery and provides methods to load
+/// and unload plugins at runtime. Plugins must be discovered before they
+/// can be loaded.
+///
+/// # Example
+///
+/// ```no_run
+/// use patina::plugins::registry::PluginManager;
+/// use std::path::Path;
+///
+/// let mut manager = PluginManager::new(Path::new("~/.config/patina/plugins"))?;
+///
+/// // Load a discovered plugin
+/// manager.load("my-plugin")?;
+/// assert!(manager.is_loaded("my-plugin"));
+///
+/// // List enabled plugins
+/// for name in manager.list_enabled() {
+///     println!("Loaded: {}", name);
+/// }
+///
+/// // Unload when done
+/// manager.unload("my-plugin");
+/// # Ok::<(), anyhow::Error>(())
+/// ```
+#[derive(Debug)]
+pub struct PluginManager {
+    /// Directory containing plugins.
+    plugins_dir: std::path::PathBuf,
+    /// All discovered plugin manifests, keyed by name.
+    discovered: std::collections::HashMap<String, Manifest>,
+    /// Names of currently loaded/enabled plugins.
+    enabled: std::collections::HashSet<String>,
+}
+
+/// Errors that can occur during plugin lifecycle operations.
+#[derive(Debug, thiserror::Error)]
+pub enum PluginError {
+    /// Plugin was not found in the registry.
+    #[error("plugin not found: {0}")]
+    NotFound(String),
+
+    /// Plugin is already loaded.
+    #[error("plugin already loaded: {0}")]
+    AlreadyLoaded(String),
+
+    /// Plugin discovery failed.
+    #[error("discovery error: {0}")]
+    DiscoveryError(#[from] ManifestError),
+}
+
+impl PluginManager {
+    /// Creates a new plugin manager and discovers plugins in the given directory.
+    ///
+    /// # Arguments
+    ///
+    /// * `plugins_dir` - Directory to scan for plugins
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if plugin discovery fails.
+    pub fn new(plugins_dir: &Path) -> Result<Self, PluginError> {
+        let manifests = discover_plugins(plugins_dir)?;
+        let discovered = manifests.into_iter().map(|m| (m.name.clone(), m)).collect();
+
+        Ok(Self {
+            plugins_dir: plugins_dir.to_path_buf(),
+            discovered,
+            enabled: std::collections::HashSet::new(),
+        })
+    }
+
+    /// Loads a plugin by name, making it active.
+    ///
+    /// The plugin must have been discovered during initialization.
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - Name of the plugin to load
+    ///
+    /// # Errors
+    ///
+    /// Returns `PluginError::NotFound` if the plugin doesn't exist.
+    /// Returns `PluginError::AlreadyLoaded` if the plugin is already loaded.
+    pub fn load(&mut self, name: &str) -> Result<(), PluginError> {
+        if !self.discovered.contains_key(name) {
+            return Err(PluginError::NotFound(name.to_string()));
+        }
+
+        if self.enabled.contains(name) {
+            return Err(PluginError::AlreadyLoaded(name.to_string()));
+        }
+
+        self.enabled.insert(name.to_string());
+        tracing::info!("Loaded plugin: {}", name);
+        Ok(())
+    }
+
+    /// Unloads a plugin by name.
+    ///
+    /// Returns `true` if the plugin was loaded and is now unloaded,
+    /// `false` if it wasn't loaded.
+    pub fn unload(&mut self, name: &str) -> bool {
+        let removed = self.enabled.remove(name);
+        if removed {
+            tracing::info!("Unloaded plugin: {}", name);
+        }
+        removed
+    }
+
+    /// Returns the names of all currently loaded plugins.
+    #[must_use]
+    pub fn list_enabled(&self) -> Vec<&str> {
+        self.enabled.iter().map(String::as_str).collect()
+    }
+
+    /// Returns the names of all discovered plugins.
+    #[must_use]
+    pub fn list_discovered(&self) -> Vec<&str> {
+        self.discovered.keys().map(String::as_str).collect()
+    }
+
+    /// Checks if a plugin is currently loaded.
+    #[must_use]
+    pub fn is_loaded(&self, name: &str) -> bool {
+        self.enabled.contains(name)
+    }
+
+    /// Returns the manifest for a discovered plugin.
+    #[must_use]
+    pub fn get_manifest(&self, name: &str) -> Option<&Manifest> {
+        self.discovered.get(name)
+    }
+
+    /// Re-scans the plugins directory for new plugins.
+    ///
+    /// Newly discovered plugins are added but not automatically loaded.
+    /// Existing loaded plugins remain loaded.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if plugin discovery fails.
+    pub fn refresh(&mut self) -> Result<(), PluginError> {
+        let manifests = discover_plugins(&self.plugins_dir)?;
+        for manifest in manifests {
+            self.discovered
+                .entry(manifest.name.clone())
+                .or_insert(manifest);
+        }
+        Ok(())
+    }
+
+    /// Returns the number of discovered plugins.
+    #[must_use]
+    pub fn discovered_count(&self) -> usize {
+        self.discovered.len()
+    }
+
+    /// Returns the number of loaded plugins.
+    #[must_use]
+    pub fn loaded_count(&self) -> usize {
+        self.enabled.len()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::fs;
     use tempfile::TempDir;
+
+    #[test]
+    fn test_plugin_load_unload() {
+        let temp_dir = TempDir::new().unwrap();
+
+        // Create a plugin
+        let plugin_dir = temp_dir.path().join("test-plugin");
+        fs::create_dir_all(&plugin_dir).unwrap();
+        fs::write(
+            plugin_dir.join(MANIFEST_FILENAME),
+            r#"name = "test-plugin"
+version = "1.0.0"
+description = "A test plugin""#,
+        )
+        .unwrap();
+
+        // Create manager and verify discovery
+        let mut manager = PluginManager::new(temp_dir.path()).unwrap();
+        assert_eq!(manager.discovered_count(), 1);
+        assert_eq!(manager.loaded_count(), 0);
+
+        // Load the plugin
+        manager.load("test-plugin").unwrap();
+        assert!(manager.is_loaded("test-plugin"));
+        assert_eq!(manager.loaded_count(), 1);
+
+        // Verify list_enabled
+        let enabled = manager.list_enabled();
+        assert_eq!(enabled.len(), 1);
+        assert!(enabled.contains(&"test-plugin"));
+
+        // Unload the plugin
+        assert!(manager.unload("test-plugin"));
+        assert!(!manager.is_loaded("test-plugin"));
+        assert_eq!(manager.loaded_count(), 0);
+        assert!(manager.list_enabled().is_empty());
+
+        // Unload again returns false
+        assert!(!manager.unload("test-plugin"));
+    }
+
+    #[test]
+    fn test_plugin_load_not_found() {
+        let temp_dir = TempDir::new().unwrap();
+        let mut manager = PluginManager::new(temp_dir.path()).unwrap();
+
+        let result = manager.load("nonexistent");
+        assert!(matches!(result, Err(PluginError::NotFound(_))));
+    }
+
+    #[test]
+    fn test_plugin_load_already_loaded() {
+        let temp_dir = TempDir::new().unwrap();
+
+        let plugin_dir = temp_dir.path().join("my-plugin");
+        fs::create_dir_all(&plugin_dir).unwrap();
+        fs::write(
+            plugin_dir.join(MANIFEST_FILENAME),
+            r#"name = "my-plugin"
+version = "1.0.0""#,
+        )
+        .unwrap();
+
+        let mut manager = PluginManager::new(temp_dir.path()).unwrap();
+        manager.load("my-plugin").unwrap();
+
+        let result = manager.load("my-plugin");
+        assert!(matches!(result, Err(PluginError::AlreadyLoaded(_))));
+    }
+
+    #[test]
+    fn test_plugin_manager_refresh() {
+        let temp_dir = TempDir::new().unwrap();
+
+        // Start with one plugin
+        let plugin1_dir = temp_dir.path().join("plugin-one");
+        fs::create_dir_all(&plugin1_dir).unwrap();
+        fs::write(
+            plugin1_dir.join(MANIFEST_FILENAME),
+            r#"name = "plugin-one"
+version = "1.0.0""#,
+        )
+        .unwrap();
+
+        let mut manager = PluginManager::new(temp_dir.path()).unwrap();
+        assert_eq!(manager.discovered_count(), 1);
+
+        // Add another plugin after initialization
+        let plugin2_dir = temp_dir.path().join("plugin-two");
+        fs::create_dir_all(&plugin2_dir).unwrap();
+        fs::write(
+            plugin2_dir.join(MANIFEST_FILENAME),
+            r#"name = "plugin-two"
+version = "1.0.0""#,
+        )
+        .unwrap();
+
+        // Refresh should find the new plugin
+        manager.refresh().unwrap();
+        assert_eq!(manager.discovered_count(), 2);
+        assert!(manager.list_discovered().contains(&"plugin-one"));
+        assert!(manager.list_discovered().contains(&"plugin-two"));
+    }
+
+    #[test]
+    fn test_plugin_manager_get_manifest() {
+        let temp_dir = TempDir::new().unwrap();
+
+        let plugin_dir = temp_dir.path().join("test-plugin");
+        fs::create_dir_all(&plugin_dir).unwrap();
+        fs::write(
+            plugin_dir.join(MANIFEST_FILENAME),
+            r#"name = "test-plugin"
+version = "2.0.0"
+description = "Test description""#,
+        )
+        .unwrap();
+
+        let manager = PluginManager::new(temp_dir.path()).unwrap();
+
+        let manifest = manager.get_manifest("test-plugin").unwrap();
+        assert_eq!(manifest.name, "test-plugin");
+        assert_eq!(manifest.version, "2.0.0");
+        assert_eq!(manifest.description.as_deref(), Some("Test description"));
+
+        assert!(manager.get_manifest("nonexistent").is_none());
+    }
 
     #[test]
     fn test_discover_plugins_finds_manifest() {

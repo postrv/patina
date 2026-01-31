@@ -249,7 +249,7 @@
   - Test: `test_discover_plugins`
   - Acceptance: Plugins discovered from filesystem
 
-- [ ] 9.2.2 Implement plugin lifecycle (GREEN)
+- [x] 9.2.2 Implement plugin lifecycle (GREEN)
   - Methods: `load()`, `unload()`, `list_enabled()`
   - Test: `test_plugin_load_unload`
   - Acceptance: Plugins can be loaded/unloaded
