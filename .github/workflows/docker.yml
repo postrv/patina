@@ -2,19 +2,49 @@ name: Docker
 
 on:
   push:
-    branches: [main]
-    tags: ['v*']
+    tags: ['v*']  # Only build on releases
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.gitignore'
+      - 'LICENSE*'
+      - '.ralph/**'
+      - '.claude/**'
+      - 'IMPLEMENTATION_PLAN.md'
+      - 'Formula/**'
+      - 'scripts/**'
   pull_request:
     branches: [main]
+    paths:
+      - 'src/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'Dockerfile'
+  workflow_dispatch:
+    inputs:
+      push_image:
+        description: 'Push image to registry'
+        required: false
+        default: false
+        type: boolean
 
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
 
+# Cancel in-progress runs
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     name: Build and Push
     runs-on: ubuntu-latest
+    # Skip if commit message contains [skip ci]
+    if: >-
+      !contains(github.event.head_commit.message, '[skip ci]') &&
+      !contains(github.event.head_commit.message, '[ci skip]')
     permissions:
       contents: read
       packages: write
@@ -47,12 +77,11 @@ jobs:
             type=sha
 
       # Build multi-arch only for releases (arm64 via QEMU is very slow)
-      # Regular pushes build amd64 only for faster CI
       - name: Build and push
         uses: docker/build-push-action@v5
         with:
           context: .
-          push: ${{ github.event_name != 'pull_request' }}
+          push: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') || github.event.inputs.push_image == 'true' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
