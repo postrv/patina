@@ -255,7 +255,7 @@ Add project-specific notes below. This section is preserved during regeneration.
 
 **Current State (2026-01-31):**
 - **All Phases Complete:** TUI, API streaming, tools, MCP, hooks, skills, commands, agents, plugins
-- **Test Coverage:** 85.84% (624 tests)
+- **Test Coverage:** 85.84% (911 tests)
 - **Cross-Platform:** Linux, macOS, Windows
 - **Version:** 0.3.0
 

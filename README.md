@@ -13,7 +13,7 @@ A high-performance terminal client for the Claude API, written in Rust. Feature 
 ## Highlights
 
 - **Sub-millisecond rendering** - Full 100-message redraw in <1ms
-- **624 tests** with 85%+ code coverage
+- **911 tests** with 85%+ code coverage
 - **Zero unsafe code** - Pure safe Rust
 - **Cross-platform** - Linux, macOS, Windows
 - **Security-first** - 8/8 security audit findings resolved
@@ -277,7 +277,7 @@ cargo fmt
 | Version | 0.3.0 |
 | MSRV | Rust 1.75 |
 | Edition | 2021 |
-| Tests | 624 |
+| Tests | 911 |
 | Coverage | 85%+ |
 | Unsafe | 0 blocks |
 

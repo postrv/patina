@@ -13,10 +13,10 @@ This security audit covers the security hardening implemented in Phases 0-4 of t
 
 | Metric | Result |
 |--------|--------|
-| Total Tests | 624 |
+| Total Tests | 911 |
 | Security Tests | 63+ |
 | Clippy Warnings | 0 |
-| Cargo Audit | 0 CRITICAL/HIGH |
+| Cargo Audit | 0 CRITICAL/HIGH (2 LOW: unmaintained deps) |
 | Forbidden Patterns | 0 |
 | Unsafe Code | 0 blocks |
 
