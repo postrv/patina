@@ -19,6 +19,12 @@ pub struct AppState {
     streaming_rx: Option<mpsc::Receiver<StreamEvent>>,
 
     dirty: DirtyFlags,
+
+    // Worktree status bar state
+    worktree_branch: Option<String>,
+    worktree_modified: usize,
+    worktree_ahead: usize,
+    worktree_behind: usize,
 }
 
 #[derive(Default)]
@@ -54,6 +60,10 @@ impl AppState {
                 full: true,
                 ..Default::default()
             },
+            worktree_branch: None,
+            worktree_modified: 0,
+            worktree_ahead: 0,
+            worktree_behind: 0,
         }
     }
 
@@ -232,5 +242,59 @@ impl AppState {
             }
         }
         Ok(())
+    }
+
+    // ========================================================================
+    // Worktree Status Bar State
+    // ========================================================================
+
+    /// Sets the current worktree branch name.
+    ///
+    /// This is displayed in the status bar.
+    pub fn set_worktree_branch(&mut self, branch: String) {
+        self.worktree_branch = Some(branch);
+        self.dirty.full = true;
+    }
+
+    /// Returns the current worktree branch name, if set.
+    #[must_use]
+    pub fn worktree_branch(&self) -> Option<&str> {
+        self.worktree_branch.as_deref()
+    }
+
+    /// Sets the number of modified files in the worktree.
+    pub fn set_worktree_modified(&mut self, count: usize) {
+        self.worktree_modified = count;
+        self.dirty.full = true;
+    }
+
+    /// Returns the number of modified files in the worktree.
+    #[must_use]
+    pub fn worktree_modified(&self) -> usize {
+        self.worktree_modified
+    }
+
+    /// Sets the number of commits ahead of upstream.
+    pub fn set_worktree_ahead(&mut self, count: usize) {
+        self.worktree_ahead = count;
+        self.dirty.full = true;
+    }
+
+    /// Returns the number of commits ahead of upstream.
+    #[must_use]
+    pub fn worktree_ahead(&self) -> usize {
+        self.worktree_ahead
+    }
+
+    /// Sets the number of commits behind upstream.
+    pub fn set_worktree_behind(&mut self, count: usize) {
+        self.worktree_behind = count;
+        self.dirty.full = true;
+    }
+
+    /// Returns the number of commits behind upstream.
+    #[must_use]
+    pub fn worktree_behind(&self) -> usize {
+        self.worktree_behind
     }
 }

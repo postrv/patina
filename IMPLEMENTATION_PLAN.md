@@ -203,7 +203,7 @@
   - Keybindings: n=new, s=switch, d=delete, c=clean
   - Acceptance: Widget renders correctly
 
-- [ ] 8.4.2 Add status bar worktree indicator (GREEN)
+- [x] 8.4.2 Add status bar worktree indicator (GREEN)
   - Path: `src/tui/mod.rs`
   - Display: Current branch, ahead/behind, modified count
   - Acceptance: Status bar shows worktree info
