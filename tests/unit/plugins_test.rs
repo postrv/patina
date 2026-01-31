@@ -814,3 +814,83 @@ version = "1.0.0"
     assert_eq!(discovered.len(), 1, "Should discover nested plugin");
     assert_eq!(discovered[0].name, "nested-plugin");
 }
+
+// =============================================================================
+// Test Group: Bundled Plugin Manifests (9.3.1)
+// =============================================================================
+
+use patina::plugins::manifest::{Capability, Manifest};
+
+/// Tests that the bundled narsil plugin manifest is valid.
+///
+/// This test validates the actual plugins/narsil/rct-plugin.toml file
+/// to ensure it parses correctly and has the expected configuration.
+#[test]
+fn test_narsil_plugin_manifest_valid() {
+    let manifest_path =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("plugins/narsil/rct-plugin.toml");
+
+    // Manifest file must exist
+    assert!(
+        manifest_path.exists(),
+        "narsil plugin manifest should exist at {:?}",
+        manifest_path
+    );
+
+    // Parse the manifest
+    let manifest = Manifest::from_file(&manifest_path)
+        .expect("narsil plugin manifest should parse successfully");
+
+    // Validate required fields
+    assert_eq!(manifest.name, "narsil", "Plugin name should be 'narsil'");
+    assert_eq!(
+        manifest.version, "1.0.0",
+        "Plugin version should be '1.0.0'"
+    );
+
+    // Validate description is present
+    assert!(
+        manifest.description.is_some(),
+        "Plugin should have a description"
+    );
+
+    // Validate MCP capability is enabled
+    assert!(
+        manifest.has_capability(Capability::Mcp),
+        "narsil plugin should have MCP capability"
+    );
+
+    // Validate MCP config
+    let mcp_config = manifest.mcp_config();
+    assert!(mcp_config.is_some(), "narsil plugin should have MCP config");
+
+    let mcp = mcp_config.unwrap();
+    assert_eq!(
+        mcp.command, "narsil-mcp",
+        "MCP command should be 'narsil-mcp'"
+    );
+    assert!(mcp.auto_start, "MCP server should auto-start");
+
+    // Validate tools capability
+    assert!(
+        manifest.has_capability(Capability::Tools),
+        "narsil plugin should have Tools capability"
+    );
+
+    // Validate skills capability
+    assert!(
+        manifest.has_capability(Capability::Skills),
+        "narsil plugin should have Skills capability"
+    );
+
+    // Validate config options exist
+    let config = manifest.config();
+    assert!(
+        config.contains_key("auto_index"),
+        "Should have auto_index config option"
+    );
+    assert!(
+        config.contains_key("security_scan_on_commit"),
+        "Should have security_scan_on_commit config option"
+    );
+}

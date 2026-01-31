@@ -1,0 +1,38 @@
+# narsil-mcp Plugin for Patina
+#
+# Provides code intelligence and security analysis through the narsil-mcp server.
+# Auto-detected when narsil-mcp is available in PATH.
+
+name = "narsil"
+version = "1.0.0"
+description = "Code intelligence, static analysis, and security scanning via narsil-mcp"
+author = "Patina Authors"
+license = "MIT"
+repository = "https://github.com/postrv/patina"
+min_patina_version = "0.3.0"
+
+[capabilities]
+mcp = true
+tools = true
+skills = true
+
+[mcp]
+command = "narsil-mcp"
+args = ["--repo", "."]
+auto_start = true
+
+# Configuration options exposed to users
+[config.auto_index]
+type = "boolean"
+default = "true"
+description = "Automatically reindex the project on startup"
+
+[config.index_on_save]
+type = "boolean"
+default = "false"
+description = "Reindex when files are saved"
+
+[config.security_scan_on_commit]
+type = "boolean"
+default = "true"
+description = "Run security scan before commits"

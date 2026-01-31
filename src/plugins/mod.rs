@@ -8,6 +8,7 @@
 
 pub mod host;
 pub mod manifest;
+pub mod narsil;
 pub mod registry;
 
 use anyhow::Result;
