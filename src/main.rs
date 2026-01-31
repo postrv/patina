@@ -6,6 +6,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 // Use the library crate
 use patina::app;
+use patina::session::{default_sessions_dir, format_session_list, SessionManager};
 use patina::types::config::{NarsilMode, ResumeMode};
 
 #[derive(Parser, Debug)]
@@ -41,11 +42,20 @@ struct Args {
     /// or provide a specific session ID.
     #[arg(long, value_name = "SESSION")]
     resume: Option<String>,
+
+    /// List all available sessions and exit.
+    #[arg(long)]
+    list_sessions: bool,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
+
+    // Handle --list-sessions before any other initialization
+    if args.list_sessions {
+        return list_sessions().await;
+    }
 
     let filter = if args.debug { "debug" } else { "info" };
     tracing_subscriber::registry()
@@ -86,4 +96,17 @@ async fn main() -> Result<()> {
         resume_mode,
     })
     .await
+}
+
+/// Lists all available sessions and exits.
+async fn list_sessions() -> Result<()> {
+    let sessions_dir = default_sessions_dir()?;
+    let manager = SessionManager::new(sessions_dir);
+
+    let sessions = manager.list_sorted().await?;
+    let output = format_session_list(&sessions);
+
+    println!("{output}");
+
+    Ok(())
 }
