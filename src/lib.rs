@@ -26,5 +26,7 @@ pub mod util;
 pub mod worktree;
 
 // Re-export core types for convenient access
-pub use session::{Session, SessionManager, WorktreeCommit, WorktreeSession};
+pub use session::{
+    ContextFile, Session, SessionContext, SessionManager, WorktreeCommit, WorktreeSession,
+};
 pub use types::{Config, Message, Role, StreamEvent};

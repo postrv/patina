@@ -223,6 +223,128 @@ impl Default for UiState {
     }
 }
 
+/// A file that was read during the session and may be needed for context restoration.
+///
+/// When resuming a session, context files can be re-read to restore the conversation
+/// context. The optional content hash allows detecting if the file has changed since
+/// the session was saved.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ContextFile {
+    /// Path to the file (absolute or relative to working directory).
+    path: PathBuf,
+
+    /// Optional SHA-256 hash of the file content at the time it was read.
+    /// Used to detect if the file has changed since the session was saved.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    content_hash: Option<String>,
+}
+
+impl ContextFile {
+    /// Creates a new context file entry without a content hash.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - Path to the file.
+    #[must_use]
+    pub fn new(path: impl Into<PathBuf>) -> Self {
+        Self {
+            path: path.into(),
+            content_hash: None,
+        }
+    }
+
+    /// Creates a new context file entry with a content hash.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - Path to the file.
+    /// * `content_hash` - SHA-256 hash of the file content.
+    #[must_use]
+    pub fn with_hash(path: impl Into<PathBuf>, content_hash: impl Into<String>) -> Self {
+        Self {
+            path: path.into(),
+            content_hash: Some(content_hash.into()),
+        }
+    }
+
+    /// Returns the path to the context file.
+    #[must_use]
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Returns the content hash, if available.
+    #[must_use]
+    pub fn content_hash(&self) -> Option<&str> {
+        self.content_hash.as_deref()
+    }
+}
+
+/// Tracks session context including files read and active skills.
+///
+/// This struct captures the context state at a point in time so it can be
+/// restored when resuming a session. It tracks:
+/// - Files that were read during the session (for context restoration)
+/// - Skills that were active (so they can be re-enabled on resume)
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SessionContext {
+    /// Files that were read during the session.
+    context_files: Vec<ContextFile>,
+
+    /// Names of skills that were active during the session.
+    active_skills: Vec<String>,
+}
+
+impl SessionContext {
+    /// Creates a new empty session context.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Returns the context files.
+    #[must_use]
+    pub fn context_files(&self) -> &[ContextFile] {
+        &self.context_files
+    }
+
+    /// Returns the active skills.
+    #[must_use]
+    pub fn active_skills(&self) -> &[String] {
+        &self.active_skills
+    }
+
+    /// Adds a context file.
+    ///
+    /// # Arguments
+    ///
+    /// * `file` - The context file to add.
+    pub fn add_file(&mut self, file: ContextFile) {
+        self.context_files.push(file);
+    }
+
+    /// Adds an active skill if not already present.
+    ///
+    /// # Arguments
+    ///
+    /// * `skill_name` - Name of the skill to add.
+    pub fn add_skill(&mut self, skill_name: impl Into<String>) {
+        let name = skill_name.into();
+        if !self.active_skills.contains(&name) {
+            self.active_skills.push(name);
+        }
+    }
+
+    /// Removes an active skill.
+    ///
+    /// # Arguments
+    ///
+    /// * `skill_name` - Name of the skill to remove.
+    pub fn remove_skill(&mut self, skill_name: &str) {
+        self.active_skills.retain(|s| s != skill_name);
+    }
+}
+
 /// Wrapper for session files that includes integrity checksum.
 ///
 /// This struct is used for serialization/deserialization of session files,
@@ -344,6 +466,13 @@ pub struct Session {
     /// so users can resume exactly where they left off.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     ui_state: Option<UiState>,
+
+    /// Optional session context for resume.
+    ///
+    /// When present, tracks files that were read during the session and
+    /// skills that were active, enabling context restoration on resume.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    context: Option<SessionContext>,
 }
 
 impl Session {
@@ -363,6 +492,7 @@ impl Session {
             updated_at: now,
             worktree_session: None,
             ui_state: None,
+            context: None,
         }
     }
 
@@ -434,6 +564,25 @@ impl Session {
     /// * `ui_state` - The UI state to save, or `None` to clear it.
     pub fn set_ui_state(&mut self, ui_state: Option<UiState>) {
         self.ui_state = ui_state;
+        self.updated_at = SystemTime::now();
+    }
+
+    /// Returns the session context, if saved.
+    ///
+    /// The session context tracks files read during the session and active skills,
+    /// enabling context restoration on session resume.
+    #[must_use]
+    pub fn context(&self) -> Option<&SessionContext> {
+        self.context.as_ref()
+    }
+
+    /// Sets the session context.
+    ///
+    /// # Arguments
+    ///
+    /// * `context` - The session context to save, or `None` to clear it.
+    pub fn set_context(&mut self, context: Option<SessionContext>) {
+        self.context = context;
         self.updated_at = SystemTime::now();
     }
 }
@@ -1277,5 +1426,159 @@ mod tests {
         assert_eq!(ui.scroll_offset(), 75);
         assert_eq!(ui.input_buffer(), "Work in progress");
         assert_eq!(ui.cursor_position(), 16);
+    }
+
+    // =========================================================================
+    // Phase 10.2.1: Context file tracking tests
+    // =========================================================================
+
+    #[test]
+    fn test_context_file_new() {
+        let cf = ContextFile::new("/project/src/main.rs");
+        assert_eq!(cf.path(), Path::new("/project/src/main.rs"));
+        assert!(cf.content_hash().is_none());
+    }
+
+    #[test]
+    fn test_context_file_with_hash() {
+        let cf = ContextFile::with_hash("/project/src/lib.rs", "abc123hash");
+        assert_eq!(cf.path(), Path::new("/project/src/lib.rs"));
+        assert_eq!(cf.content_hash(), Some("abc123hash"));
+    }
+
+    #[test]
+    fn test_context_file_serialization() {
+        let cf = ContextFile::with_hash("/project/README.md", "deadbeef");
+
+        let json = serde_json::to_string(&cf).expect("Failed to serialize");
+        let deserialized: ContextFile = serde_json::from_str(&json).expect("Failed to deserialize");
+
+        assert_eq!(deserialized.path(), Path::new("/project/README.md"));
+        assert_eq!(deserialized.content_hash(), Some("deadbeef"));
+    }
+
+    #[test]
+    fn test_session_context_new() {
+        let ctx = SessionContext::new();
+        assert!(ctx.context_files().is_empty());
+        assert!(ctx.active_skills().is_empty());
+    }
+
+    #[test]
+    fn test_session_context_add_file() {
+        let mut ctx = SessionContext::new();
+        ctx.add_file(ContextFile::new("/project/src/main.rs"));
+        ctx.add_file(ContextFile::with_hash("/project/Cargo.toml", "hash123"));
+
+        assert_eq!(ctx.context_files().len(), 2);
+    }
+
+    #[test]
+    fn test_session_context_add_skill() {
+        let mut ctx = SessionContext::new();
+        ctx.add_skill("narsil");
+        ctx.add_skill("commit");
+
+        assert_eq!(ctx.active_skills().len(), 2);
+        assert!(ctx.active_skills().contains(&"narsil".to_string()));
+        assert!(ctx.active_skills().contains(&"commit".to_string()));
+    }
+
+    #[test]
+    fn test_session_context_add_skill_deduplicates() {
+        let mut ctx = SessionContext::new();
+        ctx.add_skill("narsil");
+        ctx.add_skill("commit");
+        ctx.add_skill("narsil"); // duplicate
+
+        assert_eq!(ctx.active_skills().len(), 2);
+    }
+
+    #[test]
+    fn test_session_context_remove_skill() {
+        let mut ctx = SessionContext::new();
+        ctx.add_skill("narsil");
+        ctx.add_skill("commit");
+
+        ctx.remove_skill("narsil");
+
+        assert_eq!(ctx.active_skills().len(), 1);
+        assert!(!ctx.active_skills().contains(&"narsil".to_string()));
+        assert!(ctx.active_skills().contains(&"commit".to_string()));
+    }
+
+    #[test]
+    fn test_session_context_serialization() {
+        let mut ctx = SessionContext::new();
+        ctx.add_file(ContextFile::new("/project/src/main.rs"));
+        ctx.add_skill("narsil");
+
+        let json = serde_json::to_string(&ctx).expect("Failed to serialize");
+        let deserialized: SessionContext =
+            serde_json::from_str(&json).expect("Failed to deserialize");
+
+        assert_eq!(deserialized.context_files().len(), 1);
+        assert_eq!(deserialized.active_skills().len(), 1);
+    }
+
+    #[test]
+    fn test_session_with_context() {
+        let mut session = Session::new(PathBuf::from("/test"));
+        assert!(session.context().is_none());
+
+        let mut ctx = SessionContext::new();
+        ctx.add_file(ContextFile::new("/test/src/lib.rs"));
+        ctx.add_skill("commit");
+        session.set_context(Some(ctx));
+
+        assert!(session.context().is_some());
+        assert_eq!(session.context().unwrap().context_files().len(), 1);
+        assert_eq!(session.context().unwrap().active_skills().len(), 1);
+    }
+
+    #[test]
+    fn test_session_context_serialization_with_session() {
+        let mut session = Session::new(PathBuf::from("/project"));
+        let mut ctx = SessionContext::new();
+        ctx.add_file(ContextFile::with_hash("/project/Cargo.toml", "abc"));
+        ctx.add_skill("narsil");
+        session.set_context(Some(ctx));
+        session.add_message(test_message(Role::User, "Hello"));
+
+        let json = serde_json::to_string(&session).expect("Failed to serialize");
+        let deserialized: Session = serde_json::from_str(&json).expect("Failed to deserialize");
+
+        assert!(deserialized.context().is_some());
+        let ctx = deserialized.context().unwrap();
+        assert_eq!(ctx.context_files().len(), 1);
+        assert_eq!(
+            ctx.context_files()[0].path(),
+            Path::new("/project/Cargo.toml")
+        );
+        assert_eq!(ctx.active_skills().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_session_context_persistence() {
+        let temp_dir = TempDir::new().unwrap();
+        let manager = SessionManager::new(temp_dir.path().to_path_buf());
+
+        let mut session = Session::new(PathBuf::from("/test"));
+        let mut ctx = SessionContext::new();
+        ctx.add_file(ContextFile::with_hash("/test/src/main.rs", "hash123"));
+        ctx.add_file(ContextFile::new("/test/README.md"));
+        ctx.add_skill("narsil");
+        ctx.add_skill("commit");
+        session.set_context(Some(ctx));
+        session.add_message(test_message(Role::User, "Working on feature"));
+
+        let id = manager.save(&session).await.unwrap();
+        let loaded = manager.load(&id).await.unwrap();
+
+        assert!(loaded.context().is_some());
+        let ctx = loaded.context().unwrap();
+        assert_eq!(ctx.context_files().len(), 2);
+        assert_eq!(ctx.active_skills().len(), 2);
+        assert!(ctx.active_skills().contains(&"narsil".to_string()));
     }
 }
