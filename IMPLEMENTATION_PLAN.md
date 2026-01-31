@@ -256,21 +256,24 @@
 
 ### 9.3 narsil-mcp Integration
 
-- [ ] 9.3.1 Create narsil plugin manifest
+- [x] 9.3.1 Create narsil plugin manifest
   - Path: `plugins/narsil/rct-plugin.toml`
   - Config: Auto-start MCP server, code intelligence tools
   - Acceptance: Manifest valid
+  - **Completed: 2026-01-31** - Created TOML manifest with MCP, tools, and skills capabilities
 
-- [ ] 9.3.2 Implement auto-detection (GREEN)
+- [x] 9.3.2 Implement auto-detection (GREEN)
   - Path: `src/plugins/narsil.rs` (new)
   - Detect: `which narsil-mcp` availability
   - Detect: Supported code files in project
   - Acceptance: narsil auto-enables when available
+  - **Completed: 2026-01-31** - Added is_narsil_available(), has_supported_code_files(), should_enable_narsil()
 
-- [ ] 9.3.3 Add --with-narsil / --no-narsil flags (GREEN)
+- [x] 9.3.3 Add --with-narsil / --no-narsil flags (GREEN)
   - Path: `src/main.rs`
   - CLI: Override auto-detection
   - Acceptance: Flags control narsil loading
+  - **Completed: 2026-01-31** - Added NarsilMode enum and CLI flags
 
 ---
 

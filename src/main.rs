@@ -6,6 +6,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 // Use the library crate
 use patina::app;
+use patina::types::config::NarsilMode;
 
 #[derive(Parser, Debug)]
 #[command(name = "patina")]
@@ -27,6 +28,14 @@ struct Args {
     /// Enable debug logging
     #[arg(long)]
     debug: bool,
+
+    /// Enable narsil-mcp integration (overrides auto-detection)
+    #[arg(long, conflicts_with = "no_narsil")]
+    with_narsil: bool,
+
+    /// Disable narsil-mcp integration
+    #[arg(long, conflicts_with = "with_narsil")]
+    no_narsil: bool,
 }
 
 #[tokio::main]
@@ -48,10 +57,20 @@ async fn main() -> Result<()> {
             anyhow::anyhow!("API key required. Set ANTHROPIC_API_KEY or use --api-key")
         })?;
 
+    // Determine narsil mode from CLI flags
+    let narsil_mode = if args.with_narsil {
+        NarsilMode::Enabled
+    } else if args.no_narsil {
+        NarsilMode::Disabled
+    } else {
+        NarsilMode::Auto
+    };
+
     app::run(app::Config {
         api_key,
         model: args.model,
         working_dir: args.directory,
+        narsil_mode,
     })
     .await
 }
