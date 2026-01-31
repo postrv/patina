@@ -463,3 +463,101 @@ fn test_dirty_flags() {
     state.scroll_up(1);
     assert!(state.needs_render(), "After scroll, should need render");
 }
+
+// ============================================================================
+// 8.4.2 Status Bar Worktree Indicator Tests
+// ============================================================================
+
+/// Tests that the status bar displays the current branch name.
+#[test]
+fn test_status_bar_shows_branch_name() {
+    let mut state = new_state();
+
+    // Set worktree info on state
+    state.set_worktree_branch("feature/my-branch".to_string());
+
+    let output = render_to_string(&state, 80, 20);
+
+    // The branch name should appear in the status bar
+    assert!(
+        output.contains("feature/my-branch"),
+        "Status bar should show branch name. Output:\n{}",
+        output
+    );
+}
+
+/// Tests that the status bar displays ahead/behind counts.
+#[test]
+fn test_status_bar_shows_ahead_behind() {
+    let mut state = new_state();
+
+    state.set_worktree_branch("main".to_string());
+    state.set_worktree_ahead(3);
+    state.set_worktree_behind(2);
+
+    let output = render_to_string(&state, 80, 20);
+
+    // Should show ahead indicator
+    assert!(
+        output.contains("↑3"),
+        "Status bar should show ahead count. Output:\n{}",
+        output
+    );
+
+    // Should show behind indicator
+    assert!(
+        output.contains("↓2"),
+        "Status bar should show behind count. Output:\n{}",
+        output
+    );
+}
+
+/// Tests that the status bar displays modified file count.
+#[test]
+fn test_status_bar_shows_modified_count() {
+    let mut state = new_state();
+
+    state.set_worktree_branch("main".to_string());
+    state.set_worktree_modified(5);
+
+    let output = render_to_string(&state, 80, 20);
+
+    // Should show modified count with dirty indicator
+    assert!(
+        output.contains("●5") || output.contains("*5"),
+        "Status bar should show modified count. Output:\n{}",
+        output
+    );
+}
+
+/// Tests that status bar renders with full worktree status.
+#[test]
+fn test_status_bar_full_worktree_status() {
+    let mut state = new_state();
+
+    state.set_worktree_branch("wt/experiment".to_string());
+    state.set_worktree_modified(2);
+    state.set_worktree_ahead(1);
+    state.set_worktree_behind(0);
+
+    let output = render_to_string(&state, 80, 20);
+    insta::assert_snapshot!(output);
+}
+
+/// Tests that status bar handles clean worktree (no modified files).
+#[test]
+fn test_status_bar_clean_worktree() {
+    let mut state = new_state();
+
+    state.set_worktree_branch("main".to_string());
+    // No modified files, no ahead/behind
+
+    let output = render_to_string(&state, 80, 20);
+
+    // Branch should still appear
+    assert!(
+        output.contains("main"),
+        "Status bar should show branch even when clean. Output:\n{}",
+        output
+    );
+}
