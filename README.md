@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="patina.jpg" alt="Patina Logo" width="300">
+</p>
+
 # Patina
 
 [![CI](https://github.com/postrv/patina/actions/workflows/ci.yml/badge.svg)](https://github.com/postrv/patina/actions/workflows/ci.yml)
