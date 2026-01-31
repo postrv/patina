@@ -278,6 +278,94 @@ impl ContextFile {
     pub fn content_hash(&self) -> Option<&str> {
         self.content_hash.as_deref()
     }
+
+    /// Computes the SHA-256 hash of a file's content.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - Path to the file to hash.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the file cannot be read.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use patina::session::ContextFile;
+    /// # async fn example() -> anyhow::Result<()> {
+    /// let hash = ContextFile::compute_hash("/path/to/file.rs").await?;
+    /// println!("File hash: {}", hash);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn compute_hash(path: impl AsRef<Path>) -> Result<String> {
+        let content = fs::read(path.as_ref())
+            .await
+            .context("Failed to read file for hashing")?;
+        let mut hasher = Sha256::new();
+        hasher.update(&content);
+        Ok(hex::encode(hasher.finalize()))
+    }
+
+    /// Checks if the file is unchanged since the hash was computed.
+    ///
+    /// Returns `true` if the file exists, has a stored hash, and the current
+    /// content matches the stored hash. Returns `false` if:
+    /// - The file doesn't exist
+    /// - No hash was stored
+    /// - The file content has changed
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use patina::session::ContextFile;
+    /// # async fn example() -> anyhow::Result<()> {
+    /// let cf = ContextFile::with_hash("/path/to/file.rs", "abc123...");
+    /// if cf.is_unchanged().await? {
+    ///     println!("File hasn't changed, safe to restore context");
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn is_unchanged(&self) -> Result<bool> {
+        // No stored hash means we can't verify - treat as changed
+        let Some(stored_hash) = &self.content_hash else {
+            return Ok(false);
+        };
+
+        // Check if file exists and compute current hash
+        match Self::compute_hash(&self.path).await {
+            Ok(current_hash) => Ok(&current_hash == stored_hash),
+            Err(_) => {
+                // File doesn't exist or can't be read - treat as changed
+                Ok(false)
+            }
+        }
+    }
+}
+
+/// Result of restoring session context.
+///
+/// When restoring a session, context files are checked against their stored
+/// hashes to determine which files can be safely restored and which have changed.
+#[derive(Debug, Clone)]
+pub struct ContextRestoreResult {
+    /// Files that were successfully verified as unchanged.
+    /// These files can be safely used to restore context.
+    pub restored_files: Vec<PathBuf>,
+
+    /// Files that have been modified since the session was saved.
+    /// The user should be notified that these files have changed.
+    pub changed_files: Vec<PathBuf>,
+
+    /// Files that no longer exist.
+    /// The user should be notified that these files are missing.
+    pub missing_files: Vec<PathBuf>,
+
+    /// Skills that were active during the session.
+    /// These should be re-enabled on resume.
+    pub active_skills: Vec<String>,
 }
 
 /// Tracks session context including files read and active skills.
@@ -342,6 +430,67 @@ impl SessionContext {
     /// * `skill_name` - Name of the skill to remove.
     pub fn remove_skill(&mut self, skill_name: &str) {
         self.active_skills.retain(|s| s != skill_name);
+    }
+
+    /// Restores the session context by verifying context files.
+    ///
+    /// Checks each tracked file against its stored hash to determine which
+    /// files are unchanged and can be safely used for context restoration.
+    /// Files that have changed or are missing are reported separately.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if file hashing fails unexpectedly.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use patina::session::SessionContext;
+    /// # async fn example() -> anyhow::Result<()> {
+    /// let ctx = SessionContext::new();
+    /// // ... context is loaded from a saved session ...
+    ///
+    /// let result = ctx.restore().await?;
+    /// for path in &result.restored_files {
+    ///     println!("Restored context from: {}", path.display());
+    /// }
+    /// for path in &result.changed_files {
+    ///     println!("Warning: {} has changed since last session", path.display());
+    /// }
+    /// for skill in &result.active_skills {
+    ///     println!("Re-enabling skill: {}", skill);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn restore(&self) -> Result<ContextRestoreResult> {
+        let mut restored_files = Vec::new();
+        let mut changed_files = Vec::new();
+        let mut missing_files = Vec::new();
+
+        for context_file in &self.context_files {
+            let path = context_file.path().to_path_buf();
+
+            // Check if file exists
+            if !path.exists() {
+                missing_files.push(path);
+                continue;
+            }
+
+            // Check if file is unchanged
+            if context_file.is_unchanged().await? {
+                restored_files.push(path);
+            } else {
+                changed_files.push(path);
+            }
+        }
+
+        Ok(ContextRestoreResult {
+            restored_files,
+            changed_files,
+            missing_files,
+            active_skills: self.active_skills.clone(),
+        })
     }
 }
 
@@ -1580,5 +1729,179 @@ mod tests {
         assert_eq!(ctx.context_files().len(), 2);
         assert_eq!(ctx.active_skills().len(), 2);
         assert!(ctx.active_skills().contains(&"narsil".to_string()));
+    }
+
+    // =========================================================================
+    // Phase 10.2.2: Context restoration tests
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_compute_file_hash() {
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("test.txt");
+        fs::write(&file_path, "Hello, world!").await.unwrap();
+
+        let hash = ContextFile::compute_hash(&file_path).await.unwrap();
+        assert!(!hash.is_empty());
+        assert_eq!(hash.len(), 64); // SHA-256 hex = 64 chars
+
+        // Same content should produce same hash
+        let hash2 = ContextFile::compute_hash(&file_path).await.unwrap();
+        assert_eq!(hash, hash2);
+    }
+
+    #[tokio::test]
+    async fn test_compute_file_hash_different_content() {
+        let temp_dir = TempDir::new().unwrap();
+        let file1 = temp_dir.path().join("file1.txt");
+        let file2 = temp_dir.path().join("file2.txt");
+
+        fs::write(&file1, "Content A").await.unwrap();
+        fs::write(&file2, "Content B").await.unwrap();
+
+        let hash1 = ContextFile::compute_hash(&file1).await.unwrap();
+        let hash2 = ContextFile::compute_hash(&file2).await.unwrap();
+
+        assert_ne!(hash1, hash2);
+    }
+
+    #[tokio::test]
+    async fn test_context_file_is_unchanged() {
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("test.rs");
+        fs::write(&file_path, "fn main() {}").await.unwrap();
+
+        // Create context file with current hash
+        let hash = ContextFile::compute_hash(&file_path).await.unwrap();
+        let cf = ContextFile::with_hash(&file_path, &hash);
+
+        // File should be unchanged
+        assert!(cf.is_unchanged().await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_context_file_is_changed() {
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("test.rs");
+        fs::write(&file_path, "fn main() {}").await.unwrap();
+
+        // Create context file with current hash
+        let hash = ContextFile::compute_hash(&file_path).await.unwrap();
+        let cf = ContextFile::with_hash(&file_path, &hash);
+
+        // Modify the file
+        fs::write(&file_path, "fn main() { println!(\"modified\"); }")
+            .await
+            .unwrap();
+
+        // File should now be changed
+        assert!(!cf.is_unchanged().await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_context_file_without_hash_is_changed() {
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("test.rs");
+        fs::write(&file_path, "fn main() {}").await.unwrap();
+
+        // Create context file without hash
+        let cf = ContextFile::new(&file_path);
+
+        // Without stored hash, we can't verify - treat as changed
+        assert!(!cf.is_unchanged().await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_context_file_missing_file() {
+        let cf = ContextFile::with_hash("/nonexistent/path/file.rs", "somehash");
+
+        // Missing file should be treated as changed
+        assert!(!cf.is_unchanged().await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_restore_context_unchanged_files() {
+        let temp_dir = TempDir::new().unwrap();
+
+        // Create test files
+        let file1 = temp_dir.path().join("src/main.rs");
+        let file2 = temp_dir.path().join("src/lib.rs");
+        fs::create_dir_all(temp_dir.path().join("src"))
+            .await
+            .unwrap();
+        fs::write(&file1, "fn main() {}").await.unwrap();
+        fs::write(&file2, "pub fn lib_fn() {}").await.unwrap();
+
+        // Create context with hashes
+        let hash1 = ContextFile::compute_hash(&file1).await.unwrap();
+        let hash2 = ContextFile::compute_hash(&file2).await.unwrap();
+
+        let mut ctx = SessionContext::new();
+        ctx.add_file(ContextFile::with_hash(&file1, &hash1));
+        ctx.add_file(ContextFile::with_hash(&file2, &hash2));
+        ctx.add_skill("narsil");
+
+        // Restore context
+        let result = ctx.restore().await.unwrap();
+
+        // All files should be restored (unchanged)
+        assert_eq!(result.restored_files.len(), 2);
+        assert!(result.changed_files.is_empty());
+        assert!(result.missing_files.is_empty());
+        assert_eq!(result.active_skills, vec!["narsil".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn test_restore_context_with_changed_file() {
+        let temp_dir = TempDir::new().unwrap();
+
+        // Create test files
+        let file1 = temp_dir.path().join("unchanged.rs");
+        let file2 = temp_dir.path().join("changed.rs");
+        fs::write(&file1, "unchanged content").await.unwrap();
+        fs::write(&file2, "original content").await.unwrap();
+
+        // Create context with hashes
+        let hash1 = ContextFile::compute_hash(&file1).await.unwrap();
+        let hash2 = ContextFile::compute_hash(&file2).await.unwrap();
+
+        let mut ctx = SessionContext::new();
+        ctx.add_file(ContextFile::with_hash(&file1, &hash1));
+        ctx.add_file(ContextFile::with_hash(&file2, &hash2));
+
+        // Modify one file
+        fs::write(&file2, "modified content").await.unwrap();
+
+        // Restore context
+        let result = ctx.restore().await.unwrap();
+
+        assert_eq!(result.restored_files.len(), 1);
+        assert_eq!(result.changed_files.len(), 1);
+        assert!(result.missing_files.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_restore_context_with_missing_file() {
+        let temp_dir = TempDir::new().unwrap();
+
+        // Create only one file
+        let file1 = temp_dir.path().join("exists.rs");
+        fs::write(&file1, "content").await.unwrap();
+
+        let hash1 = ContextFile::compute_hash(&file1).await.unwrap();
+
+        let mut ctx = SessionContext::new();
+        ctx.add_file(ContextFile::with_hash(&file1, &hash1));
+        ctx.add_file(ContextFile::with_hash(
+            temp_dir.path().join("missing.rs"),
+            "oldhash",
+        ));
+
+        // Restore context
+        let result = ctx.restore().await.unwrap();
+
+        assert_eq!(result.restored_files.len(), 1);
+        assert!(result.changed_files.is_empty());
+        assert_eq!(result.missing_files.len(), 1);
     }
 }
