@@ -18,7 +18,6 @@ use serde_json::json;
 ///
 /// On Unix: `echo 'message' && exit N`
 /// On Windows: `echo message & exit /b N`
-#[allow(dead_code)]
 fn echo_and_exit(msg: &str, code: i32) -> String {
     #[cfg(unix)]
     {
@@ -42,22 +41,6 @@ fn exit_with_code(code: i32) -> String {
     #[cfg(windows)]
     {
         format!("exit /b {}", code)
-    }
-}
-
-/// Generates a platform-specific command that writes to stderr and exits.
-///
-/// On Unix: `echo 'message' >&2 && exit N`
-/// On Windows: `echo message 1>&2 & exit /b N`
-#[allow(dead_code)]
-fn stderr_and_exit(msg: &str, code: i32) -> String {
-    #[cfg(unix)]
-    {
-        format!("echo '{}' >&2 && exit {}", msg, code)
-    }
-    #[cfg(windows)]
-    {
-        format!("echo {} 1>&2 & exit /b {}", msg, code)
     }
 }
 
