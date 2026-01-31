@@ -283,17 +283,20 @@
 
 ### 10.1 Enhanced Session State
 
-- [ ] 10.1.1 Extend session with UI state (RED)
+- [x] 10.1.1 Extend session with UI state (RED)
   - Path: `src/session/mod.rs`
-  - Test: `test_serialize_ui_state`
-  - Test: `test_deserialize_ui_state`
+  - Test: `test_ui_state_new`, `test_ui_state_with_values`, `test_ui_state_serialization`
+  - Test: `test_session_with_ui_state`, `test_session_ui_state_serialization`
   - Fields: scroll_offset, input_buffer, cursor_position
   - Acceptance: Tests document serialization
+  - **Completed: 2026-01-31** - Added UiState struct with full test coverage
 
-- [ ] 10.1.2 Implement UI state persistence (GREEN)
+- [x] 10.1.2 Implement UI state persistence (GREEN)
   - Path: `src/session/mod.rs`
-  - Serialize: All restorable UI state
+  - Serialize: All restorable UI state via UiState struct
+  - Test: `test_session_ui_state_persistence`
   - Acceptance: UI state survives save/load
+  - **Completed: 2026-01-31** - UiState persists across session save/load
 
 ### 10.2 Context State
 
