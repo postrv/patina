@@ -6,7 +6,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 // Use the library crate
 use patina::app;
-use patina::types::config::NarsilMode;
+use patina::types::config::{NarsilMode, ResumeMode};
 
 #[derive(Parser, Debug)]
 #[command(name = "patina")]
@@ -36,6 +36,11 @@ struct Args {
     /// Disable narsil-mcp integration
     #[arg(long, conflicts_with = "with_narsil")]
     no_narsil: bool,
+
+    /// Resume a previous session. Use "last" to resume the most recent session,
+    /// or provide a specific session ID.
+    #[arg(long, value_name = "SESSION")]
+    resume: Option<String>,
 }
 
 #[tokio::main]
@@ -66,11 +71,19 @@ async fn main() -> Result<()> {
         NarsilMode::Auto
     };
 
+    // Determine resume mode from CLI flag
+    let resume_mode = match args.resume.as_deref() {
+        Some("last") => ResumeMode::Last,
+        Some(session_id) => ResumeMode::SessionId(session_id.to_string()),
+        None => ResumeMode::None,
+    };
+
     app::run(app::Config {
         api_key,
         model: args.model,
         working_dir: args.directory,
         narsil_mode,
+        resume_mode,
     })
     .await
 }

@@ -1,6 +1,7 @@
 //! Application state management
 
 use crate::api::{AnthropicClient, StreamEvent};
+use crate::session::Session;
 use crate::types::{Message, Role};
 use anyhow::Result;
 use std::path::PathBuf;
@@ -296,5 +297,118 @@ impl AppState {
     #[must_use]
     pub fn worktree_behind(&self) -> usize {
         self.worktree_behind
+    }
+
+    // ========================================================================
+    // Session Restoration
+    // ========================================================================
+
+    /// Restores application state from a saved session.
+    ///
+    /// This restores:
+    /// - Message history
+    /// - UI state (scroll position, input buffer, cursor position) if saved
+    ///
+    /// # Arguments
+    ///
+    /// * `session` - The session to restore from.
+    pub fn restore_from_session(&mut self, session: &Session) {
+        // Restore messages
+        self.messages = session.messages().to_vec();
+
+        // Restore UI state if available
+        if let Some(ui_state) = session.ui_state() {
+            self.scroll_offset = ui_state.scroll_offset();
+            self.input = ui_state.input_buffer().to_string();
+            self.cursor_pos = ui_state.cursor_position();
+        }
+
+        // Mark for full redraw
+        self.dirty.full = true;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::session::UiState;
+
+    fn test_message(role: Role, content: &str) -> Message {
+        Message {
+            role,
+            content: content.to_string(),
+        }
+    }
+
+    #[test]
+    fn test_app_state_new() {
+        let state = AppState::new(PathBuf::from("/test"));
+        assert!(state.messages.is_empty());
+        assert!(state.input.is_empty());
+        assert_eq!(state.scroll_offset, 0);
+        assert_eq!(state.working_dir, PathBuf::from("/test"));
+    }
+
+    #[test]
+    fn test_restore_from_session_messages() {
+        let mut state = AppState::new(PathBuf::from("/test"));
+
+        // Create a session with messages
+        let mut session = Session::new(PathBuf::from("/project"));
+        session.add_message(test_message(Role::User, "Hello"));
+        session.add_message(test_message(Role::Assistant, "Hi there!"));
+
+        state.restore_from_session(&session);
+
+        assert_eq!(state.messages.len(), 2);
+        assert_eq!(state.messages[0].content, "Hello");
+        assert_eq!(state.messages[1].content, "Hi there!");
+    }
+
+    #[test]
+    fn test_restore_from_session_with_ui_state() {
+        let mut state = AppState::new(PathBuf::from("/test"));
+
+        // Create a session with UI state
+        let mut session = Session::new(PathBuf::from("/project"));
+        session.add_message(test_message(Role::User, "Test"));
+        session.set_ui_state(Some(UiState::with_state(50, "draft input".to_string(), 5)));
+
+        state.restore_from_session(&session);
+
+        assert_eq!(state.scroll_offset, 50);
+        assert_eq!(state.input, "draft input");
+        assert_eq!(state.cursor_position(), 5);
+    }
+
+    #[test]
+    fn test_restore_from_session_without_ui_state() {
+        let mut state = AppState::new(PathBuf::from("/test"));
+        // Set some initial state
+        state.scroll_offset = 100;
+        state.input = "existing".to_string();
+        state.cursor_pos = 8;
+
+        // Create a session without UI state
+        let mut session = Session::new(PathBuf::from("/project"));
+        session.add_message(test_message(Role::User, "Test"));
+
+        state.restore_from_session(&session);
+
+        // UI state should remain unchanged since session has no UI state
+        assert_eq!(state.scroll_offset, 100);
+        assert_eq!(state.input, "existing");
+        assert_eq!(state.cursor_position(), 8);
+    }
+
+    #[test]
+    fn test_restore_marks_dirty() {
+        let mut state = AppState::new(PathBuf::from("/test"));
+        state.mark_rendered(); // Clear dirty flags
+
+        let session = Session::new(PathBuf::from("/project"));
+        state.restore_from_session(&session);
+
+        assert!(state.needs_render());
     }
 }
