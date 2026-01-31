@@ -56,3 +56,6 @@ mod experiment_test;
 
 #[path = "unit/worktree_picker_test.rs"]
 mod worktree_picker_test;
+
+#[path = "unit/manifest_test.rs"]
+mod manifest_test;

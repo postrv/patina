@@ -4,8 +4,10 @@
 //! - Plugin discovery from filesystem
 //! - Plugin registry for managing loaded plugins
 //! - Host API traits for plugin development
+//! - Manifest parsing for `rct-plugin.toml` files
 
 pub mod host;
+pub mod manifest;
 
 use anyhow::Result;
 use serde::Deserialize;
