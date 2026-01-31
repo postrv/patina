@@ -1,6 +1,6 @@
 # Security Audit Report
 
-**Project:** RCT (Rust Claude Terminal)
+**Project:** Patina (Rust Claude Terminal)
 **Version:** 0.2.0-security
 **Audit Date:** 2026-01-30
 **Auditor:** Automated + Manual Review
@@ -9,7 +9,7 @@
 
 ## Executive Summary
 
-This security audit covers the security hardening implemented in Phases 0-4 of the RCT implementation plan. All identified vulnerabilities have been resolved, with comprehensive test coverage validating the fixes.
+This security audit covers the security hardening implemented in Phases 0-4 of the Patina implementation plan. All identified vulnerabilities have been resolved, with comprehensive test coverage validating the fixes.
 
 | Metric | Result |
 |--------|--------|
@@ -222,7 +222,7 @@ grep -rn 'TODO:' src/
 
 ## Conclusion
 
-The RCT codebase has undergone comprehensive security hardening:
+The Patina codebase has undergone comprehensive security hardening:
 
 - **All 8 identified vulnerabilities resolved**
 - **63+ security-focused tests provide regression protection**

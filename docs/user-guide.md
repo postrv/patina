@@ -1,4 +1,4 @@
-# RCT User Guide
+# Patina User Guide
 
 Rust Claude Terminal - A high-performance CLI for the Claude API.
 
@@ -10,28 +10,28 @@ Rust Claude Terminal - A high-performance CLI for the Claude API.
 # Add the tap (first time only)
 brew tap postrv/tap
 
-# Install RCT
-brew install rct
+# Install Patina
+brew install patina
 ```
 
 Or install directly from the formula:
 
 ```bash
-brew install postrv/tap/rct
+brew install postrv/tap/patina
 ```
 
 ### Cargo (All Platforms)
 
 ```bash
-cargo install rct
+cargo install patina
 ```
 
 ### From Source
 
 ```bash
 # Clone the repository
-git clone https://github.com/postrv/rct.git
-cd rct
+git clone https://github.com/postrv/patina.git
+cd patina
 
 # Build release binary
 cargo build --release
@@ -42,79 +42,79 @@ cargo install --path .
 
 ### Pre-built Binaries
 
-Download the latest release from [GitHub Releases](https://github.com/postrv/rct/releases).
+Download the latest release from [GitHub Releases](https://github.com/postrv/patina/releases).
 
 Available binaries:
-- `rct-linux-x86_64.tar.gz` - Linux x86_64 (glibc)
-- `rct-linux-x86_64-musl.tar.gz` - Linux x86_64 (musl, static)
-- `rct-macos-x86_64.tar.gz` - macOS Intel
-- `rct-macos-aarch64.tar.gz` - macOS Apple Silicon
-- `rct-windows-x86_64.zip` - Windows x64
+- `patina-linux-x86_64.tar.gz` - Linux x86_64 (glibc)
+- `patina-linux-x86_64-musl.tar.gz` - Linux x86_64 (musl, static)
+- `patina-macos-x86_64.tar.gz` - macOS Intel
+- `patina-macos-aarch64.tar.gz` - macOS Apple Silicon
+- `patina-windows-x86_64.zip` - Windows x64
 
 ### Docker
 
 ```bash
 # Pull from GitHub Container Registry
-docker pull ghcr.io/postrv/rct:latest
+docker pull ghcr.io/postrv/patina:latest
 
 # Run with API key
 docker run -it --rm \
   -e ANTHROPIC_API_KEY="your-api-key" \
   -v "$(pwd):/workspace" \
-  ghcr.io/postrv/rct:latest
+  ghcr.io/postrv/patina:latest
 ```
 
 Or build locally:
 
 ```bash
-docker build -t rct .
+docker build -t patina .
 docker run -it --rm \
   -e ANTHROPIC_API_KEY="your-api-key" \
   -v "$(pwd):/workspace" \
-  rct
+  patina
 ```
 
 ### Debian/Ubuntu (apt)
 
-Download the `.deb` package from [GitHub Releases](https://github.com/postrv/rct/releases):
+Download the `.deb` package from [GitHub Releases](https://github.com/postrv/patina/releases):
 
 ```bash
 # Download the package (replace VERSION with latest)
-wget https://github.com/postrv/rct/releases/download/v0.1.0/rct_0.1.0_amd64.deb
+wget https://github.com/postrv/patina/releases/download/v0.1.0/patina_0.3.0_amd64.deb
 
 # Install
-sudo dpkg -i rct_0.1.0_amd64.deb
+sudo dpkg -i patina_0.3.0_amd64.deb
 ```
 
 ### Fedora/RHEL/CentOS (dnf/yum)
 
-Download the `.rpm` package from [GitHub Releases](https://github.com/postrv/rct/releases):
+Download the `.rpm` package from [GitHub Releases](https://github.com/postrv/patina/releases):
 
 ```bash
 # Download the package (replace VERSION with latest)
-wget https://github.com/postrv/rct/releases/download/v0.1.0/rct-0.1.0-1.x86_64.rpm
+wget https://github.com/postrv/patina/releases/download/v0.1.0/patina-0.3.0-1.x86_64.rpm
 
 # Install with dnf
-sudo dnf install rct-0.1.0-1.x86_64.rpm
+sudo dnf install patina-0.3.0-1.x86_64.rpm
 
 # Or with yum
-sudo yum localinstall rct-0.1.0-1.x86_64.rpm
+sudo yum localinstall patina-0.3.0-1.x86_64.rpm
 ```
 
 ### Windows (Scoop)
 
 ```powershell
 # Add the bucket (first time only)
-scoop bucket add rct https://github.com/postrv/scoop-rct
+scoop bucket add patina https://github.com/postrv/scoop-patina
 
 # Install
-scoop install rct
+scoop install patina
 ```
 
 ### Windows (WinGet)
 
 ```powershell
-winget install postrv.rct
+winget install postrv.patina
 ```
 
 ### Requirements
@@ -130,10 +130,10 @@ winget install postrv.rct
 export ANTHROPIC_API_KEY=sk-ant-...
 ```
 
-2. Run RCT:
+2. Run Patina:
 
 ```bash
-rct
+patina
 ```
 
 3. Start chatting with Claude in your terminal.
@@ -141,7 +141,7 @@ rct
 ## CLI Options
 
 ```
-rct [OPTIONS]
+patina [OPTIONS]
 
 Options:
   --api-key <API_KEY>       API key (or set ANTHROPIC_API_KEY env var)
@@ -156,20 +156,20 @@ Options:
 
 ```bash
 # Use a specific model
-rct --model claude-opus-4-20250514
+patina --model claude-opus-4-20250514
 
 # Work in a specific directory
-rct -C /path/to/project
+patina -C /path/to/project
 
 # Enable debug logging
-rct --debug
+patina --debug
 ```
 
 ## Features
 
 ### Interactive Chat
 
-RCT provides a terminal-based chat interface with:
+Patina provides a terminal-based chat interface with:
 
 - Streaming responses with real-time display
 - Syntax highlighting for code blocks
@@ -188,7 +188,7 @@ RCT provides a terminal-based chat interface with:
 
 ### Tools
 
-RCT includes built-in tools that Claude can use to interact with your system:
+Patina includes built-in tools that Claude can use to interact with your system:
 
 #### bash
 
@@ -287,7 +287,7 @@ Define custom workflows with markdown-based slash commands.
 
 #### Creating Commands
 
-Create a markdown file in `.rct/commands/`:
+Create a markdown file in `.patina/commands/`:
 
 ```markdown
 ---
@@ -319,7 +319,7 @@ Skills provide context-aware assistance based on file patterns and keywords.
 
 #### Creating Skills
 
-Create a markdown file in `.rct/skills/`:
+Create a markdown file in `.patina/skills/`:
 
 ```markdown
 ---
@@ -360,7 +360,7 @@ Hooks allow custom actions at lifecycle events.
 
 #### Configuration
 
-Create `.rct/hooks.toml`:
+Create `.patina/hooks.toml`:
 
 ```toml
 [[PreToolUse]]
@@ -376,7 +376,7 @@ hooks = [
 
 [[SessionStart]]
 hooks = [
-  { type = "command", command = "echo 'Session started' >> ~/.rct/session.log" }
+  { type = "command", command = "echo 'Session started' >> ~/.patina/session.log" }
 ]
 ```
 
@@ -406,7 +406,7 @@ Hooks can filter by tool name using patterns:
 
 ### MCP Integration
 
-RCT supports the Model Context Protocol (MCP) for external tool servers.
+Patina supports the Model Context Protocol (MCP) for external tool servers.
 
 #### Configuration
 
@@ -437,7 +437,7 @@ Create `.mcp.json`:
 
 ### Plugins
 
-Extend RCT with custom plugins.
+Extend Patina with custom plugins.
 
 #### Plugin Structure
 
@@ -457,14 +457,14 @@ name: my-plugin
 version: "1.0.0"
 description: My custom plugin
 author: Your Name
-min_rct_version: "0.1.0"
+min_patina_version: "0.1.0"
 ```
 
 #### Loading Plugins
 
 Place plugins in:
-- User: `~/.rct/plugins/`
-- Project: `.rct/plugins/`
+- User: `~/.patina/plugins/`
+- Project: `.patina/plugins/`
 
 ### Multi-Model Support
 
@@ -487,7 +487,7 @@ Switch between Claude models and providers.
 ```bash
 # Configure Bedrock provider
 export AWS_REGION=us-east-1
-rct --provider bedrock --model anthropic.claude-v2
+patina --provider bedrock --model anthropic.claude-v2
 ```
 
 ### Session Persistence
@@ -496,7 +496,7 @@ Save and resume conversation sessions.
 
 #### Session Storage
 
-Sessions are stored in `~/.rct/sessions/` as JSON files containing:
+Sessions are stored in `~/.patina/sessions/` as JSON files containing:
 - Message history
 - Working directory
 - Timestamps
@@ -508,13 +508,13 @@ Sessions are stored in `~/.rct/sessions/` as JSON files containing:
 
 Track all operations for compliance and debugging.
 
-Configuration in `.rct/config.toml`:
+Configuration in `.patina/config.toml`:
 
 ```toml
 [audit]
 enabled = true
 level = "all"  # all, api_only, tools_only, session_only
-path = "~/.rct/audit/"
+path = "~/.patina/audit/"
 ```
 
 Audit entries include:
@@ -547,16 +547,16 @@ Model pricing (per million tokens):
 
 ### Configuration Files
 
-RCT looks for configuration in these locations (in order):
+Patina looks for configuration in these locations (in order):
 
-1. `.rct/` in the current directory (project-specific)
-2. `~/.rct/` (user-specific)
+1. `.patina/` in the current directory (project-specific)
+2. `~/.patina/` (user-specific)
 3. Environment variables
 
 ### Directory Structure
 
 ```
-~/.rct/
+~/.patina/
 ├── config.toml       # Main configuration
 ├── hooks.toml        # Hook definitions
 ├── commands/         # Slash commands
@@ -572,14 +572,14 @@ RCT looks for configuration in these locations (in order):
 | Variable | Description |
 |----------|-------------|
 | ANTHROPIC_API_KEY | Your Anthropic API key |
-| RCT_MODEL | Default model to use |
-| RCT_DEBUG | Enable debug logging (1/true) |
+| PATINA_MODEL | Default model to use |
+| PATINA_DEBUG | Enable debug logging (1/true) |
 
 ## Security
 
 ### Security Model
 
-RCT implements multiple layers of protection:
+Patina implements multiple layers of protection:
 
 1. **Command Blocking**: Dangerous bash commands are blocked
 2. **Path Validation**: File operations are restricted to the working directory
@@ -636,14 +636,14 @@ File operations must stay within the working directory. Use relative paths.
 Enable debug logging for troubleshooting:
 
 ```bash
-rct --debug
+patina --debug
 ```
 
 Or set the environment variable:
 
 ```bash
-export RCT_DEBUG=1
-rct
+export PATINA_DEBUG=1
+patina
 ```
 
 ### Getting Help
@@ -654,4 +654,4 @@ rct
 
 ---
 
-*RCT v0.1.0*
+*Patina v0.3.0*

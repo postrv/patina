@@ -1,4 +1,4 @@
-//! Enterprise features for RCT.
+//! Enterprise features for Patina.
 //!
 //! This module provides enterprise-grade functionality including:
 //! - Audit logging for compliance and security

@@ -1,4 +1,4 @@
-//! Configuration types for RCT.
+//! Configuration types for Patina.
 //!
 //! This module contains configuration structures used to initialize
 //! and configure the application.
@@ -8,7 +8,7 @@ use std::path::PathBuf;
 
 /// Application configuration.
 ///
-/// Contains all settings needed to initialize and run the RCT application.
+/// Contains all settings needed to initialize and run the Patina application.
 ///
 /// # Security Note
 ///

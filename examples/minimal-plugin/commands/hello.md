@@ -24,4 +24,4 @@ A simple greeting command.
 
 ## Notes
 
-This is an example command demonstrating the command format for RCT plugins.
+This is an example command demonstrating the command format for Patina plugins.

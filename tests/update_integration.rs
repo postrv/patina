@@ -1,4 +1,4 @@
-//! Update system integration test suite for RCT.
+//! Update system integration test suite for Patina.
 //!
 //! Tests for auto-update functionality (check/verify/download).
 

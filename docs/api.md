@@ -1,10 +1,10 @@
-# RCT API Reference
+# Patina API Reference
 
-This document provides the library API reference for RCT (Rust Claude Terminal).
+This document provides the library API reference for Patina (Rust Claude Terminal).
 
 ## Overview
 
-RCT can be used both as a CLI application and as a library. The library exposes core types and functionality for building custom Claude integrations.
+Patina can be used both as a CLI application and as a library. The library exposes core types and functionality for building custom Claude integrations.
 
 ## Modules
 
@@ -31,7 +31,7 @@ RCT can be used both as a CLI application and as a library. The library exposes 
 Represents a conversation message.
 
 ```rust
-use rct::types::{Message, Role};
+use patina::types::{Message, Role};
 
 let message = Message {
     role: Role::User,
@@ -48,7 +48,7 @@ let message = Message {
 The sender of a message.
 
 ```rust
-use rct::types::Role;
+use patina::types::Role;
 
 let user = Role::User;
 let assistant = Role::Assistant;
@@ -63,7 +63,7 @@ assert_eq!(format!("{}", Role::Assistant), "assistant");
 Events received during streaming API responses.
 
 ```rust
-use rct::types::StreamEvent;
+use patina::types::StreamEvent;
 
 match event {
     StreamEvent::ContentDelta(text) => {
@@ -91,7 +91,7 @@ match event {
 Application configuration.
 
 ```rust
-use rct::types::Config;
+use patina::types::Config;
 use std::path::PathBuf;
 use secrecy::SecretString;
 
@@ -113,8 +113,8 @@ let working_dir = config.working_dir();
 The main API client for communicating with Anthropic's Claude API.
 
 ```rust
-use rct::api::AnthropicClient;
-use rct::types::{Message, Role, StreamEvent};
+use patina::api::AnthropicClient;
+use patina::types::{Message, Role, StreamEvent};
 use secrecy::SecretString;
 use tokio::sync::mpsc;
 
@@ -178,7 +178,7 @@ Sends a streaming message request. Events are sent through the provided channel.
 Supports switching between models and providers.
 
 ```rust
-use rct::api::multi_model::{MultiModelClient, ModelConfig, ModelProvider};
+use patina::api::multi_model::{MultiModelClient, ModelConfig, ModelProvider};
 use secrecy::SecretString;
 
 let mut client = MultiModelClient::new();
@@ -212,7 +212,7 @@ pub enum ModelProvider {
 Configuration for AWS Bedrock provider.
 
 ```rust
-use rct::api::multi_model::BedrockConfig;
+use patina::api::multi_model::BedrockConfig;
 
 let config = BedrockConfig {
     region: "us-east-1".to_string(),
@@ -227,8 +227,8 @@ let config = BedrockConfig {
 Represents a conversation session.
 
 ```rust
-use rct::session::Session;
-use rct::types::{Message, Role};
+use patina::session::Session;
+use patina::types::{Message, Role};
 use std::path::PathBuf;
 
 let mut session = Session::new(PathBuf::from("/my/project"));
@@ -250,10 +250,10 @@ let updated_at = session.updated_at();
 Handles session persistence.
 
 ```rust
-use rct::session::SessionManager;
+use patina::session::SessionManager;
 use std::path::PathBuf;
 
-let manager = SessionManager::new(PathBuf::from("~/.rct/sessions"));
+let manager = SessionManager::new(PathBuf::from("~/.config/patina/sessions"));
 
 // Save session
 let session_id = manager.save(&session).await?;
@@ -292,7 +292,7 @@ pub struct SessionMetadata {
 Executes tools with security policy enforcement.
 
 ```rust
-use rct::tools::{ToolExecutor, ToolCall, ToolResult};
+use patina::tools::{ToolExecutor, ToolCall, ToolResult};
 use std::path::PathBuf;
 use serde_json::json;
 
@@ -329,7 +329,7 @@ match result {
 Configure security policy.
 
 ```rust
-use rct::tools::ToolExecutionPolicy;
+use patina::tools::ToolExecutionPolicy;
 use std::time::Duration;
 use std::path::PathBuf;
 use regex::Regex;
@@ -354,8 +354,8 @@ let executor = ToolExecutor::new(PathBuf::from("."))
 Tool executor with lifecycle hook integration.
 
 ```rust
-use rct::tools::{HookedToolExecutor, ToolCall};
-use rct::hooks::HookManager;
+use patina::tools::{HookedToolExecutor, ToolCall};
+use patina::hooks::HookManager;
 use std::path::PathBuf;
 use serde_json::json;
 
@@ -377,7 +377,7 @@ let result = executor.execute(call).await?;
 High-level hook management.
 
 ```rust
-use rct::hooks::{HookManager, HookEvent, HookDecision};
+use patina::hooks::{HookManager, HookEvent, HookDecision};
 use std::path::Path;
 
 let mut manager = HookManager::new("session-123".to_string());
@@ -438,7 +438,7 @@ pub enum HookDecision {
 Client for MCP servers.
 
 ```rust
-use rct::mcp::client::McpClient;
+use patina::mcp::client::McpClient;
 
 let mut client = McpClient::new(
     "my-server",
@@ -466,7 +466,7 @@ client.stop().await?;
 For local process communication.
 
 ```rust
-use rct::mcp::transport::StdioTransport;
+use patina::mcp::transport::StdioTransport;
 
 let transport = StdioTransport::new(
     "mcp-server-filesystem",
@@ -479,7 +479,7 @@ let transport = StdioTransport::new(
 For remote HTTP/SSE communication.
 
 ```rust
-use rct::mcp::transport::SseTransport;
+use patina::mcp::transport::SseTransport;
 use std::collections::HashMap;
 
 let mut headers = HashMap::new();
@@ -498,7 +498,7 @@ let transport = SseTransport::new(
 Matches and retrieves context-aware skills.
 
 ```rust
-use rct::skills::SkillEngine;
+use patina::skills::SkillEngine;
 use std::path::PathBuf;
 
 let mut engine = SkillEngine::new();
@@ -523,7 +523,7 @@ let context = engine.get_context_for_file("Cargo.toml");
 Parses and executes slash commands.
 
 ```rust
-use rct::commands::CommandExecutor;
+use patina::commands::CommandExecutor;
 use std::path::PathBuf;
 use std::collections::HashMap;
 
@@ -548,14 +548,14 @@ let result = executor.execute("commit", args)?;
 Discovers and manages plugins.
 
 ```rust
-use rct::plugins::PluginRegistry;
+use patina::plugins::PluginRegistry;
 use std::path::PathBuf;
 
 let mut registry = PluginRegistry::new();
 
 // Discover plugins from paths
 registry.discover(&[
-    PathBuf::from("~/.rct/plugins"),
+    PathBuf::from("~/.config/patina/plugins"),
     PathBuf::from(".rct/plugins"),
 ])?;
 
@@ -575,13 +575,13 @@ For plugin development, see `src/plugins/host.rs` and the [Plugin API documentat
 ### AuditLogger
 
 ```rust
-use rct::enterprise::audit::{AuditLogger, AuditConfig, AuditLevel};
+use patina::enterprise::audit::{AuditLogger, AuditConfig, AuditLevel};
 use std::path::PathBuf;
 
 let config = AuditConfig {
     enabled: true,
     level: AuditLevel::All,
-    path: PathBuf::from("~/.rct/audit"),
+    path: PathBuf::from("~/.config/patina/audit"),
 };
 
 let logger = AuditLogger::new(config)?;
@@ -602,7 +602,7 @@ let entries = logger.query(AuditQuery {
 ### CostTracker
 
 ```rust
-use rct::enterprise::cost::{CostTracker, CostConfig, BudgetLimit};
+use patina::enterprise::cost::{CostTracker, CostConfig, BudgetLimit};
 
 let config = CostConfig {
     enabled: true,
@@ -635,7 +635,7 @@ println!("Total cost: ${:.2}", stats.total_cost);
 Manages parallel task execution with isolated contexts.
 
 ```rust
-use rct::agents::SubagentOrchestrator;
+use patina::agents::SubagentOrchestrator;
 
 let mut orchestrator = SubagentOrchestrator::new();
 
@@ -677,4 +677,4 @@ For specific error types, modules may define their own error enums that implemen
 
 ---
 
-*RCT v0.1.0*
+*Patina v0.3.0*

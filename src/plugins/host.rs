@@ -1,7 +1,7 @@
 //! Plugin host API providing stable interfaces for plugin development.
 //!
 //! This module defines the traits that plugins must implement to integrate
-//! with RCT. The API is designed to be stable and backward-compatible.
+//! with Patina. The API is designed to be stable and backward-compatible.
 //!
 //! # Example
 //!
@@ -43,7 +43,7 @@ pub struct PluginInfo {
     pub description: Option<String>,
 }
 
-/// Core trait that all RCT plugins must implement.
+/// Core trait that all Patina plugins must implement.
 ///
 /// This trait defines the lifecycle hooks and basic information
 /// that every plugin must provide.
@@ -159,7 +159,7 @@ pub trait SkillProvider {
 
 /// Host context provided to plugins.
 ///
-/// Plugins can use this to access RCT functionality.
+/// Plugins can use this to access Patina functionality.
 pub struct PluginContext {
     working_dir: std::path::PathBuf,
     env_vars: HashMap<String, String>,

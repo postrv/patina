@@ -1,4 +1,4 @@
-//! Hooks integration test suite for RCT.
+//! Hooks integration test suite for Patina.
 //!
 //! Tests for the lifecycle hooks system.
 

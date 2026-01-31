@@ -1,6 +1,6 @@
 # Minimal Plugin Example
 
-This is a minimal RCT plugin demonstrating the standard plugin structure.
+This is a minimal Patina plugin demonstrating the standard plugin structure.
 
 ## Structure
 

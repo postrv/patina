@@ -1,6 +1,6 @@
 //! Self-update system with release channels.
 //!
-//! This module provides functionality for automatic updates of the RCT binary:
+//! This module provides functionality for automatic updates of the Patina binary:
 //! - Version checking against a release manifest
 //! - SHA256 checksum verification for downloaded binaries
 //! - Multi-platform support (Linux, macOS, Windows)

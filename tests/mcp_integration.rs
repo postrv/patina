@@ -1,4 +1,4 @@
-//! MCP integration test suite for RCT.
+//! MCP integration test suite for Patina.
 //!
 //! Tests for MCP transport, server communication, and security validation.
 

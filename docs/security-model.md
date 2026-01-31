@@ -1,10 +1,10 @@
 # Security Model
 
-This document describes the security model used by RCT for command execution, particularly for the bash tool.
+This document describes the security model used by Patina for command execution, particularly for the bash tool.
 
 ## Overview
 
-RCT provides a layered security approach to command execution:
+Patina provides a layered security approach to command execution:
 
 1. **Dangerous Pattern Blocklist** - Always-on protection against known dangerous commands
 2. **Command Normalization** - Detects escape-based bypass attempts

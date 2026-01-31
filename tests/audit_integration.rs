@@ -1,4 +1,4 @@
-//! Audit logging integration test suite for RCT.
+//! Audit logging integration test suite for Patina.
 //!
 //! Tests for enterprise audit logging functionality.
 
