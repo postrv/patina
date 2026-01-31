@@ -3,10 +3,10 @@
 //! These tests capture the rendered terminal output and compare against snapshots.
 //! Run `cargo insta test` to run tests and `cargo insta review` to accept new snapshots.
 
-use ratatui::{backend::TestBackend, Terminal};
 use patina::app::state::AppState;
 use patina::tui::render;
 use patina::types::{Message, Role};
+use ratatui::{backend::TestBackend, Terminal};
 use std::path::PathBuf;
 
 /// Helper to render state to a string buffer for snapshot testing.

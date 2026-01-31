@@ -45,7 +45,11 @@ fn test_project_context_load_patina_claude_md() {
     let patina_dir = temp.path().join(".patina");
     fs::create_dir_all(&patina_dir).unwrap();
     let claude_md = patina_dir.join("CLAUDE.md");
-    fs::write(&claude_md, "# Patina Specific\n\nPatina configuration context.").unwrap();
+    fs::write(
+        &claude_md,
+        "# Patina Specific\n\nPatina configuration context.",
+    )
+    .unwrap();
 
     let mut ctx = ProjectContext::new(temp.path().to_path_buf());
     ctx.load().unwrap();

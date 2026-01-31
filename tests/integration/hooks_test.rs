@@ -5,7 +5,9 @@
 //! Note: Some tests use bash-specific constructs ($(cat), grep, etc.) and are
 //! marked with #[cfg(unix)]. Cross-platform tests use the helper functions below.
 
-use patina::hooks::{HookCommand, HookContext, HookDecision, HookDefinition, HookEvent, HookExecutor};
+use patina::hooks::{
+    HookCommand, HookContext, HookDecision, HookDefinition, HookEvent, HookExecutor,
+};
 use serde_json::json;
 
 // =============================================================================
