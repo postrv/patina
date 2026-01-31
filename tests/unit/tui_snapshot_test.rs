@@ -4,9 +4,9 @@
 //! Run `cargo insta test` to run tests and `cargo insta review` to accept new snapshots.
 
 use ratatui::{backend::TestBackend, Terminal};
-use rct::app::state::AppState;
-use rct::tui::render;
-use rct::types::{Message, Role};
+use patina::app::state::AppState;
+use patina::tui::render;
+use patina::types::{Message, Role};
 use std::path::PathBuf;
 
 /// Helper to render state to a string buffer for snapshot testing.

@@ -4,7 +4,7 @@
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 0.1.x   | :white_check_mark: |
+| 0.3.x   | :white_check_mark: |
 
 ## Reporting a Vulnerability
 
@@ -21,7 +21,7 @@ When reporting, please include:
 
 ## Security Model
 
-RCT implements multiple layers of security to protect users when Claude executes code on their behalf.
+Patina implements multiple layers of security to protect users when Claude executes code on their behalf.
 
 ### Command Execution Security
 
@@ -65,7 +65,7 @@ All commands have configurable timeouts (default: 5 minutes) to prevent:
 
 Files are automatically backed up before modification:
 
-- Backups stored in `.rct_backups/`
+- Backups stored in `.patina_backups/`
 - Timestamped filenames prevent overwrites
 - Original content preserved for recovery
 
@@ -118,7 +118,7 @@ Audit logs capture:
 2. **Enable audit logging**: Monitor operations for suspicious activity
 3. **Use cost controls**: Set budget limits to prevent runaway costs
 4. **Review hooks**: Audit hook configurations regularly
-5. **Update regularly**: Keep RCT updated for security fixes
+5. **Update regularly**: Keep Patina updated for security fixes
 
 ### For Developers
 

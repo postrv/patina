@@ -40,17 +40,17 @@ impl ProjectContext {
             }
         }
 
-        let rct_path = self.project_root.join(".rct/CLAUDE.md");
-        if rct_path.exists() {
-            match std::fs::read_to_string(&rct_path) {
-                Ok(rct_content) => {
+        let patina_path = self.project_root.join(".patina/CLAUDE.md");
+        if patina_path.exists() {
+            match std::fs::read_to_string(&patina_path) {
+                Ok(patina_content) => {
                     self.root_context = Some(match &self.root_context {
-                        Some(existing) => format!("{}\n\n{}", existing, rct_content),
-                        None => rct_content,
+                        Some(existing) => format!("{}\n\n{}", existing, patina_content),
+                        None => patina_content,
                     });
                 }
                 Err(e) => {
-                    tracing::warn!("Failed to read .rct/CLAUDE.md at {:?}: {}", rct_path, e);
+                    tracing::warn!("Failed to read .patina/CLAUDE.md at {:?}: {}", patina_path, e);
                 }
             }
         }

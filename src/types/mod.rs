@@ -12,7 +12,7 @@
 //! Common types are re-exported at the module level for convenience:
 //!
 //! ```
-//! use rct::types::{Message, Role, StreamEvent};
+//! use patina::types::{Message, Role, StreamEvent};
 //! ```
 
 pub mod config;

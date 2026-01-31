@@ -5,7 +5,7 @@
 //!
 //! Security issue: H-1 - Plain string API key in multi_model
 
-use rct::api::multi_model::{AnthropicConfig, ProviderConfig};
+use patina::api::multi_model::{AnthropicConfig, ProviderConfig};
 use secrecy::{ExposeSecret, SecretString};
 
 /// The test API key used in security tests.

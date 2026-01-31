@@ -1,6 +1,6 @@
 //! Tests for utility functions
 
-use rct::util::{format_bytes, sanitize_filename, truncate_string};
+use patina::util::{format_bytes, sanitize_filename, truncate_string};
 
 mod truncate_tests {
     use super::*;
@@ -98,7 +98,7 @@ mod sanitize_filename_tests {
 }
 
 mod text_tests {
-    use rct::util::text::{visible_width, wrap_text};
+    use patina::util::text::{visible_width, wrap_text};
 
     #[test]
     fn test_visible_width_ascii() {
@@ -143,7 +143,7 @@ mod text_tests {
 }
 
 mod directory_tests {
-    use rct::util::{get_cache_dir, get_config_dir, get_data_dir, get_plugins_dir};
+    use patina::util::{get_cache_dir, get_config_dir, get_data_dir, get_plugins_dir};
 
     #[test]
     fn test_get_config_dir() {

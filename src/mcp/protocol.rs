@@ -6,7 +6,7 @@
 //! # Example
 //!
 //! ```
-//! use rct::mcp::protocol::{JsonRpcRequest, JsonRpcResponse, JsonRpcError};
+//! use patina::mcp::protocol::{JsonRpcRequest, JsonRpcResponse, JsonRpcError};
 //! use serde_json::json;
 //!
 //! // Create a request
@@ -81,7 +81,7 @@ impl JsonRpcRequest {
     /// # Example
     ///
     /// ```
-    /// use rct::mcp::protocol::JsonRpcRequest;
+    /// use patina::mcp::protocol::JsonRpcRequest;
     /// use serde_json::json;
     ///
     /// let request = JsonRpcRequest::new(1, "tools/list", json!({}));

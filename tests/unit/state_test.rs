@@ -3,7 +3,7 @@
 //! These tests verify input handling, scroll behavior, and dirty flag tracking.
 //! Following TDD RED phase - cursor movement tests will fail until implemented.
 
-use rct::app::state::AppState;
+use patina::app::state::AppState;
 use std::path::PathBuf;
 
 /// Helper to create a new AppState for testing.
@@ -234,7 +234,7 @@ fn test_dirty_flag_on_throbber() {
 /// Tests that adding a message sets dirty flag.
 #[test]
 fn test_dirty_flag_on_message_add() {
-    use rct::types::{Message, Role};
+    use patina::types::{Message, Role};
 
     let mut state = new_state();
     state.mark_rendered();
@@ -398,7 +398,7 @@ fn test_cursor_end() {
 /// Tests append_chunk with content delta.
 #[test]
 fn test_append_chunk_content_delta() {
-    use rct::types::StreamEvent;
+    use patina::types::StreamEvent;
 
     let mut state = new_state();
     state.mark_rendered();
@@ -415,7 +415,7 @@ fn test_append_chunk_content_delta() {
 /// Tests append_chunk accumulates content.
 #[test]
 fn test_append_chunk_accumulates_content() {
-    use rct::types::StreamEvent;
+    use patina::types::StreamEvent;
 
     let mut state = new_state();
     state.current_response = Some(String::new());
@@ -433,7 +433,7 @@ fn test_append_chunk_accumulates_content() {
 /// Tests append_chunk message stop finalizes the response.
 #[test]
 fn test_append_chunk_message_stop() {
-    use rct::types::StreamEvent;
+    use patina::types::StreamEvent;
 
     let mut state = new_state();
     state.current_response = Some("Test response".to_string());
@@ -453,7 +453,7 @@ fn test_append_chunk_message_stop() {
 /// Tests append_chunk error sets dirty flag.
 #[test]
 fn test_append_chunk_error() {
-    use rct::types::StreamEvent;
+    use patina::types::StreamEvent;
 
     let mut state = new_state();
     state.current_response = Some("Partial response".to_string());

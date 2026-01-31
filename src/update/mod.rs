@@ -9,7 +9,7 @@
 //! # Example
 //!
 //! ```ignore
-//! use rct::update::{ReleaseChannel, UpdateChecker, UpdateInstaller};
+//! use patina::update::{ReleaseChannel, UpdateChecker, UpdateInstaller};
 //! use std::path::PathBuf;
 //!
 //! #[tokio::main]
@@ -116,7 +116,7 @@ impl UpdateChecker {
     /// # Example
     ///
     /// ```
-    /// use rct::update::{ReleaseChannel, UpdateChecker};
+    /// use patina::update::{ReleaseChannel, UpdateChecker};
     ///
     /// let checker = UpdateChecker::new("1.0.0", ReleaseChannel::Stable)
     ///     .expect("Valid version");

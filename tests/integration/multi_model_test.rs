@@ -5,7 +5,7 @@
 //! - AWS Bedrock
 //! - Provider switching at runtime
 
-use rct::api::multi_model::{
+use patina::api::multi_model::{
     BedrockConfig, ModelConfig, ModelProvider, MultiModelClient, ProviderConfig,
 };
 use secrecy::SecretString;

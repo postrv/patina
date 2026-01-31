@@ -8,8 +8,8 @@
 mod common;
 
 use common::TestContext;
-use rct::api::AnthropicClient;
-use rct::types::{Message, Role, StreamEvent};
+use patina::api::AnthropicClient;
+use patina::types::{Message, Role, StreamEvent};
 use secrecy::SecretString;
 use tokio::sync::mpsc;
 use wiremock::matchers::{header, method, path};

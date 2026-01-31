@@ -3,7 +3,7 @@
 //! These tests verify the `ShellConfig` type correctly detects the platform
 //! and provides appropriate shell configuration.
 
-use rct::shell::{execute_shell_command, translate_command, ShellConfig, ShellOutput};
+use patina::shell::{execute_shell_command, translate_command, ShellConfig, ShellOutput};
 
 // ============================================================================
 // ShellConfig Tests

@@ -138,10 +138,10 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: rct-${{ matrix.target }}
+          name: patina-${{ matrix.target }}
           path: |
-            target/${{ matrix.target }}/release/rct
-            target/${{ matrix.target }}/release/rct.exe
+            target/${{ matrix.target }}/release/patina
+            target/${{ matrix.target }}/release/patina.exe
 
   # Benchmark (only on main)
   bench:

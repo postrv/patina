@@ -18,7 +18,7 @@ use std::path::PathBuf;
 /// # Examples
 ///
 /// ```no_run
-/// use rct::types::config::Config;
+/// use patina::types::config::Config;
 /// use secrecy::SecretString;
 /// use std::path::PathBuf;
 ///
@@ -57,7 +57,7 @@ impl Config {
     /// # Examples
     ///
     /// ```no_run
-    /// use rct::types::config::Config;
+    /// use patina::types::config::Config;
     /// use secrecy::SecretString;
     /// use std::path::PathBuf;
     ///

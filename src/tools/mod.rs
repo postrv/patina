@@ -1037,8 +1037,8 @@ impl ToolExecutor {
 /// # Examples
 ///
 /// ```no_run
-/// use rct::tools::{HookedToolExecutor, ToolCall};
-/// use rct::hooks::HookManager;
+/// use patina::tools::{HookedToolExecutor, ToolCall};
+/// use patina::hooks::HookManager;
 /// use std::path::PathBuf;
 /// use serde_json::json;
 ///

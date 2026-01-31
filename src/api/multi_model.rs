@@ -7,7 +7,7 @@
 //! # Example
 //!
 //! ```
-//! use rct::api::multi_model::{
+//! use patina::api::multi_model::{
 //!     MultiModelClient, ModelConfig, ModelProvider, ProviderConfig,
 //! };
 //! use std::collections::HashMap;

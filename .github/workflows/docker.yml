@@ -76,10 +76,10 @@ jobs:
         with:
           context: .
           load: true
-          tags: rct:test
+          tags: patina:test
           cache-from: type=gha
 
       - name: Test image
         run: |
-          docker run --rm rct:test --version
-          docker run --rm rct:test --help
+          docker run --rm patina:test --version
+          docker run --rm patina:test --help

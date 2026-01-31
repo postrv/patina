@@ -17,7 +17,7 @@ use std::fmt;
 /// # Examples
 ///
 /// ```
-/// use rct::types::message::Role;
+/// use patina::types::message::Role;
 ///
 /// let role = Role::User;
 /// assert_eq!(format!("{}", role), "user");
@@ -60,7 +60,7 @@ impl fmt::Display for Role {
 /// # Examples
 ///
 /// ```
-/// use rct::types::message::{Message, Role};
+/// use patina::types::message::{Message, Role};
 ///
 /// let msg = Message {
 ///     role: Role::User,

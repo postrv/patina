@@ -3,7 +3,7 @@
 //! These tests verify skill markdown parsing and frontmatter extraction.
 //! Following TDD RED phase - validating skill parsing behavior.
 
-use rct::skills::SkillEngine;
+use patina::skills::SkillEngine;
 use std::fs;
 use tempfile::TempDir;
 

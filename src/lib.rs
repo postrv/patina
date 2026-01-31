@@ -1,6 +1,6 @@
-//! RCT - Rust Claude Terminal
+//! Patina - High-performance terminal client for Claude API
 //!
-//! High-performance CLI for Claude API with a modular, extensible architecture.
+//! A modular, extensible CLI for interacting with Claude.
 //!
 //! This library exposes the core types and functionality for testing and extension.
 

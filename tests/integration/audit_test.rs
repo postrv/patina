@@ -6,7 +6,7 @@
 //! - Log persistence and querying
 //! - Audit configuration
 
-use rct::enterprise::audit::{
+use patina::enterprise::audit::{
     AuditConfig, AuditEntry, AuditEvent, AuditLevel, AuditLogger, AuditQuery,
 };
 use std::path::PathBuf;

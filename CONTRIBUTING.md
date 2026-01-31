@@ -1,6 +1,6 @@
-# Contributing to RCT
+# Contributing to Patina
 
-Thank you for your interest in contributing to RCT (Rust Claude Terminal)! This document provides guidelines and workflows for contributing.
+Thank you for your interest in contributing to Patina (Rust Claude Terminal)! This document provides guidelines and workflows for contributing.
 
 ## Development Setup
 
@@ -15,8 +15,8 @@ Thank you for your interest in contributing to RCT (Rust Claude Terminal)! This 
 1. Fork and clone the repository:
 
 ```bash
-gh repo fork your-org/rct --clone
-cd rct
+gh repo fork your-org/patina --clone
+cd patina
 ```
 
 2. Install development dependencies:
@@ -81,7 +81,7 @@ panic!("not implemented")     // Implement or remove
 
 ## TDD Workflow
 
-RCT follows Test-Driven Development. The cycle is:
+Patina follows Test-Driven Development. The cycle is:
 
 ```
 REINDEX → RED → GREEN → REFACTOR → REVIEW → COMMIT → REINDEX
@@ -223,7 +223,7 @@ Brief description of changes.
 ## Project Structure
 
 ```
-rct/
+patina/
 ├── src/
 │   ├── main.rs          # Entry point
 │   ├── lib.rs           # Library crate root
@@ -290,7 +290,7 @@ cargo bench
 
 Open an issue with:
 
-- RCT version
+- Patina version
 - Rust version
 - Operating system
 - Steps to reproduce
@@ -317,4 +317,4 @@ By contributing, you agree that your contributions will be licensed under the sa
 
 ---
 
-Thank you for contributing to RCT!
+Thank you for contributing to Patina!

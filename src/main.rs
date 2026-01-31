@@ -1,15 +1,15 @@
-//! Rust Claude Terminal - High-performance CLI for Claude API
+//! Patina - High-performance terminal client for Claude API
 
 use anyhow::Result;
 use clap::Parser;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 // Use the library crate
-use rct::app;
+use patina::app;
 
 #[derive(Parser, Debug)]
-#[command(name = "rct")]
-#[command(about = "High-performance terminal client for Claude API")]
+#[command(name = "patina")]
+#[command(about = "Patina - High-performance terminal client for Claude API")]
 #[command(version)]
 struct Args {
     /// API key (or set ANTHROPIC_API_KEY env var)

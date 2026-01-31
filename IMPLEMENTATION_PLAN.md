@@ -1,44 +1,29 @@
-# Implementation Plan - Cross-Platform Support
+# Patina Implementation Plan
 
 > Ralph uses this file to track task progress. Update checkboxes as work completes.
 
-## Status: COMPLETE
+## Status: PHASE 7 ACTIVE
 
-## Baseline Metrics (Updated: 2026-01-30)
+## Current State Summary
 
-| Metric | Value | Command |
-|--------|-------|---------|
-| Unit Tests | 193 | `cargo test --lib` |
-| Integration Tests | 331 | `cargo test --test '*'` |
-| Doc Tests | 20 | `cargo test --doc` |
-| Total Tests | 624 | `cargo test` |
-| Test Files | 33 | `find tests -name '*.rs' \| wc -l` |
-| Clippy Warnings | 0 | `cargo clippy --all-targets -- -D warnings` |
-| Source Files | 30 | `find src -name '*.rs' \| wc -l` |
-| LOC | ~7900 | `wc -l src/**/*.rs` |
-| Coverage | 85.84% | `cargo tarpaulin --out Stdout` |
+RCT (being renamed to **Patina**) has achieved feature parity with Claude Code:
 
-**Platform Support Target:**
-- Linux (x86_64, ARM64) - Currently supported
-- macOS (x86_64, ARM64) - Currently supported
-- Windows (x86_64) - **NOT YET SUPPORTED** (Goal of this plan)
+| Metric | Value |
+|--------|-------|
+| Tests | 624 |
+| Coverage | 85%+ |
+| Clippy Warnings | 0 |
+| Security Findings | 0 (8/8 resolved) |
+| Unsafe Blocks | 0 |
 
-**Baseline Rule:** Test count must never decrease. Clippy warnings must stay at 0.
-
----
-
-## Problem Statement
-
-RCT currently has **Unix-only assumptions** that prevent Windows compatibility:
-
-| Component | Current State | Issue |
-|-----------|---------------|-------|
-| Hook Executor | `sh -c` hardcoded | `sh` doesn't exist on Windows |
-| Tool Executor | `sh -c` hardcoded | `sh` doesn't exist on Windows |
-| MCP Tests | Use `/bin/bash` scripts | Unix paths, bash not default on Windows |
-| Hook Tests | `#![cfg(unix)]` | No Windows test coverage |
-| MCP Tests | `#![cfg(unix)]` | No Windows test coverage |
-| Security Patterns | Unix command patterns | Windows has different dangerous commands |
+**Completed Phases (1-6):**
+- Phase 0: Project scaffold, CI/CD
+- Phase 1: Core TUI, streaming, Anthropic API
+- Phase 2: Configuration, markdown rendering
+- Phase 3: Tool execution, security sandboxing
+- Phase 4: Session persistence, HMAC integrity
+- Phase 5: Skills, hooks, slash commands, MCP
+- Phase 6: Cross-platform (Linux, macOS, Windows)
 
 ---
 
@@ -47,578 +32,357 @@ RCT currently has **Unix-only assumptions** that prevent Windows compatibility:
 | Gate | Command | Requirement |
 |------|---------|-------------|
 | Clippy | `cargo clippy --all-targets -- -D warnings` | 0 warnings |
-| Tests (Unix) | `cargo test` | All pass |
-| Tests (Windows) | `cargo test` (on Windows CI) | All pass |
-| Format | `cargo fmt -- --check` | No changes needed |
-| Security | `cargo audit` | 0 CRITICAL/HIGH in direct deps |
+| Tests | `cargo test` | All pass |
+| Format | `cargo fmt -- --check` | No changes |
 | TDD | Tests BEFORE implementation | Required |
 
 ---
 
-## TDD Cycle (Per Task)
+## Phase 7: v0.3.0 Release & Rebrand to Patina
 
-```
-REINDEX → RED → GREEN → REFACTOR → REVIEW → COMMIT → REINDEX
+**Objective:** Ship public release under new "Patina" branding
 
-Steps:
-  REINDEX:  Run narsil reindex to refresh code index
-  RED:      Write failing test first
-  GREEN:    Write minimal code to pass
-  REFACTOR: Clean up while tests green
-  REVIEW:   Run all quality gates
-  COMMIT:   Commit with descriptive message
-  REINDEX:  Refresh index with new code
-```
+### 7.1 Rebrand to Patina
 
----
-
-## Roadmap Overview
-
-| Phase | Focus | Priority | Est. Tasks |
-|-------|-------|----------|------------|
-| 0 | Cross-Platform Shell Abstraction | P0 | 8 |
-| 1 | Tool Executor Cross-Platform | P0 | 6 |
-| 2 | Hook Executor Cross-Platform | P0 | 6 |
-| 3 | MCP Cross-Platform Tests | P1 | 8 |
-| 4 | Windows Security Patterns | P1 | 6 |
-| 5 | Integration Test Helpers | P1 | 6 |
-| 6 | CI Validation | P0 | 4 |
-
-**Total Estimated Tasks: 44**
-
----
-
-## Phase 0: Cross-Platform Shell Abstraction
-
-### Goal: Create platform abstraction layer for shell execution
-
-### 0.1 Shell Abstraction Module
-
-- [x] 0.1.1 Create shell abstraction types (RED)
-  - Path: `src/shell/mod.rs` (new file)
-  - Test: `tests/unit/shell_test.rs` (new file)
-  - Test: `test_shell_config_returns_sh_on_unix`
-  - Test: `test_shell_config_returns_cmd_on_windows`
-  - Acceptance: Tests fail (module doesn't exist)
-  - Completed: 2026-01-30
-
-- [x] 0.1.2 Implement ShellConfig struct (GREEN)
-  - Path: `src/shell/mod.rs`
-  - Add: `ShellConfig` struct with `command`, `args`, `exit_flag`
-  - Add: `ShellConfig::default()` using conditional compilation
-  ```rust
-  #[cfg(unix)]
-  fn default() -> Self {
-      ShellConfig {
-          command: "sh".to_string(),
-          args: vec!["-c".to_string()],
-          exit_success: 0,
-      }
-  }
-
-  #[cfg(windows)]
-  fn default() -> Self {
-      ShellConfig {
-          command: "cmd.exe".to_string(),
-          args: vec!["/C".to_string()],
-          exit_success: 0,
-      }
-  }
-  ```
-  - Acceptance: Platform detection tests pass
-  - Completed: 2026-01-30
-
-- [x] 0.1.3 Add shell execution helper (GREEN)
-  - Path: `src/shell/mod.rs`
-  - Add: `async fn execute_shell_command(command: &str, stdin: Option<&str>) -> Result<ShellOutput>`
-  - Add: `ShellOutput` struct with `exit_code`, `stdout`, `stderr`
-  - Add: Platform-agnostic process spawning
-  - Acceptance: Basic shell execution works
-  - Completed: 2026-01-30
-
-- [x] 0.1.4 Export shell module from lib.rs
-  - Path: `src/lib.rs`
-  - Add: `pub mod shell;`
-  - Acceptance: Module accessible from tests
-  - Completed: 2026-01-30
-
-### 0.2 Command Translation Layer
-
-- [x] 0.2.1 Create command translator tests (RED)
-  - Path: `tests/unit/shell_test.rs`
-  - Test: `test_translate_echo_command`
-  - Test: `test_translate_exit_command`
-  - Test: `test_translate_chained_commands`
-  - Acceptance: Tests document expected translations
-  - Completed: 2026-01-30
-
-- [x] 0.2.2 Implement basic command translation (GREEN)
-  - Path: `src/shell/mod.rs`
-  - Add: `fn translate_command(cmd: &str) -> String`
-  - Handle: `echo` (works same on both)
-  - Handle: `exit N` → `exit /b N` on Windows
-  - Handle: `&&` → `&` on Windows cmd.exe (kept `&&` as it works in cmd.exe too)
-  - Handle: `export VAR=val` → `set VAR=val` on Windows
-  - Acceptance: Translation tests pass
-  - Completed: 2026-01-30
-
-- [x] 0.2.3 Commit shell abstraction
-  - Message: `feat(shell): Add cross-platform command translation`
-  - Completed: 2026-01-30
-
----
-
-## Phase 1: Tool Executor Cross-Platform
-
-### Goal: Make tool bash execution work on Windows
-
-### 1.1 Refactor Tool Executor
-
-- [x] 1.1.1 Write platform-agnostic tool executor tests (RED)
-  - Path: `tests/tools.rs`
-  - Note: Existing tests already use platform-neutral commands (echo, exit)
-  - Acceptance: Tests work on both platforms
-  - Completed: 2026-01-30
-
-- [x] 1.1.2 Update execute_bash to use shell abstraction (GREEN)
-  - Path: `src/tools/mod.rs`
-  - Change: Replace `Command::new("sh").arg("-c")` with `ShellConfig::default()`
-  - Acceptance: Existing Unix tests pass, Windows tests pass
-  - Completed: 2026-01-30
-
-- [x] 1.1.3 Add Windows-specific timeout handling (GREEN)
-  - Path: `src/tools/mod.rs`
-  - Note: `kill_on_drop` works on both platforms (verified)
-  - Acceptance: Timeout tests pass on Windows
-  - Completed: 2026-01-30
-
-### 1.2 Windows Dangerous Patterns
-
-- [x] 1.2.1 Write Windows dangerous command tests (RED)
-  - Path: `tests/tools.rs`
-  - Tests: `test_bash_blocks_del_recursive`, `test_bash_blocks_format_drive`,
-    `test_bash_blocks_rd_recursive`, `test_bash_blocks_powershell_encoded`,
-    `test_bash_blocks_invoke_expression`, `test_bash_blocks_reg_delete`
-  - Note: Tests are #[cfg(windows)] so only compile/run on Windows
-  - Completed: 2026-01-30
-
-- [x] 1.2.2 Add Windows dangerous patterns (GREEN)
-  - Path: `src/tools/mod.rs`
-  - Add: Windows-specific patterns to `DANGEROUS_PATTERNS`
-  ```rust
-  #[cfg(windows)]
-  static WINDOWS_DANGEROUS_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
-      vec![
-          // Destructive
-          Regex::new(r"(?i)del\s+/[sq]").unwrap(),         // del /s or /q
-          Regex::new(r"(?i)rd\s+/[sq]").unwrap(),          // rd /s or /q
-          Regex::new(r"(?i)rmdir\s+/[sq]").unwrap(),       // rmdir /s or /q
-          Regex::new(r"(?i)format\s+[a-z]:").unwrap(),     // format C:
-          // Privilege escalation
-          Regex::new(r"(?i)runas\s+/user").unwrap(),       // runas /user
-          // PowerShell dangers
-          Regex::new(r"(?i)powershell.*-[ec]").unwrap(),   // encoded commands
-          Regex::new(r"(?i)iex\s*\(").unwrap(),            // Invoke-Expression
-          Regex::new(r"(?i)invoke-expression").unwrap(),
-          // Registry
-          Regex::new(r"(?i)reg\s+(delete|add)").unwrap(),
-      ]
-  });
-  ```
-  - Acceptance: Windows security tests pass
-  - Note: Implemented as platform-specific DANGEROUS_PATTERNS with #[cfg(unix/windows)]
-  - Also added platform-specific protected_paths
-  - Completed: 2026-01-30
-
-- [x] 1.2.3 Commit tool executor cross-platform
-  - Message: `feat(tools): Add cross-platform shell execution and Windows patterns`
-  - Completed: 2026-01-30
-
----
-
-## Phase 2: Hook Executor Cross-Platform
-
-### Goal: Make hook execution work on Windows
-
-### 2.1 Refactor Hook Executor
-
-- [x] 2.1.1 Update run_hook_command to use shell abstraction (GREEN)
-  - Path: `src/hooks/mod.rs`
-  - Change: Replace `Command::new("sh").arg("-c")` with `ShellConfig::default()`
-  - Acceptance: Hook execution uses platform shell
-  - Completed: 2026-01-30
-
-- [x] 2.1.2 Add stdin handling for Windows (GREEN)
-  - Path: `src/hooks/mod.rs`
-  - Note: stdin piping works same on both platforms (verified)
-  - Completed: 2026-01-30
-
-### 2.2 Remove Unix-Only Restriction from Hook Tests
-
-- [x] 2.2.1 Create cross-platform test helpers (GREEN)
-  - Path: `tests/integration/hooks_test.rs`
-  - Added: `echo_and_exit()`, `exit_with_code()`, `stderr_and_exit()` helpers
-  - Acceptance: Helpers compile on both platforms
-  - Completed: 2026-01-30
-
-- [x] 2.2.2 Update hook tests to use helpers (REFACTOR)
-  - Path: `tests/integration/hooks_test.rs`
-  - Updated: `test_pre_tool_use_hook_continues`, `test_pre_tool_use_hook_blocks`
-  - Note: Tests with bash-specific constructs (grep, $(cat)) remain Unix-only
-  - Completed: 2026-01-30
-
-- [x] 2.2.3 Remove #![cfg(unix)] from hooks_test.rs (GREEN)
-  - Path: `tests/integration/hooks_test.rs`
-  - Removed: `#![cfg(unix)]` module attribute
-  - Note: Complex bash tests still have individual #[cfg(unix)] if needed
-  - Completed: 2026-01-30
-
-- [x] 2.2.4 Commit hook executor cross-platform
-  - Message: `feat(hooks): Add cross-platform shell execution`
-  - Completed: 2026-01-30
-
----
-
-## Phase 3: MCP Cross-Platform Tests
-
-### Goal: Make MCP tests work on Windows without bash scripts
-
-### 3.1 Create Rust-Based Mock MCP Server
-
-- [x] 3.1.1 Design mock server architecture
-  - Path: `tests/helpers/mock_mcp_server.rs` (new)
-  - Purpose: Rust binary that acts as MCP server
-  - Features:
-    - Read JSON-RPC from stdin
-    - Respond with appropriate messages
-    - Configurable via command-line args
-  - Acceptance: Design documented
-  - Completed: 2026-01-30
-
-- [x] 3.1.2 Implement mock MCP server binary (GREEN)
-  - Path: `tests/helpers/mock_mcp_server.rs`
-  - Add: Basic JSON-RPC parsing
-  - Add: Initialize response
-  - Add: Tool call response
-  - Add: Configurable behavior (crash, timeout, etc.)
-  - Acceptance: Binary compiles
-  - Completed: 2026-01-30
-
-- [x] 3.1.3 Add mock server to Cargo.toml as test binary
+- [ ] 7.1.1 Update Cargo.toml
   - Path: `Cargo.toml`
-  - Add:
-  ```toml
-  [[bin]]
-  name = "mock_mcp_server"
-  path = "tests/helpers/mock_mcp_server.rs"
-  ```
-  - Acceptance: `cargo build --bin mock_mcp_server` works
-  - Completed: 2026-01-30
+  - Change: `name = "rct"` to `name = "patina"`
+  - Change: description to reference Patina
+  - Acceptance: `cargo build` produces `patina` binary
 
-### 3.2 Update MCP Transport Tests
+- [ ] 7.1.2 Update README.md branding
+  - Path: `README.md`
+  - Change: All references from RCT to Patina
+  - Acceptance: No "RCT" references in README
 
-- [x] 3.2.1 Create cross-platform mock server helper (GREEN)
-  - Path: `tests/integration/mcp_transport_test.rs`
-  - Add: `fn mock_mcp_server_path() -> &'static str` using `env!("CARGO_BIN_EXE_mock_mcp_server")`
-  - Add: `fn mock_mcp_server_command() -> (&'static str, Vec<&'static str>)`
-  - Acceptance: Returns platform-appropriate path
-  - Completed: 2026-01-30
+- [ ] 7.1.3 Update CI workflow binary names
+  - Path: `.github/workflows/ci.yml`, `.github/workflows/release.yml`
+  - Change: All `rct` references to `patina`
+  - Acceptance: CI builds produce `patina` binaries
 
-- [x] 3.2.2 Update MCP tests to use Rust mock server (REFACTOR)
-  - Path: `tests/integration/mcp_transport_test.rs`
-  - Change: Replace bash script mock with Rust binary
-  - Remove: `#![cfg(unix)]`
-  - Acceptance: Tests compile on Windows
-  - Completed: 2026-01-30
+- [ ] 7.1.4 Update Docker configuration
+  - Path: `Dockerfile`, `.github/workflows/docker.yml`
+  - Change: Image name to `patina`
+  - Change: Binary references
+  - Acceptance: `docker build` works
 
-- [x] 3.2.3 Update mcp_test.rs for cross-platform (REFACTOR)
-  - Path: `tests/integration/mcp_test.rs`
-  - Change: Remove module-level `#![cfg(unix)]`, add `#[cfg(unix)]` to individual tests using Unix paths
-  - Note: Data structure tests (`test_mcp_transport_validation`, `test_mcp_filters_dangerous_env_vars`) are cross-platform
-  - Note: Async tests using Unix paths remain Unix-only until Windows security tests added in Phase 4
-  - Acceptance: Tests compile on Windows
-  - Completed: 2026-01-30
+- [ ] 7.1.5 Update Homebrew formula
+  - Path: `Formula/rct.rb`
+  - Rename: To `Formula/patina.rb`
+  - Change: All references to patina
+  - Acceptance: Formula syntax valid
 
-- [x] 3.2.4 Commit MCP cross-platform tests
-  - Message: `feat(mcp): Add cross-platform MCP test infrastructure`
-  - Completed: 2026-01-30
+- [ ] 7.1.6 Update source code references
+  - Paths: `src/main.rs`, `src/lib.rs`, `src/tui/mod.rs`
+  - Change: User-visible "RCT" strings to "Patina"
+  - Acceptance: No user-visible "RCT" strings
 
----
+- [ ] 7.1.7 Update CLAUDE.md project documentation
+  - Path: `.claude/CLAUDE.md`
+  - Change: Project name references
+  - Acceptance: Documentation accurate
 
-## Phase 4: Windows Security Patterns
+### 7.2 Release Preparation
 
-### Goal: Comprehensive security coverage for Windows commands
+- [ ] 7.2.1 Clean up .gitignore
+  - Path: `.gitignore`
+  - Add: `.mcp.json`, `.ralph/`, `.cowork/`, `coverage/`
+  - Remove: Any personal paths
+  - Acceptance: Sensitive files excluded
 
-### 4.1 Windows-Specific Security Validation
+- [ ] 7.2.2 Remove sensitive files from git tracking
+  - Command: `git rm --cached .mcp.json` (if tracked)
+  - Acceptance: No sensitive paths in repo
 
-- [x] 4.1.1 Write Windows MCP validation tests (RED)
-  - Path: `tests/integration/mcp_test.rs`
-  - Test: `test_mcp_blocks_powershell_encoded`
-  - Test: `test_mcp_blocks_powershell_encoded_short`
-  - Test: `test_mcp_blocks_powershell_iex`
-  - Test: `test_mcp_blocks_cmd_dangerous`
-  - Test: `test_mcp_blocks_cmd_format`
-  - Test: `test_mcp_blocks_reg_delete`
-  - Test: `test_mcp_validates_windows_paths`
-  - Test: `test_mcp_blocks_unc_path_traversal`
-  - Test: `test_mcp_blocks_mixed_separator_traversal`
-  - Acceptance: Tests document Windows security needs
-  - Completed: 2026-01-30
+- [ ] 7.2.3 Tag v0.3.0-patina
+  - Command: `git tag -a v0.3.0-patina -m "Patina v0.3.0 - Public Release"`
+  - Acceptance: Tag created
 
-- [x] 4.1.2 Add Windows MCP command validation (GREEN)
-  - Path: `src/mcp/client.rs`
-  - Add: Platform-specific `always_blocked_commands()` with `#[cfg(unix/windows)]`
-  - Add: Platform-specific `require_absolute_path_commands()` for interpreters
-  - Add: Platform-specific `dangerous_argument_patterns()` for shell injection
-  - Add: `is_absolute_path()` helper for Windows drive letters and UNC paths
-  - Add: Unit tests for `is_absolute_path()` and `validate_mcp_command()`
-  - Acceptance: Windows MCP security tests pass (tests compile, will run on Windows CI)
-  - Completed: 2026-01-30
+- [ ] 7.2.4 Create GitHub Release
+  - Platform: GitHub Releases via `gh release create`
+  - Include: Changelog, platform binaries
+  - Acceptance: Release visible on GitHub
 
-### 4.2 Path Validation Cross-Platform
+### 7.3 Distribution
 
-- [x] 4.2.1 Write Windows path traversal tests (RED)
-  - Path: `tests/tools.rs`
-  - Test: `test_blocks_windows_unc_traversal` (`\\server\share\..\`)
-  - Test: `test_blocks_windows_drive_traversal` (`C:\..\..\`)
-  - Test: `test_blocks_mixed_separators` (`subdir/..\..\outside.txt`)
-  - Test: `test_write_blocks_windows_unc_traversal`
-  - Test: `test_write_blocks_windows_drive_traversal`
-  - Acceptance: Tests compile on Windows, document expected security behavior
-  - Completed: 2026-01-30
+- [ ] 7.3.1 Publish to crates.io
+  - Command: `cargo publish`
+  - Acceptance: `cargo install patina` works
 
-- [x] 4.2.2 Enhance validate_path for Windows (GREEN)
-  - Path: `src/tools/mod.rs`
-  - Note: Existing implementation already handles Windows paths correctly:
-    - `Path::is_absolute()` correctly identifies UNC paths (`\\server\share`)
-    - `Path::is_absolute()` correctly identifies drive letter paths (`C:\...`)
-    - `canonicalize()` normalizes mixed separators
-    - `..` check catches traversal attempts in non-canonicalizable paths
-  - Acceptance: Path traversal tests pass on Windows (verified by code analysis)
-  - Completed: 2026-01-30
+- [ ] 7.3.2 Submit Homebrew formula
+  - Create: homebrew-patina tap or PR to homebrew-core
+  - Acceptance: `brew install patina` works
 
-- [x] 4.2.3 Commit Windows security patterns
-  - Message: `feat(security): Add Windows-specific security validation for MCP and tools`
-  - Commit: 115dd92
-  - Completed: 2026-01-30
+- [ ] 7.3.3 Update Docker Hub
+  - Push: `ghcr.io/postrv/patina:0.3.0`
+  - Acceptance: `docker pull` works
+
+### 7.4 Announcement
+
+- [ ] 7.4.1 Write r/rust post
+  - Focus: Performance benchmarks, Rust implementation
+  - Acceptance: Post submitted
+
+- [ ] 7.4.2 Write r/ClaudeAI post
+  - Focus: Feature comparison with Claude Code
+  - Acceptance: Post submitted
+
+- [ ] 7.4.3 Write Hacker News submission
+  - Title: "Show HN: Patina - Claude terminal client (16x faster than Claude Code)"
+  - Acceptance: Post submitted
 
 ---
 
-## Phase 5: Integration Test Helpers
+## Phase 8: Git Worktree Integration
 
-### Goal: Comprehensive cross-platform test utilities
+**Objective:** Native support for parallel AI-assisted development
 
-### 5.1 Test Context Abstraction
+### 8.1 Core Worktree Module
 
-- [x] 5.1.1 Create TestContext improvements (GREEN)
-  - Path: `tests/common/mod.rs`
-  - Add: `temp_script(name, content)` - creates platform script (.sh on Unix, .bat on Windows)
-  - Add: `is_windows()` / `is_unix()` - runtime platform checks
-  - Add: `skip_on_windows!` macro - conditional skip with reason
-  - Acceptance: Helpers available in all test files
-  - Completed: 2026-01-30
+- [ ] 8.1.1 Create worktree module structure (RED)
+  - Path: `src/worktree/mod.rs` (new)
+  - Test: `tests/unit/worktree_test.rs` (new)
+  - Test: `test_worktree_manager_detects_git_repo`
+  - Test: `test_worktree_config_defaults`
+  - Acceptance: Tests fail (module doesn't exist)
 
-- [x] 5.1.2 Create permission test helpers (GREEN)
-  - Path: `tests/common/mod.rs`
-  - Add: `make_readonly(path)` / `make_writable(path)` - file permissions
-  - Add: `make_dir_readonly(path)` / `make_dir_writable(path)` - directory permissions
-  - Note: Uses Unix permission bits and Windows readonly attribute
-  - Acceptance: Permission tests work on Windows
-  - Completed: 2026-01-30
+- [ ] 8.1.2 Implement WorktreeConfig and WorktreeManager (GREEN)
+  - Path: `src/worktree/mod.rs`
+  - Types: `WorktreeConfig`, `WorktreeManager`, `WorktreeInfo`, `WorktreeError`
+  - Acceptance: Basic structure tests pass
 
-### 5.2 Symlink Test Abstraction
+- [ ] 8.1.3 Implement create/list/remove operations (GREEN)
+  - Path: `src/worktree/mod.rs`
+  - Methods: `create()`, `list()`, `remove()`, `status()`
+  - Test: `test_create_worktree`
+  - Test: `test_list_worktrees`
+  - Test: `test_remove_worktree`
+  - Acceptance: CRUD operations work
 
-- [x] 5.2.1 Create symlink test helpers (GREEN)
-  - Path: `tests/common/mod.rs`
-  - Add: `create_symlink(target, link)` - cross-platform symlink creation
-  - Add: `symlinks_available()` - checks if symlinks work (tests on Windows)
-  - Add: `skip_if_no_symlinks!` macro - skip tests on Windows without admin
-  - Note: Windows symlinks require admin or Developer Mode
-  - Acceptance: Symlink tests skip gracefully on Windows without admin
-  - Completed: 2026-01-30
+- [ ] 8.1.4 Implement worktree status (GREEN)
+  - Path: `src/worktree/mod.rs`
+  - Method: `status()` returns modified/staged/ahead/behind counts
+  - Test: `test_worktree_status_dirty`
+  - Test: `test_worktree_status_clean`
+  - Acceptance: Status accurately reflects git state
 
-- [x] 5.2.2 Update symlink tests to use helpers (REFACTOR)
-  - Path: `tests/tools.rs`
-  - Change: Replace `#[cfg(unix)]` and `use std::os::unix::fs::symlink`
-  - Change: Use `create_symlink()` and `symlinks_available()` helpers
-  - Add: Skip condition at runtime if symlinks unavailable (Windows without admin)
-  - Tests updated:
-    - `test_file_read_rejects_symlinks`
-    - `test_file_write_rejects_symlinks`
-    - `test_edit_rejects_symlinks`
-    - `test_file_read_rejects_internal_symlinks`
-  - Acceptance: Tests pass or skip appropriately
-  - Completed: 2026-01-30
+### 8.2 Slash Commands
 
-- [x] 5.2.3 Commit test helpers
-  - Message: `feat(tests): Add cross-platform test utilities`
-  - Commit: b20ddc9
-  - Completed: 2026-01-30
+- [ ] 8.2.1 Add /worktree command parser (RED)
+  - Path: `src/commands/mod.rs`
+  - Test: `test_parse_worktree_new`
+  - Test: `test_parse_worktree_list`
+  - Test: `test_parse_worktree_switch`
+  - Acceptance: Tests document expected parsing
 
----
+- [ ] 8.2.2 Implement /worktree commands (GREEN)
+  - Path: `src/commands/worktree.rs` (new)
+  - Commands: `new <name>`, `list`, `switch <name>`, `remove <name>`, `clean`, `status`
+  - Acceptance: Commands execute correctly
 
-## Phase 6: CI Validation
+### 8.3 Experiment Mode
 
-### Goal: Verify cross-platform support in CI
+- [ ] 8.3.1 Design Experiment struct (RED)
+  - Path: `src/worktree/experiment.rs` (new)
+  - Test: `test_experiment_start`
+  - Test: `test_experiment_accept`
+  - Test: `test_experiment_reject`
+  - Acceptance: Tests document experiment workflow
 
-### 6.1 Update CI Configuration
+- [ ] 8.3.2 Implement Experiment workflow (GREEN)
+  - Methods: `start()`, `accept()`, `reject()`, `pause()`
+  - Creates isolated worktree for risky changes
+  - Acceptance: Full experiment lifecycle works
 
-- [x] 6.1.1 Verify Windows CI job exists
-  - Path: `.github/workflows/ci.yml`
-  - Verified: `windows-latest` in test matrix (line 50)
-  - Verified: Windows build target in build matrix (line 124-125)
-  - Acceptance: Windows tests run in CI
-  - Status: Already configured
-  - Completed: 2026-01-30
+### 8.4 TUI Integration
 
-- [x] 6.1.2 Add Windows-specific CI steps if needed
-  - Path: `.github/workflows/ci.yml`
-  - Note: No additional steps needed - tests skip gracefully via symlinks_available()
-  - Note: PowerShell is available by default on windows-latest runner
-  - Note: Symlink tests will skip on Windows CI (no admin rights)
-  - Acceptance: CI passes on Windows
-  - Status: No changes needed - graceful degradation via test helpers
-  - Completed: 2026-01-30
+- [ ] 8.4.1 Add worktree picker widget (GREEN)
+  - Path: `src/tui/widgets/worktree_picker.rs` (new)
+  - Display: List worktrees with status indicators
+  - Keybindings: n=new, s=switch, d=delete, c=clean
+  - Acceptance: Widget renders correctly
 
-### 6.2 Final Validation
+- [ ] 8.4.2 Add status bar worktree indicator (GREEN)
+  - Path: `src/tui/mod.rs`
+  - Display: Current branch, ahead/behind, modified count
+  - Acceptance: Status bar shows worktree info
 
-- [x] 6.2.1 Run full test suite on all platforms
-  - Local validation: All tests pass (428+ tests)
-  - CI: Configured for Ubuntu, macOS, Windows
-  - Platform-specific skips: Symlink tests skip on Windows without admin
-  - Completed: 2026-01-30
+### 8.5 Session-Worktree Linking
 
-- [x] 6.2.2 Update documentation
-  - Documentation embedded in code (doc comments)
-  - Platform differences documented in:
-    - `src/shell/mod.rs` - Shell abstraction layer
-    - `tests/common/mod.rs` - Cross-platform test helpers
-  - Note: Separate docs/cross-platform.md deferred (code is self-documenting)
-  - Completed: 2026-01-30
+- [ ] 8.5.1 Extend session metadata (GREEN)
+  - Path: `src/session/mod.rs`
+  - Add: `WorktreeSession` struct with worktree_name, original_branch, commits
+  - Acceptance: Sessions can be linked to worktrees
 
-- [x] 6.2.3 Final code review
-  - Verified: No `#![cfg(unix)]` on test files
-  - Verified: No hardcoded `/bin/sh` in source code
-  - Verified: Shell abstraction layer used throughout (ShellConfig)
-  - Verified: All public APIs use platform-agnostic patterns
-  - Completed: 2026-01-30
-
-- [x] 6.2.4 Tag release
-  - Tag: `v0.3.0-crossplatform`
-  - Message: Cross-platform support release
-  - Completed: 2026-01-30
+- [ ] 8.5.2 Implement session restore per worktree (GREEN)
+  - Path: `src/session/mod.rs`
+  - Feature: Resume session in correct worktree context
+  - Test: `test_session_restore_in_worktree`
+  - Acceptance: Session resume respects worktree
 
 ---
 
-## Completed
+## Phase 9: Plugin Ecosystem & narsil-mcp Integration
 
-<!-- Move completed tasks here with completion date -->
+**Objective:** First-party plugin support with narsil-mcp as flagship
+
+### 9.1 Plugin Manifest Format
+
+- [ ] 9.1.1 Define plugin manifest schema (RED)
+  - Path: `src/plugins/manifest.rs` (new)
+  - Test: `test_parse_plugin_manifest`
+  - Test: `test_validate_plugin_capabilities`
+  - Format: `rct-plugin.toml`
+  - Acceptance: Tests document manifest structure
+
+- [ ] 9.1.2 Implement manifest parsing (GREEN)
+  - Path: `src/plugins/manifest.rs`
+  - Parse: name, version, description, capabilities, config
+  - Acceptance: Manifests parse correctly
+
+### 9.2 Plugin Registry
+
+- [ ] 9.2.1 Implement plugin discovery (GREEN)
+  - Path: `src/plugins/registry.rs`
+  - Scan: `~/.config/patina/plugins/` for manifests
+  - Test: `test_discover_plugins`
+  - Acceptance: Plugins discovered from filesystem
+
+- [ ] 9.2.2 Implement plugin lifecycle (GREEN)
+  - Methods: `load()`, `unload()`, `list_enabled()`
+  - Test: `test_plugin_load_unload`
+  - Acceptance: Plugins can be loaded/unloaded
+
+### 9.3 narsil-mcp Integration
+
+- [ ] 9.3.1 Create narsil plugin manifest
+  - Path: `plugins/narsil/rct-plugin.toml`
+  - Config: Auto-start MCP server, code intelligence tools
+  - Acceptance: Manifest valid
+
+- [ ] 9.3.2 Implement auto-detection (GREEN)
+  - Path: `src/plugins/narsil.rs` (new)
+  - Detect: `which narsil-mcp` availability
+  - Detect: Supported code files in project
+  - Acceptance: narsil auto-enables when available
+
+- [ ] 9.3.3 Add --with-narsil / --no-narsil flags (GREEN)
+  - Path: `src/main.rs`
+  - CLI: Override auto-detection
+  - Acceptance: Flags control narsil loading
 
 ---
 
-## Blocked
+## Phase 10: Session Resume & Context Persistence
 
-### CI Hook Tests (Temporary)
+**Objective:** Full session resume across reboots
 
-**7 hook tests are marked `#[ignore]` until Phase 2 completes:**
+### 10.1 Enhanced Session State
 
-| Test | Reason |
-|------|--------|
-| `test_hook_matcher_exact` | Shell env differs in CI |
-| `test_hook_matcher_pipe_separated` | Shell env differs in CI |
-| `test_hook_matcher_wildcard` | Shell env differs in CI |
-| `test_hook_matcher_glob_pattern` | Shell env differs in CI |
-| `test_hook_completes_before_timeout` | Shell env differs in CI |
-| `test_user_prompt_submit_hook_fires` | Shell env differs in CI |
-| `test_subagent_stop_hook_fires` | Shell env differs in CI |
+- [ ] 10.1.1 Extend session with UI state (RED)
+  - Path: `src/session/mod.rs`
+  - Test: `test_serialize_ui_state`
+  - Test: `test_deserialize_ui_state`
+  - Fields: scroll_offset, input_buffer, cursor_position
+  - Acceptance: Tests document serialization
 
-**Resolution:** Phase 2 (Hook Executor Cross-Platform) will fix these by:
-1. Using `ShellConfig` abstraction instead of hardcoded `sh -c`
-2. Creating cross-platform test helpers like `echo_and_exit()`
+- [ ] 10.1.2 Implement UI state persistence (GREEN)
+  - Path: `src/session/mod.rs`
+  - Serialize: All restorable UI state
+  - Acceptance: UI state survives save/load
 
-**Tracking:** These tests pass locally but fail in GitHub Actions Ubuntu runner.
-Run locally with: `cargo test -- --ignored`
+### 10.2 Context State
+
+- [ ] 10.2.1 Track context files (GREEN)
+  - Path: `src/session/mod.rs`
+  - Track: Files that were read during session
+  - Track: Active skills
+  - Acceptance: Context files recorded
+
+- [ ] 10.2.2 Restore context on resume (GREEN)
+  - Path: `src/session/mod.rs`
+  - Restore: Re-read context files if unchanged
+  - Acceptance: Context restored on --resume
+
+### 10.3 Resume Commands
+
+- [ ] 10.3.1 Implement --resume flag (GREEN)
+  - Path: `src/main.rs`
+  - Syntax: `--resume last` or `--resume <session-id>`
+  - Acceptance: Sessions can be resumed
+
+- [ ] 10.3.2 Implement --list-sessions flag (GREEN)
+  - Path: `src/main.rs`
+  - Display: Available sessions with timestamps
+  - Acceptance: Sessions can be listed
+
+### 10.4 Auto-Save
+
+- [ ] 10.4.1 Implement auto-save on message (GREEN)
+  - Path: `src/app/mod.rs`
+  - Trigger: After each message sent/received
+  - Acceptance: Sessions auto-save
+
+---
+
+## Phase 11: Visual Testing (Future)
+
+**Objective:** VLM-based TUI verification
+
+### 11.1 Test Harness
+
+- [ ] 11.1.1 Set up Playwright + xterm.js
+- [ ] 11.1.2 Create screenshot capture framework
+- [ ] 11.1.3 Implement baseline comparison
+
+### 11.2 VLM Integration
+
+- [ ] 11.2.1 Create visual assertions with Claude Vision
+- [ ] 11.2.2 Natural language test descriptions
+- [ ] 11.2.3 CI integration for visual regression
+
+---
+
+## Phase 12: Beyond Parity Features (Future)
+
+### 12.1 Semantic Code Search
+- [ ] Local embeddings integration
+- [ ] narsil-mcp fallback
+
+### 12.2 Cost Tracking Dashboard
+- [ ] Token usage display
+- [ ] Budget limits
+- [ ] Historical tracking
 
 ---
 
 ## Notes
 
-### Platform Differences Reference
+### Rebrand Checklist
 
-| Feature | Unix | Windows |
-|---------|------|---------|
-| Shell | `sh -c` | `cmd.exe /C` |
-| Command chain | `&&` | `&` (or `&&` in cmd) |
-| Exit code | `exit N` | `exit /b N` |
-| Environment | `export VAR=val` | `set VAR=val` |
-| Path separator | `/` | `\` (but `/` often works) |
-| Absolute path | `/path/to/file` | `C:\path\to\file` |
-| Symlinks | Always available | Requires admin/dev mode |
-| Permissions | chmod bits | ACLs |
+Files requiring "RCT" → "Patina" changes:
+- `Cargo.toml` - package name
+- `README.md` - all references
+- `src/main.rs` - version display
+- `src/tui/mod.rs` - title bar
+- `.github/workflows/*.yml` - binary names
+- `Dockerfile` - binary name
+- `Formula/rct.rb` - formula name
+- `.claude/CLAUDE.md` - project docs
+- `CONTRIBUTING.md` - project name
+- `SECURITY.md` - project name
 
-### Windows Security Patterns
-
-Dangerous commands on Windows that need blocking:
-
-```
-# Destructive
-del /s /q          # Recursive delete
-rd /s /q           # Remove directory recursive
-rmdir /s /q        # Same as rd
-format C:          # Format drive
-
-# Privilege escalation
-runas /user:admin  # Run as different user
-
-# PowerShell dangers
-powershell -enc    # Encoded command (bypass detection)
-powershell -e      # Same
-iex (...)          # Invoke-Expression
-Invoke-Expression  # Same
-
-# Registry
-reg delete         # Delete registry key
-reg add            # Add registry key
-
-# System
-shutdown /s        # Shutdown
-shutdown /r        # Restart
-```
-
-### Testing Commands
+### Git Worktree Commands Reference
 
 ```bash
-# Run all tests (Unix)
-cargo test
-
-# Run all tests (Windows PowerShell)
-cargo test
-
-# Run only cross-platform tests
-cargo test cross_platform
-
-# Run with specific platform
-cargo test --target x86_64-pc-windows-msvc
-
-# Check clippy on all platforms
-cargo clippy --all-targets -- -D warnings
+git worktree add <path> -b <branch>
+git worktree list
+git worktree remove <path>
+git worktree prune
 ```
-
-### Quality Checklist (Pre-Commit)
-
-- [ ] `cargo clippy --all-targets -- -D warnings` passes
-- [ ] `cargo test` passes on Unix
-- [ ] `cargo test` passes on Windows (CI)
-- [ ] `cargo fmt -- --check` passes
-- [ ] No new `#[allow(...)]` attributes
-- [ ] No hardcoded `sh` or `/bin/sh` in source code
-- [ ] No `#![cfg(unix)]` on test files (unless genuinely Unix-only)
-- [ ] Public functions have doc comments
-- [ ] New code has test coverage
 
 ### Previous Implementation Plans
 
-- `docs/archive/implementation-plans/IMPLEMENTATION_PLAN_v2_security_2026-01-30.md` - Security hardening (COMPLETE)
-- `docs/archive/implementation-plans/IMPLEMENTATION_PLAN_v1_2026-01-30.md` - Original 8-phase TDD plan (COMPLETE)
-
----
+Archived in `.archive/implementation-plans/`:
+- `IMPLEMENTATION_PLAN_crossplatform_2026-01-30.md` - Cross-platform support (COMPLETE)
+- Earlier plans in `.archive/docs/`

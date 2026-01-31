@@ -5,7 +5,7 @@
 //! tracing-test crate limitations with async code and cross-crate logging.
 //! The actual logging implementation can be verified with RUST_LOG=debug.
 
-use rct::tools::{ToolCall, ToolExecutionPolicy, ToolExecutor, ToolResult};
+use patina::tools::{ToolCall, ToolExecutionPolicy, ToolExecutor, ToolResult};
 use serde_json::json;
 use std::time::Duration;
 use tempfile::TempDir;
@@ -348,7 +348,7 @@ async fn test_invalid_regex_pattern_returns_error() {
 /// Session integrity violations should return errors.
 #[tokio::test]
 async fn test_session_integrity_violation_returns_error() {
-    use rct::session::SessionManager;
+    use patina::session::SessionManager;
 
     let temp_dir = TempDir::new().unwrap();
     let session_path = temp_dir.path().join("tampered.json");
@@ -381,7 +381,7 @@ async fn test_session_integrity_violation_returns_error() {
 /// Session validation failures should return errors.
 #[tokio::test]
 async fn test_session_validation_returns_error() {
-    use rct::session::SessionManager;
+    use patina::session::SessionManager;
 
     let temp_dir = TempDir::new().unwrap();
     let manager = SessionManager::new(temp_dir.path().to_path_buf());

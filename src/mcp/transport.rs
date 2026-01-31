@@ -7,8 +7,8 @@
 //! # Example
 //!
 //! ```ignore
-//! use rct::mcp::transport::{StdioTransport, Transport};
-//! use rct::mcp::protocol::JsonRpcRequest;
+//! use patina::mcp::transport::{StdioTransport, Transport};
+//! use patina::mcp::protocol::JsonRpcRequest;
 //! use serde_json::json;
 //! use std::time::Duration;
 //!

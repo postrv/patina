@@ -7,8 +7,8 @@
 //!
 //! These tests use a Rust-based mock MCP server for cross-platform compatibility.
 
-use rct::mcp::protocol::JsonRpcRequest;
-use rct::mcp::transport::{StdioTransport, Transport};
+use patina::mcp::protocol::JsonRpcRequest;
+use patina::mcp::transport::{StdioTransport, Transport};
 use serde_json::json;
 use std::time::Duration;
 
@@ -412,7 +412,7 @@ async fn test_mcp_tool_call_error() {
 // Server Lifecycle Tests (Task 3.3.1)
 // ============================================================================
 
-use rct::mcp::client::McpClient;
+use patina::mcp::client::McpClient;
 
 /// Tests that MCP server can be started and stopped cleanly.
 #[tokio::test]

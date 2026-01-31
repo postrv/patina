@@ -1658,6 +1658,50 @@ dependencies = [
 ]
 
 [[package]]
+name = "patina"
+version = "0.3.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "criterion",
+ "crossterm 0.28.1",
+ "directories",
+ "futures",
+ "glob",
+ "hex",
+ "humantime",
+ "insta",
+ "mockall",
+ "once_cell",
+ "pretty_assertions",
+ "proptest",
+ "pulldown-cmark",
+ "ratatui",
+ "regex",
+ "reqwest",
+ "secrecy",
+ "semver",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sha2",
+ "syntect",
+ "tempfile",
+ "textwrap",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-test",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+ "tracing-test",
+ "unicode-width",
+ "uuid",
+ "walkdir",
+ "wiremock",
+]
+
+[[package]]
 name = "percent-encoding"
 version = "2.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2171,50 +2215,6 @@ checksum = "22e18b0f0062d30d4230b2e85ff77fdfe4326feb054b9783a3460d8435c8ab91"
 dependencies = [
  "crossbeam-deque",
  "crossbeam-utils",
-]
-
-[[package]]
-name = "rct"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "criterion",
- "crossterm 0.28.1",
- "directories",
- "futures",
- "glob",
- "hex",
- "humantime",
- "insta",
- "mockall",
- "once_cell",
- "pretty_assertions",
- "proptest",
- "pulldown-cmark",
- "ratatui",
- "regex",
- "reqwest",
- "secrecy",
- "semver",
- "serde",
- "serde_json",
- "serde_yaml",
- "sha2",
- "syntect",
- "tempfile",
- "textwrap",
- "thiserror 1.0.69",
- "tokio",
- "tokio-test",
- "toml",
- "tracing",
- "tracing-subscriber",
- "tracing-test",
- "unicode-width",
- "uuid",
- "walkdir",
- "wiremock",
 ]
 
 [[package]]

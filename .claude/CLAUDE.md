@@ -1,11 +1,12 @@
-# Project Memory - RCT (Rust Claude Terminal)
+# Project Memory - Patina
 
 ## Project Type: Rust CLI Application
 
-RCT is a high-performance Rust CLI for Claude API with a modular, extensible architecture.
+Patina is a high-performance Rust terminal client for Claude API with a modular, extensible architecture.
 
 **Primary Language:** Rust
 **Target:** Feature parity with Claude Code + performance superiority
+**Author:** Laurence Avent
 
 ---
 
@@ -175,7 +176,7 @@ If narsil-mcp is unavailable:
 ## PROJECT STRUCTURE
 
 ```
-rct/
+patina/
 ├── src/
 │   ├── main.rs          # Entry point
 │   ├── app/             # Application state and event loop
@@ -196,8 +197,6 @@ rct/
 │   ├── unit/            # Unit tests
 │   ├── integration/     # Integration tests
 │   └── e2e/             # End-to-end tests
-├── docs/
-│   └── TDD-PRODUCTION-PLAN.md  # Master development plan
 └── IMPLEMENTATION_PLAN.md      # Active task tracking
 ```
 
@@ -252,12 +251,13 @@ Add project-specific notes below. This section is preserved during regeneration.
 
 <!-- USER_CUSTOM_START -->
 
-### RCT-Specific Notes
+### Patina Project Notes
 
-**Current State (2026-01-30):**
+**Current State (2026-01-31):**
 - **All Phases Complete:** TUI, API streaming, tools, MCP, hooks, skills, commands, agents, plugins
 - **Test Coverage:** 85.84% (624 tests)
-- **Release:** v0.2.0-security tagged
+- **Cross-Platform:** Linux, macOS, Windows
+- **Version:** 0.3.0
 
 **Security Audit (2026-01-30) - ALL RESOLVED:**
 | ID | Severity | Status | Issue | Resolution |
@@ -272,11 +272,10 @@ Add project-specific notes below. This section is preserved during regeneration.
 | L-2 | LOW | ✅ FIXED | Session deserialization trust | HMAC-SHA256 integrity |
 
 **Archived Plans:**
-- `docs/archive/implementation-plans/IMPLEMENTATION_PLAN_v1_2026-01-30.md` - Original 8-phase TDD plan (COMPLETE)
+- `.archive/implementation-plans/` - Historical implementation plans
 
 **Reference Documents:**
-- `IMPLEMENTATION_PLAN.md` - Current security hardening plan
-- `docs/TDD-PRODUCTION-PLAN.md` - Original master development plan
+- `IMPLEMENTATION_PLAN.md` - Current development plan
 - `docs/architecture.md` - System architecture
 - `docs/api.md` - API documentation
 

@@ -14,7 +14,7 @@
 //! # Example
 //!
 //! ```ignore
-//! use rct::mcp::client::McpClient;
+//! use patina::mcp::client::McpClient;
 //!
 //! #[tokio::main]
 //! async fn main() -> anyhow::Result<()> {
