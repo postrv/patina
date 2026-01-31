@@ -210,7 +210,7 @@
 
 ### 8.5 Session-Worktree Linking
 
-- [ ] 8.5.1 Extend session metadata (GREEN)
+- [x] 8.5.1 Extend session metadata (GREEN)
   - Path: `src/session/mod.rs`
   - Add: `WorktreeSession` struct with worktree_name, original_branch, commits
   - Acceptance: Sessions can be linked to worktrees

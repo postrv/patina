@@ -71,6 +71,87 @@ async fn atomic_write(path: &Path, contents: &str) -> Result<()> {
 /// For stronger security, this should be derived from a user-configured secret.
 const INTEGRITY_KEY: &[u8] = b"rct-session-integrity-v1";
 
+/// Information about a commit made during a worktree session.
+///
+/// Tracks the commit hash and message for commits made while working
+/// in a worktree-linked session.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WorktreeCommit {
+    /// The commit hash (short or full).
+    pub hash: String,
+
+    /// The commit message (first line).
+    pub message: String,
+}
+
+/// Links a session to a git worktree for isolated development.
+///
+/// When a session is associated with a worktree, this struct tracks:
+/// - The worktree name for context switching
+/// - The original branch the worktree was created from
+/// - All commits made during the session
+///
+/// This enables session resume to restore the correct worktree context.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorktreeSession {
+    /// Name of the worktree (matches `WorktreeInfo::name`).
+    worktree_name: String,
+
+    /// The branch from which the worktree was created.
+    original_branch: String,
+
+    /// Commits made during this session.
+    commits: Vec<WorktreeCommit>,
+}
+
+impl WorktreeSession {
+    /// Creates a new worktree session.
+    ///
+    /// # Arguments
+    ///
+    /// * `worktree_name` - Name of the worktree.
+    /// * `original_branch` - The branch from which the worktree was created.
+    #[must_use]
+    pub fn new(worktree_name: impl Into<String>, original_branch: impl Into<String>) -> Self {
+        Self {
+            worktree_name: worktree_name.into(),
+            original_branch: original_branch.into(),
+            commits: Vec::new(),
+        }
+    }
+
+    /// Returns the worktree name.
+    #[must_use]
+    pub fn worktree_name(&self) -> &str {
+        &self.worktree_name
+    }
+
+    /// Returns the original branch name.
+    #[must_use]
+    pub fn original_branch(&self) -> &str {
+        &self.original_branch
+    }
+
+    /// Returns the commits made during this session.
+    #[must_use]
+    pub fn commits(&self) -> &[WorktreeCommit] {
+        &self.commits
+    }
+
+    /// Adds a commit to the session.
+    ///
+    /// # Arguments
+    ///
+    /// * `hash` - The commit hash (short or full).
+    /// * `message` - The commit message (first line).
+    pub fn add_commit(&mut self, hash: impl Into<String>, message: impl Into<String>) {
+        self.commits.push(WorktreeCommit {
+            hash: hash.into(),
+            message: message.into(),
+        });
+    }
+}
+
 /// Wrapper for session files that includes integrity checksum.
 ///
 /// This struct is used for serialization/deserialization of session files,
@@ -178,6 +259,13 @@ pub struct Session {
 
     /// When the session was last updated.
     updated_at: SystemTime,
+
+    /// Optional worktree session linking.
+    ///
+    /// When present, this session is associated with a git worktree,
+    /// enabling isolated development and session resume in the correct context.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    worktree_session: Option<WorktreeSession>,
 }
 
 impl Session {
@@ -195,6 +283,7 @@ impl Session {
             working_dir,
             created_at: now,
             updated_at: now,
+            worktree_session: None,
         }
     }
 
@@ -232,6 +321,22 @@ impl Session {
     #[must_use]
     pub fn id(&self) -> Option<&str> {
         self.id.as_deref()
+    }
+
+    /// Returns the worktree session, if this session is linked to a worktree.
+    #[must_use]
+    pub fn worktree_session(&self) -> Option<&WorktreeSession> {
+        self.worktree_session.as_ref()
+    }
+
+    /// Sets the worktree session.
+    ///
+    /// # Arguments
+    ///
+    /// * `worktree_session` - The worktree session to link, or `None` to unlink.
+    pub fn set_worktree_session(&mut self, worktree_session: Option<WorktreeSession>) {
+        self.worktree_session = worktree_session;
+        self.updated_at = SystemTime::now();
     }
 }
 
@@ -483,6 +588,100 @@ mod tests {
         assert!(session.messages().is_empty());
         assert_eq!(session.working_dir(), &PathBuf::from("/test"));
         assert!(session.id().is_none());
+    }
+
+    // =========================================================================
+    // WorktreeSession tests
+    // =========================================================================
+
+    #[test]
+    fn test_worktree_session_new() {
+        let wt_session = WorktreeSession::new("feature-x", "main");
+        assert_eq!(wt_session.worktree_name(), "feature-x");
+        assert_eq!(wt_session.original_branch(), "main");
+        assert!(wt_session.commits().is_empty());
+    }
+
+    #[test]
+    fn test_worktree_session_add_commit() {
+        let mut wt_session = WorktreeSession::new("feature-x", "main");
+        wt_session.add_commit("abc123", "Initial commit");
+        wt_session.add_commit("def456", "Add feature");
+
+        let commits = wt_session.commits();
+        assert_eq!(commits.len(), 2);
+        assert_eq!(commits[0].hash, "abc123");
+        assert_eq!(commits[0].message, "Initial commit");
+        assert_eq!(commits[1].hash, "def456");
+        assert_eq!(commits[1].message, "Add feature");
+    }
+
+    #[test]
+    fn test_worktree_session_serialization() {
+        let mut wt_session = WorktreeSession::new("experiment", "develop");
+        wt_session.add_commit("123abc", "Test commit");
+
+        let json = serde_json::to_string(&wt_session).expect("Failed to serialize");
+        let deserialized: WorktreeSession =
+            serde_json::from_str(&json).expect("Failed to deserialize");
+
+        assert_eq!(deserialized.worktree_name(), "experiment");
+        assert_eq!(deserialized.original_branch(), "develop");
+        assert_eq!(deserialized.commits().len(), 1);
+    }
+
+    #[test]
+    fn test_session_with_worktree() {
+        let mut session = Session::new(PathBuf::from("/test"));
+        assert!(session.worktree_session().is_none());
+
+        let wt_session = WorktreeSession::new("feature", "main");
+        session.set_worktree_session(Some(wt_session));
+
+        assert!(session.worktree_session().is_some());
+        assert_eq!(
+            session.worktree_session().unwrap().worktree_name(),
+            "feature"
+        );
+    }
+
+    #[test]
+    fn test_session_with_worktree_serialization() {
+        let mut session = Session::new(PathBuf::from("/project"));
+        let mut wt_session = WorktreeSession::new("wt-test", "main");
+        wt_session.add_commit("abc", "commit 1");
+        session.set_worktree_session(Some(wt_session));
+        session.add_message(test_message(Role::User, "Hello"));
+
+        let json = serde_json::to_string(&session).expect("Failed to serialize");
+        let deserialized: Session = serde_json::from_str(&json).expect("Failed to deserialize");
+
+        assert!(deserialized.worktree_session().is_some());
+        let wt = deserialized.worktree_session().unwrap();
+        assert_eq!(wt.worktree_name(), "wt-test");
+        assert_eq!(wt.commits().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_session_manager_save_load_with_worktree() {
+        let temp_dir = TempDir::new().unwrap();
+        let manager = SessionManager::new(temp_dir.path().to_path_buf());
+
+        let mut session = Session::new(PathBuf::from("/test"));
+        let mut wt_session = WorktreeSession::new("feature-branch", "main");
+        wt_session.add_commit("abc123", "Implement feature");
+        session.set_worktree_session(Some(wt_session));
+        session.add_message(test_message(Role::User, "Working on feature"));
+
+        let id = manager.save(&session).await.unwrap();
+        let loaded = manager.load(&id).await.unwrap();
+
+        assert!(loaded.worktree_session().is_some());
+        let wt = loaded.worktree_session().unwrap();
+        assert_eq!(wt.worktree_name(), "feature-branch");
+        assert_eq!(wt.original_branch(), "main");
+        assert_eq!(wt.commits().len(), 1);
+        assert_eq!(wt.commits()[0].hash, "abc123");
     }
 
     #[test]
