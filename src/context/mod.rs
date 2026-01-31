@@ -50,7 +50,11 @@ impl ProjectContext {
                     });
                 }
                 Err(e) => {
-                    tracing::warn!("Failed to read .patina/CLAUDE.md at {:?}: {}", patina_path, e);
+                    tracing::warn!(
+                        "Failed to read .patina/CLAUDE.md at {:?}: {}",
+                        patina_path,
+                        e
+                    );
                 }
             }
         }

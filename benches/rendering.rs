@@ -11,11 +11,11 @@
 //! - `input_character_echo`: <10μs
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use ratatui::backend::TestBackend;
-use ratatui::Terminal;
 use patina::app::state::AppState;
 use patina::tui::render;
 use patina::types::message::{Message, Role};
+use ratatui::backend::TestBackend;
+use ratatui::Terminal;
 use std::path::PathBuf;
 
 /// Creates an AppState populated with the specified number of messages.
