@@ -6,7 +6,7 @@
 //! # Example
 //!
 //! ```
-//! use rct::enterprise::cost::{BudgetLimit, BudgetPeriod, CostConfig, CostTracker, UsageRecord};
+//! use patina::enterprise::cost::{BudgetLimit, BudgetPeriod, CostConfig, CostTracker, UsageRecord};
 //! use std::time::Duration;
 //!
 //! // Configure cost controls with a session limit

@@ -3,7 +3,7 @@
 //! These tests verify plugin discovery, loading, and namespacing.
 //! Following TDD approach for the plugin system.
 
-use rct::plugins::PluginRegistry;
+use patina::plugins::PluginRegistry;
 use std::fs;
 use tempfile::TempDir;
 

@@ -6,7 +6,7 @@
 //! - Download and checksum verification
 //! - Platform detection
 
-use rct::update::{ReleaseChannel, UpdateChecker, UpdateInstaller};
+use patina::update::{ReleaseChannel, UpdateChecker, UpdateInstaller};
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 use wiremock::matchers::{method, path};
@@ -261,7 +261,7 @@ async fn test_auto_update_verify_signature() {
         .mount(&mock_server)
         .await;
 
-    let release = rct::update::PlatformRelease {
+    let release = patina::update::PlatformRelease {
         url: format!("{}/stable/rct-darwin-aarch64", mock_server.uri()),
         sha256: expected_hash,
         size: binary_content.len() as u64,
@@ -299,7 +299,7 @@ async fn test_auto_update_checksum_mismatch() {
         .await;
 
     // Use wrong checksum
-    let release = rct::update::PlatformRelease {
+    let release = patina::update::PlatformRelease {
         url: format!("{}/stable/rct-darwin-aarch64", mock_server.uri()),
         sha256: "wrong_checksum_that_should_not_match".to_string(),
         size: binary_content.len() as u64,
@@ -337,7 +337,7 @@ async fn test_auto_update_download_server_error() {
         .mount(&mock_server)
         .await;
 
-    let release = rct::update::PlatformRelease {
+    let release = patina::update::PlatformRelease {
         url: format!("{}/stable/rct-darwin-aarch64", mock_server.uri()),
         sha256: "abc123".to_string(),
         size: 1024,

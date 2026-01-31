@@ -6,7 +6,7 @@
 //! # Examples
 //!
 //! ```
-//! use rct::shell::ShellConfig;
+//! use patina::shell::ShellConfig;
 //!
 //! let config = ShellConfig::default();
 //! // On Unix: command = "sh", args = ["-c"]
@@ -27,7 +27,7 @@ use tokio::process::Command as TokioCommand;
 /// # Examples
 ///
 /// ```
-/// use rct::shell::ShellConfig;
+/// use patina::shell::ShellConfig;
 /// use std::process::Command;
 ///
 /// let config = ShellConfig::default();
@@ -84,7 +84,7 @@ impl ShellConfig {
     /// # Examples
     ///
     /// ```
-    /// use rct::shell::ShellConfig;
+    /// use patina::shell::ShellConfig;
     ///
     /// let config = ShellConfig::default();
     /// let cmd = config.build_command("echo hello");
@@ -106,7 +106,7 @@ impl ShellConfig {
 /// # Examples
 ///
 /// ```
-/// use rct::shell::ShellOutput;
+/// use patina::shell::ShellOutput;
 ///
 /// let output = ShellOutput {
 ///     exit_code: 0,
@@ -131,7 +131,7 @@ impl ShellOutput {
     /// # Examples
     ///
     /// ```
-    /// use rct::shell::ShellOutput;
+    /// use patina::shell::ShellOutput;
     ///
     /// let success = ShellOutput { exit_code: 0, stdout: String::new(), stderr: String::new() };
     /// assert!(success.success());
@@ -167,7 +167,7 @@ impl ShellOutput {
 /// # Examples
 ///
 /// ```no_run
-/// use rct::shell::execute_shell_command;
+/// use patina::shell::execute_shell_command;
 ///
 /// # async fn example() -> std::io::Result<()> {
 /// let output = execute_shell_command("echo hello", None).await?;
@@ -227,7 +227,7 @@ pub async fn execute_shell_command(command: &str, stdin: Option<&str>) -> io::Re
 /// # Examples
 ///
 /// ```
-/// use rct::shell::translate_command;
+/// use patina::shell::translate_command;
 ///
 /// let cmd = translate_command("echo hello");
 /// // Returns "echo hello" on all platforms

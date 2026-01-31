@@ -1,6 +1,6 @@
 //! Tests for project context loading
 
-use rct::context::ProjectContext;
+use patina::context::ProjectContext;
 use std::fs;
 use tempfile::TempDir;
 
@@ -40,40 +40,40 @@ fn test_project_context_load_root_claude_md() {
 }
 
 #[test]
-fn test_project_context_load_rct_claude_md() {
+fn test_project_context_load_patina_claude_md() {
     let temp = setup_temp_project();
-    let rct_dir = temp.path().join(".rct");
-    fs::create_dir_all(&rct_dir).unwrap();
-    let claude_md = rct_dir.join("CLAUDE.md");
-    fs::write(&claude_md, "# RCT Specific\n\nRCT configuration context.").unwrap();
+    let patina_dir = temp.path().join(".patina");
+    fs::create_dir_all(&patina_dir).unwrap();
+    let claude_md = patina_dir.join("CLAUDE.md");
+    fs::write(&claude_md, "# Patina Specific\n\nPatina configuration context.").unwrap();
 
     let mut ctx = ProjectContext::new(temp.path().to_path_buf());
     ctx.load().unwrap();
 
     let content = ctx.get_context(temp.path());
-    assert!(content.contains("RCT Specific"));
+    assert!(content.contains("Patina Specific"));
 }
 
 #[test]
-fn test_project_context_load_both_root_and_rct() {
+fn test_project_context_load_both_root_and_patina() {
     let temp = setup_temp_project();
 
     // Root CLAUDE.md
     let root_claude = temp.path().join("CLAUDE.md");
     fs::write(&root_claude, "Root context content").unwrap();
 
-    // .rct/CLAUDE.md
-    let rct_dir = temp.path().join(".rct");
-    fs::create_dir_all(&rct_dir).unwrap();
-    let rct_claude = rct_dir.join("CLAUDE.md");
-    fs::write(&rct_claude, "RCT context content").unwrap();
+    // .patina/CLAUDE.md
+    let patina_dir = temp.path().join(".patina");
+    fs::create_dir_all(&patina_dir).unwrap();
+    let patina_claude = patina_dir.join("CLAUDE.md");
+    fs::write(&patina_claude, "Patina context content").unwrap();
 
     let mut ctx = ProjectContext::new(temp.path().to_path_buf());
     ctx.load().unwrap();
 
     let content = ctx.get_context(temp.path());
     assert!(content.contains("Root context"));
-    assert!(content.contains("RCT context"));
+    assert!(content.contains("Patina context"));
 }
 
 #[test]

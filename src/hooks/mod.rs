@@ -283,7 +283,7 @@ impl Default for HookExecutor {
 /// # Examples
 ///
 /// ```no_run
-/// use rct::hooks::{HookManager, HookEvent};
+/// use patina::hooks::{HookManager, HookEvent};
 ///
 /// #[tokio::main]
 /// async fn main() -> anyhow::Result<()> {
@@ -293,7 +293,7 @@ impl Default for HookExecutor {
 ///     let result = manager.fire_session_start().await?;
 ///
 ///     // Check if hook blocked session start
-///     if matches!(result.decision, rct::hooks::HookDecision::Block { .. }) {
+///     if matches!(result.decision, patina::hooks::HookDecision::Block { .. }) {
 ///         eprintln!("Session start blocked by hook");
 ///         return Ok(());
 ///     }

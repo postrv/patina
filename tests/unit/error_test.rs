@@ -3,7 +3,7 @@
 //! These tests verify the behavior of the centralized error types module,
 //! ensuring proper Display, Error trait implementations, and conversions.
 
-use rct::error::{RctError, RctResult};
+use patina::error::{RctError, RctResult};
 
 #[cfg(test)]
 mod error_type_tests {
@@ -288,7 +288,7 @@ mod module_integration_tests {
     #[cfg(unix)]
     #[test]
     fn test_mcp_validation_returns_typed_error_for_dangerous_command() {
-        use rct::mcp::client::validate_mcp_command;
+        use patina::mcp::client::validate_mcp_command;
 
         let result = validate_mcp_command("rm", &["-rf".to_string(), "/".to_string()]);
 
@@ -307,7 +307,7 @@ mod module_integration_tests {
     /// Test that MCP validation returns RctError::McpValidation for path traversal.
     #[test]
     fn test_mcp_validation_returns_typed_error_for_path_traversal() {
-        use rct::mcp::client::validate_mcp_command;
+        use patina::mcp::client::validate_mcp_command;
 
         let result = validate_mcp_command("../../../bin/sh", &[]);
 
@@ -327,7 +327,7 @@ mod module_integration_tests {
     /// Test that MCP validation returns RctError::McpValidation for relative paths.
     #[test]
     fn test_mcp_validation_returns_typed_error_for_relative_path() {
-        use rct::mcp::client::validate_mcp_command;
+        use patina::mcp::client::validate_mcp_command;
 
         let result = validate_mcp_command("./malicious", &[]);
 
@@ -345,7 +345,7 @@ mod module_integration_tests {
     #[cfg(unix)]
     #[test]
     fn test_mcp_validation_returns_typed_error_for_interpreter_without_absolute_path() {
-        use rct::mcp::client::validate_mcp_command;
+        use patina::mcp::client::validate_mcp_command;
 
         // 'bash' without absolute path should fail
         let result = validate_mcp_command("bash", &["-c".to_string(), "echo hello".to_string()]);
@@ -393,7 +393,7 @@ mod module_integration_tests {
     /// still blocks the attack, but the error categorization could be improved.
     #[tokio::test]
     async fn test_session_validation_returns_typed_error_for_invalid_id() {
-        use rct::session::SessionManager;
+        use patina::session::SessionManager;
         use tempfile::TempDir;
 
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
@@ -420,7 +420,7 @@ mod module_integration_tests {
     /// Test that session validation returns RctError::SessionValidation for empty IDs.
     #[tokio::test]
     async fn test_session_validation_returns_typed_error_for_empty_id() {
-        use rct::session::SessionManager;
+        use patina::session::SessionManager;
         use tempfile::TempDir;
 
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
@@ -443,7 +443,7 @@ mod module_integration_tests {
     /// Test that session integrity returns RctError::SessionIntegrity for tampered sessions.
     #[tokio::test]
     async fn test_session_integrity_returns_typed_error_for_tampered_session() {
-        use rct::session::{Session, SessionManager};
+        use patina::session::{Session, SessionManager};
         use std::path::PathBuf;
         use tokio::fs;
 

@@ -3,7 +3,7 @@
 //! These tests verify serialization and parsing behavior for JSON-RPC 2.0 messages.
 //! Following TDD RED phase - these tests will fail until types are implemented.
 
-use rct::mcp::protocol::{JsonRpcError, JsonRpcRequest, JsonRpcResponse};
+use patina::mcp::protocol::{JsonRpcError, JsonRpcRequest, JsonRpcResponse};
 use serde_json::json;
 
 // ============================================================================

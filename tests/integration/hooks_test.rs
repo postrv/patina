@@ -5,7 +5,7 @@
 //! Note: Some tests use bash-specific constructs ($(cat), grep, etc.) and are
 //! marked with #[cfg(unix)]. Cross-platform tests use the helper functions below.
 
-use rct::hooks::{HookCommand, HookContext, HookDecision, HookDefinition, HookEvent, HookExecutor};
+use patina::hooks::{HookCommand, HookContext, HookDecision, HookDefinition, HookEvent, HookExecutor};
 use serde_json::json;
 
 // =============================================================================
@@ -654,7 +654,7 @@ async fn test_multiple_hook_definitions_same_event() {
 // 4.2.4 App-level hook integration tests
 // =============================================================================
 
-use rct::hooks::HookManager;
+use patina::hooks::HookManager;
 use tempfile::TempDir;
 
 /// Test that HookManager can be created with configuration.

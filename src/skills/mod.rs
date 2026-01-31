@@ -137,7 +137,7 @@ impl SkillEngine {
     /// # Examples
     ///
     /// ```
-    /// use rct::skills::SkillEngine;
+    /// use patina::skills::SkillEngine;
     ///
     /// let engine = SkillEngine::new();
     /// let matches = engine.match_skills_for_file("src/main.rs");
@@ -184,7 +184,7 @@ impl SkillEngine {
     /// # Examples
     ///
     /// ```
-    /// use rct::skills::SkillEngine;
+    /// use patina::skills::SkillEngine;
     ///
     /// let engine = SkillEngine::new();
     /// let context = engine.get_context_for_task("Help me write rust code");
@@ -207,7 +207,7 @@ impl SkillEngine {
     /// # Examples
     ///
     /// ```
-    /// use rct::skills::SkillEngine;
+    /// use patina::skills::SkillEngine;
     ///
     /// let engine = SkillEngine::new();
     /// let context = engine.get_context_for_file("Cargo.toml");

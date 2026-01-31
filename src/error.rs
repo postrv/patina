@@ -11,7 +11,7 @@
 //! # Example
 //!
 //! ```
-//! use rct::error::{RctError, RctResult};
+//! use patina::error::{RctError, RctResult};
 //!
 //! fn validate_path(path: &str) -> RctResult<()> {
 //!     if path.contains("..") {

@@ -1,6 +1,6 @@
 //! Tests for IDE integration
 
-use rct::ide::{IdeMessage, IdeServer, Selection};
+use patina::ide::{IdeMessage, IdeServer, Selection};
 use std::path::PathBuf;
 use uuid::Uuid;
 

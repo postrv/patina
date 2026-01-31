@@ -30,7 +30,7 @@ RUN touch src/main.rs && \
 FROM gcr.io/distroless/cc-debian12 AS runtime
 
 # Copy the binary from builder
-COPY --from=builder /app/target/release/rct /usr/local/bin/rct
+COPY --from=builder /app/target/release/patina /usr/local/bin/patina
 
 # Set working directory for file operations
 WORKDIR /workspace
@@ -41,4 +41,4 @@ USER nonroot:nonroot
 # Set environment variables
 ENV RUST_LOG=info
 
-ENTRYPOINT ["/usr/local/bin/rct"]
+ENTRYPOINT ["/usr/local/bin/patina"]

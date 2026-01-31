@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 /// # Examples
 ///
 /// ```
-/// use rct::types::stream::StreamEvent;
+/// use patina::types::stream::StreamEvent;
 ///
 /// let event = StreamEvent::ContentDelta("Hello".to_string());
 /// match event {

@@ -35,10 +35,15 @@ Thumbs.db
 .claude/CLAUDE.local.md
 context*.txt
 sbom.json
-*.log
 
 # Local configuration
 .mcp.json
+
+# Internal collaboration
+.cowork/
+
+# Version-specific implementation plans (use IMPLEMENTATION_PLAN.md)
+IMPLEMENTATION_PLAN_v*.md
 
 # Coverage reports
 coverage/

@@ -1,6 +1,6 @@
-# RCT - Rust Claude Terminal
+# Patina
 
-[![CI](https://github.com/postrv/rct/actions/workflows/ci.yml/badge.svg)](https://github.com/postrv/rct/actions/workflows/ci.yml)
+[![CI](https://github.com/postrv/patina/actions/workflows/ci.yml/badge.svg)](https://github.com/postrv/patina/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.75%2B-orange.svg)](https://www.rust-lang.org/)
 
@@ -55,32 +55,38 @@ A high-performance terminal client for the Claude API, written in Rust. Feature 
 
 ### Pre-built Binaries
 
-Download from [GitHub Releases](https://github.com/postrv/rct/releases):
+Download from [GitHub Releases](https://github.com/postrv/patina/releases):
 
 | Platform | Download |
 |----------|----------|
-| Linux x86_64 | `rct-linux-x86_64.tar.gz` |
-| Linux x86_64 (static) | `rct-linux-x86_64-musl.tar.gz` |
-| macOS x86_64 | `rct-macos-x86_64.tar.gz` |
-| macOS Apple Silicon | `rct-macos-aarch64.tar.gz` |
-| Windows x86_64 | `rct-windows-x86_64.zip` |
+| Linux x86_64 | `patina-linux-x86_64.tar.gz` |
+| Linux x86_64 (static) | `patina-linux-x86_64-musl.tar.gz` |
+| macOS x86_64 | `patina-macos-x86_64.tar.gz` |
+| macOS Apple Silicon | `patina-macos-aarch64.tar.gz` |
+| Windows x86_64 | `patina-windows-x86_64.zip` |
 
 All releases include SHA256 checksums.
 
 ### From Source
 
 ```bash
-git clone https://github.com/postrv/rct.git
-cd rct
+git clone https://github.com/postrv/patina.git
+cd patina
 cargo build --release
-# Binary at target/release/rct
+# Binary at target/release/patina
+```
+
+### Cargo
+
+```bash
+cargo install patina
 ```
 
 ### Docker
 
 ```bash
-docker pull ghcr.io/postrv/rct:latest
-docker run -it -e ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" ghcr.io/postrv/rct
+docker pull ghcr.io/postrv/patina:latest
+docker run -it -e ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" ghcr.io/postrv/patina
 ```
 
 ## Usage
@@ -89,11 +95,11 @@ docker run -it -e ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" ghcr.io/postrv/rct
 # Set your API key
 export ANTHROPIC_API_KEY="your-api-key"
 
-# Run rct
-rct
+# Run patina
+patina
 
 # With options
-rct --model claude-sonnet-4-20250514 --directory /path/to/project
+patina --model claude-sonnet-4-20250514 --directory /path/to/project
 ```
 
 ### Command Line Options
@@ -118,7 +124,7 @@ rct --model claude-sonnet-4-20250514 --directory /path/to/project
 
 ## Built-in Tools
 
-RCT provides 6 integrated tools with security policy enforcement:
+Patina provides 6 integrated tools with security policy enforcement:
 
 | Tool | Description | Security |
 |------|-------------|----------|
@@ -131,7 +137,7 @@ RCT provides 6 integrated tools with security policy enforcement:
 
 ## MCP Support
 
-RCT implements the [Model Context Protocol](https://spec.modelcontextprotocol.io/) for tool server integration.
+Patina implements the [Model Context Protocol](https://spec.modelcontextprotocol.io/) for tool server integration.
 
 **Protocol:** JSON-RPC 2.0
 
@@ -147,19 +153,19 @@ RCT implements the [Model Context Protocol](https://spec.modelcontextprotocol.io
 ## Configuration
 
 Configuration directories:
-- Linux/macOS: `~/.config/rct/`
-- Windows: `%APPDATA%\rct\`
+- Linux/macOS: `~/.config/patina/`
+- Windows: `%APPDATA%\patina\`
 
 ### Project Context (CLAUDE.md)
 
-Place a `CLAUDE.md` file in your project root to provide project-specific context. RCT automatically discovers:
+Place a `CLAUDE.md` file in your project root to provide project-specific context. Patina automatically discovers:
 - Root: `CLAUDE.md`
-- Framework: `.rct/CLAUDE.md`
+- Framework: `.patina/CLAUDE.md`
 - Subdirectories: `*/CLAUDE.md`
 
 ## Security
 
-RCT implements defense-in-depth security:
+Patina implements defense-in-depth security:
 
 | Control | Implementation |
 |---------|----------------|
@@ -170,9 +176,9 @@ RCT implements defense-in-depth security:
 | MCP Validation | Pre-spawn command validation |
 | Session Integrity | HMAC-SHA256 checksum verification |
 
-**Blocked Commands (Unix):** rm, sudo, su, chmod 777, mkfs, dd, shutdown, curl\|bash, eval, fork bombs, etc.
+**Blocked Commands (Unix):** rm -rf, sudo, su, chmod 777, mkfs, dd, shutdown, curl\|bash, eval, fork bombs, etc.
 
-**Blocked Commands (Windows):** reg.exe, shutdown.exe, format, del.exe, powershell -enc, iex(), certutil, etc.
+**Blocked Commands (Windows):** reg.exe, shutdown.exe, format, del /s, powershell -enc, iex(), certutil, etc.
 
 See [Security Model](docs/security-model.md) and [Security Audit](docs/SECURITY_AUDIT.md) for details.
 
@@ -264,7 +270,7 @@ cargo fmt
 
 | Metric | Value |
 |--------|-------|
-| Version | 0.1.0 |
+| Version | 0.3.0 |
 | MSRV | Rust 1.75 |
 | Edition | 2021 |
 | Tests | 624 |
@@ -290,8 +296,14 @@ cargo fmt
 3. Ensure all quality gates pass
 4. Submit a pull request
 
-See [CLAUDE.md](.claude/CLAUDE.md) for development standards.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for detailed guidelines.
+
+## Author
+
+**Laurence Avent** ([@postrv](https://github.com/postrv))
 
 ## License
 
 MIT OR Apache-2.0
+
+Copyright (c) 2026 Laurence Avent

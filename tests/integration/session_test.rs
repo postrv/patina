@@ -5,8 +5,8 @@
 //! - Resuming sessions from saved state
 //! - Session metadata handling
 
-use rct::session::{Session, SessionManager};
-use rct::types::message::{Message, Role};
+use patina::session::{Session, SessionManager};
+use patina::types::message::{Message, Role};
 use std::path::PathBuf;
 use tempfile::TempDir;
 use uuid::Uuid;

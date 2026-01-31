@@ -3,7 +3,7 @@
 //! These tests verify serialization and display behavior for core types.
 //! Following TDD RED phase - these tests will fail until types are properly implemented.
 
-use rct::{Message, Role};
+use patina::{Message, Role};
 
 /// Tests that Message can be serialized to JSON and deserialized back correctly.
 ///

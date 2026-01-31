@@ -6,7 +6,7 @@
 //! # Example
 //!
 //! ```ignore
-//! use rct::plugins::host::{RctPlugin, PluginInfo, CommandProvider, Command};
+//! use patina::plugins::host::{RctPlugin, PluginInfo, CommandProvider, Command};
 //!
 //! struct MyPlugin;
 //!

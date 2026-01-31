@@ -1,4 +1,4 @@
-//! Session persistence for RCT.
+//! Session persistence for Patina.
 //!
 //! This module provides session save/load functionality, allowing users to
 //! resume conversations across application restarts.
@@ -6,11 +6,11 @@
 //! # Example
 //!
 //! ```no_run
-//! use rct::session::{Session, SessionManager};
+//! use patina::session::{Session, SessionManager};
 //! use std::path::PathBuf;
 //!
 //! # async fn example() -> anyhow::Result<()> {
-//! let manager = SessionManager::new(PathBuf::from("~/.rct/sessions"));
+//! let manager = SessionManager::new(PathBuf::from("~/.patina/sessions"));
 //!
 //! // Create a new session
 //! let mut session = Session::new(PathBuf::from("/my/project"));

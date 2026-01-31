@@ -13,9 +13,9 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
-use rct::app::state::AppState;
-use rct::tui::render;
-use rct::types::message::{Message, Role};
+use patina::app::state::AppState;
+use patina::tui::render;
+use patina::types::message::{Message, Role};
 use std::path::PathBuf;
 
 /// Creates an AppState populated with the specified number of messages.

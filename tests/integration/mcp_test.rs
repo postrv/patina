@@ -27,8 +27,8 @@
 //! - Windows-specific security tests will be added in Phase 4
 
 #[cfg(unix)]
-use rct::mcp::client::McpClient;
-use rct::mcp::McpTransport;
+use patina::mcp::client::McpClient;
+use patina::mcp::McpTransport;
 
 // =============================================================================
 // 1.2.1 MCP Command Validation Tests (RED - Security M-1)
@@ -381,7 +381,7 @@ fn test_mcp_filters_dangerous_env_vars() {
 // =============================================================================
 
 #[cfg(windows)]
-use rct::mcp::client::McpClient;
+use patina::mcp::client::McpClient;
 
 /// Test that MCP blocks PowerShell with encoded commands.
 ///

@@ -6,7 +6,7 @@
 //! # Example
 //!
 //! ```
-//! use rct::enterprise::audit::{AuditConfig, AuditLevel, AuditLogger, AuditEntry};
+//! use patina::enterprise::audit::{AuditConfig, AuditLevel, AuditLogger, AuditEntry};
 //! use std::path::PathBuf;
 //!
 //! // Create audit logger

@@ -3,7 +3,7 @@
 //! These tests verify command parsing, argument handling, and execution.
 //! Following TDD approach for the commands system.
 
-use rct::commands::CommandExecutor;
+use patina::commands::CommandExecutor;
 use std::collections::HashMap;
 use std::fs;
 use tempfile::TempDir;

@@ -1,6 +1,6 @@
 //! Tests for MCP Manager
 
-use rct::mcp::{McpManager, McpServerConfig, McpTool, McpTransport};
+use patina::mcp::{McpManager, McpServerConfig, McpTool, McpTransport};
 use std::collections::HashMap;
 
 #[test]

@@ -3,7 +3,7 @@
 mod common;
 
 use common::TestContext;
-use rct::plugins::PluginRegistry;
+use patina::plugins::PluginRegistry;
 use std::fs;
 
 // ============================================================================

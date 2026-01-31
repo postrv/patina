@@ -9,8 +9,8 @@
 //! - GET to /sse endpoint for server-to-client events
 //! - POST to /message endpoint for client-to-server messages
 
-use rct::mcp::protocol::JsonRpcRequest;
-use rct::mcp::transport::{SseTransport, Transport};
+use patina::mcp::protocol::JsonRpcRequest;
+use patina::mcp::transport::{SseTransport, Transport};
 use serde_json::json;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;

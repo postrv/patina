@@ -6,7 +6,7 @@
 //! # Example
 //!
 //! ```
-//! use rct::agents::{SubagentConfig, SubagentOrchestrator};
+//! use patina::agents::{SubagentConfig, SubagentOrchestrator};
 //!
 //! let mut orchestrator = SubagentOrchestrator::new()
 //!     .with_max_concurrent(4);

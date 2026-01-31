@@ -1,10 +1,11 @@
 [package]
-name = "rct"
-version = "0.1.0"
+name = "patina"
+version = "0.3.0"
 edition = "2021"
 rust-version = "1.75"
-description = "Rust Claude Terminal - High-performance CLI for Claude API"
+description = "Patina - High-performance terminal client for Claude API"
 license = "MIT OR Apache-2.0"
+repository = "https://github.com/postrv/patina"
 keywords = ["claude", "anthropic", "terminal", "tui", "ai"]
 categories = ["command-line-utilities", "development-tools"]
 

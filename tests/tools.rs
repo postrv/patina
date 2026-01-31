@@ -8,7 +8,7 @@
 mod common;
 
 use common::TestContext;
-use rct::tools::{ToolCall, ToolExecutionPolicy, ToolExecutor, ToolResult};
+use patina::tools::{ToolCall, ToolExecutionPolicy, ToolExecutor, ToolResult};
 use serde_json::json;
 use std::time::Duration;
 
@@ -1724,7 +1724,7 @@ async fn test_grep_file_filter() {
 // Tool Hooks Integration Tests (4.2.4)
 // =============================================================================
 
-use rct::hooks::HookManager;
+use patina::hooks::HookManager;
 
 /// Test that HookedToolExecutor fires PreToolUse hook before execution.
 #[cfg(unix)]
@@ -1736,12 +1736,12 @@ async fn test_hooked_executor_fires_pre_tool_use() {
     // Register a hook that writes to a marker file to prove it ran
     let marker_path = ctx.path().join("hook_marker.txt");
     manager.register_tool_hook(
-        rct::hooks::HookEvent::PreToolUse,
+        patina::hooks::HookEvent::PreToolUse,
         None, // No matcher - runs for all tools
         &format!("echo 'pre-tool executed' > {:?} && exit 0", marker_path),
     );
 
-    let executor = rct::tools::HookedToolExecutor::new(ctx.path(), manager);
+    let executor = patina::tools::HookedToolExecutor::new(ctx.path(), manager);
 
     let call = ToolCall {
         name: "bash".to_string(),
@@ -1769,12 +1769,12 @@ async fn test_hooked_executor_fires_post_tool_use() {
 
     let marker_path = ctx.path().join("post_tool_marker.txt");
     manager.register_tool_hook(
-        rct::hooks::HookEvent::PostToolUse,
+        patina::hooks::HookEvent::PostToolUse,
         None,
         &format!("echo 'post-tool executed' > {:?} && exit 0", marker_path),
     );
 
-    let executor = rct::tools::HookedToolExecutor::new(ctx.path(), manager);
+    let executor = patina::tools::HookedToolExecutor::new(ctx.path(), manager);
 
     let call = ToolCall {
         name: "bash".to_string(),
@@ -1799,12 +1799,12 @@ async fn test_hooked_executor_fires_post_tool_use_failure() {
 
     let marker_path = ctx.path().join("failure_marker.txt");
     manager.register_tool_hook(
-        rct::hooks::HookEvent::PostToolUseFailure,
+        patina::hooks::HookEvent::PostToolUseFailure,
         None,
         &format!("echo 'failure hook executed' > {:?} && exit 0", marker_path),
     );
 
-    let executor = rct::tools::HookedToolExecutor::new(ctx.path(), manager);
+    let executor = patina::tools::HookedToolExecutor::new(ctx.path(), manager);
 
     // Command that will fail
     let call = ToolCall {
@@ -1829,12 +1829,12 @@ async fn test_hooked_executor_pre_tool_use_blocks() {
 
     // Hook that blocks with exit code 2
     manager.register_tool_hook(
-        rct::hooks::HookEvent::PreToolUse,
+        patina::hooks::HookEvent::PreToolUse,
         Some("bash"),
         "echo 'Blocked: bash not allowed' && exit 2",
     );
 
-    let executor = rct::tools::HookedToolExecutor::new(ctx.path(), manager);
+    let executor = patina::tools::HookedToolExecutor::new(ctx.path(), manager);
 
     let call = ToolCall {
         name: "bash".to_string(),
@@ -1869,12 +1869,12 @@ async fn test_hooked_executor_matcher_filters_tools() {
     // Hook that only matches "read_file" tool
     let marker_path = ctx.path().join("read_marker.txt");
     manager.register_tool_hook(
-        rct::hooks::HookEvent::PreToolUse,
+        patina::hooks::HookEvent::PreToolUse,
         Some("read_file"),
         &format!("echo 'read hook ran' > {:?} && exit 0", marker_path),
     );
 
-    let executor = rct::tools::HookedToolExecutor::new(ctx.path(), manager);
+    let executor = patina::tools::HookedToolExecutor::new(ctx.path(), manager);
 
     // Execute bash - hook should NOT run
     let bash_call = ToolCall {
@@ -1911,12 +1911,12 @@ async fn test_hooked_executor_pre_tool_use_receives_context() {
 
     // Hook that checks for tool_name in context and blocks if found
     manager.register_tool_hook(
-        rct::hooks::HookEvent::PreToolUse,
+        patina::hooks::HookEvent::PreToolUse,
         None,
         r#"input=$(cat); echo "$input" | grep -q '"tool_name":"bash"' && exit 2 || exit 0"#,
     );
 
-    let executor = rct::tools::HookedToolExecutor::new(ctx.path(), manager);
+    let executor = patina::tools::HookedToolExecutor::new(ctx.path(), manager);
 
     let call = ToolCall {
         name: "bash".to_string(),
@@ -1942,7 +1942,7 @@ async fn test_hooked_executor_post_tool_use_receives_response() {
     // Hook that checks for tool_response in context
     let marker_path = ctx.path().join("response_marker.txt");
     manager.register_tool_hook(
-        rct::hooks::HookEvent::PostToolUse,
+        patina::hooks::HookEvent::PostToolUse,
         None,
         &format!(
             r#"input=$(cat); echo "$input" | grep -q '"tool_response"' && echo 'found response' > {:?} && exit 0 || exit 1"#,
@@ -1950,7 +1950,7 @@ async fn test_hooked_executor_post_tool_use_receives_response() {
         ),
     );
 
-    let executor = rct::tools::HookedToolExecutor::new(ctx.path(), manager);
+    let executor = patina::tools::HookedToolExecutor::new(ctx.path(), manager);
 
     let call = ToolCall {
         name: "bash".to_string(),

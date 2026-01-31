@@ -1,6 +1,6 @@
 //! Integration tests for subagent orchestration.
 
-use rct::agents::{SubagentConfig, SubagentOrchestrator};
+use patina::agents::{SubagentConfig, SubagentOrchestrator};
 
 // ============================================================================
 // 6.1.1 Subagent Spawn Tests
@@ -205,7 +205,7 @@ fn test_subagent_config_clone() {
 
 #[test]
 fn test_subagent_result_debug() {
-    use rct::agents::SubagentResult;
+    use patina::agents::SubagentResult;
 
     let result = SubagentResult {
         id: uuid::Uuid::nil(),

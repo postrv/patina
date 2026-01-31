@@ -6,7 +6,7 @@
 //! - Alerts and warnings
 //! - Cost reporting and statistics
 
-use rct::enterprise::cost::{
+use patina::enterprise::cost::{
     BudgetLimit, BudgetPeriod, CostAlert, CostConfig, CostTracker, ModelPricing, UsageRecord,
 };
 use std::time::Duration;
