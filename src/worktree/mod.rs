@@ -20,6 +20,12 @@
 //! println!("Repo root: {:?}", manager.repo_root());
 //! ```
 
+mod experiment;
+
+pub use experiment::{
+    Experiment, ExperimentConfig, ExperimentError, ExperimentResult, ExperimentState,
+};
+
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::process::Command;

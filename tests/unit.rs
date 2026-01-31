@@ -50,3 +50,6 @@ mod worktree_test;
 
 #[path = "unit/worktree_command_test.rs"]
 mod worktree_command_test;
+
+#[path = "unit/experiment_test.rs"]
+mod experiment_test;
