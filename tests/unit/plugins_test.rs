@@ -675,3 +675,142 @@ fn test_plugin_continues_on_unreadable_command_file() {
         "Valid command should be loaded despite invalid sibling"
     );
 }
+
+// =============================================================================
+// Test Group: TOML Plugin Discovery (9.2.1)
+// =============================================================================
+
+use patina::plugins::registry::discover_plugins;
+
+/// Helper to create a TOML-based plugin directory structure
+fn create_toml_plugin(dir: &TempDir, plugin_name: &str, manifest_toml: &str) -> std::path::PathBuf {
+    let plugin_dir = dir.path().join(plugin_name);
+    fs::create_dir_all(&plugin_dir).expect("Should create plugin dir");
+    fs::write(plugin_dir.join("rct-plugin.toml"), manifest_toml).expect("Should write manifest");
+    plugin_dir
+}
+
+/// Tests discovering plugins with TOML manifests from a directory.
+#[test]
+fn test_discover_plugins() {
+    let temp_dir = TempDir::new().expect("Should create temp dir");
+
+    let manifest1 = r#"
+name = "narsil"
+version = "1.0.0"
+description = "Code intelligence plugin"
+
+[capabilities]
+mcp = true
+
+[mcp]
+command = "narsil-mcp"
+args = ["--repo", "."]
+auto_start = true
+"#;
+
+    let manifest2 = r#"
+name = "git-helper"
+version = "0.2.0"
+description = "Git workflow automation"
+
+[capabilities]
+commands = true
+skills = true
+"#;
+
+    create_toml_plugin(&temp_dir, "narsil", manifest1);
+    create_toml_plugin(&temp_dir, "git-helper", manifest2);
+
+    let discovered = discover_plugins(temp_dir.path()).expect("Should discover plugins");
+
+    assert_eq!(discovered.len(), 2, "Should discover both plugins");
+
+    // Check first plugin (narsil)
+    let narsil = discovered.iter().find(|p| p.name == "narsil");
+    assert!(narsil.is_some(), "Should find narsil plugin");
+    let narsil = narsil.unwrap();
+    assert_eq!(narsil.version, "1.0.0");
+    assert!(narsil.has_capability(patina::plugins::manifest::Capability::Mcp));
+
+    // Check second plugin (git-helper)
+    let git_helper = discovered.iter().find(|p| p.name == "git-helper");
+    assert!(git_helper.is_some(), "Should find git-helper plugin");
+    let git_helper = git_helper.unwrap();
+    assert_eq!(git_helper.version, "0.2.0");
+    assert!(git_helper.has_capability(patina::plugins::manifest::Capability::Commands));
+    assert!(git_helper.has_capability(patina::plugins::manifest::Capability::Skills));
+}
+
+/// Tests that discover_plugins returns empty vec for empty directory.
+#[test]
+fn test_discover_plugins_empty_dir() {
+    let temp_dir = TempDir::new().expect("Should create temp dir");
+
+    let discovered = discover_plugins(temp_dir.path()).expect("Should handle empty dir");
+    assert!(
+        discovered.is_empty(),
+        "Should return empty vec for empty dir"
+    );
+}
+
+/// Tests that discover_plugins handles non-existent directory gracefully.
+#[test]
+fn test_discover_plugins_nonexistent_dir() {
+    let temp_dir = TempDir::new().expect("Should create temp dir");
+    let nonexistent = temp_dir.path().join("nonexistent");
+
+    let discovered = discover_plugins(&nonexistent).expect("Should handle nonexistent dir");
+    assert!(
+        discovered.is_empty(),
+        "Should return empty vec for nonexistent dir"
+    );
+}
+
+/// Tests that invalid TOML manifests are skipped during discovery.
+#[test]
+fn test_discover_plugins_skips_invalid() {
+    let temp_dir = TempDir::new().expect("Should create temp dir");
+
+    // Valid plugin
+    let valid_manifest = r#"
+name = "valid-plugin"
+version = "1.0.0"
+"#;
+    create_toml_plugin(&temp_dir, "valid-plugin", valid_manifest);
+
+    // Invalid plugin (missing required fields)
+    let invalid_dir = temp_dir.path().join("invalid-plugin");
+    fs::create_dir_all(&invalid_dir).expect("Should create invalid plugin dir");
+    fs::write(invalid_dir.join("rct-plugin.toml"), "invalid = true")
+        .expect("Should write invalid manifest");
+
+    let discovered = discover_plugins(temp_dir.path()).expect("Should handle invalid plugins");
+
+    assert_eq!(discovered.len(), 1, "Should only discover valid plugin");
+    assert_eq!(discovered[0].name, "valid-plugin");
+}
+
+/// Tests that nested plugin directories are discovered.
+#[test]
+fn test_discover_plugins_nested() {
+    let temp_dir = TempDir::new().expect("Should create temp dir");
+
+    // Create nested structure like ~/.config/patina/plugins/category/plugin-name/
+    let category_dir = temp_dir.path().join("ai-tools");
+    fs::create_dir_all(&category_dir).expect("Should create category dir");
+
+    let manifest = r#"
+name = "nested-plugin"
+version = "1.0.0"
+"#;
+
+    let plugin_dir = category_dir.join("nested-plugin");
+    fs::create_dir_all(&plugin_dir).expect("Should create nested plugin dir");
+    fs::write(plugin_dir.join("rct-plugin.toml"), manifest).expect("Should write manifest");
+
+    let discovered = discover_plugins(temp_dir.path()).expect("Should discover nested plugins");
+
+    assert_eq!(discovered.len(), 1, "Should discover nested plugin");
+    assert_eq!(discovered[0].name, "nested-plugin");
+}
