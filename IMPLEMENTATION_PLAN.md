@@ -321,10 +321,11 @@
   - Acceptance: Sessions can be resumed
   - **Completed: 2026-01-31** - Added ResumeMode enum, --resume CLI flag, session loading logic, AppState restoration
 
-- [ ] 10.3.2 Implement --list-sessions flag (GREEN)
+- [x] 10.3.2 Implement --list-sessions flag (GREEN)
   - Path: `src/main.rs`
   - Display: Available sessions with timestamps
   - Acceptance: Sessions can be listed
+  - **Completed: 2026-01-31** - Added --list-sessions CLI flag, format_session_list(), SessionManager::list_sorted(), full test coverage
 
 ### 10.4 Auto-Save
 

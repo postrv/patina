@@ -1183,6 +1183,129 @@ impl SessionManager {
             .into_iter()
             .max_by_key(|(_, metadata)| metadata.updated_at))
     }
+
+    /// Lists all sessions sorted by most recently updated first.
+    ///
+    /// Returns session metadata sorted in descending order by `updated_at` timestamp.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if sessions cannot be read.
+    pub async fn list_sorted(&self) -> Result<Vec<SessionMetadata>> {
+        let sessions = self.list_with_metadata().await?;
+
+        let mut sorted: Vec<SessionMetadata> =
+            sessions.into_iter().map(|(_, metadata)| metadata).collect();
+
+        sorted.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+
+        Ok(sorted)
+    }
+}
+
+/// Formats a single session entry for display.
+///
+/// Returns a formatted string with session ID, working directory, message count,
+/// and timestamp.
+#[must_use]
+pub fn format_session_entry(metadata: &SessionMetadata) -> String {
+    let updated = format_timestamp(metadata.updated_at);
+    format!(
+        "{} | {} | {} msgs | {}",
+        metadata.id,
+        metadata.working_dir.display(),
+        metadata.message_count,
+        updated
+    )
+}
+
+/// Formats a list of session metadata for display.
+///
+/// Sessions are sorted by most recently updated first. If the list is empty,
+/// returns a message indicating no sessions were found.
+#[must_use]
+pub fn format_session_list(sessions: &[SessionMetadata]) -> String {
+    if sessions.is_empty() {
+        return "No sessions found.".to_string();
+    }
+
+    // Sort by updated_at descending (most recent first)
+    let mut sorted = sessions.to_vec();
+    sorted.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+
+    let mut output = String::from("Available sessions:\n\n");
+
+    for metadata in &sorted {
+        output.push_str(&format_session_entry(metadata));
+        output.push('\n');
+    }
+
+    output.push_str("\nUse --resume <session-id> or --resume last to resume a session.");
+    output
+}
+
+/// Formats a `SystemTime` as a human-readable timestamp.
+fn format_timestamp(time: SystemTime) -> String {
+    match time.duration_since(std::time::UNIX_EPOCH) {
+        Ok(duration) => {
+            let secs = duration.as_secs();
+            // Simple UTC timestamp without chrono dependency
+            // Format: seconds since epoch (or use chrono if available)
+            let days = secs / 86400;
+            let remaining = secs % 86400;
+            let hours = remaining / 3600;
+            let mins = (remaining % 3600) / 60;
+
+            // Calculate approximate date from days since epoch (1970-01-01)
+            let (year, month, day) = days_to_ymd(days);
+
+            format!(
+                "{:04}-{:02}-{:02} {:02}:{:02} UTC",
+                year, month, day, hours, mins
+            )
+        }
+        Err(_) => "unknown".to_string(),
+    }
+}
+
+/// Converts days since Unix epoch to (year, month, day).
+fn days_to_ymd(days: u64) -> (u64, u64, u64) {
+    // Simplified algorithm for UTC date calculation
+    // This is accurate for dates from 1970 onwards
+    let mut remaining_days = days;
+    let mut year = 1970u64;
+
+    loop {
+        let days_in_year = if is_leap_year(year) { 366 } else { 365 };
+        if remaining_days < days_in_year {
+            break;
+        }
+        remaining_days -= days_in_year;
+        year += 1;
+    }
+
+    let is_leap = is_leap_year(year);
+    let days_in_months: [u64; 12] = if is_leap {
+        [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    } else {
+        [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    };
+
+    let mut month = 1u64;
+    for days_in_month in days_in_months {
+        if remaining_days < days_in_month {
+            break;
+        }
+        remaining_days -= days_in_month;
+        month += 1;
+    }
+
+    (year, month, remaining_days + 1)
+}
+
+/// Returns true if the given year is a leap year.
+const fn is_leap_year(year: u64) -> bool {
+    (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
 }
 
 #[cfg(test)]
@@ -2011,5 +2134,117 @@ mod tests {
         assert!(result.is_some());
         let (latest_id, _) = result.unwrap();
         assert_eq!(latest_id, id2);
+    }
+
+    // =========================================================================
+    // Phase 10.3.2: List sessions flag tests
+    // =========================================================================
+
+    #[test]
+    fn test_format_session_entry() {
+        use std::time::{Duration, UNIX_EPOCH};
+
+        let metadata = SessionMetadata {
+            id: "abc123-def456".to_string(),
+            working_dir: PathBuf::from("/home/user/project"),
+            created_at: UNIX_EPOCH + Duration::from_secs(1706745600), // 2024-02-01 00:00:00 UTC
+            updated_at: UNIX_EPOCH + Duration::from_secs(1706745600),
+            message_count: 5,
+        };
+
+        let output = super::format_session_entry(&metadata);
+
+        // Should contain the session ID
+        assert!(output.contains("abc123-def456"));
+        // Should contain the working directory
+        assert!(output.contains("/home/user/project"));
+        // Should contain the message count
+        assert!(output.contains("5"));
+    }
+
+    #[test]
+    fn test_format_session_list_empty() {
+        let sessions: Vec<SessionMetadata> = vec![];
+        let output = super::format_session_list(&sessions);
+
+        assert!(output.contains("No sessions found"));
+    }
+
+    #[test]
+    fn test_format_session_list_single() {
+        use std::time::{Duration, UNIX_EPOCH};
+
+        let sessions = vec![SessionMetadata {
+            id: "session-1".to_string(),
+            working_dir: PathBuf::from("/project"),
+            created_at: UNIX_EPOCH + Duration::from_secs(1706745600),
+            updated_at: UNIX_EPOCH + Duration::from_secs(1706745600),
+            message_count: 3,
+        }];
+
+        let output = super::format_session_list(&sessions);
+
+        assert!(output.contains("session-1"));
+        assert!(output.contains("/project"));
+        assert!(!output.contains("No sessions found"));
+    }
+
+    #[test]
+    fn test_format_session_list_multiple_sorted_by_updated() {
+        use std::time::{Duration, UNIX_EPOCH};
+
+        // Sessions provided unsorted
+        let sessions = vec![
+            SessionMetadata {
+                id: "old-session".to_string(),
+                working_dir: PathBuf::from("/old"),
+                created_at: UNIX_EPOCH + Duration::from_secs(1000),
+                updated_at: UNIX_EPOCH + Duration::from_secs(1000),
+                message_count: 1,
+            },
+            SessionMetadata {
+                id: "new-session".to_string(),
+                working_dir: PathBuf::from("/new"),
+                created_at: UNIX_EPOCH + Duration::from_secs(2000),
+                updated_at: UNIX_EPOCH + Duration::from_secs(2000),
+                message_count: 2,
+            },
+        ];
+
+        let output = super::format_session_list(&sessions);
+
+        // Most recent should appear first
+        let new_pos = output
+            .find("new-session")
+            .expect("new-session should exist");
+        let old_pos = output
+            .find("old-session")
+            .expect("old-session should exist");
+        assert!(
+            new_pos < old_pos,
+            "Newer session should appear first in the list"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_list_all_sessions_sorted() {
+        let temp_dir = TempDir::new().unwrap();
+        let manager = SessionManager::new(temp_dir.path().to_path_buf());
+
+        // Create sessions with different timestamps
+        let mut session1 = Session::new(PathBuf::from("/project1"));
+        session1.add_message(test_message(Role::User, "First"));
+        manager.save(&session1).await.unwrap();
+
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+
+        let mut session2 = Session::new(PathBuf::from("/project2"));
+        session2.add_message(test_message(Role::User, "Second"));
+        manager.save(&session2).await.unwrap();
+
+        // list_sorted should return sessions sorted by updated_at descending
+        let sorted = manager.list_sorted().await.unwrap();
+        assert_eq!(sorted.len(), 2);
+        assert!(sorted[0].updated_at >= sorted[1].updated_at);
     }
 }
