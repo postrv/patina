@@ -183,14 +183,14 @@
 
 ### 8.3 Experiment Mode
 
-- [ ] 8.3.1 Design Experiment struct (RED)
+- [x] 8.3.1 Design Experiment struct (RED)
   - Path: `src/worktree/experiment.rs` (new)
   - Test: `test_experiment_start`
   - Test: `test_experiment_accept`
   - Test: `test_experiment_reject`
   - Acceptance: Tests document experiment workflow
 
-- [ ] 8.3.2 Implement Experiment workflow (GREEN)
+- [x] 8.3.2 Implement Experiment workflow (GREEN)
   - Methods: `start()`, `accept()`, `reject()`, `pause()`
   - Creates isolated worktree for risky changes
   - Acceptance: Full experiment lifecycle works
