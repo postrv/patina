@@ -10,7 +10,7 @@
 
 | Metric | Value |
 |--------|-------|
-| Tests | 922 |
+| Tests | 911 |
 | Coverage | 85%+ |
 | Clippy Warnings | 0 |
 | Security Findings | 0 (8/8 resolved) |
