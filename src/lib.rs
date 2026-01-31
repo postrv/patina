@@ -23,6 +23,7 @@ pub mod tui;
 pub mod types;
 pub mod update;
 pub mod util;
+pub mod worktree;
 
 // Re-export core types for convenient access
 pub use types::{Config, Message, Role, StreamEvent};

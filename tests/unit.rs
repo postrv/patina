@@ -1,4 +1,4 @@
-//! Unit test suite for RCT core types and utilities.
+//! Unit test suite for Patina core types and utilities.
 
 #[path = "unit/types_test.rs"]
 mod types_test;
@@ -44,3 +44,6 @@ mod error_logging_test;
 
 #[path = "unit/shell_test.rs"]
 mod shell_test;
+
+#[path = "unit/worktree_test.rs"]
+mod worktree_test;

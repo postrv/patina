@@ -140,19 +140,19 @@
 
 ### 8.1 Core Worktree Module
 
-- [ ] 8.1.1 Create worktree module structure (RED)
+- [x] 8.1.1 Create worktree module structure (RED)
   - Path: `src/worktree/mod.rs` (new)
   - Test: `tests/unit/worktree_test.rs` (new)
   - Test: `test_worktree_manager_detects_git_repo`
   - Test: `test_worktree_config_defaults`
   - Acceptance: Tests fail (module doesn't exist)
 
-- [ ] 8.1.2 Implement WorktreeConfig and WorktreeManager (GREEN)
+- [x] 8.1.2 Implement WorktreeConfig and WorktreeManager (GREEN)
   - Path: `src/worktree/mod.rs`
   - Types: `WorktreeConfig`, `WorktreeManager`, `WorktreeInfo`, `WorktreeError`
   - Acceptance: Basic structure tests pass
 
-- [ ] 8.1.3 Implement create/list/remove operations (GREEN)
+- [x] 8.1.3 Implement create/list/remove operations (GREEN)
   - Path: `src/worktree/mod.rs`
   - Methods: `create()`, `list()`, `remove()`, `status()`
   - Test: `test_create_worktree`
