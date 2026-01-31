@@ -160,7 +160,7 @@
   - Test: `test_remove_worktree`
   - Acceptance: CRUD operations work
 
-- [ ] 8.1.4 Implement worktree status (GREEN)
+- [x] 8.1.4 Implement worktree status (GREEN)
   - Path: `src/worktree/mod.rs`
   - Method: `status()` returns modified/staged/ahead/behind counts
   - Test: `test_worktree_status_dirty`
@@ -169,14 +169,14 @@
 
 ### 8.2 Slash Commands
 
-- [ ] 8.2.1 Add /worktree command parser (RED)
+- [x] 8.2.1 Add /worktree command parser (RED)
   - Path: `src/commands/mod.rs`
   - Test: `test_parse_worktree_new`
   - Test: `test_parse_worktree_list`
   - Test: `test_parse_worktree_switch`
   - Acceptance: Tests document expected parsing
 
-- [ ] 8.2.2 Implement /worktree commands (GREEN)
+- [x] 8.2.2 Implement /worktree commands (GREEN)
   - Path: `src/commands/worktree.rs` (new)
   - Commands: `new <name>`, `list`, `switch <name>`, `remove <name>`, `clean`, `status`
   - Acceptance: Commands execute correctly

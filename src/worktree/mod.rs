@@ -55,6 +55,39 @@ impl Default for WorktreeConfig {
     }
 }
 
+/// Status of a worktree's working directory.
+///
+/// Contains counts of files in various states and ahead/behind counts
+/// relative to the upstream branch.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WorktreeStatus {
+    /// Number of modified (unstaged) files.
+    pub modified: usize,
+
+    /// Number of staged files.
+    pub staged: usize,
+
+    /// Number of untracked files.
+    pub untracked: usize,
+
+    /// Number of commits ahead of upstream.
+    pub ahead: usize,
+
+    /// Number of commits behind upstream.
+    pub behind: usize,
+}
+
+impl WorktreeStatus {
+    /// Returns `true` if the worktree has no uncommitted changes.
+    ///
+    /// A worktree is considered clean if there are no modified, staged,
+    /// or untracked files. Ahead/behind counts do not affect cleanliness.
+    #[must_use]
+    pub fn is_clean(&self) -> bool {
+        self.modified == 0 && self.staged == 0 && self.untracked == 0
+    }
+}
+
 /// Information about a git worktree.
 ///
 /// Represents the state of a single worktree in the repository.
@@ -288,6 +321,122 @@ impl WorktreeManager {
         }
 
         Ok(())
+    }
+
+    /// Gets the status of a worktree at the given path.
+    ///
+    /// Returns information about modified, staged, and untracked files,
+    /// as well as ahead/behind counts relative to the upstream branch.
+    ///
+    /// # Errors
+    ///
+    /// Returns `WorktreeError::GitCommand` if git commands fail.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use patina::worktree::WorktreeManager;
+    /// use std::path::PathBuf;
+    ///
+    /// let manager = WorktreeManager::new(PathBuf::from(".")).unwrap();
+    /// let status = manager.status(&PathBuf::from(".")).unwrap();
+    /// println!("Modified: {}, Staged: {}", status.modified, status.staged);
+    /// ```
+    pub fn status(&self, path: &Path) -> Result<WorktreeStatus, WorktreeError> {
+        let mut status = WorktreeStatus::default();
+
+        // Get porcelain status for modified/staged/untracked counts
+        let output = Command::new("git")
+            .args(["status", "--porcelain=v1"])
+            .current_dir(path)
+            .output()
+            .map_err(|e| WorktreeError::GitCommand {
+                command: "git status".to_string(),
+                message: e.to_string(),
+            })?;
+
+        if !output.status.success() {
+            return Err(WorktreeError::GitCommand {
+                command: "git status".to_string(),
+                message: String::from_utf8_lossy(&output.stderr).to_string(),
+            });
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        for line in stdout.lines() {
+            if line.len() < 2 {
+                continue;
+            }
+
+            let index_status = line.chars().next().unwrap_or(' ');
+            let worktree_status = line.chars().nth(1).unwrap_or(' ');
+
+            // Staged changes (index column has a status letter)
+            if index_status != ' ' && index_status != '?' {
+                status.staged += 1;
+            }
+
+            // Modified (unstaged) changes in worktree
+            if worktree_status != ' ' && worktree_status != '?' {
+                status.modified += 1;
+            }
+
+            // Untracked files
+            if index_status == '?' {
+                status.untracked += 1;
+            }
+        }
+
+        // Get ahead/behind counts from rev-list
+        if let Ok(ahead_behind) = self.get_ahead_behind(path) {
+            status.ahead = ahead_behind.0;
+            status.behind = ahead_behind.1;
+        }
+
+        Ok(status)
+    }
+
+    /// Gets the ahead/behind counts relative to upstream.
+    fn get_ahead_behind(&self, path: &Path) -> Result<(usize, usize), WorktreeError> {
+        // First check if we have an upstream
+        let upstream_output = Command::new("git")
+            .args(["rev-parse", "--abbrev-ref", "@{upstream}"])
+            .current_dir(path)
+            .output()
+            .map_err(|e| WorktreeError::GitCommand {
+                command: "git rev-parse upstream".to_string(),
+                message: e.to_string(),
+            })?;
+
+        if !upstream_output.status.success() {
+            // No upstream configured
+            return Ok((0, 0));
+        }
+
+        // Get ahead/behind counts
+        let output = Command::new("git")
+            .args(["rev-list", "--left-right", "--count", "@{upstream}...HEAD"])
+            .current_dir(path)
+            .output()
+            .map_err(|e| WorktreeError::GitCommand {
+                command: "git rev-list".to_string(),
+                message: e.to_string(),
+            })?;
+
+        if !output.status.success() {
+            return Ok((0, 0));
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let parts: Vec<&str> = stdout.trim().split('\t').collect();
+
+        if parts.len() == 2 {
+            let behind = parts[0].parse().unwrap_or(0);
+            let ahead = parts[1].parse().unwrap_or(0);
+            Ok((ahead, behind))
+        } else {
+            Ok((0, 0))
+        }
     }
 
     /// Parses the output of `git worktree list --porcelain`.
