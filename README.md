@@ -8,15 +8,40 @@
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.75%2B-orange.svg)](https://www.rust-lang.org/)
 
-A high-performance terminal client for the Claude API, written in Rust. Feature parity with Claude Code plus performance superiority.
+A high-performance terminal client for the Claude API, written in Rust. Feature parity with Claude Code plus additional capabilities like git worktree integration, plugin ecosystem, and full session resume.
 
 ## Highlights
 
 - **Sub-millisecond rendering** - Full 100-message redraw in <1ms
-- **911 tests** with 85%+ code coverage
-- **Zero unsafe code** - Pure safe Rust
+- **922 tests** with 85%+ code coverage
+- **Zero unsafe code** - Pure safe Rust (~15,500 LOC)
 - **Cross-platform** - Linux, macOS, Windows
 - **Security-first** - 8/8 security audit findings resolved
+
+## What's New in v0.3.0
+
+### Git Worktree Integration (Phase 8)
+- **Parallel development** - Work on multiple features simultaneously in isolated worktrees
+- **`/worktree` commands** - `new`, `list`, `switch`, `remove`, `clean`, `status`
+- **Experiment mode** - Start risky changes in isolated worktrees, accept or reject results
+- **Status bar indicator** - Shows current branch, ahead/behind counts, modified files
+- **Session-worktree linking** - Sessions remember which worktree they belong to
+
+### Plugin Ecosystem (Phase 9)
+- **TOML-based manifests** - Define plugins in `rct-plugin.toml`
+- **Plugin discovery** - Automatic scanning of `~/.config/patina/plugins/`
+- **Lifecycle management** - Load, unload, and list plugins at runtime
+- **narsil-mcp integration** - Auto-detects and enables code intelligence when available
+- **CLI flags** - `--with-narsil` / `--no-narsil` to override auto-detection
+
+### Session Resume (Phase 10)
+- **Full session persistence** - Resume exactly where you left off
+- **`--resume last`** - Resume most recent session
+- **`--resume <id>`** - Resume specific session by ID
+- **`--list-sessions`** - View all saved sessions with timestamps
+- **Context tracking** - Remembers files read, detects changes via SHA-256
+- **UI state persistence** - Scroll position, input buffer, cursor position
+- **Auto-save** - Sessions saved after each message
 
 ## Features
 
@@ -24,7 +49,7 @@ A high-performance terminal client for the Claude API, written in Rust. Feature 
 
 | Feature | Description |
 |---------|-------------|
-| **Streaming TUI** | Real-time response streaming with ratatui (120x40 terminal) |
+| **Streaming TUI** | Real-time response streaming with ratatui |
 | **Anthropic API** | Direct integration with Messages API, exponential backoff retry |
 | **Multi-Model** | Anthropic direct + AWS Bedrock provider support |
 | **MCP Client** | Model Context Protocol with stdio/SSE transports |
@@ -36,8 +61,8 @@ A high-performance terminal client for the Claude API, written in Rust. Feature 
 |---------|-------------|
 | **Skills System** | Auto-invoked context providers via SKILL.md files |
 | **Hooks** | 10 lifecycle events (PreToolUse, PostToolUse, SessionStart, etc.) |
-| **Slash Commands** | User-triggered workflows via `/command` syntax |
-| **Plugin Architecture** | Extensible commands, skills, and agents |
+| **Slash Commands** | `/worktree`, `/help`, and user-defined workflows |
+| **Plugin Architecture** | TOML manifests, auto-discovery, lifecycle management |
 | **Subagent Orchestration** | Multi-agent coordination (4 concurrent by default) |
 
 ### Developer Experience
@@ -45,8 +70,9 @@ A high-performance terminal client for the Claude API, written in Rust. Feature 
 | Feature | Description |
 |---------|-------------|
 | **Project Context** | Automatic CLAUDE.md discovery for project instructions |
+| **Git Worktrees** | Parallel AI-assisted development with isolation |
 | **IDE Integration** | TCP server for VS Code and JetBrains extensions |
-| **Self-Update** | Built-in updates with release channels (stable, latest, nightly) |
+| **Self-Update** | Built-in updates with release channels |
 
 ### Enterprise
 
@@ -102,8 +128,14 @@ export ANTHROPIC_API_KEY="your-api-key"
 # Run patina
 patina
 
-# With options
-patina --model claude-sonnet-4-20250514 --directory /path/to/project
+# Resume last session
+patina --resume last
+
+# List saved sessions
+patina --list-sessions
+
+# With narsil-mcp code intelligence
+patina --with-narsil
 ```
 
 ### Command Line Options
@@ -114,6 +146,10 @@ patina --model claude-sonnet-4-20250514 --directory /path/to/project
 | `-m, --model` | Model to use | `claude-sonnet-4-20250514` |
 | `-C, --directory` | Working directory | `.` |
 | `--debug` | Enable debug logging | `false` |
+| `--resume` | Resume session (`last` or session ID) | - |
+| `--list-sessions` | List available sessions and exit | - |
+| `--with-narsil` | Enable narsil-mcp integration | auto |
+| `--no-narsil` | Disable narsil-mcp integration | - |
 
 ### Key Bindings
 
@@ -125,6 +161,17 @@ patina --model claude-sonnet-4-20250514 --directory /path/to/project
 | `Ctrl+Down` / `PageDown` | Scroll down |
 | `Backspace` | Delete character |
 | `Home` / `End` | Move cursor |
+
+### Slash Commands
+
+| Command | Description |
+|---------|-------------|
+| `/worktree new <name>` | Create new worktree |
+| `/worktree list` | List all worktrees |
+| `/worktree switch <name>` | Switch to worktree |
+| `/worktree remove <name>` | Remove worktree |
+| `/worktree status` | Show worktree status |
+| `/worktree clean` | Prune stale worktrees |
 
 ## Built-in Tools
 
@@ -138,6 +185,30 @@ Patina provides 6 integrated tools with security policy enforcement:
 | `edit` | Edit files with diff | Path validation |
 | `glob` | File discovery | Pattern validation |
 | `grep` | Content search | Regex compilation, path validation |
+
+## Plugin System
+
+Patina supports plugins via TOML manifests:
+
+```toml
+# ~/.config/patina/plugins/my-plugin/rct-plugin.toml
+[plugin]
+name = "my-plugin"
+version = "1.0.0"
+description = "My custom plugin"
+
+[capabilities]
+commands = true
+skills = true
+```
+
+### narsil-mcp Integration
+
+When [narsil-mcp](https://github.com/postrv/narsil-mcp) is available, Patina automatically enables code intelligence features:
+
+- **Auto-detection** - Checks for `narsil-mcp` in PATH and supported code files
+- **76 code intelligence tools** - Symbol search, call graphs, security scanning
+- **Override flags** - `--with-narsil` to force enable, `--no-narsil` to disable
 
 ## MCP Support
 
@@ -184,8 +255,6 @@ Patina implements defense-in-depth security:
 
 **Blocked Commands (Windows):** reg.exe, shutdown.exe, format, del /s, powershell -enc, iex(), certutil, etc.
 
-See [Security Model](docs/security-model.md) and [Security Audit](docs/SECURITY_AUDIT.md) for details.
-
 ## Performance
 
 Benchmarks (Criterion, 120x40 terminal):
@@ -214,21 +283,22 @@ src/
 ├── lib.rs            # Library exports
 ├── app/              # Event loop, application state
 ├── api/              # Anthropic API client, multi-model
-├── tui/              # Terminal UI (ratatui)
+├── tui/              # Terminal UI (ratatui), widgets
 ├── tools/            # Tool execution, security policy
 ├── mcp/              # MCP client (protocol, transports)
 ├── hooks/            # Lifecycle event execution
 ├── skills/           # Context-aware skill matching
-├── commands/         # Slash command parsing
+├── commands/         # Slash command parsing (/worktree, etc.)
 ├── agents/           # Subagent orchestration
-├── plugins/          # Plugin system
-├── session/          # Session persistence
+├── plugins/          # Plugin system (manifest, registry, narsil)
+├── session/          # Session persistence, context tracking
+├── worktree/         # Git worktree management, experiments
 ├── enterprise/       # Audit logging, cost tracking
 ├── context/          # Project context (CLAUDE.md)
 ├── update/           # Self-update system
 ├── ide/              # IDE integration (TCP)
 ├── shell/            # Cross-platform shell abstraction
-├── types/            # Core types (Message, Role)
+├── types/            # Core types (Message, Role, Config)
 └── error.rs          # Error types
 ```
 
@@ -259,17 +329,6 @@ cargo fmt
 | Tests | `cargo test` | All pass |
 | Format | `cargo fmt -- --check` | No changes |
 
-## Documentation
-
-| Document | Description |
-|----------|-------------|
-| [Architecture](docs/architecture.md) | System design and module overview |
-| [API Reference](docs/api.md) | API client documentation |
-| [Plugin API](docs/plugin-api.md) | Plugin development guide |
-| [User Guide](docs/user-guide.md) | End-user documentation |
-| [Security Model](docs/security-model.md) | Security architecture |
-| [Security Audit](docs/SECURITY_AUDIT.md) | Audit findings and resolutions |
-
 ## Technical Details
 
 | Metric | Value |
@@ -277,9 +336,10 @@ cargo fmt
 | Version | 0.3.0 |
 | MSRV | Rust 1.75 |
 | Edition | 2021 |
-| Tests | 911 |
+| Tests | 922 |
 | Coverage | 85%+ |
 | Unsafe | 0 blocks |
+| LOC | ~15,500 |
 
 ### Key Dependencies
 
@@ -292,6 +352,19 @@ cargo fmt
 | secrecy 0.10 | Secret storage |
 | serde 1.0 | Serialization |
 | clap 4.5 | CLI parsing |
+
+## Roadmap
+
+### Completed
+- **Phase 1-6**: Core TUI, API, tools, MCP, hooks, skills, cross-platform
+- **Phase 7**: Public release, rebrand to Patina
+- **Phase 8**: Git worktree integration
+- **Phase 9**: Plugin ecosystem, narsil-mcp integration
+- **Phase 10**: Session resume, context persistence
+
+### Future
+- **Phase 11**: Visual testing with VLM-based TUI verification
+- **Phase 12**: Semantic code search, cost tracking dashboard
 
 ## Contributing
 
