@@ -9,7 +9,7 @@ use crate::session::Session;
 use crate::tools::HookedToolExecutor;
 use crate::tui::scroll::ScrollState;
 use crate::tui::selection::{FocusArea, SelectionState};
-use crate::tui::widgets::ToolBlockState;
+use crate::tui::widgets::{CompactionProgressState, ToolBlockState};
 use crate::types::content::StopReason;
 use crate::types::{ApiMessageV2, Message, Role, Timeline};
 use anyhow::Result;
@@ -153,6 +153,10 @@ pub struct AppState {
     /// Token budget tracking for the current session.
     /// Displays usage in the status bar with color-coded warnings.
     token_budget: TokenBudget,
+
+    /// Optional compaction progress state for displaying the compaction overlay.
+    /// When set, the compaction progress widget is shown as a modal.
+    compaction_state: Option<CompactionProgressState>,
 }
 
 #[derive(Default)]
@@ -226,6 +230,7 @@ impl AppState {
             rendered_lines_cache: Vec::new(),
             focus_area: FocusArea::default(),
             token_budget: TokenBudget::new(100_000), // Claude's typical context window
+            compaction_state: None,
         }
     }
 
@@ -917,6 +922,63 @@ impl AppState {
     /// Resets the token budget for a new conversation.
     pub fn reset_token_budget(&mut self) {
         self.token_budget.reset();
+        self.dirty.full = true;
+    }
+
+    // ========================================================================
+    // Compaction Progress
+    // ========================================================================
+
+    /// Returns the compaction progress state, if compaction is active.
+    #[must_use]
+    pub fn compaction_state(&self) -> Option<&CompactionProgressState> {
+        self.compaction_state.as_ref()
+    }
+
+    /// Returns a mutable reference to the compaction progress state.
+    pub fn compaction_state_mut(&mut self) -> Option<&mut CompactionProgressState> {
+        self.compaction_state.as_mut()
+    }
+
+    /// Starts a compaction operation with the given target and before tokens.
+    ///
+    /// This will display the compaction progress overlay in the UI.
+    pub fn start_compaction(&mut self, target_tokens: usize, before_tokens: usize) {
+        let mut state = CompactionProgressState::new(target_tokens, before_tokens);
+        state.set_status(crate::tui::widgets::CompactionStatus::Compacting);
+        self.compaction_state = Some(state);
+        self.dirty.full = true;
+    }
+
+    /// Updates the compaction progress (0.0 to 1.0).
+    pub fn update_compaction_progress(&mut self, progress: f64) {
+        if let Some(state) = &mut self.compaction_state {
+            state.set_progress(progress);
+            self.dirty.full = true;
+        }
+    }
+
+    /// Completes the compaction operation with the final token count.
+    pub fn complete_compaction(&mut self, after_tokens: usize) {
+        if let Some(state) = &mut self.compaction_state {
+            state.set_after_tokens(after_tokens);
+            state.set_status(crate::tui::widgets::CompactionStatus::Complete);
+            state.set_progress(1.0);
+            self.dirty.full = true;
+        }
+    }
+
+    /// Marks the compaction operation as failed.
+    pub fn fail_compaction(&mut self) {
+        if let Some(state) = &mut self.compaction_state {
+            state.set_status(crate::tui::widgets::CompactionStatus::Failed);
+            self.dirty.full = true;
+        }
+    }
+
+    /// Clears the compaction state (closes the overlay).
+    pub fn clear_compaction(&mut self) {
+        self.compaction_state = None;
         self.dirty.full = true;
     }
 

@@ -17,6 +17,7 @@ use ratatui::{
 use crate::app::state::AppState;
 use crate::permissions::PermissionRequest;
 use crate::tui::theme::PatinaTheme;
+use crate::tui::widgets::compaction_progress::{CompactionProgressState, CompactionProgressWidget};
 use crate::tui::widgets::permission_prompt::{PermissionPromptState, PermissionPromptWidget};
 use crate::types::{ConversationEntry, Timeline};
 
@@ -372,10 +373,40 @@ pub fn render(frame: &mut Frame, state: &mut AppState) {
     render_status_bar(frame, chunks[1], state);
     render_input(frame, chunks[2], state);
 
+    // Render compaction progress overlay if compaction is active
+    if let Some(compaction_state) = state.compaction_state() {
+        render_compaction_overlay(frame, compaction_state);
+    }
+
     // Render permission modal overlay if there's a pending permission request
     if let Some(request) = state.pending_permission() {
         render_permission_modal(frame, request);
     }
+}
+
+/// Renders the compaction progress overlay.
+///
+/// This function displays a modal showing the progress of context compaction,
+/// including before/after token counts and a progress bar.
+///
+/// # Arguments
+///
+/// * `frame` - The ratatui frame to render into
+/// * `compaction_state` - The compaction progress state to display
+pub fn render_compaction_overlay(frame: &mut Frame, compaction_state: &CompactionProgressState) {
+    let area = frame.area();
+
+    // Calculate modal area - centered, 50 chars wide, 8 lines tall
+    let modal_width = 50u16.min(area.width.saturating_sub(4));
+    let modal_height = 8u16.min(area.height.saturating_sub(4));
+    let modal_x = area.x + (area.width.saturating_sub(modal_width)) / 2;
+    let modal_y = area.y + (area.height.saturating_sub(modal_height)) / 2;
+
+    let modal_area = Rect::new(modal_x, modal_y, modal_width, modal_height);
+
+    // Render the compaction progress widget
+    let widget = CompactionProgressWidget::new(compaction_state);
+    frame.render_widget(widget, modal_area);
 }
 
 /// Renders the permission prompt modal as an overlay.
