@@ -114,6 +114,33 @@ impl PatinaTheme {
     pub const MUTED: Color = Color::Rgb(100, 120, 115);
 
     // =========================================================================
+    // Diff Colors (subtle backgrounds, not foregrounds)
+    // =========================================================================
+
+    /// Diff addition background — subtle dark green.
+    /// Hex: `#122319`
+    pub const DIFF_ADDITION_BG: Color = Color::Rgb(18, 35, 25);
+
+    /// Diff deletion background — subtle dark red.
+    /// Hex: `#281416`
+    pub const DIFF_DELETION_BG: Color = Color::Rgb(40, 20, 22);
+
+    /// Diff hunk header background — subtle bronze tint.
+    /// Hex: `#1e1814`
+    pub const DIFF_HUNK_BG: Color = Color::Rgb(30, 24, 20);
+
+    // Legacy foreground colors (kept for compatibility)
+    /// Diff addition — muted green (distinct from verdigris).
+    /// Hex: `#5fb87a`
+    pub const DIFF_ADDITION: Color = Color::Rgb(95, 184, 122);
+
+    /// Diff deletion — muted red (same as ERROR for consistency).
+    pub const DIFF_DELETION: Color = Self::ERROR;
+
+    /// Diff hunk header — muted bronze.
+    pub const DIFF_HUNK: Color = Self::BRONZE_MUTED;
+
+    // =========================================================================
     // Role-based Colors
     // =========================================================================
 
@@ -285,6 +312,33 @@ impl PatinaTheme {
             .fg(Self::VERDIGRIS_BRIGHT)
             .add_modifier(Modifier::SLOW_BLINK)
     }
+
+    /// Style for diff additions (lines starting with +).
+    /// Uses subtle green background with default text color.
+    #[must_use]
+    pub fn diff_addition() -> Style {
+        Style::default()
+            .fg(Self::USER_TEXT)
+            .bg(Self::DIFF_ADDITION_BG)
+    }
+
+    /// Style for diff deletions (lines starting with -).
+    /// Uses subtle red background with default text color.
+    #[must_use]
+    pub fn diff_deletion() -> Style {
+        Style::default()
+            .fg(Self::USER_TEXT)
+            .bg(Self::DIFF_DELETION_BG)
+    }
+
+    /// Style for diff hunk headers (lines starting with @@).
+    /// Uses subtle bronze background with muted text.
+    #[must_use]
+    pub fn diff_hunk() -> Style {
+        Style::default()
+            .fg(Self::BRONZE_MUTED)
+            .bg(Self::DIFF_HUNK_BG)
+    }
 }
 
 #[cfg(test)]
@@ -314,5 +368,35 @@ mod tests {
         if let Color::Rgb(r, g, b) = PatinaTheme::BG_PRIMARY {
             assert!(r < 50 && g < 50 && b < 50);
         }
+    }
+
+    #[test]
+    fn diff_backgrounds_are_distinct() {
+        assert_ne!(PatinaTheme::DIFF_ADDITION_BG, PatinaTheme::DIFF_DELETION_BG);
+        assert_ne!(PatinaTheme::DIFF_ADDITION_BG, PatinaTheme::BG_PRIMARY);
+        assert_ne!(PatinaTheme::DIFF_DELETION_BG, PatinaTheme::BG_PRIMARY);
+    }
+
+    #[test]
+    fn diff_styles_use_background_highlighting() {
+        // Diff styles should use background colors for subtle highlighting
+        assert_eq!(
+            PatinaTheme::diff_addition().bg,
+            Some(PatinaTheme::DIFF_ADDITION_BG)
+        );
+        assert_eq!(
+            PatinaTheme::diff_deletion().bg,
+            Some(PatinaTheme::DIFF_DELETION_BG)
+        );
+        assert_eq!(PatinaTheme::diff_hunk().bg, Some(PatinaTheme::DIFF_HUNK_BG));
+        // Text should remain readable (user text color for additions/deletions)
+        assert_eq!(
+            PatinaTheme::diff_addition().fg,
+            Some(PatinaTheme::USER_TEXT)
+        );
+        assert_eq!(
+            PatinaTheme::diff_deletion().fg,
+            Some(PatinaTheme::USER_TEXT)
+        );
     }
 }
