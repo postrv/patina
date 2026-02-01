@@ -71,15 +71,18 @@ struct Args {
     dangerously_skip_permissions: bool,
 
     /// Start OAuth login flow for Claude subscription authentication.
-    #[arg(long)]
+    /// NOTE: OAuth is currently disabled pending client_id registration with Anthropic.
+    #[arg(long, hide = true)]
     oauth_login: bool,
 
     /// Clear stored OAuth credentials and exit.
-    #[arg(long)]
+    /// NOTE: OAuth is currently disabled pending client_id registration with Anthropic.
+    #[arg(long, hide = true)]
     oauth_logout: bool,
 
     /// Force use of API key even if OAuth credentials are available.
-    #[arg(long)]
+    /// NOTE: OAuth is currently disabled, so this flag has no effect.
+    #[arg(long, hide = true)]
     use_api_key: bool,
 }
 
@@ -144,26 +147,16 @@ async fn main() -> Result<()> {
     }
 
     // Determine authentication method
-    // If --use-api-key is set, require API key
-    // Otherwise, try OAuth first, then fall back to API key
-    let api_key = if args.use_api_key {
-        args.api_key
-            .or_else(|| std::env::var("ANTHROPIC_API_KEY").ok().map(Into::into))
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "API key required with --use-api-key. Set ANTHROPIC_API_KEY or use --api-key"
-                )
-            })?
-    } else {
-        // Try to get API key (OAuth integration would go here in a more complete implementation)
-        args.api_key
-            .or_else(|| std::env::var("ANTHROPIC_API_KEY").ok().map(Into::into))
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "API key required. Set ANTHROPIC_API_KEY, use --api-key, or use --oauth-login"
-                )
-            })?
-    };
+    // Currently API key only (OAuth is disabled pending client_id registration)
+    let api_key = args
+        .api_key
+        .or_else(|| std::env::var("ANTHROPIC_API_KEY").ok().map(Into::into))
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "API key required. Set ANTHROPIC_API_KEY environment variable or use --api-key flag.\n\
+                 Get your API key at: https://console.anthropic.com/settings/keys"
+            )
+        })?;
 
     // Determine narsil mode from CLI flags
     let narsil_mode = if args.with_narsil {
@@ -226,11 +219,12 @@ async fn list_sessions() -> Result<()> {
 }
 
 /// Runs the OAuth login flow and stores credentials.
+///
+/// Note: OAuth is currently disabled pending client_id registration with Anthropic.
 async fn oauth_login() -> Result<()> {
-    println!("Starting OAuth login flow...");
-    println!("Note: This requires Claude subscription (Max/Pro) authentication.");
-
     let flow = OAuthFlow::new();
+
+    // This will return an error explaining OAuth is disabled
     let credentials = flow.run().await?;
 
     println!("\nOAuth login successful!");

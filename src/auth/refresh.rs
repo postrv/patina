@@ -3,6 +3,11 @@
 //! This module handles automatic refresh of expired OAuth access tokens
 //! using the refresh token.
 //!
+//! # OAuth Status: DISABLED
+//!
+//! OAuth is currently disabled pending client_id registration with Anthropic.
+//! See [`super::flow`] for details.
+//!
 //! # Example
 //!
 //! ```no_run
@@ -34,11 +39,16 @@ use tracing::{debug, info};
 
 use super::OAuthCredentials;
 
-/// Token endpoint URL (same as in flow module).
-const TOKEN_URL: &str = "https://claude.ai/oauth/token";
+/// Token endpoint URL.
+///
+/// Using the correct Anthropic console endpoint (pending client_id registration).
+const TOKEN_URL: &str = "https://console.anthropic.com/oauth/token";
 
-/// Client ID (same as in flow module).
-const CLIENT_ID: &str = "patina-cli";
+/// Client ID.
+///
+/// PLACEHOLDER: Must be replaced with a valid UUID from Anthropic's
+/// developer registration process.
+const CLIENT_ID: &str = "00000000-0000-0000-0000-000000000000";
 
 /// Refreshes OAuth credentials using the refresh token.
 ///
