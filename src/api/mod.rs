@@ -1,5 +1,6 @@
 //! Anthropic API client
 
+pub mod compaction;
 pub mod context;
 pub mod multi_model;
 pub mod tokens;
@@ -12,7 +13,12 @@ pub use tokens::{
 };
 
 // Re-export context utilities for convenience
-pub use context::{truncate_context, DEFAULT_MAX_INPUT_TOKENS, DEFAULT_MAX_MESSAGES};
+pub use context::{
+    compact_or_truncate_context, truncate_context, DEFAULT_MAX_INPUT_TOKENS, DEFAULT_MAX_MESSAGES,
+};
+
+// Re-export compaction types for convenience
+pub use compaction::{CompactionConfig, CompactionResult, ContextCompactor, SummaryStyle};
 
 use std::time::Duration;
 

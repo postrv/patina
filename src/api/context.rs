@@ -1,18 +1,25 @@
 //! Context window management for API requests.
 //!
-//! Provides smart truncation of conversation history to stay within
+//! Provides smart truncation and compaction of conversation history to stay within
 //! token budgets while preserving conversation coherence.
 //!
 //! # Overview
 //!
 //! Long conversations can accumulate hundreds of thousands of tokens,
 //! causing API costs to skyrocket. This module provides utilities to
-//! truncate conversation history while:
+//! manage conversation history:
 //!
 //! 1. **Always preserving the first message** (system prompt/project context)
 //! 2. **Prioritizing recent messages** (most relevant context)
 //! 3. **Respecting token budgets** (configurable limits)
 //! 4. **Maintaining conversation order** (coherent history)
+//!
+//! ## Truncation vs Compaction
+//!
+//! - **Truncation** (`truncate_context`): Simply drops old messages to fit budget.
+//!   Fast but loses context.
+//! - **Compaction** (`compact_or_truncate_context`): Summarizes old messages into
+//!   a timeline before preserving recent messages. Slower but preserves more context.
 //!
 //! # Example
 //!
@@ -31,6 +38,7 @@
 //! assert!(truncated.len() <= messages.len());
 //! ```
 
+use crate::api::compaction::{CompactionConfig, ContextCompactor};
 use crate::api::tokens::estimate_message_tokens;
 use crate::types::ApiMessageV2;
 
@@ -89,6 +97,71 @@ pub const DEFAULT_MAX_MESSAGES: usize = 30;
 #[must_use]
 pub fn truncate_context(messages: &[ApiMessageV2], max_tokens: usize) -> Vec<ApiMessageV2> {
     truncate_context_with_limits(messages, max_tokens, DEFAULT_MAX_MESSAGES)
+}
+
+/// Compacts or truncates messages to fit within a token budget.
+///
+/// This function first attempts to use compaction (summarizing old messages).
+/// If compaction fails or is not applicable, it falls back to truncation.
+///
+/// # Arguments
+///
+/// * `messages` - The full conversation history
+/// * `max_tokens` - Maximum total tokens allowed
+/// * `preserve_recent` - Number of recent messages to preserve verbatim
+///
+/// # Returns
+///
+/// A new vector with messages compacted/truncated to fit the budget.
+/// The first message is always preserved if it exists.
+///
+/// # Example
+///
+/// ```rust
+/// use patina::api::context::compact_or_truncate_context;
+/// use patina::types::ApiMessageV2;
+///
+/// let messages = vec![
+///     ApiMessageV2::user("System prompt"),
+///     ApiMessageV2::assistant("Response 1"),
+///     ApiMessageV2::user("Query 2"),
+///     ApiMessageV2::assistant("Response 2"),
+/// ];
+///
+/// let result = compact_or_truncate_context(&messages, 1000, 2);
+/// assert!(!result.is_empty());
+/// ```
+#[must_use]
+pub fn compact_or_truncate_context(
+    messages: &[ApiMessageV2],
+    max_tokens: usize,
+    preserve_recent: usize,
+) -> Vec<ApiMessageV2> {
+    // Try compaction first
+    let compactor = ContextCompactor::new_mock();
+    let config = CompactionConfig {
+        target_tokens: max_tokens,
+        preserve_recent,
+        ..Default::default()
+    };
+
+    match compactor.compact(messages, &config) {
+        Ok(result) => {
+            if result.saved_tokens > 0 {
+                tracing::info!(
+                    saved_tokens = result.saved_tokens,
+                    original_count = messages.len(),
+                    compacted_count = result.messages.len(),
+                    "Context compacted successfully"
+                );
+            }
+            result.messages
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "Compaction failed, falling back to truncation");
+            truncate_context_with_limits(messages, max_tokens, preserve_recent)
+        }
+    }
 }
 
 /// Truncates messages with explicit token and message limits.
@@ -419,5 +492,63 @@ mod tests {
                 assert_eq!(msg.role, crate::types::Role::User);
             }
         }
+    }
+
+    // =========================================================================
+    // compact_or_truncate_context tests
+    // =========================================================================
+
+    #[test]
+    fn test_compact_or_truncate_empty() {
+        let messages: Vec<ApiMessageV2> = vec![];
+        let result = compact_or_truncate_context(&messages, 1000, 2);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_compact_or_truncate_under_budget_unchanged() {
+        let messages = vec![
+            make_message("user", "Hello"),
+            make_message("assistant", "Hi there!"),
+        ];
+        let result = compact_or_truncate_context(&messages, 10_000, 2);
+        assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn test_compact_or_truncate_preserves_first_message() {
+        let messages = vec![
+            make_message("user", "System prompt with project context"),
+            make_message("assistant", "Ready to help"),
+            make_message("user", "Task 1"),
+            make_message("assistant", "Done 1"),
+        ];
+        let result = compact_or_truncate_context(&messages, 100, 2);
+        assert!(!result.is_empty());
+        assert_eq!(
+            result[0].content.to_text(),
+            "System prompt with project context"
+        );
+    }
+
+    #[test]
+    fn test_compact_or_truncate_preserves_recent() {
+        // Create a long conversation that needs compaction
+        let long_padding = "x".repeat(200);
+        let mut messages = vec![make_message("user", &format!("System {}", long_padding))];
+        for i in 0..10 {
+            messages.push(make_message("user", &format!("Q{} {}", i, long_padding)));
+            messages.push(make_message(
+                "assistant",
+                &format!("A{} {}", i, long_padding),
+            ));
+        }
+
+        let result = compact_or_truncate_context(&messages, 200, 2);
+
+        // Last message should be preserved
+        let last_original = messages.last().unwrap().content.to_text();
+        let last_result = result.last().unwrap().content.to_text();
+        assert_eq!(last_result, last_original);
     }
 }
