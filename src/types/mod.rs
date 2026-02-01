@@ -19,12 +19,14 @@
 pub mod config;
 pub mod content;
 pub mod conversation;
+pub mod image;
 pub mod message;
 pub mod stream;
 
 // Re-export common types for convenience
 pub use config::Config;
 pub use content::{ContentBlock, StopReason, ToolResultBlock, ToolUseBlock};
+pub use image::{ImageContent, ImageError, ImageSource, MediaType};
 pub use message::{ApiMessageV2, Message, MessageContent, Role};
 pub use stream::{StreamEvent, ToolUseAccumulator};
 
