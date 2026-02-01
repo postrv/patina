@@ -62,10 +62,14 @@ pub mod refresh;
 pub mod storage;
 
 use std::fmt;
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use anyhow::{bail, Result};
 use secrecy::{ExposeSecret, SecretString};
+use tokio::task::JoinHandle;
+
+use self::refresh::TokenRefresher;
 
 /// Authentication method for API access.
 ///
@@ -256,8 +260,12 @@ impl OAuthCredentials {
 ///
 /// The manager handles:
 /// - Loading OAuth credentials from the OS keychain
-/// - Refreshing expired OAuth tokens
+/// - Refreshing expired OAuth tokens automatically via background task
 /// - Falling back to API key authentication
+///
+/// When OAuth credentials are set, a background task is started to
+/// automatically refresh tokens before they expire. Call [`shutdown`](Self::shutdown)
+/// to stop the background task when done.
 pub struct AuthManager {
     /// The current authentication method.
     current_auth: Option<AuthMethod>,
@@ -267,6 +275,12 @@ pub struct AuthManager {
 
     /// Cached API key from environment.
     api_key: Option<SecretString>,
+
+    /// Background token refresher for OAuth credentials.
+    refresher: Option<TokenRefresher>,
+
+    /// Handle to the background refresh task.
+    refresh_handle: Option<JoinHandle<()>>,
 }
 
 impl Default for AuthManager {
@@ -283,6 +297,8 @@ impl AuthManager {
             current_auth: None,
             force_api_key: false,
             api_key: None,
+            refresher: None,
+            refresh_handle: None,
         }
     }
 
@@ -385,7 +401,10 @@ impl AuthManager {
     }
 
     /// Clears the current authentication state.
+    ///
+    /// This also stops any running background token refresher.
     pub fn clear(&mut self) {
+        self.stop_refresher();
         self.current_auth = None;
     }
 
@@ -399,6 +418,62 @@ impl AuthManager {
     #[must_use]
     pub fn has_api_key(&self) -> bool {
         self.api_key.is_some() || std::env::var("ANTHROPIC_API_KEY").is_ok()
+    }
+
+    /// Sets OAuth credentials and starts background token refresh.
+    ///
+    /// This will start a background task that automatically refreshes
+    /// the access token before it expires.
+    pub fn set_oauth_credentials(&mut self, credentials: OAuthCredentials) {
+        // Stop any existing refresher
+        self.stop_refresher();
+
+        // Create the refresher with a callback to update credentials
+        let refresher =
+            TokenRefresher::new(credentials.clone()).with_callback(Arc::new(|new_creds| {
+                // Note: In production, this would update storage
+                // For now, just log the refresh
+                tracing::info!(
+                    expires_at = ?new_creds.expires_at(),
+                    "OAuth credentials refreshed by background task"
+                );
+            }));
+
+        // Start the background task
+        let handle = refresher.start();
+
+        // Store the refresher and handle
+        self.refresher = Some(refresher);
+        self.refresh_handle = Some(handle);
+        self.current_auth = Some(AuthMethod::OAuth(credentials));
+    }
+
+    /// Returns true if a background token refresher is active.
+    #[must_use]
+    pub fn has_active_refresher(&self) -> bool {
+        if let Some(ref refresher) = self.refresher {
+            !refresher.is_stopping()
+        } else {
+            false
+        }
+    }
+
+    /// Shuts down the authentication manager.
+    ///
+    /// This stops any running background token refresher. Safe to call
+    /// multiple times (idempotent).
+    pub fn shutdown(&mut self) {
+        self.stop_refresher();
+    }
+
+    /// Internal helper to stop the refresher.
+    fn stop_refresher(&mut self) {
+        if let Some(ref refresher) = self.refresher {
+            refresher.stop();
+        }
+        // Clear the refresher state
+        self.refresher = None;
+        self.refresh_handle = None;
     }
 }
 
@@ -542,5 +617,84 @@ mod tests {
         let mut manager = AuthManager::new();
         manager.set_api_key(SecretString::new("sk-test".into()));
         assert!(manager.has_api_key());
+    }
+
+    // =========================================================================
+    // TokenRefresher Integration tests (0.9.3)
+    // =========================================================================
+
+    #[test]
+    fn test_auth_manager_starts_without_refresher() {
+        let manager = AuthManager::new();
+        assert!(
+            !manager.has_active_refresher(),
+            "New AuthManager should not have an active refresher"
+        );
+    }
+
+    #[test]
+    fn test_auth_manager_shutdown_is_idempotent() {
+        let mut manager = AuthManager::new();
+
+        // Shutdown should be safe to call even without a refresher
+        manager.shutdown();
+        assert!(
+            !manager.has_active_refresher(),
+            "Manager should have no refresher after shutdown"
+        );
+
+        // Should be safe to call multiple times
+        manager.shutdown();
+        manager.shutdown();
+    }
+
+    #[tokio::test]
+    async fn test_auth_manager_set_oauth_starts_refresher() {
+        let mut manager = AuthManager::new();
+
+        let creds = OAuthCredentials::new(
+            SecretString::new("access".into()),
+            SecretString::new("refresh".into()),
+            Duration::from_secs(3600),
+        );
+
+        manager.set_oauth_credentials(creds);
+
+        assert!(
+            manager.has_active_refresher(),
+            "Setting OAuth credentials should start the refresher"
+        );
+        assert!(
+            manager.has_oauth(),
+            "Manager should have OAuth auth after setting credentials"
+        );
+
+        // Cleanup
+        manager.shutdown();
+    }
+
+    #[tokio::test]
+    async fn test_auth_manager_clear_stops_refresher() {
+        let mut manager = AuthManager::new();
+
+        let creds = OAuthCredentials::new(
+            SecretString::new("access".into()),
+            SecretString::new("refresh".into()),
+            Duration::from_secs(3600),
+        );
+
+        manager.set_oauth_credentials(creds);
+        assert!(manager.has_active_refresher());
+
+        manager.clear();
+
+        assert!(
+            !manager.has_active_refresher(),
+            "Clearing auth should stop the refresher"
+        );
+        assert!(
+            !manager.has_oauth(),
+            "Manager should not have OAuth after clear"
+        );
     }
 }
