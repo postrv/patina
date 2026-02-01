@@ -85,7 +85,8 @@ async fn test_fetch_valid_url_returns_content() {
         .mount(&mock_server)
         .await;
 
-    let tool = WebFetchTool::new(WebFetchConfig::default());
+    // Use testing config to allow localhost (mock server)
+    let tool = WebFetchTool::new(WebFetchConfig::for_testing());
     let result = tool.fetch(&format!("{}/test", mock_server.uri())).await;
 
     assert!(
@@ -124,6 +125,7 @@ async fn test_fetch_timeout_returns_error() {
 
     let config = WebFetchConfig {
         timeout: Duration::from_millis(100),
+        allow_localhost: true, // Allow localhost for mock server
         ..Default::default()
     };
     let tool = WebFetchTool::new(config);
@@ -166,7 +168,8 @@ async fn test_fetch_converts_html_to_markdown() {
         .mount(&mock_server)
         .await;
 
-    let tool = WebFetchTool::new(WebFetchConfig::default());
+    // Use testing config to allow localhost (mock server)
+    let tool = WebFetchTool::new(WebFetchConfig::for_testing());
     let result = tool.fetch(&format!("{}/markdown", mock_server.uri())).await;
 
     assert!(result.is_ok());
@@ -208,7 +211,8 @@ async fn test_fetch_preserves_links_in_markdown() {
         .mount(&mock_server)
         .await;
 
-    let tool = WebFetchTool::new(WebFetchConfig::default());
+    // Use testing config to allow localhost (mock server)
+    let tool = WebFetchTool::new(WebFetchConfig::for_testing());
     let result = tool.fetch(&format!("{}/links", mock_server.uri())).await;
 
     assert!(result.is_ok());
@@ -234,15 +238,12 @@ async fn test_fetch_handles_non_html_content() {
 
     Mock::given(method("GET"))
         .and(path("/api/data"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_string(json_content)
-                .insert_header("content-type", "application/json"),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_raw(json_content, "application/json"))
         .mount(&mock_server)
         .await;
 
-    let tool = WebFetchTool::new(WebFetchConfig::default());
+    // Use testing config to allow localhost (mock server)
+    let tool = WebFetchTool::new(WebFetchConfig::for_testing());
     let result = tool.fetch(&format!("{}/api/data", mock_server.uri())).await;
 
     assert!(result.is_ok());
@@ -278,6 +279,7 @@ async fn test_fetch_respects_max_content_length() {
 
     let config = WebFetchConfig {
         max_content_length: 1_000_000, // 1MB limit
+        allow_localhost: true,         // Allow localhost for mock server
         ..Default::default()
     };
     let tool = WebFetchTool::new(config);
@@ -321,6 +323,7 @@ async fn test_fetch_follows_redirects_limited() {
 
     let config = WebFetchConfig {
         max_redirects: 5,
+        allow_localhost: true, // Allow localhost for mock server
         ..Default::default()
     };
     let tool = WebFetchTool::new(config);
@@ -349,6 +352,7 @@ async fn test_fetch_blocks_excessive_redirects() {
 
     let config = WebFetchConfig {
         max_redirects: 3,
+        allow_localhost: true, // Allow localhost for mock server
         ..Default::default()
     };
     let tool = WebFetchTool::new(config);
@@ -393,5 +397,19 @@ fn test_web_fetch_config_default() {
     assert!(
         config.max_redirects >= 3,
         "Should allow some redirects by default"
+    );
+    assert!(
+        !config.allow_localhost,
+        "Localhost should be blocked by default"
+    );
+}
+
+#[test]
+fn test_web_fetch_config_for_testing() {
+    let config = WebFetchConfig::for_testing();
+
+    assert!(
+        config.allow_localhost,
+        "Testing config should allow localhost"
     );
 }
