@@ -173,10 +173,18 @@ fn render_user_message(lines: &mut Vec<Line<'static>>, text: &str) {
     )]));
 
     for line in text.lines() {
-        lines.push(Line::from(Span::styled(
-            line.to_string(),
-            PatinaTheme::user_message(),
-        )));
+        // Detect diff patterns and apply appropriate styling
+        let line_style = if line.starts_with("+ ") || line.starts_with("+\t") || line == "+" {
+            PatinaTheme::diff_addition()
+        } else if line.starts_with("- ") || line.starts_with("-\t") || line == "-" {
+            PatinaTheme::diff_deletion()
+        } else if line.starts_with("@@") && line.contains("@@") {
+            PatinaTheme::diff_hunk()
+        } else {
+            PatinaTheme::user_message()
+        };
+
+        lines.push(Line::from(Span::styled(line.to_string(), line_style)));
     }
 
     lines.push(Line::from(""));
@@ -190,10 +198,18 @@ fn render_assistant_message(lines: &mut Vec<Line<'static>>, text: &str) {
     )]));
 
     for line in text.lines() {
-        lines.push(Line::from(Span::styled(
-            line.to_string(),
-            PatinaTheme::assistant_message(),
-        )));
+        // Detect diff patterns and apply appropriate styling
+        let line_style = if line.starts_with("+ ") || line.starts_with("+\t") || line == "+" {
+            PatinaTheme::diff_addition()
+        } else if line.starts_with("- ") || line.starts_with("-\t") || line == "-" {
+            PatinaTheme::diff_deletion()
+        } else if line.starts_with("@@") && line.contains("@@") {
+            PatinaTheme::diff_hunk()
+        } else {
+            PatinaTheme::assistant_message()
+        };
+
+        lines.push(Line::from(Span::styled(line.to_string(), line_style)));
     }
 
     lines.push(Line::from(""));
@@ -251,18 +267,25 @@ fn render_tool_execution(
 
     // Tool result (if complete) or pending status
     if let Some(result) = output {
-        let result_style = if is_error {
-            PatinaTheme::error()
-        } else {
-            Style::default().fg(PatinaTheme::TOOL_CONTENT)
-        };
-
         // Show first few lines of result (truncate long output)
         let result_lines: Vec<&str> = result.lines().take(5).collect();
         for line in &result_lines {
+            // Determine style based on diff pattern
+            let line_style = if is_error {
+                PatinaTheme::error()
+            } else if line.starts_with("+ ") || line.starts_with("+\t") || *line == "+" {
+                PatinaTheme::diff_addition()
+            } else if line.starts_with("- ") || line.starts_with("-\t") || *line == "-" {
+                PatinaTheme::diff_deletion()
+            } else if line.starts_with("@@") && line.contains("@@") {
+                PatinaTheme::diff_hunk()
+            } else {
+                Style::default().fg(PatinaTheme::TOOL_CONTENT)
+            };
+
             lines.push(Line::from(vec![
                 Span::raw("    ".to_string()),
-                Span::styled((*line).to_string(), result_style),
+                Span::styled((*line).to_string(), line_style),
             ]));
         }
 
