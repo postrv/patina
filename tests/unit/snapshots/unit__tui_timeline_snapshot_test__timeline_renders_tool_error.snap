@@ -1,0 +1,10 @@
+---
+source: tests/unit/tui_timeline_snapshot_test.rs
+expression: output
+---
+Patina: 
+Running command...
+
+  ✗ bash
+    › nonexistent_cmd
+    command not found

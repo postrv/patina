@@ -6,6 +6,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 // Use the library crate
 use patina::app;
+use patina::auth::{flow::OAuthFlow, storage as auth_storage};
 use patina::session::{default_sessions_dir, format_session_list, SessionManager};
 use patina::types::config::{NarsilMode, ResumeMode};
 
@@ -14,6 +15,16 @@ use patina::types::config::{NarsilMode, ResumeMode};
 #[command(about = "Patina - High-performance terminal client for Claude API")]
 #[command(version)]
 struct Args {
+    /// Initial prompt to start the conversation with.
+    /// Starts interactive mode with this prompt pre-submitted.
+    #[arg(value_name = "PROMPT")]
+    prompt: Option<String>,
+
+    /// Print mode: send prompt, print response, then exit (non-interactive).
+    /// When combined with a prompt, runs in headless mode.
+    #[arg(short = 'p', long)]
+    print: bool,
+
     /// API key (or set ANTHROPIC_API_KEY env var)
     #[arg(long, env = "ANTHROPIC_API_KEY", hide_env_values = true)]
     api_key: Option<secrecy::SecretString>,
@@ -38,14 +49,38 @@ struct Args {
     #[arg(long, conflicts_with = "with_narsil")]
     no_narsil: bool,
 
-    /// Resume a previous session. Use "last" to resume the most recent session,
-    /// or provide a specific session ID.
-    #[arg(long, value_name = "SESSION")]
+    /// Continue the most recent conversation in the current directory.
+    #[arg(short = 'c', long = "continue")]
+    continue_session: bool,
+
+    /// Resume a specific session by ID or name.
+    #[arg(
+        short = 'r',
+        long,
+        value_name = "SESSION",
+        conflicts_with = "continue_session"
+    )]
     resume: Option<String>,
 
     /// List all available sessions and exit.
     #[arg(long)]
     list_sessions: bool,
+
+    /// Bypass all permission prompts (DANGEROUS: allows all tool executions without approval).
+    #[arg(long)]
+    dangerously_skip_permissions: bool,
+
+    /// Start OAuth login flow for Claude subscription authentication.
+    #[arg(long)]
+    oauth_login: bool,
+
+    /// Clear stored OAuth credentials and exit.
+    #[arg(long)]
+    oauth_logout: bool,
+
+    /// Force use of API key even if OAuth credentials are available.
+    #[arg(long)]
+    use_api_key: bool,
 }
 
 #[tokio::main]
@@ -57,6 +92,16 @@ async fn main() -> Result<()> {
         return list_sessions().await;
     }
 
+    // Handle --oauth-logout before other initialization
+    if args.oauth_logout {
+        return oauth_logout().await;
+    }
+
+    // Handle --oauth-login before other initialization
+    if args.oauth_login {
+        return oauth_login().await;
+    }
+
     let filter = if args.debug { "debug" } else { "info" };
     tracing_subscriber::registry()
         .with(
@@ -65,12 +110,27 @@ async fn main() -> Result<()> {
         .with(tracing_subscriber::fmt::layer().with_target(false))
         .init();
 
-    let api_key = args
-        .api_key
-        .or_else(|| std::env::var("ANTHROPIC_API_KEY").ok().map(Into::into))
-        .ok_or_else(|| {
-            anyhow::anyhow!("API key required. Set ANTHROPIC_API_KEY or use --api-key")
-        })?;
+    // Determine authentication method
+    // If --use-api-key is set, require API key
+    // Otherwise, try OAuth first, then fall back to API key
+    let api_key = if args.use_api_key {
+        args.api_key
+            .or_else(|| std::env::var("ANTHROPIC_API_KEY").ok().map(Into::into))
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "API key required with --use-api-key. Set ANTHROPIC_API_KEY or use --api-key"
+                )
+            })?
+    } else {
+        // Try to get API key (OAuth integration would go here in a more complete implementation)
+        args.api_key
+            .or_else(|| std::env::var("ANTHROPIC_API_KEY").ok().map(Into::into))
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "API key required. Set ANTHROPIC_API_KEY, use --api-key, or use --oauth-login"
+                )
+            })?
+    };
 
     // Determine narsil mode from CLI flags
     let narsil_mode = if args.with_narsil {
@@ -81,11 +141,29 @@ async fn main() -> Result<()> {
         NarsilMode::Auto
     };
 
-    // Determine resume mode from CLI flag
-    let resume_mode = match args.resume.as_deref() {
-        Some("last") => ResumeMode::Last,
-        Some(session_id) => ResumeMode::SessionId(session_id.to_string()),
-        None => ResumeMode::None,
+    // Determine resume mode from CLI flags
+    let resume_mode = if args.continue_session {
+        ResumeMode::Last
+    } else {
+        match args.resume.as_deref() {
+            Some(session_id) => ResumeMode::SessionId(session_id.to_string()),
+            None => ResumeMode::None,
+        }
+    };
+
+    // Determine execution mode:
+    // - print mode (-p) with prompt: non-interactive (send prompt, print response, exit)
+    // - prompt only: interactive mode with initial prompt pre-submitted
+    // - no prompt: interactive mode
+    let (initial_prompt, print_mode) = match (args.prompt, args.print) {
+        (Some(prompt), true) => (Some(prompt), true), // Non-interactive
+        (Some(prompt), false) => (Some(prompt), false), // Interactive with initial prompt
+        (None, true) => {
+            // -p without prompt reads from stdin (not yet implemented)
+            eprintln!("Error: --print requires a prompt argument or piped input");
+            std::process::exit(1);
+        }
+        (None, false) => (None, false), // Pure interactive
     };
 
     app::run(app::Config {
@@ -94,6 +172,9 @@ async fn main() -> Result<()> {
         working_dir: args.directory,
         narsil_mode,
         resume_mode,
+        skip_permissions: args.dangerously_skip_permissions,
+        initial_prompt,
+        print_mode,
     })
     .await
 }
@@ -108,5 +189,27 @@ async fn list_sessions() -> Result<()> {
 
     println!("{output}");
 
+    Ok(())
+}
+
+/// Runs the OAuth login flow and stores credentials.
+async fn oauth_login() -> Result<()> {
+    println!("Starting OAuth login flow...");
+    println!("Note: This requires Claude subscription (Max/Pro) authentication.");
+
+    let flow = OAuthFlow::new();
+    let credentials = flow.run().await?;
+
+    println!("\nOAuth login successful!");
+    println!("Access token stored in system keychain.");
+    println!("Token expires at: {:?}", credentials.expires_at());
+
+    Ok(())
+}
+
+/// Clears stored OAuth credentials.
+async fn oauth_logout() -> Result<()> {
+    auth_storage::clear_oauth_credentials().await?;
+    println!("OAuth credentials cleared from system keychain.");
     Ok(())
 }

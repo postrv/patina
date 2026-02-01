@@ -7,6 +7,7 @@
 pub mod agents;
 pub mod api;
 pub mod app;
+pub mod auth;
 pub mod commands;
 pub mod context;
 pub mod enterprise;
@@ -14,6 +15,7 @@ pub mod error;
 pub mod hooks;
 pub mod ide;
 pub mod mcp;
+pub mod permissions;
 pub mod plugins;
 pub mod session;
 pub mod shell;

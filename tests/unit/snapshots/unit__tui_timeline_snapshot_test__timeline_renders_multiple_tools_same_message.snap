@@ -1,0 +1,19 @@
+---
+source: tests/unit/tui_timeline_snapshot_test.rs
+expression: output
+---
+Patina: 
+I'll run several commands.
+
+  ✓ bash
+    › ls
+    file1.txt
+    file2.txt
+
+  ✓ bash
+    › pwd
+    /home/user
+
+  ✓ bash
+    › whoami
+    user

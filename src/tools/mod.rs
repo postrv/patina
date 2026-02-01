@@ -16,12 +16,17 @@ use serde_json::json;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::process::Command;
+use tokio::sync::Mutex;
 use tracing::{debug, warn};
 use walkdir::WalkDir;
 
 use crate::hooks::{HookDecision, HookManager};
+use crate::permissions::{
+    PermissionDecision, PermissionManager, PermissionRequest, PermissionResponse,
+};
 use crate::shell::ShellConfig;
 
 /// Static collection of dangerous command patterns for Unix systems.
@@ -153,6 +158,11 @@ pub struct ToolExecutionPolicy {
     pub protected_paths: Vec<PathBuf>,
     /// Maximum allowed file size for write operations.
     pub max_file_size: usize,
+    /// Maximum allowed output size for bash commands (P0-3: prevents memory issues).
+    ///
+    /// When command output exceeds this limit, it will be truncated with a notice.
+    /// Default is 1MB.
+    pub max_output_size: usize,
     /// Timeout for command execution.
     pub command_timeout: Duration,
     /// Enable allowlist mode (default: false).
@@ -172,6 +182,7 @@ impl Default for ToolExecutionPolicy {
             dangerous_patterns: DANGEROUS_PATTERNS.clone(),
             protected_paths: default_protected_paths(),
             max_file_size: 10 * 1024 * 1024,
+            max_output_size: 1024 * 1024, // 1MB default for bash output
             command_timeout: Duration::from_secs(300),
             allowlist_mode: false,
             allowed_commands: vec![],
@@ -248,9 +259,17 @@ pub struct ToolCall {
 
 #[derive(Debug)]
 pub enum ToolResult {
+    /// Tool executed successfully with output.
     Success(String),
+    /// Tool execution failed with error message.
     Error(String),
+    /// Tool execution was cancelled (by hook or user).
     Cancelled,
+    /// Tool requires permission before execution.
+    ///
+    /// The caller should display a permission prompt to the user and
+    /// re-execute with the appropriate permission grant.
+    NeedsPermission(PermissionRequest),
 }
 
 impl ToolExecutor {
@@ -477,16 +496,51 @@ impl ToolExecutor {
             Ok(Ok(output)) => {
                 let stdout = String::from_utf8_lossy(&output.stdout);
                 let stderr = String::from_utf8_lossy(&output.stderr);
+                let combined = format!("{}{}", stdout, stderr);
+
+                // P0-3: Truncate output if it exceeds max_output_size to prevent memory issues
+                let (final_output, truncated) = if combined.len() > self.policy.max_output_size {
+                    let truncated_output = combined
+                        .chars()
+                        .take(self.policy.max_output_size)
+                        .collect::<String>();
+                    warn!(
+                        original_size = combined.len(),
+                        max_size = self.policy.max_output_size,
+                        "Bash command output truncated"
+                    );
+                    (truncated_output, true)
+                } else {
+                    (combined, false)
+                };
 
                 if output.status.success() {
-                    Ok(ToolResult::Success(format!("{}{}", stdout, stderr)))
+                    let result = if truncated {
+                        format!(
+                            "{}\n\n[Output truncated: {} bytes exceeded {} byte limit]",
+                            final_output,
+                            stdout.len() + stderr.len(),
+                            self.policy.max_output_size
+                        )
+                    } else {
+                        final_output
+                    };
+                    Ok(ToolResult::Success(result))
                 } else {
-                    Ok(ToolResult::Error(format!(
-                        "Exit code {}: {}{}",
-                        output.status.code().unwrap_or(-1),
-                        stdout,
-                        stderr
-                    )))
+                    let result = if truncated {
+                        format!(
+                            "Exit code {}: {}\n\n[Output truncated]",
+                            output.status.code().unwrap_or(-1),
+                            final_output
+                        )
+                    } else {
+                        format!(
+                            "Exit code {}: {}",
+                            output.status.code().unwrap_or(-1),
+                            final_output
+                        )
+                    };
+                    Ok(ToolResult::Error(result))
                 }
             }
             Ok(Err(e)) => {
@@ -1023,10 +1077,10 @@ impl ToolExecutor {
     }
 }
 
-/// Tool executor with hook integration.
+/// Tool executor with hook and permission integration.
 ///
-/// Wraps `ToolExecutor` to automatically fire lifecycle hooks before and after
-/// tool execution. Use this when hooks need to be integrated into tool execution.
+/// Wraps `ToolExecutor` to automatically fire lifecycle hooks and check
+/// permissions before and after tool execution.
 ///
 /// # Hook Events
 ///
@@ -1034,18 +1088,31 @@ impl ToolExecutor {
 /// - `PostToolUse` - Fired after successful tool execution.
 /// - `PostToolUseFailure` - Fired after failed tool execution.
 ///
+/// # Permission Checks
+///
+/// When a `PermissionManager` is configured, tools are checked against permission
+/// rules before execution:
+/// - If allowed by rule or session grant: proceeds to execution
+/// - If denied by rule: returns `ToolResult::Cancelled`
+/// - If no rule matches: returns `ToolResult::NeedsPermission` with request details
+///
 /// # Examples
 ///
 /// ```no_run
 /// use patina::tools::{HookedToolExecutor, ToolCall};
 /// use patina::hooks::HookManager;
+/// use patina::permissions::PermissionManager;
 /// use std::path::PathBuf;
+/// use std::sync::Arc;
+/// use tokio::sync::Mutex;
 /// use serde_json::json;
 ///
 /// #[tokio::main]
 /// async fn main() -> anyhow::Result<()> {
-///     let manager = HookManager::new("session-123".to_string());
-///     let executor = HookedToolExecutor::new(PathBuf::from("."), manager);
+///     let hooks = HookManager::new("session-123".to_string());
+///     let permissions = Arc::new(Mutex::new(PermissionManager::new()));
+///     let executor = HookedToolExecutor::new(PathBuf::from("."), hooks)
+///         .with_permissions(permissions);
 ///
 ///     let call = ToolCall {
 ///         name: "bash".to_string(),
@@ -1057,8 +1124,9 @@ impl ToolExecutor {
 /// }
 /// ```
 pub struct HookedToolExecutor {
-    inner: ToolExecutor,
+    inner: StatefulToolExecutor,
     hooks: HookManager,
+    permissions: Option<Arc<Mutex<PermissionManager>>>,
 }
 
 impl HookedToolExecutor {
@@ -1071,9 +1139,22 @@ impl HookedToolExecutor {
     #[must_use]
     pub fn new(working_dir: PathBuf, hook_manager: HookManager) -> Self {
         Self {
-            inner: ToolExecutor::new(working_dir),
+            inner: StatefulToolExecutor::new(working_dir),
             hooks: hook_manager,
+            permissions: None,
         }
+    }
+
+    /// Returns the current shell state.
+    ///
+    /// This provides access to the tracked working directory and environment
+    /// variables that persist across command executions.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the lock is poisoned.
+    pub fn shell_state(&self) -> std::sync::RwLockReadGuard<'_, ShellState> {
+        self.inner.shell_state()
     }
 
     /// Creates a new hooked tool executor with a custom policy.
@@ -1083,12 +1164,147 @@ impl HookedToolExecutor {
         self
     }
 
-    /// Executes a tool call with hook integration.
+    /// Configures the permission manager for this executor.
+    ///
+    /// When configured, tools will be checked against permission rules
+    /// before execution.
+    #[must_use]
+    pub fn with_permissions(mut self, permissions: Arc<Mutex<PermissionManager>>) -> Self {
+        self.permissions = Some(permissions);
+        self
+    }
+
+    /// Grants permission for a specific tool execution.
+    ///
+    /// This should be called after the user responds to a permission prompt.
+    /// The response will be handled by the permission manager to either:
+    /// - Add a session grant (AllowOnce)
+    /// - Add a persistent rule (AllowAlways)
+    /// - Track denial count (Deny)
+    ///
+    /// # Arguments
+    ///
+    /// * `tool_name` - The tool that was granted/denied
+    /// * `tool_input` - The specific input that was granted/denied
+    /// * `response` - The user's response to the permission prompt
+    pub async fn grant_permission(
+        &self,
+        tool_name: &str,
+        tool_input: Option<&str>,
+        response: PermissionResponse,
+    ) {
+        if let Some(ref permissions) = self.permissions {
+            let mut manager = permissions.lock().await;
+            manager.handle_response(tool_name, tool_input, response);
+        }
+    }
+
+    /// Extracts a human-readable input string from the tool call.
+    fn extract_tool_input(&self, call: &ToolCall) -> Option<String> {
+        match call.name.as_str() {
+            "bash" => call
+                .input
+                .get("command")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            "read_file" | "write_file" | "list_files" => call
+                .input
+                .get("path")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            "edit" => call
+                .input
+                .get("path")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            "glob" | "grep" => call
+                .input
+                .get("pattern")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            _ => {
+                // For MCP tools, try to extract a meaningful input
+                serde_json::to_string(&call.input).ok()
+            }
+        }
+    }
+
+    /// Generates a human-readable description for a tool call.
+    fn generate_description(&self, call: &ToolCall) -> String {
+        match call.name.as_str() {
+            "bash" => {
+                let cmd = call
+                    .input
+                    .get("command")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown command");
+                format!("Execute shell command: {cmd}")
+            }
+            "read_file" => {
+                let path = call
+                    .input
+                    .get("path")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown path");
+                format!("Read file: {path}")
+            }
+            "write_file" => {
+                let path = call
+                    .input
+                    .get("path")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown path");
+                format!("Write to file: {path}")
+            }
+            "edit" => {
+                let path = call
+                    .input
+                    .get("path")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown path");
+                format!("Edit file: {path}")
+            }
+            "list_files" => {
+                let path = call
+                    .input
+                    .get("path")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(".");
+                format!("List directory: {path}")
+            }
+            "glob" => {
+                let pattern = call
+                    .input
+                    .get("pattern")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("*");
+                format!("Search for files matching: {pattern}")
+            }
+            "grep" => {
+                let pattern = call
+                    .input
+                    .get("pattern")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("*");
+                format!("Search file contents for: {pattern}")
+            }
+            name if name.starts_with("mcp__") => {
+                format!("Execute MCP tool: {name}")
+            }
+            name => {
+                format!("Execute tool: {name}")
+            }
+        }
+    }
+
+    /// Executes a tool call with permission checks and hook integration.
     ///
     /// This method:
-    /// 1. Fires `PreToolUse` hook - if it returns Block, returns `ToolResult::Cancelled`
-    /// 2. Executes the actual tool
-    /// 3. Fires `PostToolUse` on success or `PostToolUseFailure` on failure
+    /// 1. Checks permissions - if denied, returns `ToolResult::Cancelled`
+    ///    If no rule matches, returns `ToolResult::NeedsPermission`
+    /// 2. Fires `PreToolUse` hook - if it returns Block, returns `ToolResult::Cancelled`
+    /// 3. Executes the actual tool
+    /// 4. Fires `PostToolUse` on success or `PostToolUseFailure` on failure
     ///
     /// # Errors
     ///
@@ -1096,6 +1312,44 @@ impl HookedToolExecutor {
     pub async fn execute(&self, call: ToolCall) -> Result<ToolResult> {
         let tool_input = call.input.clone();
         let tool_name = call.name.clone();
+
+        // Check permissions if configured
+        if let Some(ref permissions) = self.permissions {
+            let input_str = self.extract_tool_input(&call);
+            let manager = permissions.lock().await;
+            let decision = manager.check(&tool_name, input_str.as_deref());
+
+            match decision {
+                PermissionDecision::Denied => {
+                    debug!(
+                        tool = %tool_name,
+                        input = ?input_str,
+                        "Tool execution denied by permission rule"
+                    );
+                    return Ok(ToolResult::Cancelled);
+                }
+                PermissionDecision::NeedsPrompt => {
+                    debug!(
+                        tool = %tool_name,
+                        input = ?input_str,
+                        "Tool execution requires permission prompt"
+                    );
+                    let description = self.generate_description(&call);
+                    let request =
+                        PermissionRequest::new(&tool_name, input_str.as_deref(), &description);
+                    return Ok(ToolResult::NeedsPermission(request));
+                }
+                PermissionDecision::Allowed | PermissionDecision::SessionGrant => {
+                    debug!(
+                        tool = %tool_name,
+                        input = ?input_str,
+                        decision = ?decision,
+                        "Tool execution permitted"
+                    );
+                    // Continue with execution
+                }
+            }
+        }
 
         // Fire PreToolUse hook
         let pre_result = self
@@ -1131,11 +1385,401 @@ impl HookedToolExecutor {
                     .fire_post_tool_use_failure(&tool_name, tool_input, response)
                     .await?;
             }
-            ToolResult::Cancelled => {
-                // No hook for cancelled - it was already blocked by PreToolUse
+            ToolResult::Cancelled | ToolResult::NeedsPermission(_) => {
+                // No hook for cancelled/needs permission
             }
         }
 
         Ok(result)
+    }
+}
+
+// =============================================================================
+// P1-1: Stateful Tool Executor with Shell State Persistence
+// =============================================================================
+
+use std::collections::HashMap;
+use std::sync::RwLock;
+
+/// Shell state that persists across command executions.
+///
+/// Tracks the current working directory and environment variables set during
+/// the session. This allows `cd` and `export` commands to affect subsequent
+/// commands.
+#[derive(Debug)]
+pub struct ShellState {
+    /// Current working directory for command execution.
+    cwd: PathBuf,
+    /// Environment variables set during the session via export.
+    env: HashMap<String, String>,
+}
+
+impl ShellState {
+    /// Creates a new shell state with the given initial working directory.
+    #[must_use]
+    pub fn new(initial_cwd: PathBuf) -> Self {
+        Self {
+            cwd: initial_cwd,
+            env: HashMap::new(),
+        }
+    }
+
+    /// Returns the current working directory.
+    #[must_use]
+    pub fn cwd(&self) -> &Path {
+        &self.cwd
+    }
+
+    /// Returns the environment variables set during the session.
+    #[must_use]
+    pub fn env(&self) -> &HashMap<String, String> {
+        &self.env
+    }
+
+    /// Processes a command and updates shell state accordingly.
+    ///
+    /// Parses `cd` and `export` commands to update the tracked state.
+    pub fn process_command(&mut self, command: &str) {
+        // Handle cd commands
+        if let Some(new_dir) = Self::parse_cd(command) {
+            self.update_cwd(new_dir);
+        }
+
+        // Handle export commands
+        if let Some((key, value)) = Self::parse_export(command) {
+            self.env.insert(key.to_string(), value.to_string());
+        }
+    }
+
+    /// Updates the current working directory.
+    fn update_cwd(&mut self, new_dir: &str) {
+        // Use std::env::var for HOME since directories crate is for user directories
+        let home_dir = || {
+            std::env::var("HOME")
+                .ok()
+                .map(PathBuf::from)
+                .or_else(|| std::env::var("USERPROFILE").ok().map(PathBuf::from))
+        };
+
+        let target = if new_dir.starts_with('/') {
+            PathBuf::from(new_dir)
+        } else if new_dir == "~" {
+            home_dir().unwrap_or_else(|| self.cwd.clone())
+        } else if let Some(rest) = new_dir.strip_prefix("~/") {
+            home_dir()
+                .map(|h| h.join(rest))
+                .unwrap_or_else(|| self.cwd.clone())
+        } else if new_dir == "-" {
+            // cd - not supported without tracking previous dir
+            return;
+        } else {
+            self.cwd.join(new_dir)
+        };
+
+        // Canonicalize if the path exists
+        if let Ok(canonical) = target.canonicalize() {
+            debug!(
+                old_cwd = %self.cwd.display(),
+                new_cwd = %canonical.display(),
+                "Shell state: updated cwd"
+            );
+            self.cwd = canonical;
+        } else if target.exists() {
+            // Path exists but canonicalize failed - just use it
+            self.cwd = target;
+        }
+        // If path doesn't exist, don't change cwd
+    }
+
+    /// Parses a `cd` command and extracts the target directory.
+    fn parse_cd(command: &str) -> Option<&str> {
+        let trimmed = command.trim();
+
+        if trimmed == "cd" {
+            return Some("~");
+        }
+
+        if let Some(rest) = trimmed.strip_prefix("cd ") {
+            // Handle cd in compounds: "cd foo && ls" -> "foo"
+            let dir = rest
+                .split(['&', '|', ';'])
+                .next()
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty());
+            return dir;
+        }
+
+        None
+    }
+
+    /// Parses an `export` command and extracts the key-value pair.
+    fn parse_export(command: &str) -> Option<(&str, &str)> {
+        let trimmed = command.trim();
+
+        if let Some(rest) = trimmed.strip_prefix("export ") {
+            // Handle: export VAR=value or export VAR="value"
+            let assignment = rest.split(['&', '|', ';']).next().map(|s| s.trim())?;
+
+            if let Some(eq_pos) = assignment.find('=') {
+                let key = assignment[..eq_pos].trim();
+                let value = assignment[eq_pos + 1..]
+                    .trim()
+                    .trim_matches('"')
+                    .trim_matches('\'');
+                if !key.is_empty() {
+                    return Some((key, value));
+                }
+            }
+        }
+
+        None
+    }
+}
+
+/// Tool executor with persistent shell state.
+///
+/// Wraps `ToolExecutor` to track shell state (cwd, environment variables)
+/// across command executions. This allows `cd` and `export` commands to
+/// affect subsequent commands.
+///
+/// # Example
+///
+/// ```no_run
+/// use patina::tools::{StatefulToolExecutor, ToolCall};
+/// use serde_json::json;
+/// use std::path::PathBuf;
+///
+/// # async fn example() -> anyhow::Result<()> {
+/// let executor = StatefulToolExecutor::new(PathBuf::from("."));
+///
+/// // cd into a subdirectory
+/// executor.execute(ToolCall {
+///     name: "bash".to_string(),
+///     input: json!({ "command": "cd subdir" }),
+/// }).await?;
+///
+/// // Subsequent commands run in subdir
+/// let result = executor.execute(ToolCall {
+///     name: "bash".to_string(),
+///     input: json!({ "command": "ls" }),
+/// }).await?;
+/// # Ok(())
+/// # }
+/// ```
+pub struct StatefulToolExecutor {
+    inner: ToolExecutor,
+    state: RwLock<ShellState>,
+}
+
+impl StatefulToolExecutor {
+    /// Creates a new stateful executor with the given working directory.
+    #[must_use]
+    pub fn new(working_dir: PathBuf) -> Self {
+        let canonical = working_dir
+            .canonicalize()
+            .unwrap_or_else(|_| working_dir.clone());
+        Self {
+            inner: ToolExecutor::new(working_dir),
+            state: RwLock::new(ShellState::new(canonical)),
+        }
+    }
+
+    /// Returns the current shell state.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the lock is poisoned.
+    pub fn shell_state(&self) -> std::sync::RwLockReadGuard<'_, ShellState> {
+        self.state.read().expect("shell state lock poisoned")
+    }
+
+    /// Sets a custom execution policy for the tool executor.
+    ///
+    /// # Arguments
+    ///
+    /// * `policy` - The new execution policy to use
+    #[must_use]
+    pub fn with_policy(mut self, policy: ToolExecutionPolicy) -> Self {
+        self.inner = self.inner.with_policy(policy);
+        self
+    }
+
+    /// Executes a tool call with persistent shell state.
+    ///
+    /// For bash commands:
+    /// 1. Parses `cd`/`export` and updates shell state
+    /// 2. Runs command in the tracked cwd with tracked env vars
+    /// 3. Stores the state for subsequent commands
+    pub async fn execute(&self, call: ToolCall) -> Result<ToolResult> {
+        if call.name == "bash" {
+            return self.execute_bash_with_state(&call.input).await;
+        }
+
+        // Non-bash tools use the inner executor directly
+        self.inner.execute(call).await
+    }
+
+    /// Executes a bash command with persistent shell state.
+    async fn execute_bash_with_state(&self, input: &serde_json::Value) -> Result<ToolResult> {
+        let command = input
+            .get("command")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("Missing command"))?;
+
+        // Check if this is a pure cd command (just changes directory, no other operation)
+        let is_pure_cd = Self::is_pure_cd(command);
+
+        // Get current shell state BEFORE processing the command
+        let (effective_cwd, env_vars) = {
+            let state = self.state.read().expect("shell state lock poisoned");
+            (state.cwd.clone(), state.env.clone())
+        };
+
+        // For pure cd commands, update state and return success immediately
+        if is_pure_cd {
+            let mut state = self.state.write().expect("shell state lock poisoned");
+            state.process_command(command);
+            return Ok(ToolResult::Success(format!(
+                "Changed directory to {}",
+                state.cwd.display()
+            )));
+        }
+
+        // Normalize command for security checks
+        let normalized = normalize_command(command);
+
+        // Check dangerous patterns
+        for pattern in &self.inner.policy.dangerous_patterns {
+            if pattern.is_match(command) || pattern.is_match(&normalized) {
+                warn!(
+                    pattern = %pattern.as_str(),
+                    command = %command,
+                    "Security violation: command blocked by dangerous pattern"
+                );
+                return Ok(ToolResult::Error(format!(
+                    "Command blocked by security policy: matches {:?}",
+                    pattern.as_str()
+                )));
+            }
+        }
+
+        // Check allowlist mode
+        if self.inner.policy.allowlist_mode {
+            let is_allowed = self
+                .inner
+                .policy
+                .allowed_commands
+                .iter()
+                .any(|pattern| pattern.is_match(command) || pattern.is_match(&normalized));
+            if !is_allowed {
+                warn!(
+                    command = %command,
+                    "Security: command blocked by allowlist policy"
+                );
+                return Ok(ToolResult::Error(
+                    "Command blocked: not in allowlist".to_string(),
+                ));
+            }
+        }
+
+        // Execute the command with the tracked cwd and env
+        let shell = ShellConfig::default();
+        let mut cmd = Command::new(&shell.command);
+        cmd.args(&shell.args)
+            .arg(command)
+            .current_dir(&effective_cwd)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
+
+        // Apply tracked environment variables
+        for (key, value) in &env_vars {
+            cmd.env(key, value);
+        }
+
+        let child = cmd.spawn()?;
+
+        // Wait for completion with timeout
+        match tokio::time::timeout(self.inner.policy.command_timeout, child.wait_with_output())
+            .await
+        {
+            Ok(Ok(output)) => {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                let combined = format!("{}{}", stdout, stderr);
+
+                // Truncate if needed
+                let (final_output, truncated) =
+                    if combined.len() > self.inner.policy.max_output_size {
+                        let truncated_output = combined
+                            .chars()
+                            .take(self.inner.policy.max_output_size)
+                            .collect::<String>();
+                        (truncated_output, true)
+                    } else {
+                        (combined, false)
+                    };
+
+                if output.status.success() {
+                    // Update shell state after successful command execution
+                    // This handles compound commands like "cd foo && ls"
+                    {
+                        let mut state = self.state.write().expect("shell state lock poisoned");
+                        state.process_command(command);
+                    }
+
+                    let result = if truncated {
+                        format!(
+                            "{}\n\n[Output truncated: {} bytes exceeded {} byte limit]",
+                            final_output,
+                            stdout.len() + stderr.len(),
+                            self.inner.policy.max_output_size
+                        )
+                    } else {
+                        final_output
+                    };
+                    Ok(ToolResult::Success(result))
+                } else {
+                    let result = if truncated {
+                        format!(
+                            "Exit code {}: {}\n\n[Output truncated]",
+                            output.status.code().unwrap_or(-1),
+                            final_output
+                        )
+                    } else {
+                        format!(
+                            "Exit code {}: {}",
+                            output.status.code().unwrap_or(-1),
+                            final_output
+                        )
+                    };
+                    Ok(ToolResult::Error(result))
+                }
+            }
+            Ok(Err(e)) => {
+                warn!(error = %e, "Bash command execution failed");
+                Err(e.into())
+            }
+            Err(_) => {
+                warn!(
+                    timeout_ms = %self.inner.policy.command_timeout.as_millis(),
+                    "Bash command timed out and was killed"
+                );
+                Err(anyhow::anyhow!(
+                    "Command timed out after {:?}",
+                    self.inner.policy.command_timeout
+                ))
+            }
+        }
+    }
+
+    /// Checks if a command is a pure `cd` (no other operations).
+    fn is_pure_cd(command: &str) -> bool {
+        let trimmed = command.trim();
+        trimmed == "cd"
+            || (trimmed.starts_with("cd ")
+                && !trimmed.contains("&&")
+                && !trimmed.contains("||")
+                && !trimmed.contains(';'))
     }
 }

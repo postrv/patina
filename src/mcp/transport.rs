@@ -36,6 +36,17 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::{mpsc, oneshot, Mutex};
 
+/// Warmup delay after spawning a child process.
+///
+/// This small delay ensures the child process has time to:
+/// 1. Initialize its runtime
+/// 2. Set up stdin/stdout pipes
+/// 3. Enter its main read loop
+///
+/// Without this delay, requests sent immediately after spawn may arrive
+/// before the child is ready to read, causing timeouts.
+const SPAWN_WARMUP_MS: u64 = 50;
+
 /// Transport trait for MCP communication.
 ///
 /// Implementations of this trait provide the communication layer
@@ -210,6 +221,9 @@ impl StdioTransport {
                 }
             }
         });
+
+        // Brief warmup delay to ensure child process is ready to receive messages
+        tokio::time::sleep(Duration::from_millis(SPAWN_WARMUP_MS)).await;
 
         Ok(())
     }
