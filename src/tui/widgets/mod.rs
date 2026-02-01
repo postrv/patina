@@ -2,11 +2,15 @@
 //!
 //! This module contains custom ratatui widgets for the Patina terminal UI.
 
+pub mod compaction_progress;
 pub mod image_display;
 pub mod permission_prompt;
 pub mod tool_block;
 pub mod worktree_picker;
 
+pub use compaction_progress::{
+    CompactionProgressState, CompactionProgressWidget, CompactionStatus,
+};
 pub use image_display::{
     detect_graphics_protocol, GraphicsProtocol, ImageDisplayState, ImageDisplayWidget,
 };

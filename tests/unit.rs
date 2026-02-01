@@ -101,3 +101,6 @@ mod image_display_test;
 
 #[path = "unit/compaction_test.rs"]
 mod compaction_test;
+
+#[path = "unit/compaction_progress_test.rs"]
+mod compaction_progress_test;
