@@ -104,3 +104,6 @@ mod compaction_test;
 
 #[path = "unit/compaction_progress_test.rs"]
 mod compaction_progress_test;
+
+#[path = "unit/oauth_flow_test.rs"]
+mod oauth_flow_test;
