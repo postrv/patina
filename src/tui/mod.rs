@@ -51,6 +51,55 @@ fn calculate_wrapped_height(lines: &[Line], width: usize) -> usize {
         .sum()
 }
 
+/// Wraps lines to the specified width and returns a vector of wrapped strings.
+///
+/// This converts logical lines to visual lines for copy/paste operations,
+/// accounting for line wrapping at the terminal width.
+///
+/// # Arguments
+///
+/// * `lines` - The logical lines to wrap
+/// * `width` - The available width for content (excluding borders)
+///
+/// # Returns
+///
+/// A vector of strings representing the visual lines after wrapping
+#[must_use]
+pub fn wrap_lines_to_strings(lines: &[Line], width: usize) -> Vec<String> {
+    if width == 0 {
+        // Degenerate case - return lines as-is
+        return lines
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect();
+    }
+
+    let mut result = Vec::new();
+
+    for line in lines {
+        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+
+        if text.is_empty() {
+            // Empty line becomes one empty visual line
+            result.push(String::new());
+        } else {
+            // Split into chunks of `width` characters
+            // Note: This uses char count for Unicode correctness
+            let chars: Vec<char> = text.chars().collect();
+            for chunk in chars.chunks(width) {
+                result.push(chunk.iter().collect());
+            }
+        }
+    }
+
+    result
+}
+
 /// Renders a timeline to a vector of lines for display.
 ///
 /// This function converts timeline entries into styled lines suitable for
@@ -440,14 +489,16 @@ fn render_messages(frame: &mut Frame, area: Rect, state: &mut AppState) {
     let throbber = state.throbber_char();
     let lines = render_timeline_with_throbber(state.timeline(), throbber);
 
-    // Update cached lines for copy/paste operations
-    state.update_rendered_lines_cache(&lines);
-
-    // Update scroll state with content dimensions
+    // Calculate content dimensions first (needed for cache wrapping)
     // Subtract 2 for borders (top and bottom)
     let viewport_height = area.height.saturating_sub(2) as usize;
     // Subtract 2 for borders (left and right)
     let content_width = area.width.saturating_sub(2) as usize;
+
+    // Update cached lines for copy/paste operations
+    // IMPORTANT: Cache the wrapped lines (visual lines) not logical lines,
+    // so that selection coordinates match the visual display
+    state.update_rendered_lines_cache(&lines, content_width);
 
     // Calculate actual wrapped content height
     // Each Line may wrap to multiple displayed lines based on content width
@@ -908,5 +959,119 @@ mod tests {
         // Last line is ~100+ chars = 2 lines
         let height = calculate_wrapped_height(&lines, 80);
         assert!(height >= 5, "Should have at least 5 lines, got {}", height);
+    }
+
+    // =========================================================================
+    // wrap_lines_to_strings tests
+    // =========================================================================
+
+    #[test]
+    fn test_wrap_lines_empty() {
+        let lines: Vec<Line> = vec![];
+        let wrapped = wrap_lines_to_strings(&lines, 80);
+        assert!(wrapped.is_empty());
+    }
+
+    #[test]
+    fn test_wrap_lines_short_line() {
+        let lines = vec![Line::from("Hello")];
+        let wrapped = wrap_lines_to_strings(&lines, 80);
+        assert_eq!(wrapped.len(), 1);
+        assert_eq!(wrapped[0], "Hello");
+    }
+
+    #[test]
+    fn test_wrap_lines_long_line() {
+        // 100 chars in width 80 = 2 visual lines
+        let text = "x".repeat(100);
+        let lines = vec![Line::from(text.clone())];
+        let wrapped = wrap_lines_to_strings(&lines, 80);
+        assert_eq!(wrapped.len(), 2);
+        assert_eq!(wrapped[0].len(), 80);
+        assert_eq!(wrapped[1].len(), 20);
+        assert_eq!(format!("{}{}", wrapped[0], wrapped[1]), text);
+    }
+
+    #[test]
+    fn test_wrap_lines_exact_fit() {
+        // 80 chars in width 80 = 1 visual line
+        let text = "x".repeat(80);
+        let lines = vec![Line::from(text.clone())];
+        let wrapped = wrap_lines_to_strings(&lines, 80);
+        assert_eq!(wrapped.len(), 1);
+        assert_eq!(wrapped[0], text);
+    }
+
+    #[test]
+    fn test_wrap_lines_empty_line() {
+        let lines = vec![Line::from("")];
+        let wrapped = wrap_lines_to_strings(&lines, 80);
+        assert_eq!(wrapped.len(), 1);
+        assert_eq!(wrapped[0], "");
+    }
+
+    #[test]
+    fn test_wrap_lines_multiple_lines() {
+        let lines = vec![
+            Line::from("Short"),
+            Line::from("x".repeat(100)), // Will wrap to 2 lines
+            Line::from(""),
+        ];
+        let wrapped = wrap_lines_to_strings(&lines, 80);
+        // 1 + 2 + 1 = 4 visual lines
+        assert_eq!(wrapped.len(), 4);
+        assert_eq!(wrapped[0], "Short");
+        assert_eq!(wrapped[1].len(), 80);
+        assert_eq!(wrapped[2].len(), 20);
+        assert_eq!(wrapped[3], "");
+    }
+
+    #[test]
+    fn test_wrap_lines_styled_spans() {
+        let lines = vec![Line::from(vec![
+            Span::styled("Hello ", Style::default().fg(Color::Red)),
+            Span::styled("World", Style::default().fg(Color::Blue)),
+        ])];
+        let wrapped = wrap_lines_to_strings(&lines, 80);
+        assert_eq!(wrapped.len(), 1);
+        assert_eq!(wrapped[0], "Hello World");
+    }
+
+    #[test]
+    fn test_wrap_lines_zero_width() {
+        // Zero width returns lines as-is
+        let lines = vec![Line::from("Hello"), Line::from("World")];
+        let wrapped = wrap_lines_to_strings(&lines, 0);
+        assert_eq!(wrapped.len(), 2);
+        assert_eq!(wrapped[0], "Hello");
+        assert_eq!(wrapped[1], "World");
+    }
+
+    #[test]
+    fn test_wrap_lines_narrow_width() {
+        // 10 chars in width 5 = 2 visual lines
+        let lines = vec![Line::from("HelloWorld")];
+        let wrapped = wrap_lines_to_strings(&lines, 5);
+        assert_eq!(wrapped.len(), 2);
+        assert_eq!(wrapped[0], "Hello");
+        assert_eq!(wrapped[1], "World");
+    }
+
+    #[test]
+    fn test_wrap_lines_matches_wrapped_height() {
+        // Verify that wrap_lines_to_strings produces same count as calculate_wrapped_height
+        let lines = vec![
+            Line::from("Short line"),
+            Line::from("x".repeat(100)),
+            Line::from(""),
+            Line::from("y".repeat(200)),
+        ];
+        let wrapped = wrap_lines_to_strings(&lines, 80);
+        let height = calculate_wrapped_height(&lines, 80);
+        assert_eq!(
+            wrapped.len(),
+            height,
+            "wrap_lines_to_strings count should match calculate_wrapped_height"
+        );
     }
 }

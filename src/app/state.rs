@@ -429,17 +429,16 @@ impl AppState {
 
     /// Updates the cached rendered lines for copy operations.
     ///
-    /// Call this during render to keep the cache fresh.
-    pub fn update_rendered_lines_cache(&mut self, lines: &[ratatui::text::Line<'_>]) {
-        self.rendered_lines_cache = lines
-            .iter()
-            .map(|line| {
-                line.spans
-                    .iter()
-                    .map(|s| s.content.as_ref())
-                    .collect::<String>()
-            })
-            .collect();
+    /// This stores the **wrapped** visual lines, accounting for terminal width.
+    /// Selection and copy operations use visual line indices, so we must cache
+    /// the post-wrapping content.
+    ///
+    /// # Arguments
+    ///
+    /// * `lines` - The logical lines before wrapping
+    /// * `width` - The terminal content width (excluding borders)
+    pub fn update_rendered_lines_cache(&mut self, lines: &[ratatui::text::Line<'_>], width: usize) {
+        self.rendered_lines_cache = crate::tui::wrap_lines_to_strings(lines, width);
     }
 
     /// Copies the current selection to clipboard using cached lines.
