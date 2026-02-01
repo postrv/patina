@@ -259,23 +259,52 @@ fn test_oauth_flow_handles_timeout() {
 
 /// Tests that state parameter provides CSRF protection.
 ///
-/// Note: The current implementation doesn't use a state parameter,
-/// but this test documents that it should be added for security.
+/// RFC 6749 Section 10.12 requires using the state parameter for CSRF protection.
+/// The implementation must:
+/// 1. Generate a random state value
+/// 2. Include it in the authorization URL
+/// 3. Verify it matches in the callback
 #[test]
 fn test_oauth_flow_validates_state_parameter() {
-    // RFC 6749 recommends using the state parameter for CSRF protection
-    // The implementation should:
-    // 1. Generate a random state value
-    // 2. Include it in the authorization URL
-    // 3. Verify it matches in the callback
-
     let flow = OAuthFlow::new();
     let auth_url = flow.authorization_url();
 
-    // TODO: When state parameter is implemented, verify it's included
-    // For now, this documents the expected security feature
-    // assert!(auth_url.contains("state="), "Auth URL should include state parameter");
-    let _ = auth_url; // Suppress unused warning
+    // Verify state parameter is included in authorization URL
+    assert!(
+        auth_url.contains("state="),
+        "Auth URL should include state parameter for CSRF protection"
+    );
+
+    // Verify the flow has a state value
+    let state = flow.state();
+    assert!(!state.is_empty(), "State parameter should be non-empty");
+
+    // Verify state is base64url encoded (no unsafe characters)
+    for c in state.chars() {
+        assert!(
+            c.is_ascii_alphanumeric() || c == '-' || c == '_',
+            "State should use base64url characters only"
+        );
+    }
+
+    // Verify state is included correctly in the URL
+    assert!(
+        auth_url.contains(&format!("state={}", urlencoding::encode(state))),
+        "Auth URL should contain the flow's state value"
+    );
+}
+
+/// Tests that each OAuth flow instance has unique state for security.
+#[test]
+fn test_oauth_flow_state_uniqueness() {
+    let flow1 = OAuthFlow::new();
+    let flow2 = OAuthFlow::new();
+
+    assert_ne!(
+        flow1.state(),
+        flow2.state(),
+        "Each OAuth flow should have unique state to prevent CSRF"
+    );
 }
 
 /// Tests that error callbacks are handled correctly.
@@ -308,27 +337,53 @@ fn test_oauth_flow_handles_error_callback() {
 }
 
 // ============================================================================
-// OAuth Disabled Tests
+// OAuth Configuration Tests
 // ============================================================================
 
-/// Verifies that OAuth is currently disabled with a helpful message.
-#[tokio::test]
-async fn test_oauth_flow_returns_disabled_message() {
+/// Verifies that the OAuth flow authorization URL contains all required OAuth parameters.
+///
+/// This test ensures the flow can construct valid authorization URLs that would be
+/// accepted by an OAuth provider, even when using a placeholder client_id.
+#[test]
+fn test_oauth_flow_constructs_complete_auth_url() {
     let flow = OAuthFlow::new();
-    let result = flow.run().await;
+    let auth_url = flow.authorization_url();
 
-    assert!(result.is_err(), "OAuth should be disabled");
+    // Verify all required OAuth 2.0 + PKCE parameters are present
+    let required_params = [
+        "response_type=code",
+        "client_id=",
+        "redirect_uri=",
+        "scope=",
+        "state=",
+        "code_challenge=",
+        "code_challenge_method=S256",
+    ];
 
-    let err = result.unwrap_err();
-    let err_msg = err.to_string();
+    for param in required_params {
+        assert!(
+            auth_url.contains(param),
+            "Auth URL should contain '{}': {}",
+            param,
+            auth_url
+        );
+    }
+}
 
-    // Verify the error message is helpful
-    assert!(
-        err_msg.contains("OAuth") || err_msg.contains("not available"),
-        "Error should mention OAuth is not available: {err_msg}"
-    );
-    assert!(
-        err_msg.contains("API key") || err_msg.contains("ANTHROPIC_API_KEY"),
-        "Error should suggest using API key: {err_msg}"
-    );
+/// Verifies OAuth flow can be created with different callback ports.
+#[test]
+fn test_oauth_flow_port_configuration() {
+    let ports = [54545, 8080, 9000, 12345];
+
+    for port in ports {
+        let flow = OAuthFlow::with_port(port);
+        let auth_url = flow.authorization_url();
+
+        let decoded = urlencoding::decode(&auth_url).expect("URL should be decodable");
+        assert!(
+            decoded.contains(&format!(":{port}")),
+            "Auth URL should use port {port}: {}",
+            decoded
+        );
+    }
 }
