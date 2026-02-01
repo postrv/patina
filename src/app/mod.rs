@@ -4,10 +4,14 @@ use anyhow::{Context, Result};
 use crossterm::{
     event::{
         DisableMouseCapture, EnableMouseCapture, Event, EventStream, KeyCode, KeyModifiers,
-        MouseButton, MouseEventKind,
+        KeyboardEnhancementFlags, MouseButton, MouseEventKind, PopKeyboardEnhancementFlags,
+        PushKeyboardEnhancementFlags,
     },
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{
+        disable_raw_mode, enable_raw_mode, supports_keyboard_enhancement, EnterAlternateScreen,
+        LeaveAlternateScreen,
+    },
 };
 use futures::StreamExt;
 use ratatui::{backend::CrosstermBackend, Terminal};
@@ -24,8 +28,9 @@ use tool_loop::ToolLoopState;
 use crate::api::AnthropicClient;
 use crate::permissions::PermissionResponse;
 use crate::session::{default_sessions_dir, SessionManager};
+use crate::terminal;
 use crate::tui;
-use crate::tui::selection::ContentPosition;
+use crate::tui::selection::{ContentPosition, FocusArea};
 use crate::tui::widgets::handle_permission_key;
 use crate::tui::widgets::permission_prompt::PermissionPromptState;
 use crate::types::config::ResumeMode;
@@ -34,11 +39,68 @@ use crate::types::{ApiMessageV2, Message, Role};
 // Re-export Config for backward compatibility
 pub use crate::types::Config;
 
+/// Handles copy operation with detailed logging.
+///
+/// Copies the current selection to clipboard and logs the result.
+fn handle_copy(state: &AppState) {
+    let selection = state.selection();
+    let cache_len = state.rendered_line_count();
+
+    if let Some((start, end)) = selection.range() {
+        let selected_lines = end.line.saturating_sub(start.line) + 1;
+        debug!(
+            start_line = start.line,
+            end_line = end.line,
+            selected_lines,
+            cache_len,
+            "copy: attempting to copy {} lines from cache of {} lines",
+            selected_lines,
+            cache_len
+        );
+
+        match state.copy_from_cache() {
+            Ok(true) => {
+                info!("Copied {} lines to clipboard", selected_lines);
+            }
+            Ok(false) => {
+                warn!(
+                    "copy: no text extracted (cache_len={}, selection=L{}-L{})",
+                    cache_len, start.line, end.line
+                );
+            }
+            Err(e) => {
+                warn!("copy: clipboard error: {}", e);
+            }
+        }
+    } else {
+        debug!(
+            "copy: no selection (has_selection={})",
+            selection.has_selection()
+        );
+    }
+}
+
 pub async fn run(config: Config) -> Result<()> {
     // If print mode is enabled with an initial prompt, run non-interactively
     if config.print_mode {
         if let Some(ref prompt) = config.initial_prompt {
             return run_print_mode(&config, prompt).await;
+        }
+    }
+
+    // Configure terminal key bindings for Cmd+A/C/V on macOS iTerm2
+    // This is idempotent and only modifies settings once
+    match terminal::configure_iterm2_keybindings() {
+        Ok(true) => {
+            // Changes were made - tell user to restart iTerm2
+            eprintln!("\n✨ Configured iTerm2 for native Cmd+A/C/V support.");
+            eprintln!("   Please restart iTerm2 for changes to take effect.\n");
+        }
+        Ok(false) => {
+            // No changes needed (already configured or not iTerm2)
+        }
+        Err(e) => {
+            warn!("Failed to configure iTerm2 bindings: {}", e);
         }
     }
 
@@ -56,6 +118,26 @@ pub async fn run(config: Config) -> Result<()> {
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();
+
+    // Check if terminal supports enhanced keyboard mode (kitty protocol)
+    // This enables proper Cmd+key detection on iTerm2, kitty, WezTerm, etc.
+    // Full enhancement flags are required for SUPER (Cmd) modifier detection.
+    let keyboard_enhancement_supported = supports_keyboard_enhancement().unwrap_or(false);
+    if keyboard_enhancement_supported {
+        execute!(
+            stdout,
+            PushKeyboardEnhancementFlags(
+                KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+                    | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES
+                    | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS
+                    | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
+            )
+        )?;
+        info!("Keyboard enhancement enabled (kitty protocol) - Cmd+A/Cmd+C supported");
+    } else {
+        info!("Keyboard enhancement not supported - use Ctrl+A/Ctrl+Y instead");
+    }
+
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
@@ -69,6 +151,10 @@ pub async fn run(config: Config) -> Result<()> {
 
     let result = event_loop(&mut terminal, &client, &mut state, &session_manager).await;
 
+    // Clean up terminal state
+    if keyboard_enhancement_supported {
+        execute!(terminal.backend_mut(), PopKeyboardEnhancementFlags)?;
+    }
     disable_raw_mode()?;
     execute!(
         terminal.backend_mut(),
@@ -215,7 +301,16 @@ async fn run_print_mode(config: &Config, prompt: &str) -> Result<()> {
         state.approve_all_tools()?;
 
         // Execute the tools
-        let _needs_permission = state.execute_pending_tools().await?;
+        let needs_permission = state.execute_pending_tools().await?;
+
+        // Check if any tools still need permission
+        if !needs_permission.is_empty() {
+            warn!(
+                "Tools need permission in print mode (skipping): {:?}",
+                needs_permission
+            );
+            break;
+        }
 
         // Finish execution and get continuation data
         let continuation = state.finish_tool_execution()?;
@@ -383,43 +478,66 @@ async fn event_loop(
                                 state.scroll_to_bottom(height);
                             }
 
-                            // Select all: Cmd+A (macOS) or Ctrl+Shift+A (cross-platform)
+                            // Select all: Cmd+A (macOS), Ctrl+A, or Ctrl+Shift+A
+                            // Cmd+A works when kitty protocol is enabled (iTerm2, kitty, WezTerm)
+                            // Always selects all content regardless of focus area
                             (KeyCode::Char('a') | KeyCode::Char('A'), modifiers)
                                 if modifiers == KeyModifiers::SUPER
+                                    || modifiers == KeyModifiers::CONTROL
                                     || modifiers.contains(KeyModifiers::CONTROL | KeyModifiers::SHIFT) =>
                             {
-                                // Use rendered line count for full content selection
                                 let line_count = state.rendered_line_count();
-                                state.selection_mut().select_all(line_count);
-                                state.mark_full_redraw();
+                                let timeline_len = state.timeline().len();
+                                let modifier_name = if modifiers == KeyModifiers::SUPER {
+                                    "Cmd+A"
+                                } else {
+                                    "Ctrl+A"
+                                };
                                 debug!(
                                     line_count,
-                                    has_selection = state.selection().has_selection(),
-                                    range = ?state.selection().range(),
-                                    "select_all completed"
+                                    timeline_len,
+                                    modifier = modifier_name,
+                                    focus_area = ?state.focus_area(),
+                                    "select_all triggered via {}",
+                                    modifier_name
                                 );
+                                if line_count == 0 {
+                                    debug!("select_all: no content to select (cache empty, timeline_len={})", timeline_len);
+                                } else {
+                                    // Set focus to Content so status bar shows correctly
+                                    state.set_focus_area(FocusArea::Content);
+                                    state.selection_mut().select_all(line_count);
+                                    state.mark_full_redraw();
+                                    let copy_hint = if modifiers == KeyModifiers::SUPER {
+                                        "Cmd+C"
+                                    } else {
+                                        "Ctrl+Y"
+                                    };
+                                    info!(
+                                        line_count,
+                                        "Selected all {} lines ({} to copy)",
+                                        line_count,
+                                        copy_hint
+                                    );
+                                }
                             }
 
-                            // Copy selection: Cmd+C (macOS) or Ctrl+Shift+C (cross-platform)
+                            // Copy selection: Cmd+C (macOS), Ctrl+Shift+C, or Ctrl+Y (yank)
+                            // Cmd+C works when kitty protocol is enabled (iTerm2, kitty, WezTerm)
                             // Note: Ctrl+C alone is reserved for exit
                             (KeyCode::Char('c') | KeyCode::Char('C'), modifiers)
                                 if modifiers == KeyModifiers::SUPER
                                     || modifiers.contains(KeyModifiers::CONTROL | KeyModifiers::SHIFT) =>
                             {
-                                debug!(
-                                    has_selection = state.selection().has_selection(),
-                                    cache_len = state.rendered_line_count(),
-                                    "copy requested"
-                                );
-                                if state.selection().has_selection() {
-                                    match state.copy_from_cache() {
-                                        Ok(true) => debug!("copied selection to clipboard"),
-                                        Ok(false) => debug!("no text to copy"),
-                                        Err(e) => warn!("clipboard error: {}", e),
-                                    }
-                                } else {
-                                    debug!("no selection to copy");
-                                }
+                                debug!(modifier = ?modifiers, "copy triggered");
+                                handle_copy(state);
+                            }
+
+                            // Alternative copy: Ctrl+Y (yank) - easier to type than Ctrl+Shift+C
+                            // This is the RECOMMENDED copy keybinding as it doesn't conflict
+                            (KeyCode::Char('y') | KeyCode::Char('Y'), KeyModifiers::CONTROL) =>
+                            {
+                                handle_copy(state);
                             }
 
                             // Clear selection: Escape
@@ -442,32 +560,53 @@ async fn event_loop(
                         state.mark_full_redraw();
                     }
                     Event::Mouse(mouse) => {
+                        // Get terminal height for focus area detection
+                        let terminal_height = terminal.size().map(|s| s.height).unwrap_or(24);
+
                         match mouse.kind {
                             MouseEventKind::Down(MouseButton::Left) => {
-                                // Start text selection
-                                // Convert screen coordinates to content position
-                                // Using simple mapping: line = row + scroll_offset, col = column
-                                let scroll_offset = state.scroll_state().offset();
-                                let pos = ContentPosition::new(
-                                    mouse.row as usize + scroll_offset,
-                                    mouse.column as usize,
-                                );
-                                state.selection_mut().start(pos);
+                                // Determine which area was clicked and set focus
+                                let clicked_area =
+                                    AppState::focus_area_for_row(mouse.row, terminal_height);
+
+                                // Update focus (clears selection if focus changes)
+                                state.set_focus_area(clicked_area);
+
+                                // Only start text selection if clicking in content area
+                                if clicked_area == FocusArea::Content {
+                                    // Convert screen coordinates to content position
+                                    // mouse.row is terminal row (0 = top of screen)
+                                    // first_visible_line() gives the content line at viewport top
+                                    // Account for Messages box border (1 row)
+                                    let first_visible = state.scroll_state().first_visible_line();
+                                    let content_row = mouse.row.saturating_sub(1) as usize;
+                                    let pos = ContentPosition::new(
+                                        first_visible + content_row,
+                                        mouse.column.saturating_sub(1) as usize,
+                                    );
+                                    state.selection_mut().start(pos);
+                                }
+                                state.mark_full_redraw();
                             }
                             MouseEventKind::Drag(MouseButton::Left) => {
-                                // Update selection during drag
-                                let scroll_offset = state.scroll_state().offset();
-                                let pos = ContentPosition::new(
-                                    mouse.row as usize + scroll_offset,
-                                    mouse.column as usize,
-                                );
-                                state.selection_mut().update(pos);
-                                state.mark_full_redraw(); // Redraw to show selection
+                                // Only update selection if content area has focus
+                                if state.focus_area() == FocusArea::Content {
+                                    let first_visible = state.scroll_state().first_visible_line();
+                                    let content_row = mouse.row.saturating_sub(1) as usize;
+                                    let pos = ContentPosition::new(
+                                        first_visible + content_row,
+                                        mouse.column.saturating_sub(1) as usize,
+                                    );
+                                    state.selection_mut().update(pos);
+                                    state.mark_full_redraw();
+                                }
                             }
                             MouseEventKind::Up(MouseButton::Left) => {
-                                // Complete selection
-                                state.selection_mut().end();
-                                state.mark_full_redraw();
+                                // Complete selection if content area has focus
+                                if state.focus_area() == FocusArea::Content {
+                                    state.selection_mut().end();
+                                    state.mark_full_redraw();
+                                }
                             }
                             MouseEventKind::ScrollUp => {
                                 debug!("mouse scroll up");
@@ -556,10 +695,12 @@ async fn handle_tool_execution(
     debug!("Executing pending tools");
     let needs_permission = state.execute_pending_tools().await?;
 
-    // TODO: Handle tools that need permission
+    // Handle tools that need permission
     if !needs_permission.is_empty() {
         warn!("Some tools need permission: {:?}", needs_permission);
-        // For now, just log and continue
+        // Cannot proceed - tools haven't been executed yet
+        // Return early to prevent "Cannot finish execution with unexecuted tools" error
+        return Ok(());
     }
 
     // Finish execution and get continuation data

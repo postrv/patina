@@ -1,5 +1,6 @@
 //! Terminal UI rendering
 
+pub mod clipboard;
 pub mod scroll;
 pub mod selection;
 pub mod theme;
@@ -487,7 +488,14 @@ fn render_permission_modal_dangerous(frame: &mut Frame, area: Rect, state: &Perm
 fn render_messages(frame: &mut Frame, area: Rect, state: &mut AppState) {
     // Render using unified timeline
     let throbber = state.throbber_char();
+    let timeline_entry_count = state.timeline().len();
     let lines = render_timeline_with_throbber(state.timeline(), throbber);
+
+    tracing::debug!(
+        timeline_entries = timeline_entry_count,
+        rendered_lines = lines.len(),
+        "render_messages: timeline to lines"
+    );
 
     // Calculate content dimensions first (needed for cache wrapping)
     // Subtract 2 for borders (top and bottom)
@@ -499,6 +507,11 @@ fn render_messages(frame: &mut Frame, area: Rect, state: &mut AppState) {
     // IMPORTANT: Cache the wrapped lines (visual lines) not logical lines,
     // so that selection coordinates match the visual display
     state.update_rendered_lines_cache(&lines, content_width);
+
+    tracing::debug!(
+        cache_size = state.rendered_line_count(),
+        "render_messages: cache updated"
+    );
 
     // Calculate actual wrapped content height
     // Each Line may wrap to multiple displayed lines based on content width
@@ -590,18 +603,31 @@ fn render_status_bar(frame: &mut Frame, area: Rect, state: &AppState) {
         ));
     }
 
-    // Selection and cache diagnostic info (for copy/paste debugging)
-    let sel_info = if let Some((start, end)) = state.selection().range() {
-        format!("SEL:{}-{}", start.line, end.line)
-    } else {
-        "SEL:none".to_string()
+    // Focus area indicator (helps user know which area is active for selection)
+    let focus_indicator = match state.focus_area() {
+        crate::tui::selection::FocusArea::Content => "CONTENT",
+        crate::tui::selection::FocusArea::Input => "INPUT",
     };
-    let cache_info = format!("CACHE:{}", state.rendered_line_count());
     spans.push(Span::raw(" "));
     spans.push(Span::styled(
-        format!("[{}] [{}]", sel_info, cache_info),
-        Style::default().fg(PatinaTheme::MUTED),
+        format!("[{}]", focus_indicator),
+        Style::default().fg(
+            if state.focus_area() == crate::tui::selection::FocusArea::Content {
+                PatinaTheme::VERDIGRIS_BRIGHT
+            } else {
+                PatinaTheme::MUTED
+            },
+        ),
     ));
+
+    // Selection range (only show when there's an active selection)
+    if let Some((start, end)) = state.selection().range() {
+        spans.push(Span::raw(" "));
+        spans.push(Span::styled(
+            format!("SEL:L{}-L{}", start.line, end.line),
+            Style::default().fg(PatinaTheme::SUCCESS),
+        ));
+    }
 
     // Scroll indicator (right side)
     let scroll = state.scroll_state();

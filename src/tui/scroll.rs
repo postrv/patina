@@ -228,6 +228,20 @@ impl ScrollState {
         self.offset >= self.max_offset()
     }
 
+    /// Returns the index of the first visible line in the content.
+    ///
+    /// This converts from the internal "offset from bottom" representation
+    /// to the actual line number that appears at the top of the viewport.
+    ///
+    /// # Example
+    ///
+    /// If content has 100 lines, viewport shows 40 lines, and user is at
+    /// the bottom (offset=0), the first visible line is 60.
+    #[must_use]
+    pub fn first_visible_line(&self) -> usize {
+        self.max_offset().saturating_sub(self.offset)
+    }
+
     /// Returns the maximum scroll offset.
     fn max_offset(&self) -> usize {
         self.content_height.saturating_sub(self.viewport_height)
@@ -638,6 +652,56 @@ mod tests {
         assert_eq!(state.offset(), 80); // 100 - 20
         assert!(state.is_at_top());
         assert_eq!(state.mode(), AutoScrollMode::Manual);
+    }
+
+    // =========================================================================
+    // First visible line tests
+    // =========================================================================
+
+    #[test]
+    fn test_first_visible_line_at_bottom() {
+        let mut state = ScrollState::new();
+        state.set_viewport_height(20);
+        state.set_content_height(100);
+
+        // At bottom (offset=0), first visible line should be 80 (100-20)
+        assert_eq!(state.first_visible_line(), 80);
+    }
+
+    #[test]
+    fn test_first_visible_line_at_top() {
+        let mut state = ScrollState::new();
+        state.set_viewport_height(20);
+        state.set_content_height(100);
+
+        state.scroll_to_top();
+
+        // At top (offset=80), first visible line should be 0
+        assert_eq!(state.first_visible_line(), 0);
+    }
+
+    #[test]
+    fn test_first_visible_line_middle() {
+        let mut state = ScrollState::new();
+        state.set_viewport_height(20);
+        state.set_content_height(100);
+
+        // Scroll up by 40 (offset=40)
+        // max_offset = 100-20 = 80
+        // first_visible = 80 - 40 = 40
+        state.scroll_up(40);
+
+        assert_eq!(state.first_visible_line(), 40);
+    }
+
+    #[test]
+    fn test_first_visible_line_content_smaller_than_viewport() {
+        let mut state = ScrollState::new();
+        state.set_viewport_height(100);
+        state.set_content_height(50);
+
+        // Content smaller than viewport, should always show from line 0
+        assert_eq!(state.first_visible_line(), 0);
     }
 
     // =========================================================================

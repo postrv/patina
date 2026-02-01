@@ -6,6 +6,23 @@
 
 use ratatui::text::Line;
 
+/// Represents which area of the UI has focus.
+///
+/// Used to determine how keyboard shortcuts like Ctrl+A behave:
+/// - `Input`: The text input area has focus (default)
+/// - `Content`: The message/response content area has focus
+///
+/// When Content is focused, Ctrl+A selects all content text.
+/// When Input is focused, keyboard events go to the input field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FocusArea {
+    /// The text input area (default)
+    #[default]
+    Input,
+    /// The message/response content area
+    Content,
+}
+
 /// Position in rendered timeline content.
 ///
 /// Represents a cursor position in the visible content area, where `line`
