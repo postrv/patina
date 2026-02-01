@@ -325,18 +325,44 @@ impl TokenEstimator {
 
         // Code indicators
         let code_patterns = [
-            "fn ", "func ", "function ", "def ", "class ", "struct ", "impl ",
-            "pub ", "private ", "public ", "const ", "let ", "var ",
-            "if ", "else ", "for ", "while ", "match ", "switch ",
-            "return ", "import ", "use ", "from ", "require(",
-            " => ", " -> ", "->", "::", "&&", "||",
-            "();", ");", "};", "{{", "}}",
+            "fn ",
+            "func ",
+            "function ",
+            "def ",
+            "class ",
+            "struct ",
+            "impl ",
+            "pub ",
+            "private ",
+            "public ",
+            "const ",
+            "let ",
+            "var ",
+            "if ",
+            "else ",
+            "for ",
+            "while ",
+            "match ",
+            "switch ",
+            "return ",
+            "import ",
+            "use ",
+            "from ",
+            "require(",
+            " => ",
+            " -> ",
+            "->",
+            "::",
+            "&&",
+            "||",
+            "();",
+            ");",
+            "};",
+            "{{",
+            "}}",
         ];
 
-        let matches = code_patterns
-            .iter()
-            .filter(|p| text.contains(*p))
-            .count();
+        let matches = code_patterns.iter().filter(|p| text.contains(*p)).count();
 
         // Also check for balanced braces and common syntax
         let has_braces = text.contains('{') && text.contains('}');
@@ -467,7 +493,13 @@ impl TokenBudget {
 
 impl std::fmt::Display for TokenBudget {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}/{} tokens ({}%)", self.used, self.limit, self.percentage_used())
+        write!(
+            f,
+            "{}/{} tokens ({}%)",
+            self.used,
+            self.limit,
+            self.percentage_used()
+        )
     }
 }
 
@@ -952,7 +984,10 @@ mod tests {
         assert!(budget.is_warning(), "Should warn at custom 70% threshold");
 
         budget.add_usage(20_000); // Now at 90%
-        assert!(budget.is_critical(), "Should be critical at custom 90% threshold");
+        assert!(
+            budget.is_critical(),
+            "Should be critical at custom 90% threshold"
+        );
     }
 
     #[test]
