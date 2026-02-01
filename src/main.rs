@@ -84,6 +84,11 @@ struct Args {
     /// NOTE: OAuth is currently disabled, so this flag has no effect.
     #[arg(long, hide = true)]
     use_api_key: bool,
+
+    /// OAuth client ID for subscription authentication.
+    /// Must be a valid UUID registered with Anthropic's developer program.
+    #[arg(long, env = "PATINA_OAUTH_CLIENT_ID")]
+    oauth_client_id: Option<String>,
 }
 
 #[tokio::main]
@@ -202,6 +207,7 @@ async fn main() -> Result<()> {
         initial_prompt,
         print_mode,
         vision_model: None,
+        oauth_client_id: args.oauth_client_id,
     })
     .await
 }

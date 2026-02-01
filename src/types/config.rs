@@ -80,6 +80,7 @@ pub enum NarsilMode {
 ///     initial_prompt: None,
 ///     print_mode: false,
 ///     vision_model: None,
+///     oauth_client_id: None,
 /// };
 /// ```
 pub struct Config {
@@ -135,6 +136,13 @@ pub struct Config {
     /// instead of the default model. If not set, the default model is used
     /// for all requests (all Claude 3+ models support vision).
     pub vision_model: Option<String>,
+
+    /// Optional OAuth client ID for subscription authentication.
+    ///
+    /// When set (via config or `PATINA_OAUTH_CLIENT_ID` environment variable),
+    /// enables OAuth flow using the specified client ID. The client ID must be
+    /// a valid UUID registered with Anthropic's developer program.
+    pub oauth_client_id: Option<String>,
 }
 
 impl Config {
@@ -174,6 +182,7 @@ impl Config {
             initial_prompt: None,
             print_mode: false,
             vision_model: None,
+            oauth_client_id: None,
         }
     }
 
@@ -335,6 +344,26 @@ impl Config {
     pub fn vision_model(&self) -> Option<&str> {
         self.vision_model.as_deref()
     }
+
+    /// Sets the OAuth client ID for subscription authentication.
+    ///
+    /// When set, enables OAuth flow using the specified client ID.
+    /// The client ID must be a valid UUID registered with Anthropic.
+    ///
+    /// # Arguments
+    ///
+    /// * `client_id` - The OAuth client ID (UUID format)
+    #[must_use]
+    pub fn with_oauth_client_id(mut self, client_id: impl Into<String>) -> Self {
+        self.oauth_client_id = Some(client_id.into());
+        self
+    }
+
+    /// Returns the OAuth client ID if set.
+    #[must_use]
+    pub fn oauth_client_id(&self) -> Option<&str> {
+        self.oauth_client_id.as_deref()
+    }
 }
 
 #[cfg(test)]
@@ -366,6 +395,7 @@ mod tests {
             initial_prompt: None,
             print_mode: false,
             vision_model: None,
+            oauth_client_id: None,
         };
 
         assert_eq!(config.model(), "claude-opus-4-20250514");
@@ -384,6 +414,7 @@ mod tests {
             initial_prompt: None,
             print_mode: false,
             vision_model: None,
+            oauth_client_id: None,
         };
 
         assert_eq!(config.working_dir(), &path);
@@ -569,5 +600,39 @@ mod tests {
             .with_vision_model(String::from("claude-opus-4-20250514"));
 
         assert_eq!(config.vision_model(), Some("claude-opus-4-20250514"));
+    }
+
+    // =========================================================================
+    // OAuth client_id tests (0.8.4)
+    // =========================================================================
+
+    #[test]
+    fn test_config_default_oauth_client_id() {
+        let config = Config::new(
+            SecretString::new("test-key".into()),
+            "test-model",
+            PathBuf::from("/tmp"),
+        );
+
+        assert!(config.oauth_client_id().is_none());
+    }
+
+    #[test]
+    fn test_config_with_oauth_client_id() {
+        let config = Config::new(SecretString::new("key".into()), "model", PathBuf::from("."))
+            .with_oauth_client_id("12345678-1234-1234-1234-123456789abc");
+
+        assert_eq!(
+            config.oauth_client_id(),
+            Some("12345678-1234-1234-1234-123456789abc")
+        );
+    }
+
+    #[test]
+    fn test_config_oauth_client_id_string_conversion() {
+        let config = Config::new(SecretString::new("key".into()), "model", PathBuf::from("."))
+            .with_oauth_client_id(String::from("uuid-from-string"));
+
+        assert_eq!(config.oauth_client_id(), Some("uuid-from-string"));
     }
 }
