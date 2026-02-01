@@ -245,12 +245,7 @@ fn test_empty_assistant_message_not_rendered() {
     timeline.push_assistant_message("");
 
     // Add a tool execution using push_tool_execution
-    timeline.push_tool_execution(
-        "bash",
-        "ls",
-        Some("file1.txt".to_string()),
-        false,
-    );
+    timeline.push_tool_execution("bash", "ls", Some("file1.txt".to_string()), false);
 
     // Render the timeline
     let lines = render_timeline_to_lines(&timeline, 80);

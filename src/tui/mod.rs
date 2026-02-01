@@ -539,6 +539,19 @@ fn render_status_bar(frame: &mut Frame, area: Rect, state: &AppState) {
         ));
     }
 
+    // Selection and cache diagnostic info (for copy/paste debugging)
+    let sel_info = if let Some((start, end)) = state.selection().range() {
+        format!("SEL:{}-{}", start.line, end.line)
+    } else {
+        "SEL:none".to_string()
+    };
+    let cache_info = format!("CACHE:{}", state.rendered_line_count());
+    spans.push(Span::raw(" "));
+    spans.push(Span::styled(
+        format!("[{}] [{}]", sel_info, cache_info),
+        Style::default().fg(PatinaTheme::MUTED),
+    ));
+
     // Scroll indicator (right side)
     let scroll = state.scroll_state();
     let mode_char = match scroll.mode() {
