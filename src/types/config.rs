@@ -79,6 +79,7 @@ pub enum NarsilMode {
 ///     skip_permissions: false,
 ///     initial_prompt: None,
 ///     print_mode: false,
+///     vision_model: None,
 /// };
 /// ```
 pub struct Config {
@@ -127,6 +128,13 @@ pub struct Config {
     /// - Executes any requested tools
     /// - Exits when complete
     pub print_mode: bool,
+
+    /// Optional model to use for vision (image) requests.
+    ///
+    /// When set, messages containing images will automatically use this model
+    /// instead of the default model. If not set, the default model is used
+    /// for all requests (all Claude 3+ models support vision).
+    pub vision_model: Option<String>,
 }
 
 impl Config {
@@ -165,6 +173,7 @@ impl Config {
             skip_permissions: false,
             initial_prompt: None,
             print_mode: false,
+            vision_model: None,
         }
     }
 
@@ -306,6 +315,26 @@ impl Config {
     pub fn print_mode(&self) -> bool {
         self.print_mode
     }
+
+    /// Sets the vision model for image requests.
+    ///
+    /// When set, messages containing images will automatically use this model
+    /// instead of the default model.
+    ///
+    /// # Arguments
+    ///
+    /// * `model` - The model identifier to use for vision requests
+    #[must_use]
+    pub fn with_vision_model(mut self, model: impl Into<String>) -> Self {
+        self.vision_model = Some(model.into());
+        self
+    }
+
+    /// Returns the vision model if set.
+    #[must_use]
+    pub fn vision_model(&self) -> Option<&str> {
+        self.vision_model.as_deref()
+    }
 }
 
 #[cfg(test)]
@@ -336,6 +365,7 @@ mod tests {
             skip_permissions: false,
             initial_prompt: None,
             print_mode: false,
+            vision_model: None,
         };
 
         assert_eq!(config.model(), "claude-opus-4-20250514");
@@ -353,6 +383,7 @@ mod tests {
             skip_permissions: false,
             initial_prompt: None,
             print_mode: false,
+            vision_model: None,
         };
 
         assert_eq!(config.working_dir(), &path);
@@ -507,5 +538,36 @@ mod tests {
 
         assert_eq!(config.initial_prompt(), Some("explain this code"));
         assert!(config.print_mode());
+    }
+
+    // =========================================================================
+    // Vision model tests
+    // =========================================================================
+
+    #[test]
+    fn test_config_default_vision_model() {
+        let config = Config::new(
+            SecretString::new("test-key".into()),
+            "test-model",
+            PathBuf::from("/tmp"),
+        );
+
+        assert!(config.vision_model().is_none());
+    }
+
+    #[test]
+    fn test_config_with_vision_model() {
+        let config = Config::new(SecretString::new("key".into()), "model", PathBuf::from("."))
+            .with_vision_model("claude-sonnet-4-20250514");
+
+        assert_eq!(config.vision_model(), Some("claude-sonnet-4-20250514"));
+    }
+
+    #[test]
+    fn test_config_vision_model_string_conversion() {
+        let config = Config::new(SecretString::new("key".into()), "model", PathBuf::from("."))
+            .with_vision_model(String::from("claude-opus-4-20250514"));
+
+        assert_eq!(config.vision_model(), Some("claude-opus-4-20250514"));
     }
 }
