@@ -8,71 +8,49 @@
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.75%2B-orange.svg)](https://www.rust-lang.org/)
 
-A high-performance terminal client for the Claude API, written in Rust. Feature parity with Claude Code plus additional capabilities like git worktree integration, plugin ecosystem, and full session resume.
+A high-performance terminal client for the Claude API, written in Rust. Designed for developers who want a fast, secure, and extensible AI assistant in their terminal.
 
 ## Highlights
 
 - **Sub-millisecond rendering** - Full 100-message redraw in <1ms
-- **1,150+ tests** with 85%+ code coverage
-- **Zero unsafe code** - Pure safe Rust (~28,000 LOC)
+- **1,475 tests** with 85%+ code coverage
+- **Zero unsafe code** - Pure safe Rust (~31,000 LOC)
 - **Cross-platform** - Linux, macOS, Windows
-- **Security-first** - 8/8 security audit findings resolved
+- **Security-first** - Defense-in-depth with command filtering, path validation, and session integrity
 - **Patina theme** - Distinctive bronze & verdigris color palette
-
-## What's New in v0.3.0
-
-### Git Worktree Integration (Phase 8)
-- **Parallel development** - Work on multiple features simultaneously in isolated worktrees
-- **`/worktree` commands** - `new`, `list`, `switch`, `remove`, `clean`, `status`
-- **Experiment mode** - Start risky changes in isolated worktrees, accept or reject results
-- **Status bar indicator** - Shows current branch, ahead/behind counts, modified files
-- **Session-worktree linking** - Sessions remember which worktree they belong to
-
-### Plugin Ecosystem (Phase 9)
-- **TOML-based manifests** - Define plugins in `rct-plugin.toml`
-- **Plugin discovery** - Automatic scanning of `~/.config/patina/plugins/`
-- **Lifecycle management** - Load, unload, and list plugins at runtime
-- **narsil-mcp integration** - Auto-detects and enables code intelligence when available
-- **CLI flags** - `--with-narsil` / `--no-narsil` to override auto-detection
-
-### Session Resume (Phase 10)
-- **Full session persistence** - Resume exactly where you left off
-- **`--resume last`** - Resume most recent session
-- **`--resume <id>`** - Resume specific session by ID
-- **`--list-sessions`** - View all saved sessions with timestamps
-- **Context tracking** - Remembers files read, detects changes via SHA-256
-- **UI state persistence** - Scroll position, input buffer, cursor position
-- **Auto-save** - Sessions saved after each message
-
-### Tool Execution & Patina Theme (Phase 10.5)
-- **Agentic tool loop** - Claude can autonomously execute tools and continue conversations
-- **Permission system** - Modal prompts for tool approval (Allow Once / Allow Always / Deny)
-- **Dangerous command detection** - Red warning styling for risky operations (rm -rf, sudo, etc.)
-- **Smart auto-scroll** - Follow mode during streaming, preserves user scroll position
-- **Patina color theme** - Distinctive bronze (user) and verdigris (assistant) color palette
-- **Tool block rendering** - Styled tool execution display with ⚙ icons and status indicators
 
 ## Features
 
-### Core
+### Core Capabilities
 
 | Feature | Description |
 |---------|-------------|
-| **Streaming TUI** | Real-time response streaming with ratatui |
-| **Anthropic API** | Direct integration with Messages API, exponential backoff retry |
+| **Streaming TUI** | Real-time response streaming with syntax highlighting |
+| **Agentic Tool Loop** | Claude can autonomously execute tools and continue conversations |
+| **Session Resume** | Save and restore conversations with full context |
+| **MCP Support** | Model Context Protocol for tool server integration |
 | **Multi-Model** | Anthropic direct + AWS Bedrock provider support |
-| **MCP Client** | Model Context Protocol with stdio/SSE transports |
-| **Session Persistence** | Save/load conversations with HMAC-SHA256 integrity |
+
+### Built-in Tools
+
+| Tool | Description |
+|------|-------------|
+| `bash` | Execute shell commands with security filtering |
+| `read` | Read file contents with path traversal protection |
+| `write` | Write files with validation |
+| `edit` | Edit files with diff-based changes |
+| `glob` | File discovery with pattern matching |
+| `grep` | Content search with regex support |
 
 ### Extensibility
 
 | Feature | Description |
 |---------|-------------|
-| **Skills System** | Auto-invoked context providers via SKILL.md files |
+| **Plugin System** | TOML-based plugins with auto-discovery |
+| **Skills Engine** | Context-aware suggestions via SKILL.md files |
 | **Hooks** | 10 lifecycle events (PreToolUse, PostToolUse, SessionStart, etc.) |
 | **Slash Commands** | `/worktree`, `/help`, and user-defined workflows |
-| **Plugin Architecture** | TOML manifests, auto-discovery, lifecycle management |
-| **Subagent Orchestration** | Multi-agent coordination (4 concurrent by default) |
+| **Subagent Orchestration** | Multi-agent coordination for complex tasks |
 
 ### Developer Experience
 
@@ -81,14 +59,7 @@ A high-performance terminal client for the Claude API, written in Rust. Feature 
 | **Project Context** | Automatic CLAUDE.md discovery for project instructions |
 | **Git Worktrees** | Parallel AI-assisted development with isolation |
 | **IDE Integration** | TCP server for VS Code and JetBrains extensions |
-| **Self-Update** | Built-in updates with release channels |
-
-### Enterprise
-
-| Feature | Description |
-|---------|-------------|
-| **Audit Logging** | Configurable levels (All, ApiOnly, ToolsOnly, SessionOnly) |
-| **Cost Tracking** | Budget limits per session/daily/monthly with warnings |
+| **narsil-mcp** | Optional code intelligence with 76 analysis tools |
 
 ## Installation
 
@@ -103,8 +74,6 @@ Download from [GitHub Releases](https://github.com/postrv/patina/releases):
 | macOS x86_64 | `patina-macos-x86_64.tar.gz` |
 | macOS Apple Silicon | `patina-macos-aarch64.tar.gz` |
 | Windows x86_64 | `patina-windows-x86_64.zip` |
-
-All releases include SHA256 checksums.
 
 ### From Source
 
@@ -128,7 +97,7 @@ docker pull ghcr.io/postrv/patina:latest
 docker run -it -e ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" ghcr.io/postrv/patina
 ```
 
-## Usage
+## Quick Start
 
 ```bash
 # Set your API key
@@ -137,74 +106,93 @@ export ANTHROPIC_API_KEY="your-api-key"
 # Run patina
 patina
 
+# With an initial prompt
+patina "Explain this codebase"
+
+# Print mode (non-interactive)
+patina -p "What is 2+2?"
+
 # Resume last session
-patina --resume last
+patina -c
 
 # List saved sessions
 patina --list-sessions
-
-# With narsil-mcp code intelligence
-patina --with-narsil
 ```
 
-### Command Line Options
+## Command Line Options
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--api-key` | Anthropic API key (or `ANTHROPIC_API_KEY` env) | - |
+| `[PROMPT]` | Initial prompt to start with | - |
+| `-p, --print` | Print mode (non-interactive) | `false` |
+| `--api-key` | API key (or `ANTHROPIC_API_KEY` env) | - |
 | `-m, --model` | Model to use | `claude-sonnet-4-20250514` |
 | `-C, --directory` | Working directory | `.` |
-| `--debug` | Enable debug logging | `false` |
-| `--resume` | Resume session (`last` or session ID) | - |
-| `--list-sessions` | List available sessions and exit | - |
+| `-c, --continue` | Resume most recent session | - |
+| `-r, --resume` | Resume specific session by ID | - |
+| `--list-sessions` | List available sessions | - |
 | `--with-narsil` | Enable narsil-mcp integration | auto |
 | `--no-narsil` | Disable narsil-mcp integration | - |
+| `--debug` | Enable debug logging | `false` |
 
-### Key Bindings
+## Key Bindings
 
 | Key | Action |
 |-----|--------|
 | `Enter` | Send message |
 | `Ctrl+C` / `Ctrl+D` | Quit |
-| `Ctrl+Up` / `PageUp` | Scroll up |
-| `Ctrl+Down` / `PageDown` | Scroll down |
-| `Backspace` | Delete character |
-| `Home` / `End` | Move cursor |
+| `PageUp` / `PageDown` | Scroll conversation |
+| `Cmd+A` / `Ctrl+A` | Select all (macOS/Linux) |
+| `Cmd+C` / `Ctrl+C` | Copy selection |
+| `Cmd+V` / `Ctrl+V` | Paste |
 
 **Permission Prompts:**
+
 | Key | Action |
 |-----|--------|
-| `y` / `Enter` | Allow once (session only) |
+| `y` / `Enter` | Allow once |
 | `a` | Allow always (save rule) |
 | `n` / `Esc` | Deny |
 
-### Slash Commands
+## Slash Commands
 
 | Command | Description |
 |---------|-------------|
-| `/worktree new <name>` | Create new worktree |
+| `/worktree new <name>` | Create new git worktree |
 | `/worktree list` | List all worktrees |
 | `/worktree switch <name>` | Switch to worktree |
 | `/worktree remove <name>` | Remove worktree |
 | `/worktree status` | Show worktree status |
-| `/worktree clean` | Prune stale worktrees |
 
-## Built-in Tools
+## Security
 
-Patina provides 6 integrated tools with security policy enforcement:
+Patina implements defense-in-depth security controls:
 
-| Tool | Description | Security |
-|------|-------------|----------|
-| `bash` | Execute shell commands | Dangerous pattern blocking (28+ patterns) |
-| `read` | Read file contents | Path traversal + symlink protection |
-| `write` | Write files | Path validation |
-| `edit` | Edit files with diff | Path validation |
-| `glob` | File discovery | Pattern validation |
-| `grep` | Content search | Regex compilation, path validation |
+| Control | Implementation |
+|---------|----------------|
+| **Command Filtering** | 28+ dangerous patterns blocked (rm -rf, sudo, etc.) |
+| **Path Validation** | Canonicalization + symlink protection |
+| **Permission System** | Explicit approval required for tool execution |
+| **API Key Protection** | SecretString with `[REDACTED]` in logs |
+| **MCP Validation** | Pre-spawn command validation |
+| **Session Integrity** | HMAC-SHA256 checksum verification |
 
-## Plugin System
+See [SECURITY.md](SECURITY.md) for security policy and reporting vulnerabilities.
 
-Patina supports plugins via TOML manifests:
+## Configuration
+
+Configuration directories:
+- Linux/macOS: `~/.config/patina/`
+- Windows: `%APPDATA%\patina\`
+
+### Project Context (CLAUDE.md)
+
+Place a `CLAUDE.md` file in your project root to provide project-specific instructions. Patina automatically discovers:
+- `CLAUDE.md` (project root)
+- `.patina/CLAUDE.md` (framework config)
+- `*/CLAUDE.md` (subdirectories)
+
+### Plugins
 
 ```toml
 # ~/.config/patina/plugins/my-plugin/rct-plugin.toml
@@ -218,74 +206,25 @@ commands = true
 skills = true
 ```
 
-### narsil-mcp Integration
-
-When [narsil-mcp](https://github.com/postrv/narsil-mcp) is available, Patina automatically enables code intelligence features:
-
-- **Auto-detection** - Checks for `narsil-mcp` in PATH and supported code files
-- **76 code intelligence tools** - Symbol search, call graphs, security scanning
-- **Override flags** - `--with-narsil` to force enable, `--no-narsil` to disable
-
 ## MCP Support
 
-Patina implements the [Model Context Protocol](https://spec.modelcontextprotocol.io/) for tool server integration.
+Patina implements the [Model Context Protocol](https://spec.modelcontextprotocol.io/) for tool server integration:
 
-**Protocol:** JSON-RPC 2.0
-
-**Transports:**
-- `StdioTransport` - Process stdin/stdout (default)
-- `SseTransport` - HTTP Server-Sent Events for remote servers
-
-**Security:**
-- Always-blocked commands validation
-- Interpreter absolute path requirements
-- Shell injection detection in arguments
-
-## Configuration
-
-Configuration directories:
-- Linux/macOS: `~/.config/patina/`
-- Windows: `%APPDATA%\patina\`
-
-### Project Context (CLAUDE.md)
-
-Place a `CLAUDE.md` file in your project root to provide project-specific context. Patina automatically discovers:
-- Root: `CLAUDE.md`
-- Framework: `.patina/CLAUDE.md`
-- Subdirectories: `*/CLAUDE.md`
-
-## Security
-
-Patina implements defense-in-depth security:
-
-| Control | Implementation |
-|---------|----------------|
-| Command Filtering | 28+ dangerous patterns blocklist + allowlist mode |
-| Path Traversal | Canonicalization + `..` rejection |
-| Symlink Protection | TOCTOU mitigation via `symlink_metadata()` |
-| API Key Protection | SecretString with `[REDACTED]` debug output |
-| MCP Validation | Pre-spawn command validation |
-| Session Integrity | HMAC-SHA256 checksum verification |
-
-**Blocked Commands (Unix):** rm -rf, sudo, su, chmod 777, mkfs, dd, shutdown, curl\|bash, eval, fork bombs, etc.
-
-**Blocked Commands (Windows):** reg.exe, shutdown.exe, format, del /s, powershell -enc, iex(), certutil, etc.
+- **Protocol:** JSON-RPC 2.0
+- **Transports:** stdio (default), HTTP SSE
+- **Security:** Command validation, interpreter path requirements
 
 ## Performance
 
 Benchmarks (Criterion, 120x40 terminal):
 
-| Benchmark | Target | Description |
-|-----------|--------|-------------|
-| `full_redraw_100_messages` | <1ms | Complete redraw with 100 messages |
-| `streaming_token_append` | <100μs | Single token append during streaming |
-| `streaming_cycle` | <500μs | Append + render cycle |
-| `input_character_echo` | <10μs | Keypress handling |
-| `cursor_movement` | <10μs | Cursor navigation |
-| `scroll_operations` | <1μs | Scroll up/down |
-| `large_message_rendering` | <5ms | 20 messages, ~5000 chars each |
+| Benchmark | Target |
+|-----------|--------|
+| Full redraw (100 messages) | <1ms |
+| Streaming token append | <100μs |
+| Scroll operations | <1μs |
+| Large message rendering | <5ms |
 
-Run benchmarks:
 ```bash
 cargo bench
 # HTML reports in target/criterion/
@@ -296,54 +235,39 @@ cargo bench
 ```
 src/
 ├── main.rs           # CLI entry point
-├── lib.rs            # Library exports
 ├── app/              # Event loop, application state
-├── api/              # Anthropic API client, multi-model
-├── tui/              # Terminal UI (ratatui), widgets
-├── tools/            # Tool execution, security policy
-├── mcp/              # MCP client (protocol, transports)
-├── hooks/            # Lifecycle event execution
-├── skills/           # Context-aware skill matching
-├── commands/         # Slash command parsing (/worktree, etc.)
+├── api/              # Anthropic API client, streaming
+├── tui/              # Terminal UI (ratatui)
+├── tools/            # Tool execution, security
+├── mcp/              # Model Context Protocol client
+├── hooks/            # Lifecycle events
+├── skills/           # Context-aware suggestions
+├── commands/         # Slash command parsing
 ├── agents/           # Subagent orchestration
-├── plugins/          # Plugin system (manifest, registry, narsil)
-├── session/          # Session persistence, context tracking
-├── worktree/         # Git worktree management, experiments
+├── plugins/          # Plugin system
+├── session/          # Session persistence
+├── worktree/         # Git worktree management
+├── permissions/      # Permission management
+├── auth/             # Authentication (API key)
 ├── enterprise/       # Audit logging, cost tracking
-├── context/          # Project context (CLAUDE.md)
-├── update/           # Self-update system
-├── ide/              # IDE integration (TCP)
-├── shell/            # Cross-platform shell abstraction
-├── types/            # Core types (Message, Role, Config)
-└── error.rs          # Error types
+└── types/            # Core types
 ```
 
 ## Development
 
 ```bash
-# Run in debug mode
-cargo run
-
 # Run tests
 cargo test
 
-# Run with coverage
-cargo tarpaulin --out Html
-
-# Check for issues
+# Run clippy
 cargo clippy --all-targets -- -D warnings
 
-# Format code
-cargo fmt
+# Check formatting
+cargo fmt -- --check
+
+# Run with coverage
+cargo tarpaulin --out Html
 ```
-
-### Quality Gates
-
-| Gate | Command | Requirement |
-|------|---------|-------------|
-| Clippy | `cargo clippy --all-targets -- -D warnings` | 0 warnings |
-| Tests | `cargo test` | All pass |
-| Format | `cargo fmt -- --check` | No changes |
 
 ## Technical Details
 
@@ -352,10 +276,10 @@ cargo fmt
 | Version | 0.3.0 |
 | MSRV | Rust 1.75 |
 | Edition | 2021 |
-| Tests | 1,200+ |
+| Tests | 1,475 |
 | Coverage | 85%+ |
 | Unsafe | 0 blocks |
-| LOC | ~16,000 |
+| LOC | ~31,000 |
 
 ### Key Dependencies
 
@@ -369,35 +293,29 @@ cargo fmt
 | serde 1.0 | Serialization |
 | clap 4.5 | CLI parsing |
 
-## Roadmap
+## Documentation
 
-### Completed
-- **Phase 1-6**: Core TUI, API, tools, MCP, hooks, skills, cross-platform
-- **Phase 7**: Public release, rebrand to Patina
-- **Phase 8**: Git worktree integration
-- **Phase 9**: Plugin ecosystem, narsil-mcp integration
-- **Phase 10**: Session resume, context persistence
-- **Phase 10.5**: Tool execution, permission system, Patina theme
-
-### Future
-- **Phase 11**: Visual testing with VLM-based TUI verification
-- **Phase 12**: Semantic code search, cost tracking dashboard
+- [Architecture](docs/architecture.md) - System design and data flow
+- [API Reference](docs/api.md) - API client documentation
+- [Plugin API](docs/plugin-api.md) - Plugin development guide
+- [Security Model](docs/security-model.md) - Security architecture
+- [User Guide](docs/user-guide.md) - Usage documentation
 
 ## Contributing
 
 1. Fork the repository
 2. Create a feature branch
-3. Ensure all quality gates pass
+3. Ensure all quality gates pass (`cargo test`, `cargo clippy`, `cargo fmt`)
 4. Submit a pull request
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for detailed guidelines.
-
-## Author
-
-**Laurence Avent** ([@postrv](https://github.com/postrv))
 
 ## License
 
 MIT OR Apache-2.0
 
 Copyright (c) 2026 Laurence Avent
+
+## Author
+
+**Laurence Avent** ([@postrv](https://github.com/postrv))
