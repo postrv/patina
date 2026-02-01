@@ -36,6 +36,9 @@
 //! }
 //! ```
 
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
@@ -44,6 +47,173 @@ use secrecy::{ExposeSecret, SecretString};
 use tracing::{debug, warn};
 
 use super::OAuthCredentials;
+
+// ============================================================================
+// CredentialStorage Trait
+// ============================================================================
+
+/// Trait for storing and retrieving OAuth credentials.
+///
+/// This trait abstracts over the storage backend, allowing for:
+/// - Real keyring storage in production
+/// - Mock storage for testing
+///
+/// # Example
+///
+/// ```
+/// use patina::auth::storage::{CredentialStorage, MockCredentialStorage};
+/// use patina::auth::OAuthCredentials;
+/// use secrecy::SecretString;
+/// use std::time::Duration;
+///
+/// # #[tokio::main]
+/// # async fn main() -> anyhow::Result<()> {
+/// let mut storage = MockCredentialStorage::new();
+///
+/// let creds = OAuthCredentials::new(
+///     SecretString::new("access".into()),
+///     SecretString::new("refresh".into()),
+///     Duration::from_secs(3600),
+/// );
+///
+/// storage.store(&creds).await?;
+/// let loaded = storage.load().await?.expect("should have credentials");
+/// # Ok(())
+/// # }
+/// ```
+pub trait CredentialStorage: Send + Sync {
+    /// Stores OAuth credentials.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the storage operation fails.
+    fn store(
+        &mut self,
+        credentials: &OAuthCredentials,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>>;
+
+    /// Loads OAuth credentials.
+    ///
+    /// # Returns
+    ///
+    /// - `Ok(Some(credentials))` if credentials are found
+    /// - `Ok(None)` if no credentials are stored
+    /// - `Err` if the load operation fails
+    fn load(&self) -> Pin<Box<dyn Future<Output = Result<Option<OAuthCredentials>>> + Send + '_>>;
+
+    /// Clears all stored credentials.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the clear operation fails.
+    fn clear(&mut self) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>>;
+
+    /// Checks if credentials are stored.
+    fn has_stored(&self) -> bool;
+}
+
+// ============================================================================
+// MockCredentialStorage - In-memory storage for testing
+// ============================================================================
+
+/// In-memory credential storage for testing.
+///
+/// This implementation stores credentials in memory instead of the OS keychain,
+/// allowing tests to run without accessing real system credentials.
+///
+/// # Example
+///
+/// ```
+/// use patina::auth::storage::{CredentialStorage, MockCredentialStorage};
+/// use patina::auth::OAuthCredentials;
+/// use secrecy::SecretString;
+/// use std::time::Duration;
+///
+/// # #[tokio::main]
+/// # async fn main() -> anyhow::Result<()> {
+/// let mut storage = MockCredentialStorage::new();
+///
+/// // Initially empty
+/// assert!(!storage.has_stored());
+///
+/// // Store credentials
+/// let creds = OAuthCredentials::new(
+///     SecretString::new("access".into()),
+///     SecretString::new("refresh".into()),
+///     Duration::from_secs(3600),
+/// );
+/// storage.store(&creds).await?;
+///
+/// // Now has credentials
+/// assert!(storage.has_stored());
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Default)]
+pub struct MockCredentialStorage {
+    /// Stored credentials (thread-safe for async access).
+    credentials: Mutex<Option<StoredCredentials>>,
+}
+
+/// Internal representation of stored credentials for MockCredentialStorage.
+struct StoredCredentials {
+    access_token: String,
+    refresh_token: String,
+    expires_at: SystemTime,
+}
+
+impl MockCredentialStorage {
+    /// Creates a new empty mock storage.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            credentials: Mutex::new(None),
+        }
+    }
+}
+
+impl CredentialStorage for MockCredentialStorage {
+    fn store(
+        &mut self,
+        credentials: &OAuthCredentials,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
+        let stored = StoredCredentials {
+            access_token: credentials.access_token().expose_secret().to_string(),
+            refresh_token: credentials.refresh_token().expose_secret().to_string(),
+            expires_at: credentials.expires_at(),
+        };
+
+        Box::pin(async move {
+            *self.credentials.lock().unwrap() = Some(stored);
+            Ok(())
+        })
+    }
+
+    fn load(&self) -> Pin<Box<dyn Future<Output = Result<Option<OAuthCredentials>>> + Send + '_>> {
+        Box::pin(async move {
+            let guard = self.credentials.lock().unwrap();
+            match &*guard {
+                Some(stored) => Ok(Some(OAuthCredentials::with_expiry(
+                    SecretString::new(stored.access_token.clone().into()),
+                    SecretString::new(stored.refresh_token.clone().into()),
+                    stored.expires_at,
+                ))),
+                None => Ok(None),
+            }
+        })
+    }
+
+    fn clear(&mut self) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
+        Box::pin(async move {
+            *self.credentials.lock().unwrap() = None;
+            Ok(())
+        })
+    }
+
+    fn has_stored(&self) -> bool {
+        self.credentials.lock().unwrap().is_some()
+    }
+}
 
 /// Service name for keyring entries.
 const SERVICE_NAME: &str = "patina";

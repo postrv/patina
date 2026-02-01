@@ -110,3 +110,6 @@ mod oauth_flow_test;
 
 #[path = "unit/token_refresh_test.rs"]
 mod token_refresh_test;
+
+#[path = "unit/keyring_storage_test.rs"]
+mod keyring_storage_test;
