@@ -320,9 +320,8 @@ struct TokenResponse {
     access_token: String,
     refresh_token: String,
     expires_in: u64,
-    #[allow(dead_code)]
-    #[serde(default)]
-    token_type: String,
+    #[serde(default, rename = "token_type")]
+    _token_type: String,
 }
 
 /// Extracts the authorization code from a callback URL.
