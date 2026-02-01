@@ -11,6 +11,7 @@
 //! - Parallel tool execution for performance optimization
 
 pub mod parallel;
+pub mod vision;
 pub mod web_fetch;
 pub mod web_search;
 

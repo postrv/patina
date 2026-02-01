@@ -334,6 +334,33 @@ pub fn web_search_tool() -> ToolDefinition {
     )
 }
 
+/// Creates the analyze_image (vision) tool definition.
+///
+/// Analyzes images using Claude's vision capabilities.
+#[must_use]
+pub fn vision_tool() -> ToolDefinition {
+    ToolDefinition::new(
+        "analyze_image",
+        "Analyze an image using Claude's vision capabilities. Load an image from a file path \
+         and optionally provide a prompt to guide the analysis. Supported formats: PNG, JPEG, \
+         GIF, WebP. Maximum file size: 20MB.",
+        json!({
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "The relative path to the image file to analyze"
+                },
+                "prompt": {
+                    "type": "string",
+                    "description": "Optional prompt to guide the image analysis (e.g., 'What objects are in this image?')"
+                }
+            },
+            "required": ["path"]
+        }),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
