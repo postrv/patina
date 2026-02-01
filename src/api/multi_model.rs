@@ -465,10 +465,12 @@ mod tests {
 
     #[test]
     fn test_contains_images_with_blocks_no_images() {
-        let messages = vec![ApiMessageV2::user_with_content(MessageContent::blocks(vec![
-            ContentBlock::text("Just text"),
-            ContentBlock::text("More text"),
-        ]))];
+        let messages = vec![ApiMessageV2::user_with_content(MessageContent::blocks(
+            vec![
+                ContentBlock::text("Just text"),
+                ContentBlock::text("More text"),
+            ],
+        ))];
         assert!(!contains_images(&messages));
     }
 
@@ -478,10 +480,12 @@ mod tests {
             media_type: "image/png".to_string(),
             data: "iVBORw0KGgo=".to_string(),
         };
-        let messages = vec![ApiMessageV2::user_with_content(MessageContent::blocks(vec![
-            ContentBlock::text("What's this?"),
-            ContentBlock::image(source),
-        ]))];
+        let messages = vec![ApiMessageV2::user_with_content(MessageContent::blocks(
+            vec![
+                ContentBlock::text("What's this?"),
+                ContentBlock::image(source),
+            ],
+        ))];
         assert!(contains_images(&messages));
     }
 
@@ -490,9 +494,9 @@ mod tests {
         let source = ImageSource::Url {
             url: "https://example.com/image.png".to_string(),
         };
-        let messages = vec![ApiMessageV2::user_with_content(MessageContent::blocks(vec![
-            ContentBlock::image(source),
-        ]))];
+        let messages = vec![ApiMessageV2::user_with_content(MessageContent::blocks(
+            vec![ContentBlock::image(source)],
+        ))];
         assert!(contains_images(&messages));
     }
 
@@ -535,9 +539,9 @@ mod tests {
             media_type: "image/png".to_string(),
             data: "data".to_string(),
         };
-        let messages = vec![ApiMessageV2::user_with_content(MessageContent::blocks(vec![
-            ContentBlock::image(source),
-        ]))];
+        let messages = vec![ApiMessageV2::user_with_content(MessageContent::blocks(
+            vec![ContentBlock::image(source)],
+        ))];
         let model = select_model_for_content(&messages, "claude-sonnet-4", None);
         // Has images but no vision model, fall back to default
         assert_eq!(model, "claude-sonnet-4");
@@ -549,9 +553,9 @@ mod tests {
             media_type: "image/png".to_string(),
             data: "data".to_string(),
         };
-        let messages = vec![ApiMessageV2::user_with_content(MessageContent::blocks(vec![
-            ContentBlock::image(source),
-        ]))];
+        let messages = vec![ApiMessageV2::user_with_content(MessageContent::blocks(
+            vec![ContentBlock::image(source)],
+        ))];
         let model = select_model_for_content(&messages, "claude-sonnet-4", Some("claude-opus-4"));
         // Has images and vision model configured, use vision model
         assert_eq!(model, "claude-opus-4");

@@ -165,9 +165,9 @@ fn test_vision_model_routing_no_vision_model_configured() {
         url: "https://example.com/photo.jpg".to_string(),
     };
 
-    let messages = vec![ApiMessageV2::user_with_content(MessageContent::blocks(vec![
-        ContentBlock::image(source),
-    ]))];
+    let messages = vec![ApiMessageV2::user_with_content(MessageContent::blocks(
+        vec![ContentBlock::image(source)],
+    ))];
 
     let model = select_model_for_content(&messages, "claude-sonnet-4", None);
 
@@ -216,11 +216,11 @@ fn test_vision_token_estimation_formula() {
     // Test cases based on Claude's documented formula
     let test_cases = [
         // (width, height, expected minimum, expected maximum)
-        (1024, 1024, 1398, 1400), // Standard square ~1399
-        (800, 600, 639, 641),     // Landscape
-        (600, 800, 639, 641),     // Portrait
-        (100, 100, 13, 15),       // Small thumbnail
-        (1920, 1080, 2764, 2766), // Full HD
+        (1024, 1024, 1398, 1400),   // Standard square ~1399
+        (800, 600, 639, 641),       // Landscape
+        (600, 800, 639, 641),       // Portrait
+        (100, 100, 13, 15),         // Small thumbnail
+        (1920, 1080, 2764, 2766),   // Full HD
         (3840, 2160, 11058, 11062), // 4K
     ];
 
@@ -316,7 +316,11 @@ fn test_image_content_from_url() {
 
     for (url, expected_type) in test_urls {
         let result = ImageContent::from_url(url);
-        assert!(result.is_ok(), "Should create ImageContent from URL: {}", url);
+        assert!(
+            result.is_ok(),
+            "Should create ImageContent from URL: {}",
+            url
+        );
 
         let content = result.unwrap();
         assert_eq!(
