@@ -351,3 +351,131 @@ async fn test_mock_storage_preserves_expiry() {
         "Mock storage should preserve exact expiry"
     );
 }
+
+// ============================================================================
+// StorageError Tests - Error handling for keyring operations (0.10.2)
+// ============================================================================
+
+/// Tests that StorageError enum has the expected variants.
+#[test]
+fn test_storage_error_variants() {
+    use patina::auth::storage::StorageError;
+
+    // Test each variant can be created
+    let unavailable = StorageError::KeyringUnavailable("test platform".to_string());
+    let not_found = StorageError::EntryNotFound("access_token".to_string());
+    let access_denied = StorageError::AccessDenied("permission denied".to_string());
+    let platform = StorageError::Platform("specific error".to_string());
+
+    // Verify Debug is implemented
+    assert!(format!("{:?}", unavailable).contains("KeyringUnavailable"));
+    assert!(format!("{:?}", not_found).contains("EntryNotFound"));
+    assert!(format!("{:?}", access_denied).contains("AccessDenied"));
+    assert!(format!("{:?}", platform).contains("Platform"));
+}
+
+/// Tests that StorageError implements std::error::Error.
+#[test]
+fn test_storage_error_is_std_error() {
+    use patina::auth::storage::StorageError;
+    use std::error::Error;
+
+    let err = StorageError::KeyringUnavailable("test".to_string());
+
+    // Verify it implements Error trait
+    fn assert_error<T: Error>(_: &T) {}
+    assert_error(&err);
+
+    // Verify Display is implemented with helpful messages
+    let display = err.to_string();
+    assert!(
+        display.contains("keyring") || display.contains("Keyring"),
+        "Error message should mention keyring"
+    );
+}
+
+/// Tests that StorageError provides platform-specific messages.
+#[test]
+fn test_storage_error_platform_messages() {
+    use patina::auth::storage::StorageError;
+
+    // Platform error should contain helpful context
+    let platform_err = StorageError::Platform("D-Bus connection failed".to_string());
+    let display = platform_err.to_string();
+    assert!(
+        display.contains("D-Bus") || display.contains("platform"),
+        "Platform error should include specific details"
+    );
+
+    // Access denied should suggest solutions
+    let access_err = StorageError::AccessDenied("keychain locked".to_string());
+    let display = access_err.to_string();
+    assert!(
+        display.contains("locked") || display.contains("denied"),
+        "Access error should include reason"
+    );
+}
+
+/// Tests that StorageError can be converted from keyring::Error.
+#[test]
+fn test_storage_error_from_keyring_error() {
+    use patina::auth::storage::StorageError;
+
+    // NoEntry should map to EntryNotFound
+    let keyring_err = keyring::Error::NoEntry;
+    let storage_err: StorageError = keyring_err.into();
+    assert!(
+        matches!(storage_err, StorageError::EntryNotFound(_)),
+        "NoEntry should map to EntryNotFound"
+    );
+
+    // NoStorageAccess with "permission denied" should map to AccessDenied
+    let keyring_err = keyring::Error::NoStorageAccess(Box::new(std::io::Error::new(
+        std::io::ErrorKind::PermissionDenied,
+        "permission denied",
+    )));
+    let storage_err: StorageError = keyring_err.into();
+    assert!(
+        matches!(storage_err, StorageError::AccessDenied(_)),
+        "NoStorageAccess with permission denied should map to AccessDenied"
+    );
+
+    // NoStorageAccess without permission keywords should map to KeyringUnavailable
+    let keyring_err = keyring::Error::NoStorageAccess(Box::new(std::io::Error::new(
+        std::io::ErrorKind::NotConnected,
+        "service not available",
+    )));
+    let storage_err: StorageError = keyring_err.into();
+    assert!(
+        matches!(storage_err, StorageError::KeyringUnavailable(_)),
+        "NoStorageAccess without permission should map to KeyringUnavailable"
+    );
+}
+
+/// Tests that MockCredentialStorage can simulate errors for testing.
+#[tokio::test]
+async fn test_mock_storage_error_simulation() {
+    use patina::auth::storage::{CredentialStorage, MockCredentialStorage, StorageError};
+
+    let mut storage = MockCredentialStorage::new();
+
+    // Configure mock to return an error on next store
+    storage.set_error_on_store(Some(StorageError::AccessDenied("simulated".to_string())));
+
+    let creds = OAuthCredentials::new(
+        SecretString::new("access".into()),
+        SecretString::new("refresh".into()),
+        Duration::from_secs(3600),
+    );
+
+    // Store should fail
+    let result = storage.store(&creds).await;
+    assert!(result.is_err(), "Store should fail when error is set");
+
+    // Error should be cleared after use (one-shot)
+    let result = storage.store(&creds).await;
+    assert!(
+        result.is_ok(),
+        "Store should succeed after error is consumed"
+    );
+}

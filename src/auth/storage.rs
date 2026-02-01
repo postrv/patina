@@ -36,6 +36,7 @@
 //! }
 //! ```
 
+use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Mutex;
@@ -47,6 +48,103 @@ use secrecy::{ExposeSecret, SecretString};
 use tracing::{debug, warn};
 
 use super::OAuthCredentials;
+
+// ============================================================================
+// StorageError - Detailed error types for credential storage
+// ============================================================================
+
+/// Error type for credential storage operations.
+///
+/// This enum provides detailed error information for keyring operations,
+/// including platform-specific error messages to help users diagnose issues.
+///
+/// # Example
+///
+/// ```
+/// use patina::auth::storage::StorageError;
+///
+/// let err = StorageError::KeyringUnavailable("Secret Service not running".to_string());
+/// println!("Error: {}", err);
+/// ```
+#[derive(Debug, Clone)]
+pub enum StorageError {
+    /// The keyring service is not available on this platform.
+    ///
+    /// This typically occurs on:
+    /// - Linux: when Secret Service (GNOME Keyring, KWallet) is not running
+    /// - Headless servers without a desktop environment
+    KeyringUnavailable(String),
+
+    /// The requested entry was not found in the keyring.
+    ///
+    /// This is not typically an error condition - it means no credentials
+    /// have been stored yet.
+    EntryNotFound(String),
+
+    /// Access to the keyring was denied.
+    ///
+    /// This can occur when:
+    /// - The keyring is locked and requires user interaction
+    /// - The application doesn't have permission to access the keyring
+    AccessDenied(String),
+
+    /// A platform-specific error occurred.
+    ///
+    /// This wraps any other keyring errors that don't fit into the above categories.
+    Platform(String),
+}
+
+impl fmt::Display for StorageError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::KeyringUnavailable(msg) => {
+                write!(
+                    f,
+                    "Keyring service unavailable: {}. On Linux, ensure Secret Service is running.",
+                    msg
+                )
+            }
+            Self::EntryNotFound(key) => {
+                write!(f, "No credential entry found for key: {}", key)
+            }
+            Self::AccessDenied(msg) => {
+                write!(
+                    f,
+                    "Access denied to keyring: {}. Try unlocking your keychain.",
+                    msg
+                )
+            }
+            Self::Platform(msg) => {
+                write!(f, "Keyring platform error: {}", msg)
+            }
+        }
+    }
+}
+
+impl std::error::Error for StorageError {}
+
+impl From<keyring::Error> for StorageError {
+    fn from(err: keyring::Error) -> Self {
+        match err {
+            keyring::Error::NoEntry => Self::EntryNotFound("entry not found".to_string()),
+            keyring::Error::NoStorageAccess(inner) => {
+                let msg = inner.to_string();
+                if msg.to_lowercase().contains("permission")
+                    || msg.to_lowercase().contains("denied")
+                {
+                    Self::AccessDenied(msg)
+                } else {
+                    Self::KeyringUnavailable(msg)
+                }
+            }
+            keyring::Error::PlatformFailure(inner) => Self::Platform(inner.to_string()),
+            keyring::Error::BadEncoding(_) => {
+                Self::Platform("Encoding error in credential data".to_string())
+            }
+            other => Self::Platform(other.to_string()),
+        }
+    }
+}
 
 // ============================================================================
 // CredentialStorage Trait
@@ -149,10 +247,20 @@ pub trait CredentialStorage: Send + Sync {
 /// # Ok(())
 /// # }
 /// ```
-#[derive(Default)]
+/// In-memory credential storage for testing.
 pub struct MockCredentialStorage {
     /// Stored credentials (thread-safe for async access).
     credentials: Mutex<Option<StoredCredentials>>,
+    /// Optional error to return on next store operation.
+    store_error: Mutex<Option<StorageError>>,
+    /// Optional error to return on next load operation.
+    load_error: Mutex<Option<StorageError>>,
+}
+
+impl Default for MockCredentialStorage {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 /// Internal representation of stored credentials for MockCredentialStorage.
@@ -168,7 +276,25 @@ impl MockCredentialStorage {
     pub fn new() -> Self {
         Self {
             credentials: Mutex::new(None),
+            store_error: Mutex::new(None),
+            load_error: Mutex::new(None),
         }
+    }
+
+    /// Sets an error to be returned on the next store operation.
+    ///
+    /// The error is consumed (one-shot) - after it's returned once,
+    /// subsequent operations will succeed normally.
+    pub fn set_error_on_store(&mut self, error: Option<StorageError>) {
+        *self.store_error.lock().unwrap() = error;
+    }
+
+    /// Sets an error to be returned on the next load operation.
+    ///
+    /// The error is consumed (one-shot) - after it's returned once,
+    /// subsequent operations will succeed normally.
+    pub fn set_error_on_load(&mut self, error: Option<StorageError>) {
+        *self.load_error.lock().unwrap() = error;
     }
 }
 
@@ -177,6 +303,12 @@ impl CredentialStorage for MockCredentialStorage {
         &mut self,
         credentials: &OAuthCredentials,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
+        // Check for configured error
+        let pending_error = self.store_error.lock().unwrap().take();
+        if let Some(err) = pending_error {
+            return Box::pin(async move { Err(anyhow::anyhow!(err)) });
+        }
+
         let stored = StoredCredentials {
             access_token: credentials.access_token().expose_secret().to_string(),
             refresh_token: credentials.refresh_token().expose_secret().to_string(),
@@ -190,6 +322,12 @@ impl CredentialStorage for MockCredentialStorage {
     }
 
     fn load(&self) -> Pin<Box<dyn Future<Output = Result<Option<OAuthCredentials>>> + Send + '_>> {
+        // Check for configured error
+        let pending_error = self.load_error.lock().unwrap().take();
+        if let Some(err) = pending_error {
+            return Box::pin(async move { Err(anyhow::anyhow!(err)) });
+        }
+
         Box::pin(async move {
             let guard = self.credentials.lock().unwrap();
             match &*guard {
