@@ -195,6 +195,7 @@ fn test_timeline_produces_render_content() {
                 has_tool = true;
             }
             ConversationEntry::Streaming { .. } => {}
+            ConversationEntry::ImageDisplay { .. } => {}
         }
     }
 

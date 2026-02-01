@@ -69,6 +69,20 @@ pub enum ConversationEntry {
         /// Used for rendering tool blocks inline with their producing message.
         follows_message_idx: Option<usize>,
     },
+
+    /// An image for display in the conversation.
+    ///
+    /// Contains the decoded pixel data ready for TUI rendering.
+    ImageDisplay {
+        /// Width of the image in pixels.
+        width: u32,
+        /// Height of the image in pixels.
+        height: u32,
+        /// RGBA pixel data (4 bytes per pixel).
+        pixels: Vec<u8>,
+        /// Optional alt text or description.
+        alt_text: Option<String>,
+    },
 }
 
 impl ConversationEntry {
@@ -96,16 +110,39 @@ impl ConversationEntry {
         matches!(self, Self::ToolExecution { .. })
     }
 
+    /// Returns `true` if this is an image display entry.
+    #[must_use]
+    pub fn is_image_display(&self) -> bool {
+        matches!(self, Self::ImageDisplay { .. })
+    }
+
     /// Returns the text content if this entry has displayable text.
     ///
     /// Returns `Some(&str)` for user messages, assistant messages, and streaming entries.
-    /// Returns `None` for tool execution entries (use structured accessors instead).
+    /// Returns `None` for tool execution and image display entries (use structured accessors instead).
     #[must_use]
     pub fn text(&self) -> Option<&str> {
         match self {
             Self::UserMessage(text) | Self::AssistantMessage(text) => Some(text),
             Self::Streaming { text, .. } => Some(text),
-            Self::ToolExecution { .. } => None,
+            Self::ToolExecution { .. } | Self::ImageDisplay { .. } => None,
+        }
+    }
+
+    /// Returns the image display data if this is an image entry.
+    ///
+    /// Returns `Some((width, height, &pixels, alt_text))` for image display entries.
+    /// Returns `None` for other entry types.
+    #[must_use]
+    pub fn as_image_display(&self) -> Option<(u32, u32, &[u8], Option<&str>)> {
+        match self {
+            Self::ImageDisplay {
+                width,
+                height,
+                pixels,
+                alt_text,
+            } => Some((*width, *height, pixels.as_slice(), alt_text.as_deref())),
+            _ => None,
         }
     }
 }
@@ -129,6 +166,15 @@ impl fmt::Display for ConversationEntry {
                 let status = if *is_error { "error" } else { "success" };
                 let out = output.as_deref().unwrap_or("(pending)");
                 write!(f, "Tool[{name}] ({status}): {input} -> {out}")
+            }
+            Self::ImageDisplay {
+                width,
+                height,
+                alt_text,
+                ..
+            } => {
+                let alt = alt_text.as_deref().unwrap_or("image");
+                write!(f, "Image[{width}x{height}]: {alt}")
             }
         }
     }
@@ -368,6 +414,29 @@ impl Timeline {
         &mut self.entries
     }
 
+    /// Pushes an image display entry to the timeline.
+    ///
+    /// # Arguments
+    ///
+    /// * `width` - Width of the image in pixels
+    /// * `height` - Height of the image in pixels
+    /// * `pixels` - RGBA pixel data (4 bytes per pixel)
+    /// * `alt_text` - Optional alt text or description
+    pub fn push_image(
+        &mut self,
+        width: u32,
+        height: u32,
+        pixels: Vec<u8>,
+        alt_text: Option<String>,
+    ) {
+        self.entries.push(ConversationEntry::ImageDisplay {
+            width,
+            height,
+            pixels,
+            alt_text,
+        });
+    }
+
     /// Updates the most recent tool execution with the given name.
     ///
     /// Finds the most recent tool entry with matching name and no output yet,
@@ -433,5 +502,117 @@ mod tests {
 
         let err = TimelineError::NotStreaming;
         assert_eq!(format!("{err}"), "Timeline is not currently streaming");
+    }
+
+    #[test]
+    fn test_image_display_entry() {
+        let pixels = vec![255, 0, 0, 255]; // 1 red pixel
+        let entry = ConversationEntry::ImageDisplay {
+            width: 1,
+            height: 1,
+            pixels: pixels.clone(),
+            alt_text: Some("red pixel".to_string()),
+        };
+
+        assert!(entry.is_image_display());
+        assert!(!entry.is_user());
+        assert!(!entry.is_assistant());
+        assert!(!entry.is_streaming());
+        assert!(!entry.is_tool_execution());
+        assert!(entry.text().is_none());
+
+        let (w, h, px, alt) = entry.as_image_display().unwrap();
+        assert_eq!(w, 1);
+        assert_eq!(h, 1);
+        assert_eq!(px, &pixels);
+        assert_eq!(alt, Some("red pixel"));
+    }
+
+    #[test]
+    fn test_image_display_entry_no_alt_text() {
+        let entry = ConversationEntry::ImageDisplay {
+            width: 10,
+            height: 5,
+            pixels: vec![0; 200], // 10x5 image, 4 bytes per pixel
+            alt_text: None,
+        };
+
+        let (w, h, px, alt) = entry.as_image_display().unwrap();
+        assert_eq!(w, 10);
+        assert_eq!(h, 5);
+        assert_eq!(px.len(), 200);
+        assert!(alt.is_none());
+    }
+
+    #[test]
+    fn test_image_display_display_trait() {
+        let entry = ConversationEntry::ImageDisplay {
+            width: 800,
+            height: 600,
+            pixels: vec![],
+            alt_text: Some("screenshot".to_string()),
+        };
+        assert_eq!(format!("{entry}"), "Image[800x600]: screenshot");
+
+        let entry_no_alt = ConversationEntry::ImageDisplay {
+            width: 100,
+            height: 50,
+            pixels: vec![],
+            alt_text: None,
+        };
+        assert_eq!(format!("{entry_no_alt}"), "Image[100x50]: image");
+    }
+
+    #[test]
+    fn test_timeline_push_image() {
+        let mut timeline = Timeline::new();
+        let pixels = vec![255, 255, 255, 255]; // 1 white pixel
+
+        timeline.push_image(1, 1, pixels.clone(), Some("white pixel".to_string()));
+
+        assert_eq!(timeline.len(), 1);
+        let entry = &timeline.entries()[0];
+        assert!(entry.is_image_display());
+
+        let (w, h, px, alt) = entry.as_image_display().unwrap();
+        assert_eq!(w, 1);
+        assert_eq!(h, 1);
+        assert_eq!(px, &pixels);
+        assert_eq!(alt, Some("white pixel"));
+    }
+
+    #[test]
+    fn test_timeline_push_image_no_alt() {
+        let mut timeline = Timeline::new();
+
+        timeline.push_image(50, 50, vec![0; 10_000], None);
+
+        assert_eq!(timeline.len(), 1);
+        let (_, _, _, alt) = timeline.entries()[0].as_image_display().unwrap();
+        assert!(alt.is_none());
+    }
+
+    #[test]
+    fn test_other_entries_as_image_display_returns_none() {
+        let user = ConversationEntry::UserMessage("Hello".to_string());
+        assert!(user.as_image_display().is_none());
+
+        let assistant = ConversationEntry::AssistantMessage("Hi".to_string());
+        assert!(assistant.as_image_display().is_none());
+
+        let streaming = ConversationEntry::Streaming {
+            text: "...".to_string(),
+            complete: false,
+        };
+        assert!(streaming.as_image_display().is_none());
+
+        let tool = ConversationEntry::ToolExecution {
+            name: "test".to_string(),
+            input: "test".to_string(),
+            output: None,
+            is_error: false,
+            follows_message_idx: None,
+        };
+        assert!(tool.as_image_display().is_none());
     }
 }
