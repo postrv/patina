@@ -550,6 +550,60 @@ Place plugins in:
 - User: `~/.patina/plugins/`
 - Project: `.patina/plugins/`
 
+### Parallel Tool Execution
+
+Patina v0.5.0 introduces parallel tool execution for improved performance on multi-file operations.
+
+#### How It Works
+
+Tools are classified by their safety for parallel execution:
+
+- **ReadOnly**: Safe to parallelize (read_file, glob, grep, list_files, web_fetch, web_search)
+- **Mutating**: Must run sequentially (write_file, edit)
+- **Unknown**: Treated as mutating for safety (bash, MCP tools)
+
+When Claude requests multiple tools, Patina groups consecutive ReadOnly tools and executes them in parallel, while maintaining sequential execution for mutating operations.
+
+#### Performance Benefits
+
+- 5x+ speedup on multi-file read operations
+- Parallel grep across multiple patterns
+- Concurrent web fetches
+- Automatic grouping - no configuration needed
+
+#### CLI Options
+
+```bash
+# Disable parallel execution (sequential mode)
+patina --no-parallel
+
+# Enable aggressive mode (parallelize all tools - use with caution)
+patina --parallel-aggressive
+```
+
+#### Configuration
+
+Parallel execution is enabled by default. Configure in `.patina/config.toml`:
+
+```toml
+[parallel]
+enabled = true              # Enable/disable parallel execution
+max_concurrency = 8         # Maximum concurrent operations
+aggressive = false          # Parallelize all tools (unsafe)
+```
+
+#### Bash Command Classification
+
+Safe bash commands are also parallelized:
+
+- File inspection: `ls`, `cat`, `head`, `tail`, `wc`, `stat`
+- Directory listing: `find`, `tree`, `du`
+- Text search: `grep`, `rg`, `ag`
+- Git read operations: `git status`, `git log`, `git diff`
+- System info: `pwd`, `whoami`, `hostname`, `uname`
+
+Commands with pipes, redirects, or command substitution are always run sequentially.
+
 ### Multi-Model Support
 
 Switch between Claude models and providers.
@@ -783,4 +837,4 @@ patina
 
 ---
 
-*Patina v0.4.0*
+*Patina v0.5.0*
