@@ -31,58 +31,9 @@ use ratatui::{
     widgets::{Paragraph, Widget},
 };
 
-/// Graphics protocols supported for terminal image display.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum GraphicsProtocol {
-    /// Sixel bitmap graphics (xterm, mintty, mlterm).
-    Sixel,
-
-    /// Kitty graphics protocol.
-    Kitty,
-
-    /// iTerm2 inline images.
-    ITerm2,
-
-    /// Half-block Unicode characters (universal fallback).
-    HalfBlock,
-
-    /// No graphics support - display placeholder.
-    Unsupported,
-}
-
-/// Detects the graphics protocol supported by the current terminal.
-///
-/// Checks terminal capabilities in order of preference:
-/// 1. Kitty graphics (via APC query)
-/// 2. Sixel graphics (via XTGETTCAP or $TERM)
-/// 3. iTerm2 (via $TERM_PROGRAM)
-/// 4. Falls back to half-block rendering
-///
-/// # Returns
-///
-/// The most capable graphics protocol available, or `HalfBlock` as fallback.
-///
-/// # Example
-///
-/// ```rust,ignore
-/// use patina::tui::widgets::image_display::detect_graphics_protocol;
-///
-/// let protocol = detect_graphics_protocol();
-/// println!("Using graphics protocol: {:?}", protocol);
-/// ```
-#[must_use]
-pub fn detect_graphics_protocol() -> GraphicsProtocol {
-    // TODO: Implement terminal capability detection
-    // For now, return HalfBlock as universal fallback
-    //
-    // Implementation should check:
-    // 1. $TERM_PROGRAM for iTerm2
-    // 2. Query Kitty graphics support via APC
-    // 3. Check $TERM or XTGETTCAP for Sixel
-    // 4. Fall back to HalfBlock
-
-    GraphicsProtocol::HalfBlock
-}
+// Re-export GraphicsProtocol and detect_graphics_protocol from the terminal module
+// for backward compatibility with existing code that imports from this module.
+pub use crate::terminal::{detect_graphics_protocol, GraphicsProtocol};
 
 /// State for the image display widget.
 ///
