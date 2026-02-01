@@ -80,10 +80,10 @@ Download the `.deb` package from [GitHub Releases](https://github.com/postrv/pat
 
 ```bash
 # Download the package (replace VERSION with latest)
-wget https://github.com/postrv/patina/releases/download/v0.1.0/patina_0.3.0_amd64.deb
+wget https://github.com/postrv/patina/releases/download/v0.1.0/patina_0.4.0_amd64.deb
 
 # Install
-sudo dpkg -i patina_0.3.0_amd64.deb
+sudo dpkg -i patina_0.4.0_amd64.deb
 ```
 
 ### Fedora/RHEL/CentOS (dnf/yum)
@@ -92,13 +92,13 @@ Download the `.rpm` package from [GitHub Releases](https://github.com/postrv/pat
 
 ```bash
 # Download the package (replace VERSION with latest)
-wget https://github.com/postrv/patina/releases/download/v0.1.0/patina-0.3.0-1.x86_64.rpm
+wget https://github.com/postrv/patina/releases/download/v0.1.0/patina-0.4.0-1.x86_64.rpm
 
 # Install with dnf
-sudo dnf install patina-0.3.0-1.x86_64.rpm
+sudo dnf install patina-0.4.0-1.x86_64.rpm
 
 # Or with yum
-sudo yum localinstall patina-0.3.0-1.x86_64.rpm
+sudo yum localinstall patina-0.4.0-1.x86_64.rpm
 ```
 
 ### Windows (Scoop)
@@ -280,6 +280,90 @@ Searches file contents with regex patterns.
   }
 }
 ```
+
+#### web_fetch
+
+Fetches content from a URL and returns it as markdown.
+
+```json
+{
+  "name": "web_fetch",
+  "input": {
+    "url": "https://docs.rs/tokio/latest/tokio/",
+    "prompt": "Summarize the main features"
+  }
+}
+```
+
+**Features**:
+- Converts HTML to markdown for better readability
+- Supports custom prompts for content extraction
+- 15-minute caching for repeated requests
+- Automatic HTTPS upgrade
+
+#### web_search
+
+Searches the web and returns formatted results.
+
+```json
+{
+  "name": "web_search",
+  "input": {
+    "query": "rust async programming best practices",
+    "max_results": 5
+  }
+}
+```
+
+**Features**:
+- Returns search results with titles and snippets
+- Configurable result count
+- Domain filtering support
+
+### Vision Support
+
+Patina supports analyzing images in conversations.
+
+#### Image Input
+
+Include images in your prompts:
+
+```bash
+# Analyze an image from URL
+patina "What's in this image?" --image https://example.com/photo.jpg
+
+# Analyze a local image file
+patina "Describe this diagram" --image ./diagram.png
+```
+
+**Supported formats**:
+- JPEG, PNG, GIF, WebP
+- Maximum 5MB per image
+- Multiple images per message
+
+### Context Compaction
+
+Long conversations are automatically compacted to stay within context limits.
+
+#### How It Works
+
+1. **Detection**: When conversation approaches token limit
+2. **Summarization**: Older messages are summarized using the API
+3. **Replacement**: Original messages replaced with compact summary
+4. **Continuity**: Conversation continues seamlessly
+
+#### Configuration
+
+```toml
+[compaction]
+enabled = true
+threshold = 0.8           # Trigger at 80% of context limit
+preserve_recent = 5       # Keep last 5 messages uncompacted
+```
+
+#### Progress Indicator
+
+A progress bar shows compaction status in the TUI when active.
 
 ### Slash Commands
 
@@ -575,6 +659,51 @@ Patina looks for configuration in these locations (in order):
 | PATINA_MODEL | Default model to use |
 | PATINA_DEBUG | Enable debug logging (1/true) |
 
+## Authentication
+
+### API Key (Recommended)
+
+Set your Anthropic API key:
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...
+```
+
+Or pass it directly:
+
+```bash
+patina --api-key sk-ant-...
+```
+
+### OAuth (Experimental)
+
+Patina supports OAuth 2.0 with PKCE for Claude subscription users.
+
+**Note**: OAuth requires a registered client_id with Anthropic. Currently disabled
+pending client registration.
+
+#### OAuth Flow
+
+1. Browser opens for authentication
+2. User authorizes Patina
+3. Tokens stored securely in OS keychain
+4. Automatic token refresh
+
+#### Credential Storage
+
+OAuth credentials are stored securely in:
+- **macOS**: Keychain
+- **Windows**: Credential Manager
+- **Linux**: Secret Service (GNOME Keyring, KWallet)
+
+#### Clearing Credentials
+
+To clear stored OAuth credentials:
+
+```bash
+patina --clear-oauth
+```
+
 ## Security
 
 ### Security Model
@@ -654,4 +783,4 @@ patina
 
 ---
 
-*Patina v0.3.0*
+*Patina v0.4.0*
