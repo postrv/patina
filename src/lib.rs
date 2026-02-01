@@ -20,6 +20,7 @@ pub mod plugins;
 pub mod session;
 pub mod shell;
 pub mod skills;
+pub mod terminal;
 pub mod tools;
 pub mod tui;
 pub mod types;

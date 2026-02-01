@@ -8,7 +8,7 @@ use crate::permissions::{PermissionManager, PermissionRequest, PermissionRespons
 use crate::session::Session;
 use crate::tools::HookedToolExecutor;
 use crate::tui::scroll::ScrollState;
-use crate::tui::selection::SelectionState;
+use crate::tui::selection::{FocusArea, SelectionState};
 use crate::tui::widgets::ToolBlockState;
 use crate::types::content::StopReason;
 use crate::types::{ApiMessageV2, Message, Role, Timeline};
@@ -145,6 +145,10 @@ pub struct AppState {
     /// Cached rendered lines for copy operations.
     /// Updated during render to enable copy extraction.
     rendered_lines_cache: Vec<String>,
+
+    /// Which area of the UI currently has focus.
+    /// Determines how shortcuts like Ctrl+A behave.
+    focus_area: FocusArea,
 }
 
 #[derive(Default)]
@@ -216,6 +220,7 @@ impl AppState {
             selection: SelectionState::new(),
             copy_pending: false,
             rendered_lines_cache: Vec::new(),
+            focus_area: FocusArea::default(),
         }
     }
 
@@ -312,6 +317,8 @@ impl AppState {
             mode = ?self.scroll.mode(),
             content_height = self.scroll.content_height(),
             viewport_height = self.scroll.viewport_height(),
+            cache_size = self.rendered_lines_cache.len(),
+            timeline_entries = self.timeline.len(),
             "scroll_up"
         );
         self.dirty.messages = true;
@@ -382,26 +389,70 @@ impl AppState {
         &mut self.selection
     }
 
+    /// Returns the current focus area.
+    #[must_use]
+    pub fn focus_area(&self) -> FocusArea {
+        self.focus_area
+    }
+
+    /// Sets the focus area, clearing selection if focus changes.
+    ///
+    /// When focus moves between Input and Content areas, any existing
+    /// selection is cleared to prevent confusion about what would be copied.
+    pub fn set_focus_area(&mut self, area: FocusArea) {
+        if self.focus_area != area {
+            self.selection.clear();
+            self.focus_area = area;
+        }
+    }
+
+    /// Determines which focus area a screen row belongs to.
+    ///
+    /// Layout (from top to bottom):
+    /// - Messages/Content: rows 0 to (terminal_height - 5)
+    /// - Status bar: row (terminal_height - 4)
+    /// - Input: rows (terminal_height - 3) to (terminal_height - 1)
+    ///
+    /// # Arguments
+    ///
+    /// * `row` - The screen row (0-indexed, 0 = top)
+    /// * `terminal_height` - Total terminal height in rows
+    ///
+    /// # Returns
+    ///
+    /// The `FocusArea` that the row belongs to.
+    #[must_use]
+    pub fn focus_area_for_row(row: u16, terminal_height: u16) -> FocusArea {
+        // Input area is the bottom 3 rows
+        // Status bar is 1 row above input
+        // Content area is everything else
+        let input_start = terminal_height.saturating_sub(3);
+        if row >= input_start {
+            FocusArea::Input
+        } else {
+            FocusArea::Content
+        }
+    }
+
     /// Copies the current selection to the system clipboard.
+    ///
+    /// Uses multiple clipboard backends:
+    /// 1. Native clipboard (arboard) - works on desktop
+    /// 2. OSC 52 escape sequence - works in iTerm2, kitty, tmux, SSH, etc.
     ///
     /// Returns `Ok(true)` if text was copied, `Ok(false)` if no selection,
     /// or an error if clipboard access fails.
     ///
     /// # Errors
     ///
-    /// Returns an error if clipboard access fails.
+    /// Returns an error if all clipboard methods fail.
     pub fn copy_selection_to_clipboard(&self, lines: &[ratatui::text::Line<'_>]) -> Result<bool> {
         let text = self.selection.extract_text(lines);
         if text.is_empty() {
             return Ok(false);
         }
 
-        let mut clipboard = arboard::Clipboard::new()
-            .map_err(|e| anyhow::anyhow!("Failed to access clipboard: {}", e))?;
-        clipboard
-            .set_text(&text)
-            .map_err(|e| anyhow::anyhow!("Failed to copy to clipboard: {}", e))?;
-
+        crate::tui::clipboard::copy_to_clipboard(&text)?;
         Ok(true)
     }
 
@@ -506,12 +557,7 @@ impl AppState {
             "copy_from_cache: copying to clipboard"
         );
 
-        let mut clipboard = arboard::Clipboard::new()
-            .map_err(|e| anyhow::anyhow!("Failed to access clipboard: {}", e))?;
-        clipboard
-            .set_text(&result)
-            .map_err(|e| anyhow::anyhow!("Failed to copy to clipboard: {}", e))?;
-
+        crate::tui::clipboard::copy_to_clipboard(&result)?;
         Ok(true)
     }
 
@@ -2109,5 +2155,91 @@ mod tests {
         );
         // First message always preserved
         assert_eq!(truncated[0].content.to_text(), "System prompt");
+    }
+
+    // =========================================================================
+    // Focus Area Tests
+    // =========================================================================
+
+    #[test]
+    fn test_focus_area_default_is_input() {
+        use crate::tui::selection::FocusArea;
+        let state = AppState::new(PathBuf::from("/test"), false);
+        assert_eq!(state.focus_area(), FocusArea::Input);
+    }
+
+    #[test]
+    fn test_focus_area_can_be_set() {
+        use crate::tui::selection::FocusArea;
+        let mut state = AppState::new(PathBuf::from("/test"), false);
+
+        state.set_focus_area(FocusArea::Content);
+        assert_eq!(state.focus_area(), FocusArea::Content);
+
+        state.set_focus_area(FocusArea::Input);
+        assert_eq!(state.focus_area(), FocusArea::Input);
+    }
+
+    #[test]
+    fn test_focus_change_clears_selection() {
+        use crate::tui::selection::{ContentPosition, FocusArea};
+        let mut state = AppState::new(PathBuf::from("/test"), false);
+
+        // Create a selection
+        state.selection_mut().start(ContentPosition::new(0, 0));
+        state.selection_mut().update(ContentPosition::new(5, 10));
+        state.selection_mut().end();
+        assert!(state.selection().has_selection());
+
+        // Change focus should clear selection
+        state.set_focus_area(FocusArea::Content);
+        assert!(!state.selection().has_selection());
+    }
+
+    #[test]
+    fn test_focus_same_area_preserves_selection() {
+        use crate::tui::selection::{ContentPosition, FocusArea};
+        let mut state = AppState::new(PathBuf::from("/test"), false);
+
+        // Set focus to content
+        state.set_focus_area(FocusArea::Content);
+
+        // Create a selection
+        state.selection_mut().start(ContentPosition::new(0, 0));
+        state.selection_mut().update(ContentPosition::new(5, 10));
+        state.selection_mut().end();
+        assert!(state.selection().has_selection());
+
+        // Setting same focus should NOT clear selection
+        state.set_focus_area(FocusArea::Content);
+        assert!(state.selection().has_selection());
+    }
+
+    #[test]
+    fn test_focus_area_for_row_content() {
+        use crate::tui::selection::FocusArea;
+        // Terminal height 30: input is rows 27-29, content is 0-26
+        assert_eq!(AppState::focus_area_for_row(0, 30), FocusArea::Content);
+        assert_eq!(AppState::focus_area_for_row(10, 30), FocusArea::Content);
+        assert_eq!(AppState::focus_area_for_row(26, 30), FocusArea::Content);
+    }
+
+    #[test]
+    fn test_focus_area_for_row_input() {
+        use crate::tui::selection::FocusArea;
+        // Terminal height 30: input is rows 27-29
+        assert_eq!(AppState::focus_area_for_row(27, 30), FocusArea::Input);
+        assert_eq!(AppState::focus_area_for_row(28, 30), FocusArea::Input);
+        assert_eq!(AppState::focus_area_for_row(29, 30), FocusArea::Input);
+    }
+
+    #[test]
+    fn test_focus_area_for_row_small_terminal() {
+        use crate::tui::selection::FocusArea;
+        // Minimum terminal height 7: content rows 0-3, input rows 4-6
+        assert_eq!(AppState::focus_area_for_row(0, 7), FocusArea::Content);
+        assert_eq!(AppState::focus_area_for_row(3, 7), FocusArea::Content);
+        assert_eq!(AppState::focus_area_for_row(4, 7), FocusArea::Input);
+        assert_eq!(AppState::focus_area_for_row(6, 7), FocusArea::Input);
     }
 }

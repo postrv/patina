@@ -103,12 +103,45 @@ async fn main() -> Result<()> {
     }
 
     let filter = if args.debug { "debug" } else { "info" };
-    tracing_subscriber::registry()
-        .with(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| filter.into()),
-        )
-        .with(tracing_subscriber::fmt::layer().with_target(false))
-        .init();
+
+    // Determine if we're running in interactive TUI mode
+    // TUI mode uses alternate screen which conflicts with stdout logging
+    let is_tui_mode = !args.print || args.prompt.is_none();
+
+    if is_tui_mode && args.debug {
+        // TUI mode with debug: write logs to file to avoid corrupting display
+        let log_path = std::env::temp_dir().join("patina.log");
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&log_path)
+            .expect("Failed to open log file");
+
+        tracing_subscriber::registry()
+            .with(
+                tracing_subscriber::EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| filter.into()),
+            )
+            .with(
+                tracing_subscriber::fmt::layer()
+                    .with_target(false)
+                    .with_ansi(false)
+                    .with_writer(std::sync::Mutex::new(file)),
+            )
+            .init();
+
+        eprintln!("Debug logs written to: {}", log_path.display());
+    } else {
+        // Print mode or no debug: log to stdout
+        tracing_subscriber::registry()
+            .with(
+                tracing_subscriber::EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| filter.into()),
+            )
+            .with(tracing_subscriber::fmt::layer().with_target(false))
+            .init();
+    }
 
     // Determine authentication method
     // If --use-api-key is set, require API key
