@@ -95,3 +95,6 @@ mod web_search_test;
 
 #[path = "unit/image_test.rs"]
 mod image_test;
+
+#[path = "unit/image_display_test.rs"]
+mod image_display_test;
