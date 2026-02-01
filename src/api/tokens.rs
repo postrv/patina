@@ -32,6 +32,45 @@
 
 use crate::types::{ApiMessageV2, ContentBlock, MessageContent};
 
+/// Default token estimate for images when dimensions are unknown.
+///
+/// Based on a typical 1024x1024 image which is approximately 1400 tokens.
+/// We use 1500 as a conservative estimate.
+pub const DEFAULT_IMAGE_TOKENS: usize = 1500;
+
+/// Estimates token count for an image based on its dimensions.
+///
+/// Uses Claude's official image token formula: `(width × height) / 750`.
+///
+/// # Arguments
+///
+/// * `width` - Image width in pixels
+/// * `height` - Image height in pixels
+///
+/// # Returns
+///
+/// Estimated token count for the image
+///
+/// # Examples
+///
+/// ```rust
+/// use patina::api::tokens::estimate_image_tokens;
+///
+/// // 1024x1024 image (uses ceiling division to avoid underestimating)
+/// let tokens = estimate_image_tokens(1024, 1024);
+/// assert_eq!(tokens, 1399); // ceil(1024 * 1024 / 750) = 1399
+///
+/// // Small thumbnail
+/// let tokens = estimate_image_tokens(100, 100);
+/// assert_eq!(tokens, 14); // ceil(100 * 100 / 750) = 14
+/// ```
+#[must_use]
+pub fn estimate_image_tokens(width: u32, height: u32) -> usize {
+    let pixels = u64::from(width) * u64::from(height);
+    // Use ceiling division to avoid underestimating
+    pixels.div_ceil(750) as usize
+}
+
 /// Estimates token count for a string.
 ///
 /// Uses the heuristic of ~4 characters per token, which is reasonably
@@ -140,8 +179,8 @@ fn estimate_block_tokens(block: &ContentBlock) -> usize {
             // Image tokens are calculated as (width × height) / 750 by Claude.
             // Without decoding the image, we use a conservative estimate based on
             // a typical image size. A 1024x1024 image ≈ 1400 tokens.
-            // We use 1500 as a safe default estimate.
-            1500
+            // Use estimate_image_tokens(width, height) if dimensions are known.
+            DEFAULT_IMAGE_TOKENS
         }
     }
 }
@@ -368,5 +407,99 @@ mod tests {
         let estimate = estimate_block_tokens(&block);
         // Should account for large content
         assert!(estimate > 2500);
+    }
+
+    // =========================================================================
+    // estimate_image_tokens tests
+    // =========================================================================
+
+    #[test]
+    fn test_estimate_image_tokens_standard_1024x1024() {
+        // Claude's formula: (width * height) / 750
+        // 1024 * 1024 = 1,048,576 / 750 = 1398.1 -> 1399 (ceiling)
+        let tokens = super::estimate_image_tokens(1024, 1024);
+        assert_eq!(tokens, 1399);
+    }
+
+    #[test]
+    fn test_estimate_image_tokens_small_100x100() {
+        // 100 * 100 = 10,000 / 750 = 13.3 -> 14 (ceiling)
+        let tokens = super::estimate_image_tokens(100, 100);
+        assert_eq!(tokens, 14);
+    }
+
+    #[test]
+    fn test_estimate_image_tokens_wide_1920x1080() {
+        // HD image: 1920 * 1080 = 2,073,600 / 750 = 2764.8 -> 2765 (ceiling)
+        let tokens = super::estimate_image_tokens(1920, 1080);
+        assert_eq!(tokens, 2765);
+    }
+
+    #[test]
+    fn test_estimate_image_tokens_tall_1080x1920() {
+        // Portrait HD: same pixel count as wide
+        let tokens = super::estimate_image_tokens(1080, 1920);
+        assert_eq!(tokens, 2765);
+    }
+
+    #[test]
+    fn test_estimate_image_tokens_tiny_10x10() {
+        // Very small: 10 * 10 = 100 / 750 = 0.13 -> 1 (ceiling, never zero)
+        let tokens = super::estimate_image_tokens(10, 10);
+        assert_eq!(tokens, 1);
+    }
+
+    #[test]
+    fn test_estimate_image_tokens_single_pixel() {
+        // 1x1 = 1 / 750 = 0.001 -> 1 (ceiling)
+        let tokens = super::estimate_image_tokens(1, 1);
+        assert_eq!(tokens, 1);
+    }
+
+    #[test]
+    fn test_estimate_image_tokens_4k_3840x2160() {
+        // 4K image: 3840 * 2160 = 8,294,400 / 750 = 11,059.2 -> 11060
+        let tokens = super::estimate_image_tokens(3840, 2160);
+        assert_eq!(tokens, 11060);
+    }
+
+    #[test]
+    fn test_estimate_image_tokens_exact_multiple_750x1() {
+        // Edge case: exactly divisible
+        // 750 * 1 = 750 / 750 = 1
+        let tokens = super::estimate_image_tokens(750, 1);
+        assert_eq!(tokens, 1);
+    }
+
+    #[test]
+    fn test_estimate_image_tokens_zero_dimension() {
+        // Edge case: zero dimension results in zero tokens
+        let tokens = super::estimate_image_tokens(0, 1000);
+        assert_eq!(tokens, 0);
+        let tokens = super::estimate_image_tokens(1000, 0);
+        assert_eq!(tokens, 0);
+        let tokens = super::estimate_image_tokens(0, 0);
+        assert_eq!(tokens, 0);
+    }
+
+    #[test]
+    fn test_estimate_image_tokens_large_no_overflow() {
+        // Large image: ensure no overflow with u32::MAX values
+        // Using 65535 x 65535 (max reasonable image size)
+        // 65535 * 65535 = 4,294,836,225 / 750 = 5,726,448.3 -> 5726449
+        let tokens = super::estimate_image_tokens(65535, 65535);
+        assert_eq!(tokens, 5726449);
+    }
+
+    #[test]
+    fn test_default_image_tokens_constant() {
+        // Verify the default constant is reasonable for unknown dimensions
+        assert_eq!(super::DEFAULT_IMAGE_TOKENS, 1500);
+        // Should be close to a 1024x1024 image estimate
+        let calculated = super::estimate_image_tokens(1024, 1024);
+        assert!(
+            (calculated as i64 - super::DEFAULT_IMAGE_TOKENS as i64).abs() < 200,
+            "DEFAULT_IMAGE_TOKENS should be close to 1024x1024 estimate"
+        );
     }
 }

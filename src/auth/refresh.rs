@@ -114,9 +114,8 @@ struct TokenRefreshResponse {
     /// Some OAuth providers return a new refresh token on refresh.
     refresh_token: Option<String>,
     expires_in: u64,
-    #[allow(dead_code)]
-    #[serde(default)]
-    token_type: String,
+    #[serde(default, rename = "token_type")]
+    _token_type: String,
 }
 
 /// Checks if credentials should be refreshed.

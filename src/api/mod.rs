@@ -6,7 +6,10 @@ pub mod tokens;
 pub mod tools;
 
 // Re-export token utilities for convenience
-pub use tokens::{estimate_message_tokens, estimate_messages_tokens, estimate_tokens};
+pub use tokens::{
+    estimate_image_tokens, estimate_message_tokens, estimate_messages_tokens, estimate_tokens,
+    DEFAULT_IMAGE_TOKENS,
+};
 
 // Re-export context utilities for convenience
 pub use context::{truncate_context, DEFAULT_MAX_INPUT_TOKENS, DEFAULT_MAX_MESSAGES};
