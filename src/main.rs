@@ -201,6 +201,7 @@ async fn main() -> Result<()> {
         skip_permissions: args.dangerously_skip_permissions,
         initial_prompt,
         print_mode,
+        vision_model: None,
     })
     .await
 }
