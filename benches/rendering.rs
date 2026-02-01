@@ -20,7 +20,7 @@ use std::path::PathBuf;
 
 /// Creates an AppState populated with the specified number of messages.
 fn create_state_with_messages(message_count: usize) -> AppState {
-    let mut state = AppState::new(PathBuf::from("/tmp"));
+    let mut state = AppState::new(PathBuf::from("/tmp"), false);
 
     for i in 0..message_count {
         let role = if i % 2 == 0 {
@@ -45,7 +45,7 @@ fn create_state_with_messages(message_count: usize) -> AppState {
 /// Benchmark: Full redraw with 100 messages
 /// Target: <1ms
 fn bench_full_redraw_100_messages(c: &mut Criterion) {
-    let state = create_state_with_messages(100);
+    let mut state = create_state_with_messages(100);
     let backend = TestBackend::new(120, 40);
     let mut terminal = Terminal::new(backend).expect("Failed to create terminal");
 
@@ -53,7 +53,7 @@ fn bench_full_redraw_100_messages(c: &mut Criterion) {
         b.iter(|| {
             terminal
                 .draw(|frame| {
-                    render(frame, black_box(&state));
+                    render(frame, black_box(&mut state));
                 })
                 .expect("Failed to draw");
         });
@@ -71,15 +71,13 @@ fn bench_streaming_token_append(c: &mut Criterion) {
             || {
                 // Setup: Create state with some messages and a streaming response
                 let mut state = create_state_with_messages(10);
-                // Simulate streaming state by setting current_response
-                state.current_response = Some(String::with_capacity(4096));
+                // Simulate streaming state by starting streaming in timeline
+                state.set_streaming(true);
                 state
             },
             |mut state| {
                 // Append a token (the core operation during streaming)
-                if let Some(ref mut response) = state.current_response {
-                    response.push_str(black_box("token "));
-                }
+                state.append_streaming_text(black_box("token "));
                 black_box(&state);
             },
             criterion::BatchSize::SmallInput,
@@ -101,17 +99,15 @@ fn bench_streaming_cycle(c: &mut Criterion) {
             || {
                 // Setup: Create state with some messages and a streaming response
                 let mut state = create_state_with_messages(10);
-                state.current_response = Some(String::with_capacity(4096));
+                state.set_streaming(true);
                 state
             },
             |mut state| {
                 // Append a token and render
-                if let Some(ref mut response) = state.current_response {
-                    response.push_str(black_box("token "));
-                }
+                state.append_streaming_text(black_box("token "));
                 terminal
                     .draw(|frame| {
-                        render(frame, &state);
+                        render(frame, &mut state);
                     })
                     .expect("Failed to draw");
             },
@@ -130,7 +126,7 @@ fn bench_input_character_echo(c: &mut Criterion) {
         b.iter_batched(
             || {
                 // Setup: Create state with some existing input
-                let mut state = AppState::new(PathBuf::from("/tmp"));
+                let mut state = AppState::new(PathBuf::from("/tmp"), false);
                 state.input = "Hello, this is some existing input text".to_string();
                 state
             },
@@ -152,7 +148,7 @@ fn bench_cursor_movement(c: &mut Criterion) {
     c.bench_function("cursor_movement", |b| {
         b.iter_batched(
             || {
-                let mut state = AppState::new(PathBuf::from("/tmp"));
+                let mut state = AppState::new(PathBuf::from("/tmp"), false);
                 state.input = "Hello, this is some text for cursor movement testing".to_string();
                 // Move cursor to middle
                 for _ in 0..25 {
@@ -197,7 +193,7 @@ fn bench_scroll_operations(c: &mut Criterion) {
 ///
 /// Tests rendering performance with messages containing very long content.
 fn bench_large_message_rendering(c: &mut Criterion) {
-    let mut state = AppState::new(PathBuf::from("/tmp"));
+    let mut state = AppState::new(PathBuf::from("/tmp"), false);
 
     // Create messages with very long content (simulating code blocks, etc.)
     for i in 0..20 {
@@ -227,7 +223,7 @@ fn bench_large_message_rendering(c: &mut Criterion) {
         b.iter(|| {
             terminal
                 .draw(|frame| {
-                    render(frame, black_box(&state));
+                    render(frame, black_box(&mut state));
                 })
                 .expect("Failed to draw");
         });

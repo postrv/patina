@@ -1,0 +1,25 @@
+---
+source: tests/unit/tui_timeline_snapshot_test.rs
+expression: output
+---
+You: 
+What directory am I in?
+
+Patina: 
+Let me check.
+
+  ✓ bash
+    › pwd
+    /home/user/project
+
+You: 
+What files are here?
+
+Patina: 
+I'll list them.
+
+  ✓ bash
+    › ls
+    src/
+    tests/
+    Cargo.toml

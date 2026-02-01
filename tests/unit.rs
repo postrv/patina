@@ -59,3 +59,30 @@ mod worktree_picker_test;
 
 #[path = "unit/manifest_test.rs"]
 mod manifest_test;
+
+#[path = "unit/theme_test.rs"]
+mod theme_test;
+
+#[path = "unit/tool_block_test.rs"]
+mod tool_block_test;
+
+#[path = "unit/conversation_entry_test.rs"]
+mod conversation_entry_test;
+
+#[path = "unit/state_timeline_test.rs"]
+mod state_timeline_test;
+
+#[path = "unit/state_streaming_test.rs"]
+mod state_streaming_test;
+
+#[path = "unit/tui_timeline_snapshot_test.rs"]
+mod tui_timeline_snapshot_test;
+
+#[path = "unit/async_tool_test.rs"]
+mod async_tool_test;
+
+#[path = "unit/tool_progress_test.rs"]
+mod tool_progress_test;
+
+#[path = "unit/selection_test.rs"]
+mod selection_test;

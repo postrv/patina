@@ -3,7 +3,7 @@ source: tests/unit/tui_snapshot_test.rs
 expression: output
 ---
 ┌ Messages ────────────────────────────────────────────────┐
-│Claude:                                                   │
+│Patina:                                                   │
 │Hello! How can I help you today?                          │
 │                                                          │
 │                                                          │
@@ -18,7 +18,7 @@ expression: output
 │                                                          │
 │                                                          │
 └──────────────────────────────────────────────────────────┘
-                                                            
+ [F:0↑ 14/3]                                                
 ┌ Input (Enter to send, Ctrl+C to quit) ───────────────────┐
 │                                                          │
 └──────────────────────────────────────────────────────────┘

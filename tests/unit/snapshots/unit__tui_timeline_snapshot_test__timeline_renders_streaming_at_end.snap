@@ -1,0 +1,9 @@
+---
+source: tests/unit/tui_timeline_snapshot_test.rs
+expression: output
+---
+You: 
+Tell me about Rust
+
+Patina: ⠋ 
+Rust is a systems programming language...

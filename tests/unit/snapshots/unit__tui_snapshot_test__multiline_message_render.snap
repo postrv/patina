@@ -3,7 +3,7 @@ source: tests/unit/tui_snapshot_test.rs
 expression: output
 ---
 ┌ Messages ────────────────────────────────────────────────┐
-│Claude:                                                   │
+│Patina:                                                   │
 │Here's a list:                                            │
 │- First item                                              │
 │- Second item                                             │
@@ -18,7 +18,7 @@ expression: output
 │                                                          │
 │                                                          │
 └──────────────────────────────────────────────────────────┘
-                                                            
+ [F:0↑ 14/6]                                                
 ┌ Input (Enter to send, Ctrl+C to quit) ───────────────────┐
 │                                                          │
 └──────────────────────────────────────────────────────────┘

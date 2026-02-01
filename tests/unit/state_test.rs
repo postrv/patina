@@ -8,7 +8,7 @@ use std::path::PathBuf;
 
 /// Helper to create a new AppState for testing.
 fn new_state() -> AppState {
-    AppState::new(PathBuf::from("/tmp/test"))
+    AppState::new(PathBuf::from("/tmp/test"), false)
 }
 
 // ============================================================================
@@ -101,38 +101,45 @@ fn test_input_unicode() {
 #[test]
 fn test_scroll_up() {
     let mut state = new_state();
-    assert_eq!(state.scroll_offset, 0);
+    // Set content larger than viewport to allow scrolling
+    state.set_viewport_height(20);
+    state.update_content_height(100);
+    assert_eq!(state.scroll_offset(), 0);
 
     state.scroll_up(5);
-    assert_eq!(state.scroll_offset, 5);
+    assert_eq!(state.scroll_offset(), 5);
 
     state.scroll_up(3);
-    assert_eq!(state.scroll_offset, 8);
+    assert_eq!(state.scroll_offset(), 8);
 }
 
 /// Tests scroll down decreases scroll offset.
 #[test]
 fn test_scroll_down() {
     let mut state = new_state();
+    // Set content larger than viewport to allow scrolling
+    state.set_viewport_height(20);
+    state.update_content_height(100);
+
     state.scroll_up(10);
-    assert_eq!(state.scroll_offset, 10);
+    assert_eq!(state.scroll_offset(), 10);
 
     state.scroll_down(3);
-    assert_eq!(state.scroll_offset, 7);
+    assert_eq!(state.scroll_offset(), 7);
 
     state.scroll_down(2);
-    assert_eq!(state.scroll_offset, 5);
+    assert_eq!(state.scroll_offset(), 5);
 }
 
 /// Tests scroll bounds saturation - scroll_down at 0 stays at 0.
 #[test]
 fn test_scroll_bounds_saturation_at_zero() {
     let mut state = new_state();
-    assert_eq!(state.scroll_offset, 0);
+    assert_eq!(state.scroll_offset(), 0);
 
     // Should not go negative - saturating_sub should keep it at 0
     state.scroll_down(10);
-    assert_eq!(state.scroll_offset, 0);
+    assert_eq!(state.scroll_offset(), 0);
 }
 
 /// Tests scroll up saturation - large values don't overflow.
@@ -141,11 +148,11 @@ fn test_scroll_up_large_values() {
     let mut state = new_state();
 
     state.scroll_up(usize::MAX / 2);
-    let first = state.scroll_offset;
+    let first = state.scroll_offset();
 
     // saturating_add should prevent overflow
     state.scroll_up(usize::MAX / 2);
-    assert!(state.scroll_offset >= first);
+    assert!(state.scroll_offset() >= first);
 }
 
 // ============================================================================
@@ -246,7 +253,7 @@ fn test_dirty_flag_on_message_add() {
     });
 
     assert!(state.needs_render(), "add_message should set dirty flag");
-    assert_eq!(state.messages.len(), 1);
+    assert_eq!(state.timeline().len(), 1);
 }
 
 // ============================================================================
@@ -404,11 +411,14 @@ fn test_append_chunk_content_delta() {
     state.mark_rendered();
 
     // Simulate starting a response
-    state.current_response = Some(String::new());
+    state.set_streaming(true);
 
     let result = state.append_chunk(StreamEvent::ContentDelta("Hello ".to_string()));
     assert!(result.is_ok());
-    assert_eq!(state.current_response.as_ref().unwrap(), "Hello ");
+
+    // Verify content in timeline streaming entry
+    let entries: Vec<_> = state.timeline().iter().collect();
+    assert_eq!(entries[0].text(), Some("Hello "));
     assert!(state.needs_render());
 }
 
@@ -418,7 +428,7 @@ fn test_append_chunk_accumulates_content() {
     use patina::types::StreamEvent;
 
     let mut state = new_state();
-    state.current_response = Some(String::new());
+    state.set_streaming(true);
 
     state
         .append_chunk(StreamEvent::ContentDelta("Hello ".to_string()))
@@ -427,26 +437,34 @@ fn test_append_chunk_accumulates_content() {
         .append_chunk(StreamEvent::ContentDelta("World!".to_string()))
         .unwrap();
 
-    assert_eq!(state.current_response.as_ref().unwrap(), "Hello World!");
+    // Verify content in timeline streaming entry
+    let entries: Vec<_> = state.timeline().iter().collect();
+    assert_eq!(entries[0].text(), Some("Hello World!"));
 }
 
 /// Tests append_chunk message stop finalizes the response.
 #[test]
 fn test_append_chunk_message_stop() {
-    use patina::types::StreamEvent;
+    use patina::types::{ConversationEntry, StreamEvent};
 
     let mut state = new_state();
-    state.current_response = Some("Test response".to_string());
+    state.set_streaming(true);
+    state
+        .append_chunk(StreamEvent::ContentDelta("Test response".to_string()))
+        .unwrap();
     state.mark_rendered();
 
     let result = state.append_chunk(StreamEvent::MessageStop);
     assert!(result.is_ok());
 
-    // Response should be moved to messages
-    assert!(state.current_response.is_none());
+    // Response should be finalized in timeline as assistant message
     assert!(!state.is_loading());
-    assert_eq!(state.messages.len(), 1);
-    assert_eq!(state.messages[0].content, "Test response");
+    let entries: Vec<_> = state.timeline().iter().collect();
+    assert_eq!(entries.len(), 1);
+    assert!(matches!(
+        entries[0],
+        ConversationEntry::AssistantMessage(s) if s == "Test response"
+    ));
     assert!(state.needs_render());
 }
 
@@ -456,7 +474,10 @@ fn test_append_chunk_error() {
     use patina::types::StreamEvent;
 
     let mut state = new_state();
-    state.current_response = Some("Partial response".to_string());
+    state.set_streaming(true);
+    state
+        .append_chunk(StreamEvent::ContentDelta("Partial response".to_string()))
+        .unwrap();
     state.mark_rendered();
 
     let result = state.append_chunk(StreamEvent::Error("Connection error".to_string()));
@@ -472,4 +493,183 @@ fn test_append_chunk_error() {
 fn test_is_loading_initial() {
     let state = new_state();
     assert!(!state.is_loading());
+}
+
+// ============================================================================
+// P0-1: Tool Use Response Deduplication Tests
+// ============================================================================
+
+/// Tests that tool_use responses finalize streaming but don't add to API messages yet.
+///
+/// When a MessageComplete with stop_reason=ToolUse is received:
+/// 1. Streaming entry is finalized in timeline
+/// 2. The text should be stored in tool_loop for later use
+/// 3. handle_tool_execution() will add the proper API message with tool_use blocks
+#[test]
+fn test_tool_use_response_not_added_to_display_by_append_chunk() {
+    use patina::api::StreamEvent;
+    use patina::types::content::StopReason;
+
+    let mut state = new_state();
+    state.mark_rendered();
+
+    // Start streaming
+    state.tool_loop_mut().start_streaming().unwrap();
+    state.set_streaming(true);
+
+    // Simulate streaming text via ContentDelta
+    state
+        .append_chunk(StreamEvent::ContentDelta("I'll help you.".to_string()))
+        .unwrap();
+
+    // Simulate tool_use events
+    state.handle_tool_use_start("toolu_123".to_string(), "bash".to_string(), 0);
+    state.handle_tool_use_input_delta(0, r#"{"command":"ls"}"#);
+    state.handle_tool_use_complete(0).unwrap();
+
+    // Record timeline length before MessageComplete
+    let timeline_len_before = state.timeline().len();
+
+    // Complete with tool_use stop reason
+    state
+        .append_chunk(StreamEvent::MessageComplete {
+            stop_reason: StopReason::ToolUse,
+        })
+        .unwrap();
+
+    // Timeline length should remain the same (streaming converted to assistant)
+    assert_eq!(
+        state.timeline().len(),
+        timeline_len_before,
+        "timeline length should remain unchanged (streaming becomes assistant)"
+    );
+
+    // The text should be stored in tool_loop for later use
+    assert_eq!(state.tool_loop().text_content(), "I'll help you.");
+}
+
+/// Tests that normal (non-tool_use) responses are finalized in timeline.
+#[test]
+fn test_normal_response_added_to_display_by_append_chunk() {
+    use patina::api::StreamEvent;
+    use patina::types::content::StopReason;
+    use patina::types::ConversationEntry;
+
+    let mut state = new_state();
+    state.mark_rendered();
+
+    // Start streaming
+    state.tool_loop_mut().start_streaming().unwrap();
+    state.set_streaming(true);
+    state
+        .append_chunk(StreamEvent::ContentDelta("Here's my response.".to_string()))
+        .unwrap();
+
+    // Complete with EndTurn (normal response)
+    state
+        .append_chunk(StreamEvent::MessageComplete {
+            stop_reason: StopReason::EndTurn,
+        })
+        .unwrap();
+
+    // Normal responses should be finalized in timeline
+    let entries: Vec<_> = state.timeline().iter().collect();
+    assert!(!entries.is_empty());
+    assert!(matches!(
+        entries.last().unwrap(),
+        ConversationEntry::AssistantMessage(s) if s == "Here's my response."
+    ));
+}
+
+/// Tests that tool_loop text content is preserved during streaming.
+#[test]
+fn test_tool_loop_preserves_text_content() {
+    use patina::api::StreamEvent;
+
+    let mut state = new_state();
+
+    // Start streaming
+    state.tool_loop_mut().start_streaming().unwrap();
+    state.set_streaming(true);
+
+    // Stream some text
+    state
+        .append_chunk(StreamEvent::ContentDelta("Let me ".to_string()))
+        .unwrap();
+    state
+        .append_chunk(StreamEvent::ContentDelta("help you.".to_string()))
+        .unwrap();
+
+    // Tool loop should have the full text
+    assert_eq!(state.tool_loop().text_content(), "Let me help you.");
+}
+
+// ============================================================================
+// P0-2: Tool Results in API Context Tests
+// ============================================================================
+
+/// Tests that ContinuationData builds proper assistant message with text AND tool_use.
+#[test]
+fn test_continuation_data_includes_text_and_tool_use() {
+    use patina::app::tool_loop::ContinuationData;
+    use patina::types::content::ContentBlock;
+    use serde_json::json;
+
+    let continuation = ContinuationData {
+        assistant_content: vec![
+            ContentBlock::text("Here's what I found:"),
+            ContentBlock::tool_use("toolu_123", "bash", json!({"command": "ls"})),
+        ],
+        tool_results: vec![ContentBlock::tool_result(
+            "toolu_123",
+            "file1.txt\nfile2.txt",
+        )],
+    };
+
+    let (assistant_msg, user_msg) = continuation.build_messages();
+
+    // Verify assistant message has both text and tool_use
+    let blocks = assistant_msg.content.as_blocks().unwrap();
+    assert_eq!(blocks.len(), 2, "Assistant should have text + tool_use");
+    assert!(blocks[0].is_text(), "First block should be text");
+    assert!(blocks[1].is_tool_use(), "Second block should be tool_use");
+
+    // Verify user message has tool_result
+    let results = user_msg.content.as_blocks().unwrap();
+    assert_eq!(results.len(), 1, "User should have 1 tool_result");
+    assert!(results[0].is_tool_result());
+}
+
+/// Tests that continuation messages serialize correctly for API.
+#[test]
+fn test_continuation_serializes_correctly_for_api() {
+    use patina::app::tool_loop::ContinuationData;
+    use patina::types::content::ContentBlock;
+    use serde_json::json;
+
+    let continuation = ContinuationData {
+        assistant_content: vec![
+            ContentBlock::text("Checking..."),
+            ContentBlock::tool_use("toolu_abc", "read_file", json!({"path": "test.txt"})),
+        ],
+        tool_results: vec![ContentBlock::tool_result("toolu_abc", "file contents here")],
+    };
+
+    let (assistant_msg, _user_msg) = continuation.build_messages();
+
+    // Serialize and verify JSON structure
+    let json = serde_json::to_value(&assistant_msg).unwrap();
+
+    assert_eq!(json["role"], "assistant");
+    let content = json["content"].as_array().unwrap();
+    assert_eq!(content.len(), 2);
+
+    // Verify first block is text
+    assert_eq!(content[0]["type"], "text");
+    assert_eq!(content[0]["text"], "Checking...");
+
+    // Verify second block is tool_use
+    assert_eq!(content[1]["type"], "tool_use");
+    assert_eq!(content[1]["id"], "toolu_abc");
+    assert_eq!(content[1]["name"], "read_file");
 }

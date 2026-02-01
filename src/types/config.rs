@@ -76,6 +76,9 @@ pub enum NarsilMode {
 ///     working_dir: PathBuf::from("."),
 ///     narsil_mode: NarsilMode::Auto,
 ///     resume_mode: ResumeMode::None,
+///     skip_permissions: false,
+///     initial_prompt: None,
+///     print_mode: false,
 /// };
 /// ```
 pub struct Config {
@@ -103,6 +106,27 @@ pub struct Config {
     ///
     /// Controls whether to resume a previous session on startup.
     pub resume_mode: ResumeMode,
+
+    /// Whether to skip all permission prompts.
+    ///
+    /// When true, all tool executions are allowed without user approval.
+    /// Use with caution - this bypasses security protections.
+    pub skip_permissions: bool,
+
+    /// Optional initial prompt to start the conversation with.
+    ///
+    /// When provided in interactive mode, this prompt is automatically
+    /// submitted when the TUI starts.
+    pub initial_prompt: Option<String>,
+
+    /// Whether to run in print mode (non-interactive).
+    ///
+    /// When true (and `initial_prompt` is set):
+    /// - Sends the prompt to Claude
+    /// - Streams and prints the response to stdout
+    /// - Executes any requested tools
+    /// - Exits when complete
+    pub print_mode: bool,
 }
 
 impl Config {
@@ -138,6 +162,9 @@ impl Config {
             working_dir,
             narsil_mode: NarsilMode::Auto,
             resume_mode: ResumeMode::None,
+            skip_permissions: false,
+            initial_prompt: None,
+            print_mode: false,
         }
     }
 
@@ -222,6 +249,63 @@ impl Config {
     pub fn resume_mode(&self) -> &ResumeMode {
         &self.resume_mode
     }
+
+    /// Sets whether to skip permission prompts.
+    ///
+    /// # Arguments
+    ///
+    /// * `skip` - If true, bypass all permission prompts
+    ///
+    /// # Security Warning
+    ///
+    /// This bypasses security protections. Use only when you trust
+    /// all tool executions (e.g., in automated testing environments).
+    #[must_use]
+    pub fn with_skip_permissions(mut self, skip: bool) -> Self {
+        self.skip_permissions = skip;
+        self
+    }
+
+    /// Returns whether permission prompts are being skipped.
+    #[must_use]
+    pub fn skip_permissions(&self) -> bool {
+        self.skip_permissions
+    }
+
+    /// Sets an initial prompt to start the conversation with.
+    ///
+    /// When set in interactive mode, the prompt is automatically submitted.
+    /// When combined with `with_print_mode(true)`, runs non-interactively.
+    #[must_use]
+    pub fn with_initial_prompt(mut self, prompt: impl Into<String>) -> Self {
+        self.initial_prompt = Some(prompt.into());
+        self
+    }
+
+    /// Returns the initial prompt if set.
+    #[must_use]
+    pub fn initial_prompt(&self) -> Option<&str> {
+        self.initial_prompt.as_deref()
+    }
+
+    /// Enables print mode (non-interactive).
+    ///
+    /// In print mode with an initial prompt, the application:
+    /// 1. Sends the prompt to Claude
+    /// 2. Streams and prints the response to stdout
+    /// 3. Executes any requested tools
+    /// 4. Exits when complete
+    #[must_use]
+    pub fn with_print_mode(mut self, enabled: bool) -> Self {
+        self.print_mode = enabled;
+        self
+    }
+
+    /// Returns whether print mode is enabled.
+    #[must_use]
+    pub fn print_mode(&self) -> bool {
+        self.print_mode
+    }
 }
 
 #[cfg(test)]
@@ -249,6 +333,9 @@ mod tests {
             working_dir: PathBuf::from("."),
             narsil_mode: NarsilMode::Auto,
             resume_mode: ResumeMode::None,
+            skip_permissions: false,
+            initial_prompt: None,
+            print_mode: false,
         };
 
         assert_eq!(config.model(), "claude-opus-4-20250514");
@@ -263,6 +350,9 @@ mod tests {
             working_dir: path.clone(),
             narsil_mode: NarsilMode::Auto,
             resume_mode: ResumeMode::None,
+            skip_permissions: false,
+            initial_prompt: None,
+            print_mode: false,
         };
 
         assert_eq!(config.working_dir(), &path);
@@ -349,5 +439,73 @@ mod tests {
         assert!(!ResumeMode::None.is_resuming());
         assert!(ResumeMode::Last.is_resuming());
         assert!(ResumeMode::SessionId("abc".to_string()).is_resuming());
+    }
+
+    // =========================================================================
+    // Permission skip tests
+    // =========================================================================
+
+    #[test]
+    fn test_config_default_skip_permissions() {
+        let config = Config::new(
+            SecretString::new("test-key".into()),
+            "test-model",
+            PathBuf::from("/tmp"),
+        );
+
+        assert!(!config.skip_permissions());
+    }
+
+    #[test]
+    fn test_config_with_skip_permissions() {
+        let config = Config::new(SecretString::new("key".into()), "model", PathBuf::from("."))
+            .with_skip_permissions(true);
+
+        assert!(config.skip_permissions());
+    }
+
+    // =========================================================================
+    // Print mode and initial prompt tests
+    // =========================================================================
+
+    #[test]
+    fn test_config_default_initial_prompt() {
+        let config = Config::new(
+            SecretString::new("test-key".into()),
+            "test-model",
+            PathBuf::from("/tmp"),
+        );
+
+        assert!(config.initial_prompt().is_none());
+        assert!(!config.print_mode());
+    }
+
+    #[test]
+    fn test_config_with_initial_prompt() {
+        let config = Config::new(SecretString::new("key".into()), "model", PathBuf::from("."))
+            .with_initial_prompt("list the files in this directory");
+
+        assert_eq!(
+            config.initial_prompt(),
+            Some("list the files in this directory")
+        );
+    }
+
+    #[test]
+    fn test_config_with_print_mode() {
+        let config = Config::new(SecretString::new("key".into()), "model", PathBuf::from("."))
+            .with_print_mode(true);
+
+        assert!(config.print_mode());
+    }
+
+    #[test]
+    fn test_config_print_mode_with_prompt() {
+        let config = Config::new(SecretString::new("key".into()), "model", PathBuf::from("."))
+            .with_initial_prompt("explain this code")
+            .with_print_mode(true);
+
+        assert_eq!(config.initial_prompt(), Some("explain this code"));
+        assert!(config.print_mode());
     }
 }

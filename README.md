@@ -13,10 +13,11 @@ A high-performance terminal client for the Claude API, written in Rust. Feature 
 ## Highlights
 
 - **Sub-millisecond rendering** - Full 100-message redraw in <1ms
-- **922 tests** with 85%+ code coverage
-- **Zero unsafe code** - Pure safe Rust (~15,500 LOC)
+- **1,150+ tests** with 85%+ code coverage
+- **Zero unsafe code** - Pure safe Rust (~28,000 LOC)
 - **Cross-platform** - Linux, macOS, Windows
 - **Security-first** - 8/8 security audit findings resolved
+- **Patina theme** - Distinctive bronze & verdigris color palette
 
 ## What's New in v0.3.0
 
@@ -42,6 +43,14 @@ A high-performance terminal client for the Claude API, written in Rust. Feature 
 - **Context tracking** - Remembers files read, detects changes via SHA-256
 - **UI state persistence** - Scroll position, input buffer, cursor position
 - **Auto-save** - Sessions saved after each message
+
+### Tool Execution & Patina Theme (Phase 10.5)
+- **Agentic tool loop** - Claude can autonomously execute tools and continue conversations
+- **Permission system** - Modal prompts for tool approval (Allow Once / Allow Always / Deny)
+- **Dangerous command detection** - Red warning styling for risky operations (rm -rf, sudo, etc.)
+- **Smart auto-scroll** - Follow mode during streaming, preserves user scroll position
+- **Patina color theme** - Distinctive bronze (user) and verdigris (assistant) color palette
+- **Tool block rendering** - Styled tool execution display with ⚙ icons and status indicators
 
 ## Features
 
@@ -161,6 +170,13 @@ patina --with-narsil
 | `Ctrl+Down` / `PageDown` | Scroll down |
 | `Backspace` | Delete character |
 | `Home` / `End` | Move cursor |
+
+**Permission Prompts:**
+| Key | Action |
+|-----|--------|
+| `y` / `Enter` | Allow once (session only) |
+| `a` | Allow always (save rule) |
+| `n` / `Esc` | Deny |
 
 ### Slash Commands
 
@@ -336,10 +352,10 @@ cargo fmt
 | Version | 0.3.0 |
 | MSRV | Rust 1.75 |
 | Edition | 2021 |
-| Tests | 922 |
+| Tests | 1,200+ |
 | Coverage | 85%+ |
 | Unsafe | 0 blocks |
-| LOC | ~15,500 |
+| LOC | ~16,000 |
 
 ### Key Dependencies
 
@@ -361,6 +377,7 @@ cargo fmt
 - **Phase 8**: Git worktree integration
 - **Phase 9**: Plugin ecosystem, narsil-mcp integration
 - **Phase 10**: Session resume, context persistence
+- **Phase 10.5**: Tool execution, permission system, Patina theme
 
 ### Future
 - **Phase 11**: Visual testing with VLM-based TUI verification

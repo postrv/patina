@@ -6,6 +6,7 @@ expression: output
 │You:                                                      │
 │Tell me about Rust                                        │
 │                                                          │
+│Patina: ⠋                                                 │
 │Rust is a systems programming language that...            │
 │                                                          │
 │                                                          │
@@ -16,9 +17,8 @@ expression: output
 │                                                          │
 │                                                          │
 │                                                          │
-│                                                          │
 └──────────────────────────────────────────────────────────┘
-                                                            
+ [F:0↑ 14/5]                                                
 ┌ Input (Enter to send, Ctrl+C to quit) ───────────────────┐
 │                                                          │
 └──────────────────────────────────────────────────────────┘

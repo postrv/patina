@@ -12,6 +12,16 @@ use patina::mcp::transport::{StdioTransport, Transport};
 use serde_json::json;
 use std::time::Duration;
 
+/// Startup warmup delay to allow the mock server's stdin read loop to initialize.
+///
+/// This addresses a race condition where the test sends requests before
+/// the child process has fully started its read loop. The delay gives
+/// the OS time to:
+/// - Spawn the process
+/// - Initialize the Rust runtime
+/// - Enter the stdin read loop
+const STARTUP_WARMUP_MS: u64 = 50;
+
 /// Returns the path to the mock MCP server binary.
 ///
 /// This uses the `CARGO_BIN_EXE_mock_mcp_server` environment variable
@@ -38,6 +48,16 @@ fn mock_mcp_server_command() -> (&'static str, Vec<&'static str>) {
     (mock_mcp_server_path(), vec![])
 }
 
+/// Starts a transport and waits for it to be ready.
+///
+/// Adds a small warmup delay after spawning to ensure the child process
+/// has entered its stdin read loop before we send requests.
+async fn start_with_warmup(transport: &mut StdioTransport) -> anyhow::Result<()> {
+    transport.start().await?;
+    tokio::time::sleep(Duration::from_millis(STARTUP_WARMUP_MS)).await;
+    Ok(())
+}
+
 /// Tests that stdio transport can initialize an MCP server.
 ///
 /// The MCP initialization sequence:
@@ -48,10 +68,9 @@ fn mock_mcp_server_command() -> (&'static str, Vec<&'static str>) {
 async fn test_mcp_stdio_initialization() {
     let (cmd, args) = mock_mcp_server_command();
 
-    // Create and start the transport
+    // Create and start the transport with warmup
     let mut transport = StdioTransport::new(cmd, args);
-    transport
-        .start()
+    start_with_warmup(&mut transport)
         .await
         .expect("Transport should start successfully");
 
@@ -103,7 +122,9 @@ async fn test_mcp_stdio_bidirectional() {
     let (cmd, args) = mock_mcp_server_command();
 
     let mut transport = StdioTransport::new(cmd, args);
-    transport.start().await.expect("Transport should start");
+    start_with_warmup(&mut transport)
+        .await
+        .expect("Transport should start");
 
     // Initialize first
     let init_request = JsonRpcRequest::new(1, "initialize", json!({}));
@@ -159,7 +180,9 @@ async fn test_mcp_stdio_method_not_found() {
     let (cmd, args) = mock_mcp_server_command();
 
     let mut transport = StdioTransport::new(cmd, args);
-    transport.start().await.expect("Transport should start");
+    start_with_warmup(&mut transport)
+        .await
+        .expect("Transport should start");
 
     let request = JsonRpcRequest::new(1, "nonexistent/method", json!({}));
     let response = transport
@@ -177,7 +200,9 @@ async fn test_mcp_stdio_method_not_found() {
 async fn test_mcp_stdio_timeout() {
     // Use mock server with --no-response flag - reads input but never responds
     let mut transport = StdioTransport::new(mock_mcp_server_path(), vec!["--no-response"]);
-    transport.start().await.expect("Transport should start");
+    start_with_warmup(&mut transport)
+        .await
+        .expect("Transport should start");
 
     let request = JsonRpcRequest::new(1, "ping", json!({}));
     let result = transport
@@ -203,7 +228,9 @@ async fn test_mcp_stdio_restart() {
     let mut transport = StdioTransport::new(cmd, args.clone());
 
     // First run
-    transport.start().await.expect("Should start");
+    start_with_warmup(&mut transport)
+        .await
+        .expect("Should start");
     let request = JsonRpcRequest::new(1, "ping", json!({}));
     let response = transport
         .send_request(request, Duration::from_secs(5))
@@ -214,7 +241,9 @@ async fn test_mcp_stdio_restart() {
 
     // Second run - should work the same
     let mut transport2 = StdioTransport::new(cmd, args);
-    transport2.start().await.expect("Should start again");
+    start_with_warmup(&mut transport2)
+        .await
+        .expect("Should start again");
     let request2 = JsonRpcRequest::new(1, "ping", json!({}));
     let response2 = transport2
         .send_request(request2, Duration::from_secs(5))
@@ -234,7 +263,9 @@ async fn test_mcp_tool_discovery() {
     let (cmd, args) = mock_mcp_server_command();
 
     let mut transport = StdioTransport::new(cmd, args);
-    transport.start().await.expect("Transport should start");
+    start_with_warmup(&mut transport)
+        .await
+        .expect("Transport should start");
 
     // Initialize first
     let init_request = JsonRpcRequest::new(1, "initialize", json!({}));
@@ -279,7 +310,9 @@ async fn test_mcp_tool_schema_parsing() {
     let (cmd, args) = mock_mcp_server_command();
 
     let mut transport = StdioTransport::new(cmd, args);
-    transport.start().await.expect("Transport should start");
+    start_with_warmup(&mut transport)
+        .await
+        .expect("Transport should start");
 
     // Initialize
     let init_request = JsonRpcRequest::new(1, "initialize", json!({}));
@@ -323,7 +356,9 @@ async fn test_mcp_tool_call() {
     let (cmd, args) = mock_mcp_server_command();
 
     let mut transport = StdioTransport::new(cmd, args);
-    transport.start().await.expect("Transport should start");
+    start_with_warmup(&mut transport)
+        .await
+        .expect("Transport should start");
 
     // Initialize
     let init_request = JsonRpcRequest::new(1, "initialize", json!({}));
@@ -373,7 +408,9 @@ async fn test_mcp_tool_call_error() {
     let (cmd, args) = mock_mcp_server_command();
 
     let mut transport = StdioTransport::new(cmd, args);
-    transport.start().await.expect("Transport should start");
+    start_with_warmup(&mut transport)
+        .await
+        .expect("Transport should start");
 
     // Initialize
     let init_request = JsonRpcRequest::new(1, "initialize", json!({}));
@@ -475,7 +512,9 @@ async fn test_stdio_invalid_json() {
     // Create a server that outputs invalid JSON for first message
     let mut transport = StdioTransport::new(mock_mcp_server_path(), vec!["--invalid-json-at", "1"]);
 
-    transport.start().await.expect("Transport should start");
+    start_with_warmup(&mut transport)
+        .await
+        .expect("Transport should start");
 
     // First request - server will respond with invalid JSON
     // The transport should timeout since invalid JSON is ignored
@@ -528,7 +567,9 @@ async fn test_stdio_process_crash() {
         vec!["--crash-after", "1", "--exit-code", "1"],
     );
 
-    transport.start().await.expect("Transport should start");
+    start_with_warmup(&mut transport)
+        .await
+        .expect("Transport should start");
 
     // First request should succeed
     let request1 = JsonRpcRequest::new(1, "ping", json!({}));

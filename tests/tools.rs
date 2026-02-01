@@ -37,6 +37,7 @@ async fn test_bash_execution_success() {
         }
         ToolResult::Error(e) => panic!("expected success, got error: {e}"),
         ToolResult::Cancelled => panic!("expected success, got cancelled"),
+        ToolResult::NeedsPermission(_) => panic!("unexpected needs permission"),
     }
 }
 
@@ -70,6 +71,7 @@ async fn test_bash_captures_stdout_stderr() {
         }
         ToolResult::Error(e) => panic!("expected success, got error: {e}"),
         ToolResult::Cancelled => panic!("expected success, got cancelled"),
+        ToolResult::NeedsPermission(_) => panic!("unexpected needs permission"),
     }
 }
 
@@ -98,6 +100,7 @@ async fn test_bash_execution_failure() {
         }
         ToolResult::Success(s) => panic!("expected error, got success: {s}"),
         ToolResult::Cancelled => panic!("expected error, got cancelled"),
+        ToolResult::NeedsPermission(_) => panic!("unexpected needs permission"),
     }
 }
 
@@ -127,6 +130,7 @@ async fn test_bash_uses_working_directory() {
         }
         ToolResult::Error(e) => panic!("expected success, got error: {e}"),
         ToolResult::Cancelled => panic!("expected success, got cancelled"),
+        ToolResult::NeedsPermission(_) => panic!("unexpected needs permission"),
     }
 }
 
@@ -179,6 +183,7 @@ async fn test_bash_blocks_rm_rf() {
         }
         ToolResult::Success(s) => panic!("rm -rf / should be blocked, got success: {s}"),
         ToolResult::Cancelled => panic!("expected error, got cancelled"),
+        ToolResult::NeedsPermission(_) => panic!("unexpected needs permission"),
     }
 }
 
@@ -208,6 +213,7 @@ async fn test_bash_blocks_sudo() {
         }
         ToolResult::Success(s) => panic!("sudo should be blocked, got success: {s}"),
         ToolResult::Cancelled => panic!("expected error, got cancelled"),
+        ToolResult::NeedsPermission(_) => panic!("unexpected needs permission"),
     }
 }
 
@@ -237,6 +243,7 @@ async fn test_bash_blocks_chmod_777() {
         }
         ToolResult::Success(s) => panic!("chmod 777 should be blocked, got success: {s}"),
         ToolResult::Cancelled => panic!("expected error, got cancelled"),
+        ToolResult::NeedsPermission(_) => panic!("unexpected needs permission"),
     }
 }
 
@@ -268,6 +275,7 @@ async fn test_bash_blocks_dangerous_in_pipeline() {
             panic!("dangerous command in pipeline should be blocked, got success: {s}")
         }
         ToolResult::Cancelled => panic!("expected error, got cancelled"),
+        ToolResult::NeedsPermission(_) => panic!("unexpected needs permission"),
     }
 }
 
@@ -294,6 +302,7 @@ async fn test_bash_allows_safe_commands() {
         }
         ToolResult::Error(e) => panic!("safe command should not be blocked, got error: {e}"),
         ToolResult::Cancelled => panic!("expected success, got cancelled"),
+        ToolResult::NeedsPermission(_) => panic!("unexpected needs permission"),
     }
 }
 
@@ -323,6 +332,7 @@ async fn test_bash_blocks_curl_pipe_bash() {
         }
         ToolResult::Success(s) => panic!("curl | bash should be blocked, got success: {s}"),
         ToolResult::Cancelled => panic!("expected error, got cancelled"),
+        ToolResult::NeedsPermission(_) => panic!("unexpected needs permission"),
     }
 }
 
@@ -352,6 +362,7 @@ async fn test_bash_blocks_mkfs() {
         }
         ToolResult::Success(s) => panic!("mkfs should be blocked, got success: {s}"),
         ToolResult::Cancelled => panic!("expected error, got cancelled"),
+        ToolResult::NeedsPermission(_) => panic!("unexpected needs permission"),
     }
 }
 
@@ -381,6 +392,7 @@ async fn test_bash_blocks_shutdown() {
         }
         ToolResult::Success(s) => panic!("shutdown should be blocked, got success: {s}"),
         ToolResult::Cancelled => panic!("expected error, got cancelled"),
+        ToolResult::NeedsPermission(_) => panic!("unexpected needs permission"),
     }
 }
 
@@ -410,6 +422,7 @@ async fn test_bash_blocks_dd_device_write() {
         }
         ToolResult::Success(s) => panic!("dd to device should be blocked, got success: {s}"),
         ToolResult::Cancelled => panic!("expected error, got cancelled"),
+        ToolResult::NeedsPermission(_) => panic!("unexpected needs permission"),
     }
 }
 
@@ -443,6 +456,7 @@ async fn test_bash_blocks_del_recursive() {
         }
         ToolResult::Success(s) => panic!("del /s should be blocked, got success: {s}"),
         ToolResult::Cancelled => panic!("expected error, got cancelled"),
+        ToolResult::NeedsPermission(_) => panic!("unexpected needs permission"),
     }
 }
 
@@ -472,6 +486,7 @@ async fn test_bash_blocks_format_drive() {
         }
         ToolResult::Success(s) => panic!("format drive should be blocked, got success: {s}"),
         ToolResult::Cancelled => panic!("expected error, got cancelled"),
+        ToolResult::NeedsPermission(_) => panic!("unexpected needs permission"),
     }
 }
 
@@ -501,6 +516,7 @@ async fn test_bash_blocks_rd_recursive() {
         }
         ToolResult::Success(s) => panic!("rd /s should be blocked, got success: {s}"),
         ToolResult::Cancelled => panic!("expected error, got cancelled"),
+        ToolResult::NeedsPermission(_) => panic!("unexpected needs permission"),
     }
 }
 
@@ -530,6 +546,7 @@ async fn test_bash_blocks_powershell_encoded() {
         }
         ToolResult::Success(s) => panic!("powershell -enc should be blocked, got success: {s}"),
         ToolResult::Cancelled => panic!("expected error, got cancelled"),
+        ToolResult::NeedsPermission(_) => panic!("unexpected needs permission"),
     }
 }
 
@@ -559,6 +576,7 @@ async fn test_bash_blocks_invoke_expression() {
         }
         ToolResult::Success(s) => panic!("Invoke-Expression should be blocked, got success: {s}"),
         ToolResult::Cancelled => panic!("expected error, got cancelled"),
+        ToolResult::NeedsPermission(_) => panic!("unexpected needs permission"),
     }
 }
 
@@ -588,6 +606,7 @@ async fn test_bash_blocks_reg_delete() {
         }
         ToolResult::Success(s) => panic!("reg delete should be blocked, got success: {s}"),
         ToolResult::Cancelled => panic!("expected error, got cancelled"),
+        ToolResult::NeedsPermission(_) => panic!("unexpected needs permission"),
     }
 }
 
@@ -647,6 +666,7 @@ async fn test_bash_completes_before_timeout() {
         }
         ToolResult::Error(e) => panic!("expected success, got error: {e}"),
         ToolResult::Cancelled => panic!("expected success, got cancelled"),
+        ToolResult::NeedsPermission(_) => panic!("unexpected needs permission"),
     }
 }
 
@@ -704,6 +724,7 @@ async fn test_file_read_within_working_dir() {
         }
         ToolResult::Error(e) => panic!("expected success, got error: {e}"),
         ToolResult::Cancelled => panic!("expected success, got cancelled"),
+        ToolResult::NeedsPermission(_) => panic!("unexpected needs permission"),
     }
 }
 
@@ -751,6 +772,7 @@ async fn test_file_read_blocks_path_traversal() {
             panic!("path traversal should be blocked, but read content: {s}")
         }
         ToolResult::Cancelled => panic!("expected error, got cancelled"),
+        ToolResult::NeedsPermission(_) => panic!("unexpected needs permission"),
     }
 }
 
@@ -781,6 +803,7 @@ async fn test_file_read_nonexistent() {
         }
         ToolResult::Success(s) => panic!("expected error for nonexistent file, got success: {s}"),
         ToolResult::Cancelled => panic!("expected error, got cancelled"),
+        ToolResult::NeedsPermission(_) => panic!("unexpected needs permission"),
     }
 }
 
@@ -817,6 +840,7 @@ async fn test_file_write_creates_file() {
         }
         ToolResult::Error(e) => panic!("expected success, got error: {e}"),
         ToolResult::Cancelled => panic!("expected success, got cancelled"),
+        ToolResult::NeedsPermission(_) => panic!("unexpected needs permission"),
     }
 }
 
@@ -860,6 +884,7 @@ async fn test_file_write_blocks_path_traversal() {
             panic!("path traversal should be blocked, but wrote file: {s}")
         }
         ToolResult::Cancelled => panic!("expected error, got cancelled"),
+        ToolResult::NeedsPermission(_) => panic!("unexpected needs permission"),
     }
 
     // Verify file was NOT created
@@ -899,6 +924,7 @@ async fn test_file_write_blocks_protected_paths() {
             panic!("writing to protected path should be blocked, got success: {s}")
         }
         ToolResult::Cancelled => panic!("expected error, got cancelled"),
+        ToolResult::NeedsPermission(_) => panic!("unexpected needs permission"),
     }
 }
 
@@ -941,6 +967,7 @@ async fn test_blocks_windows_unc_traversal() {
             panic!("UNC path traversal should be blocked, got success: {s}")
         }
         ToolResult::Cancelled => panic!("expected error, got cancelled"),
+        ToolResult::NeedsPermission(_) => panic!("unexpected needs permission"),
     }
 }
 
@@ -979,6 +1006,7 @@ async fn test_blocks_windows_drive_traversal() {
             panic!("drive letter traversal should be blocked, got success: {s}")
         }
         ToolResult::Cancelled => panic!("expected error, got cancelled"),
+        ToolResult::NeedsPermission(_) => panic!("unexpected needs permission"),
     }
 }
 
@@ -1020,6 +1048,7 @@ async fn test_blocks_mixed_separators() {
             panic!("mixed separator traversal should be blocked, got success: {s}")
         }
         ToolResult::Cancelled => panic!("expected error, got cancelled"),
+        ToolResult::NeedsPermission(_) => panic!("unexpected needs permission"),
     }
 }
 
@@ -1057,6 +1086,7 @@ async fn test_write_blocks_windows_unc_traversal() {
             panic!("UNC write traversal should be blocked, got success: {s}")
         }
         ToolResult::Cancelled => panic!("expected error, got cancelled"),
+        ToolResult::NeedsPermission(_) => panic!("unexpected needs permission"),
     }
 }
 
@@ -1094,6 +1124,7 @@ async fn test_write_blocks_windows_drive_traversal() {
             panic!("drive letter write should be blocked, got success: {s}")
         }
         ToolResult::Cancelled => panic!("expected error, got cancelled"),
+        ToolResult::NeedsPermission(_) => panic!("unexpected needs permission"),
     }
 }
 
@@ -1144,6 +1175,7 @@ async fn test_file_write_creates_backup() {
         }
         ToolResult::Error(e) => panic!("expected success, got error: {e}"),
         ToolResult::Cancelled => panic!("expected success, got cancelled"),
+        ToolResult::NeedsPermission(_) => panic!("unexpected needs permission"),
     }
 }
 
@@ -1189,6 +1221,7 @@ async fn test_edit_replaces_string() {
         }
         ToolResult::Error(e) => panic!("expected success, got error: {e}"),
         ToolResult::Cancelled => panic!("expected success, got cancelled"),
+        ToolResult::NeedsPermission(_) => panic!("unexpected needs permission"),
     }
 }
 
@@ -1225,6 +1258,7 @@ async fn test_edit_generates_diff() {
         }
         ToolResult::Error(e) => panic!("expected success, got error: {e}"),
         ToolResult::Cancelled => panic!("expected success, got cancelled"),
+        ToolResult::NeedsPermission(_) => panic!("unexpected needs permission"),
     }
 }
 
@@ -1270,6 +1304,7 @@ async fn test_edit_unique_match_required() {
             panic!("expected error for ambiguous match, got success: {s}")
         }
         ToolResult::Cancelled => panic!("expected error, got cancelled"),
+        ToolResult::NeedsPermission(_) => panic!("unexpected needs permission"),
     }
 }
 
@@ -1302,6 +1337,7 @@ async fn test_edit_nonexistent_file() {
         }
         ToolResult::Success(s) => panic!("expected error for nonexistent file, got success: {s}"),
         ToolResult::Cancelled => panic!("expected error, got cancelled"),
+        ToolResult::NeedsPermission(_) => panic!("unexpected needs permission"),
     }
 }
 
@@ -1335,6 +1371,7 @@ async fn test_edit_no_match() {
         }
         ToolResult::Success(s) => panic!("expected error for no match, got success: {s}"),
         ToolResult::Cancelled => panic!("expected error, got cancelled"),
+        ToolResult::NeedsPermission(_) => panic!("unexpected needs permission"),
     }
 }
 
@@ -1392,6 +1429,7 @@ async fn test_glob_finds_files() {
         }
         ToolResult::Error(e) => panic!("expected success, got error: {e}"),
         ToolResult::Cancelled => panic!("expected success, got cancelled"),
+        ToolResult::NeedsPermission(_) => panic!("unexpected needs permission"),
     }
 }
 
@@ -1437,6 +1475,7 @@ async fn test_glob_respects_gitignore() {
         }
         ToolResult::Error(e) => panic!("expected success, got error: {e}"),
         ToolResult::Cancelled => panic!("expected success, got cancelled"),
+        ToolResult::NeedsPermission(_) => panic!("unexpected needs permission"),
     }
 }
 
@@ -1474,6 +1513,7 @@ async fn test_glob_no_matches() {
             );
         }
         ToolResult::Cancelled => panic!("expected success or no-match error, got cancelled"),
+        ToolResult::NeedsPermission(_) => panic!("unexpected needs permission"),
     }
 }
 
@@ -1512,6 +1552,7 @@ async fn test_glob_blocks_path_traversal() {
             );
         }
         ToolResult::Cancelled => panic!("expected error or sanitized success, got cancelled"),
+        ToolResult::NeedsPermission(_) => panic!("unexpected needs permission"),
     }
 }
 
@@ -1558,6 +1599,7 @@ async fn test_grep_finds_content() {
         }
         ToolResult::Error(e) => panic!("expected success, got error: {e}"),
         ToolResult::Cancelled => panic!("expected success, got cancelled"),
+        ToolResult::NeedsPermission(_) => panic!("unexpected needs permission"),
     }
 }
 
@@ -1601,6 +1643,7 @@ async fn test_grep_regex_support() {
         }
         ToolResult::Error(e) => panic!("expected success, got error: {e}"),
         ToolResult::Cancelled => panic!("expected success, got cancelled"),
+        ToolResult::NeedsPermission(_) => panic!("unexpected needs permission"),
     }
 }
 
@@ -1638,6 +1681,7 @@ async fn test_grep_case_insensitive() {
         }
         ToolResult::Error(e) => panic!("expected success, got error: {e}"),
         ToolResult::Cancelled => panic!("expected success, got cancelled"),
+        ToolResult::NeedsPermission(_) => panic!("unexpected needs permission"),
     }
 }
 
@@ -1675,6 +1719,7 @@ async fn test_grep_no_matches() {
             );
         }
         ToolResult::Cancelled => panic!("expected success or no-match error, got cancelled"),
+        ToolResult::NeedsPermission(_) => panic!("unexpected needs permission"),
     }
 }
 
@@ -1717,6 +1762,7 @@ async fn test_grep_file_filter() {
         }
         ToolResult::Error(e) => panic!("expected success, got error: {e}"),
         ToolResult::Cancelled => panic!("expected success, got cancelled"),
+        ToolResult::NeedsPermission(_) => panic!("unexpected needs permission"),
     }
 }
 
@@ -1855,6 +1901,9 @@ async fn test_hooked_executor_pre_tool_use_blocks() {
         }
         ToolResult::Success(s) => {
             panic!("tool should have been blocked by hook, got success: {s}")
+        }
+        ToolResult::NeedsPermission(_) => {
+            panic!("unexpected needs permission")
         }
     }
 }
@@ -2021,6 +2070,7 @@ async fn test_list_files_blocks_path_traversal() {
             panic!("list_files should block path traversal, but listed contents: {s}")
         }
         ToolResult::Cancelled => panic!("expected error, got cancelled"),
+        ToolResult::NeedsPermission(_) => panic!("unexpected needs permission"),
     }
 }
 
@@ -2057,6 +2107,7 @@ async fn test_list_files_blocks_absolute_path() {
             panic!("list_files should block absolute paths, but listed contents: {s}")
         }
         ToolResult::Cancelled => panic!("expected error, got cancelled"),
+        ToolResult::NeedsPermission(_) => panic!("unexpected needs permission"),
     }
 }
 
@@ -2100,6 +2151,7 @@ async fn test_bash_blocks_escaped_rm() {
             panic!("escaped rm should be blocked (r\\m -> rm), got success: {s}")
         }
         ToolResult::Cancelled => panic!("expected error, got cancelled"),
+        ToolResult::NeedsPermission(_) => panic!("unexpected needs permission"),
     }
 }
 
@@ -2137,6 +2189,7 @@ async fn test_bash_blocks_command_substitution() {
             panic!("command substitution $(which rm) should be blocked, got success: {s}")
         }
         ToolResult::Cancelled => panic!("expected error, got cancelled"),
+        ToolResult::NeedsPermission(_) => panic!("unexpected needs permission"),
     }
 }
 
@@ -2174,6 +2227,7 @@ async fn test_bash_blocks_su_root() {
             panic!("su root should be blocked by security policy, got success: {s}")
         }
         ToolResult::Cancelled => panic!("expected error, got cancelled"),
+        ToolResult::NeedsPermission(_) => panic!("unexpected needs permission"),
     }
 }
 
@@ -2221,6 +2275,7 @@ async fn test_bash_blocks_eval_quoted_variable() {
             )
         }
         ToolResult::Cancelled => panic!("expected error, got cancelled"),
+        ToolResult::NeedsPermission(_) => panic!("unexpected needs permission"),
     }
 }
 
@@ -2258,6 +2313,7 @@ async fn test_bash_blocks_backtick_substitution() {
             panic!("backtick command substitution should be blocked, got success: {s}")
         }
         ToolResult::Cancelled => panic!("expected error, got cancelled"),
+        ToolResult::NeedsPermission(_) => panic!("unexpected needs permission"),
     }
 }
 
@@ -2296,6 +2352,7 @@ async fn test_bash_blocks_hex_encoded_command() {
             panic!("hex-encoded command should be blocked, got success: {s}")
         }
         ToolResult::Cancelled => panic!("expected error, got cancelled"),
+        ToolResult::NeedsPermission(_) => panic!("unexpected needs permission"),
     }
 }
 
@@ -2334,6 +2391,7 @@ async fn test_bash_blocks_base64_command() {
             panic!("base64-decoded command should be blocked, got success: {s}")
         }
         ToolResult::Cancelled => panic!("expected error, got cancelled"),
+        ToolResult::NeedsPermission(_) => panic!("unexpected needs permission"),
     }
 }
 
@@ -2372,6 +2430,7 @@ async fn test_bash_blocks_pkexec() {
             panic!("pkexec should be blocked by security policy, got success: {s}")
         }
         ToolResult::Cancelled => panic!("expected error, got cancelled"),
+        ToolResult::NeedsPermission(_) => panic!("unexpected needs permission"),
     }
 }
 
@@ -2412,6 +2471,7 @@ async fn test_allowlist_mode_blocks_unlisted_commands() {
             panic!("command should be blocked in allowlist mode, got success: {s}")
         }
         ToolResult::Cancelled => panic!("expected error, got cancelled"),
+        ToolResult::NeedsPermission(_) => panic!("unexpected needs permission"),
     }
 }
 
@@ -2443,6 +2503,7 @@ async fn test_allowlist_mode_allows_listed_commands() {
         }
         ToolResult::Error(e) => panic!("allowed command should succeed, got error: {e}"),
         ToolResult::Cancelled => panic!("expected success, got cancelled"),
+        ToolResult::NeedsPermission(_) => panic!("unexpected needs permission"),
     }
 }
 
@@ -2481,6 +2542,7 @@ async fn test_allowlist_mode_still_blocks_dangerous() {
             panic!("dangerous command should be blocked even with allowlist, got: {s}")
         }
         ToolResult::Cancelled => panic!("expected error, got cancelled"),
+        ToolResult::NeedsPermission(_) => panic!("unexpected needs permission"),
     }
 }
 
@@ -2516,6 +2578,7 @@ async fn test_allowlist_mode_empty_blocks_all() {
             panic!("empty allowlist should block all commands, got success: {s}")
         }
         ToolResult::Cancelled => panic!("expected error, got cancelled"),
+        ToolResult::NeedsPermission(_) => panic!("unexpected needs permission"),
     }
 }
 
@@ -2547,6 +2610,7 @@ async fn test_allowlist_mode_disabled_allows_safe() {
             }
         }
         ToolResult::Cancelled => panic!("expected success or non-policy error"),
+        ToolResult::NeedsPermission(_) => panic!("unexpected needs permission"),
     }
 }
 
@@ -2631,6 +2695,7 @@ async fn test_file_read_rejects_symlinks() {
             )
         }
         ToolResult::Cancelled => panic!("expected error, got cancelled"),
+        ToolResult::NeedsPermission(_) => panic!("unexpected needs permission"),
     }
 }
 
@@ -2710,6 +2775,7 @@ async fn test_file_write_rejects_symlinks() {
             panic!("write_file should reject symlinks to prevent TOCTOU attacks, but wrote: {s}")
         }
         ToolResult::Cancelled => panic!("expected error, got cancelled"),
+        ToolResult::NeedsPermission(_) => panic!("unexpected needs permission"),
     }
 }
 
@@ -2791,6 +2857,7 @@ async fn test_edit_rejects_symlinks() {
             panic!("edit should reject symlinks to prevent TOCTOU attacks, but edited: {s}")
         }
         ToolResult::Cancelled => panic!("expected error, got cancelled"),
+        ToolResult::NeedsPermission(_) => panic!("unexpected needs permission"),
     }
 }
 
@@ -2850,6 +2917,7 @@ async fn test_file_read_rejects_internal_symlinks() {
             panic!("read_file should reject ALL symlinks for defense in depth, but read: {s}")
         }
         ToolResult::Cancelled => panic!("expected error, got cancelled"),
+        ToolResult::NeedsPermission(_) => panic!("unexpected needs permission"),
     }
 }
 
@@ -2917,6 +2985,7 @@ async fn test_read_file_permission_denied() {
             panic!("read_file should fail with permission denied, got success: {s}")
         }
         ToolResult::Cancelled => panic!("expected error, got cancelled"),
+        ToolResult::NeedsPermission(_) => panic!("unexpected needs permission"),
     }
 }
 
@@ -2984,6 +3053,7 @@ async fn test_write_file_to_readonly_directory() {
             panic!("write_file should fail on read-only directory, got success: {s}")
         }
         ToolResult::Cancelled => panic!("expected error, got cancelled"),
+        ToolResult::NeedsPermission(_) => panic!("unexpected needs permission"),
     }
 }
 
@@ -3050,6 +3120,7 @@ async fn test_edit_file_no_read_permission() {
             panic!("edit should fail with permission denied, got success: {s}")
         }
         ToolResult::Cancelled => panic!("expected error, got cancelled"),
+        ToolResult::NeedsPermission(_) => panic!("unexpected needs permission"),
     }
 }
 
@@ -3117,6 +3188,7 @@ async fn test_edit_file_no_write_permission() {
             panic!("edit should fail with permission denied, got success: {s}")
         }
         ToolResult::Cancelled => panic!("expected error, got cancelled"),
+        ToolResult::NeedsPermission(_) => panic!("unexpected needs permission"),
     }
 }
 
@@ -3235,6 +3307,7 @@ async fn test_read_file_large_file() {
         }
         ToolResult::Error(e) => panic!("expected success for large file, got error: {e}"),
         ToolResult::Cancelled => panic!("expected success, got cancelled"),
+        ToolResult::NeedsPermission(_) => panic!("unexpected needs permission"),
     }
 }
 
@@ -3277,6 +3350,7 @@ async fn test_write_file_exceeds_size_limit() {
             panic!("write should fail due to size limit, got success: {s}")
         }
         ToolResult::Cancelled => panic!("expected error, got cancelled"),
+        ToolResult::NeedsPermission(_) => panic!("unexpected needs permission"),
     }
 
     // Verify file was NOT created
@@ -3318,6 +3392,7 @@ async fn test_list_files_nonexistent_directory() {
             panic!("list_files should fail for nonexistent directory, got success: {s}")
         }
         ToolResult::Cancelled => panic!("expected error, got cancelled"),
+        ToolResult::NeedsPermission(_) => panic!("unexpected needs permission"),
     }
 }
 
@@ -3374,6 +3449,7 @@ async fn test_list_files_blocks_parent_escape() {
             panic!("list_files should block parent escape, but listed contents: {s}")
         }
         ToolResult::Cancelled => panic!("expected error, got cancelled"),
+        ToolResult::NeedsPermission(_) => panic!("unexpected needs permission"),
     }
 }
 
@@ -3597,4 +3673,314 @@ async fn test_parallel_tool_calls() {
     }
 
     assert_eq!(completed, 10, "All 10 parallel operations should complete");
+}
+
+// =============================================================================
+// P0-3: Output Size Limit Tests
+// =============================================================================
+
+/// Test that bash output is truncated when it exceeds max_output_size.
+#[tokio::test]
+async fn test_bash_output_truncated_when_exceeds_limit() {
+    let ctx = TestContext::new();
+
+    // Create a policy with a small output size limit for testing (10KB)
+    let policy = ToolExecutionPolicy {
+        max_output_size: 10 * 1024, // 10KB
+        ..Default::default()
+    };
+    let executor = ToolExecutor::new(ctx.path()).with_policy(policy);
+
+    // Generate output larger than the limit
+    // seq 1 5000 produces about 24KB of output on most systems
+    let call = ToolCall {
+        name: "bash".to_string(),
+        input: json!({ "command": "seq 1 5000" }),
+    };
+
+    let result = executor
+        .execute(call)
+        .await
+        .expect("execution should not error");
+
+    match result {
+        ToolResult::Success(output) => {
+            // Output should be truncated to around max_output_size
+            assert!(
+                output.len() <= 15 * 1024, // Allow some buffer for truncation message
+                "output should be truncated, got {} bytes",
+                output.len()
+            );
+            // Should contain truncation notice
+            assert!(
+                output.contains("truncated") || output.contains("Output"),
+                "output should mention truncation"
+            );
+        }
+        ToolResult::Error(e) => panic!("expected success, got error: {e}"),
+        ToolResult::Cancelled => panic!("expected success, got cancelled"),
+        ToolResult::NeedsPermission(_) => panic!("unexpected needs permission"),
+    }
+}
+
+/// Test that bash output is NOT truncated when within limit.
+#[tokio::test]
+async fn test_bash_output_not_truncated_when_within_limit() {
+    let ctx = TestContext::new();
+
+    // Create a policy with a reasonable limit
+    let policy = ToolExecutionPolicy {
+        max_output_size: 1024 * 1024, // 1MB
+        ..Default::default()
+    };
+    let executor = ToolExecutor::new(ctx.path()).with_policy(policy);
+
+    // Generate small output
+    let call = ToolCall {
+        name: "bash".to_string(),
+        input: json!({ "command": "echo 'small output'" }),
+    };
+
+    let result = executor
+        .execute(call)
+        .await
+        .expect("execution should not error");
+
+    match result {
+        ToolResult::Success(output) => {
+            assert!(
+                !output.contains("truncated"),
+                "small output should not be truncated"
+            );
+            assert!(
+                output.contains("small output"),
+                "output should contain expected content"
+            );
+        }
+        ToolResult::Error(e) => panic!("expected success, got error: {e}"),
+        ToolResult::Cancelled => panic!("expected success, got cancelled"),
+        ToolResult::NeedsPermission(_) => panic!("unexpected needs permission"),
+    }
+}
+
+// =============================================================================
+// P1-1: Shell State Persistence Tests
+// =============================================================================
+
+/// Test that cd command updates the effective working directory.
+#[tokio::test]
+async fn test_shell_state_cd_updates_cwd() {
+    use patina::tools::StatefulToolExecutor;
+
+    let ctx = TestContext::new();
+    // create_file creates parent directories automatically
+    ctx.create_file("subdir/marker.txt", "subdir marker");
+
+    let executor = StatefulToolExecutor::new(ctx.path());
+
+    // First, cd into subdir
+    let cd_call = ToolCall {
+        name: "bash".to_string(),
+        input: json!({ "command": "cd subdir" }),
+    };
+    executor.execute(cd_call).await.expect("cd should succeed");
+
+    // Then list files - should see marker.txt since we're in subdir
+    let ls_call = ToolCall {
+        name: "bash".to_string(),
+        input: json!({ "command": "ls" }),
+    };
+    let result = executor.execute(ls_call).await.expect("ls should succeed");
+
+    match result {
+        ToolResult::Success(output) => {
+            assert!(
+                output.contains("marker.txt"),
+                "ls should show marker.txt since we're in subdir, got: {output}"
+            );
+        }
+        ToolResult::Error(e) => panic!("expected success, got error: {e}"),
+        _ => panic!("unexpected result"),
+    }
+}
+
+/// Test that export command persists environment variables.
+#[tokio::test]
+async fn test_shell_state_export_persists_env() {
+    use patina::tools::StatefulToolExecutor;
+
+    let ctx = TestContext::new();
+    let executor = StatefulToolExecutor::new(ctx.path());
+
+    // Set an environment variable
+    let export_call = ToolCall {
+        name: "bash".to_string(),
+        input: json!({ "command": "export MY_TEST_VAR=test_value" }),
+    };
+    executor
+        .execute(export_call)
+        .await
+        .expect("export should succeed");
+
+    // Echo the variable
+    let echo_call = ToolCall {
+        name: "bash".to_string(),
+        input: json!({ "command": "echo $MY_TEST_VAR" }),
+    };
+    let result = executor
+        .execute(echo_call)
+        .await
+        .expect("echo should succeed");
+
+    match result {
+        ToolResult::Success(output) => {
+            assert!(
+                output.contains("test_value"),
+                "exported variable should be accessible, got: {output}"
+            );
+        }
+        ToolResult::Error(e) => panic!("expected success, got error: {e}"),
+        _ => panic!("unexpected result"),
+    }
+}
+
+/// Test that cd with compound command (cd foo && ls) tracks directory.
+#[tokio::test]
+async fn test_shell_state_cd_compound_command() {
+    use patina::tools::StatefulToolExecutor;
+
+    let ctx = TestContext::new();
+    // create_file creates parent directories automatically
+    ctx.create_file("testdir/test.txt", "content");
+
+    let executor = StatefulToolExecutor::new(ctx.path());
+
+    // cd && ls in one command
+    let call = ToolCall {
+        name: "bash".to_string(),
+        input: json!({ "command": "cd testdir && ls" }),
+    };
+    let result = executor
+        .execute(call)
+        .await
+        .expect("cd && ls should succeed");
+
+    // The output should contain test.txt
+    match &result {
+        ToolResult::Success(output) => {
+            assert!(
+                output.contains("test.txt"),
+                "compound cd && ls should show test.txt, got: {output}"
+            );
+        }
+        _ => panic!("unexpected result: {:?}", result),
+    }
+
+    // Subsequent command should still be in testdir
+    let ls_call = ToolCall {
+        name: "bash".to_string(),
+        input: json!({ "command": "pwd" }),
+    };
+    let result = executor.execute(ls_call).await.expect("pwd should succeed");
+
+    match result {
+        ToolResult::Success(output) => {
+            assert!(
+                output.contains("testdir"),
+                "pwd should show testdir as cwd, got: {output}"
+            );
+        }
+        _ => panic!("unexpected result"),
+    }
+}
+
+/// Test that HookedToolExecutor exposes shell state via shell_state().
+#[tokio::test]
+async fn test_hooked_executor_exposes_shell_state() {
+    use patina::hooks::HookManager;
+    use patina::tools::HookedToolExecutor;
+
+    let ctx = TestContext::new();
+    ctx.create_file("mydir/test.txt", "content");
+
+    let hooks = HookManager::new("test-session".to_string());
+    let executor = HookedToolExecutor::new(ctx.path(), hooks);
+
+    // Initial shell state should have cwd = ctx.path()
+    {
+        let state = executor.shell_state();
+        assert_eq!(
+            state.cwd().canonicalize().unwrap(),
+            ctx.path().canonicalize().unwrap()
+        );
+        assert!(state.env().is_empty());
+    }
+
+    // cd into mydir
+    let cd_call = ToolCall {
+        name: "bash".to_string(),
+        input: json!({ "command": "cd mydir" }),
+    };
+    executor.execute(cd_call).await.expect("cd should succeed");
+
+    // Shell state should reflect new cwd
+    {
+        let state = executor.shell_state();
+        assert!(
+            state.cwd().ends_with("mydir"),
+            "cwd should end with mydir, got: {}",
+            state.cwd().display()
+        );
+    }
+}
+
+/// Test that HookedToolExecutor persists environment variables via shell state.
+#[tokio::test]
+async fn test_hooked_executor_shell_state_env() {
+    use patina::hooks::HookManager;
+    use patina::tools::HookedToolExecutor;
+
+    let ctx = TestContext::new();
+    let hooks = HookManager::new("test-session".to_string());
+    let executor = HookedToolExecutor::new(ctx.path(), hooks);
+
+    // Export an environment variable
+    let export_call = ToolCall {
+        name: "bash".to_string(),
+        input: json!({ "command": "export HOOKED_TEST=hello" }),
+    };
+    executor
+        .execute(export_call)
+        .await
+        .expect("export should succeed");
+
+    // Shell state should have the env var
+    {
+        let state = executor.shell_state();
+        assert_eq!(
+            state.env().get("HOOKED_TEST"),
+            Some(&"hello".to_string()),
+            "env should contain HOOKED_TEST=hello"
+        );
+    }
+
+    // Echo should use the persisted env var
+    let echo_call = ToolCall {
+        name: "bash".to_string(),
+        input: json!({ "command": "echo $HOOKED_TEST" }),
+    };
+    let result = executor
+        .execute(echo_call)
+        .await
+        .expect("echo should succeed");
+
+    match result {
+        ToolResult::Success(output) => {
+            assert!(
+                output.contains("hello"),
+                "expected 'hello' in output, got: {output}"
+            );
+        }
+        _ => panic!("expected success"),
+    }
 }

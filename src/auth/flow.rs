@@ -1,0 +1,371 @@
+//! OAuth 2.0 authorization flow implementation.
+//!
+//! This module handles the browser-based OAuth flow for Claude subscription
+//! authentication. The flow is:
+//!
+//! 1. Generate PKCE challenge
+//! 2. Start local callback server
+//! 3. Open browser to authorization URL
+//! 4. Wait for callback with authorization code
+//! 5. Exchange code for tokens
+//! 6. Store tokens in keychain
+//!
+//! # Example
+//!
+//! ```no_run
+//! use patina::auth::flow::OAuthFlow;
+//!
+//! #[tokio::main]
+//! async fn main() -> anyhow::Result<()> {
+//!     let flow = OAuthFlow::new();
+//!     let credentials = flow.run().await?;
+//!     println!("Got credentials: {:?}", credentials);
+//!     Ok(())
+//! }
+//! ```
+
+use std::time::Duration;
+
+use anyhow::{bail, Context, Result};
+use secrecy::SecretString;
+use tiny_http::{Response, Server};
+use tracing::{debug, info, warn};
+
+use super::pkce::PkceChallenge;
+use super::storage;
+use super::OAuthCredentials;
+
+/// Default port for the local OAuth callback server.
+const DEFAULT_CALLBACK_PORT: u16 = 9876;
+
+/// Timeout for waiting for the OAuth callback.
+const CALLBACK_TIMEOUT: Duration = Duration::from_secs(300); // 5 minutes
+
+/// OAuth configuration.
+///
+/// Note: These values would need to be discovered from Claude Code's actual
+/// OAuth implementation. These are placeholder values.
+mod config {
+    /// The authorization endpoint URL.
+    ///
+    /// This would be something like `https://claude.ai/oauth/authorize` or
+    /// `https://accounts.anthropic.com/oauth/authorize`.
+    pub const AUTHORIZATION_URL: &str = "https://claude.ai/oauth/authorize";
+
+    /// The token endpoint URL.
+    pub const TOKEN_URL: &str = "https://claude.ai/oauth/token";
+
+    /// The client ID for Patina.
+    ///
+    /// Note: This would need to be registered with Anthropic.
+    pub const CLIENT_ID: &str = "patina-cli";
+
+    /// The scopes to request.
+    pub const SCOPES: &str = "api.read api.write";
+
+    /// The redirect URI (local callback).
+    #[must_use]
+    pub fn redirect_uri(port: u16) -> String {
+        format!("http://localhost:{port}/callback")
+    }
+}
+
+/// Manages the OAuth 2.0 authorization flow.
+#[derive(Debug)]
+pub struct OAuthFlow {
+    /// Port for the local callback server.
+    callback_port: u16,
+
+    /// The PKCE challenge for this flow.
+    pkce: PkceChallenge,
+}
+
+impl Default for OAuthFlow {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl OAuthFlow {
+    /// Creates a new OAuth flow with default settings.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            callback_port: DEFAULT_CALLBACK_PORT,
+            pkce: PkceChallenge::generate(),
+        }
+    }
+
+    /// Creates a new OAuth flow with a custom callback port.
+    #[must_use]
+    pub fn with_port(port: u16) -> Self {
+        Self {
+            callback_port: port,
+            pkce: PkceChallenge::generate(),
+        }
+    }
+
+    /// Builds the authorization URL.
+    #[must_use]
+    pub fn authorization_url(&self) -> String {
+        let redirect_uri = config::redirect_uri(self.callback_port);
+        format!(
+            "{}?response_type=code&client_id={}&redirect_uri={}&scope={}&code_challenge={}&code_challenge_method={}",
+            config::AUTHORIZATION_URL,
+            urlencoding::encode(config::CLIENT_ID),
+            urlencoding::encode(&redirect_uri),
+            urlencoding::encode(config::SCOPES),
+            urlencoding::encode(self.pkce.challenge()),
+            self.pkce.challenge_method()
+        )
+    }
+
+    /// Runs the complete OAuth flow.
+    ///
+    /// This method:
+    /// 1. Starts a local callback server
+    /// 2. Opens the browser to the authorization URL
+    /// 3. Waits for the callback with the authorization code
+    /// 4. Exchanges the code for tokens
+    /// 5. Stores the tokens in the keychain
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any step of the flow fails.
+    pub async fn run(&self) -> Result<OAuthCredentials> {
+        info!("Starting OAuth login flow");
+
+        // Start local callback server
+        let server = Server::http(format!("127.0.0.1:{}", self.callback_port)).map_err(|e| {
+            anyhow::anyhow!(
+                "Failed to start callback server on port {}: {}",
+                self.callback_port,
+                e
+            )
+        })?;
+
+        // Build authorization URL
+        let auth_url = self.authorization_url();
+        debug!(url = %auth_url, "Opening browser for authorization");
+
+        // Open browser
+        if let Err(e) = webbrowser::open(&auth_url) {
+            warn!(error = %e, "Failed to open browser automatically");
+            println!("\nPlease open this URL in your browser to authenticate:");
+            println!("{}\n", auth_url);
+        } else {
+            info!("Opened browser for authentication");
+            println!("\nOpened browser for authentication. Please complete the login flow.");
+        }
+
+        println!(
+            "Waiting for authorization (timeout: {} seconds)...",
+            CALLBACK_TIMEOUT.as_secs()
+        );
+
+        // Wait for callback
+        let code = self.wait_for_callback(server).await?;
+        debug!("Received authorization code");
+
+        // Exchange code for tokens
+        let credentials = self.exchange_code(&code).await?;
+        info!("Successfully obtained OAuth tokens");
+
+        // Store in keychain
+        storage::store_oauth_credentials(&credentials).await?;
+        info!("Stored credentials in keychain");
+
+        Ok(credentials)
+    }
+
+    /// Waits for the OAuth callback with the authorization code.
+    async fn wait_for_callback(&self, server: Server) -> Result<String> {
+        // Create a channel to receive the result
+        let (tx, rx) = tokio::sync::oneshot::channel();
+
+        // Use a thread for the blocking HTTP server
+        std::thread::spawn(move || {
+            // Set timeout on the server
+            for request in server.incoming_requests() {
+                let url = request.url().to_string();
+
+                // Parse the URL to extract the code
+                if let Some(code) = extract_code_from_url(&url) {
+                    // Send success response
+                    let response = Response::from_string(
+                        "<html><body><h1>Authentication successful!</h1><p>You can close this window.</p></body></html>"
+                    ).with_header(
+                        tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"text/html"[..]).unwrap()
+                    );
+                    let _ = request.respond(response);
+
+                    let _ = tx.send(Ok(code));
+                    return;
+                } else if let Some(error) = extract_error_from_url(&url) {
+                    // Send error response
+                    let response = Response::from_string(format!(
+                        "<html><body><h1>Authentication failed</h1><p>{}</p></body></html>",
+                        error
+                    ))
+                    .with_header(
+                        tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"text/html"[..])
+                            .unwrap(),
+                    );
+                    let _ = request.respond(response);
+
+                    let _ = tx.send(Err(anyhow::anyhow!("OAuth error: {}", error)));
+                    return;
+                } else {
+                    // Unexpected request, send 404
+                    let response = Response::from_string("Not found").with_status_code(404);
+                    let _ = request.respond(response);
+                }
+            }
+        });
+
+        // Wait for result with timeout
+        tokio::select! {
+            result = rx => {
+                result.map_err(|_| anyhow::anyhow!("Callback server channel closed"))?
+            }
+            _ = tokio::time::sleep(CALLBACK_TIMEOUT) => {
+                bail!("OAuth callback timed out after {} seconds", CALLBACK_TIMEOUT.as_secs())
+            }
+        }
+    }
+
+    /// Exchanges the authorization code for tokens.
+    async fn exchange_code(&self, code: &str) -> Result<OAuthCredentials> {
+        let redirect_uri = config::redirect_uri(self.callback_port);
+
+        let client = reqwest::Client::new();
+        let response: reqwest::Response = client
+            .post(config::TOKEN_URL)
+            .form(&[
+                ("grant_type", "authorization_code"),
+                ("client_id", config::CLIENT_ID),
+                ("code", code),
+                ("redirect_uri", &redirect_uri),
+                ("code_verifier", self.pkce.verifier()),
+            ])
+            .send()
+            .await
+            .context("Failed to send token exchange request")?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body: String = response.text().await.unwrap_or_default();
+            bail!("Token exchange failed: {} - {}", status, body);
+        }
+
+        let token_response: TokenResponse = response
+            .json()
+            .await
+            .context("Failed to parse token response")?;
+
+        Ok(OAuthCredentials::new(
+            SecretString::new(token_response.access_token.into()),
+            SecretString::new(token_response.refresh_token.into()),
+            Duration::from_secs(token_response.expires_in),
+        ))
+    }
+}
+
+/// Response from the token endpoint.
+#[derive(Debug, serde::Deserialize)]
+struct TokenResponse {
+    access_token: String,
+    refresh_token: String,
+    expires_in: u64,
+    #[allow(dead_code)]
+    #[serde(default)]
+    token_type: String,
+}
+
+/// Extracts the authorization code from a callback URL.
+fn extract_code_from_url(url: &str) -> Option<String> {
+    // URL format: /callback?code=ABC123&state=...
+    url.split('?').nth(1)?.split('&').find_map(|param| {
+        let (key, value) = param.split_once('=')?;
+        if key == "code" {
+            Some(urlencoding::decode(value).ok()?.into_owned())
+        } else {
+            None
+        }
+    })
+}
+
+/// Extracts the error from a callback URL.
+fn extract_error_from_url(url: &str) -> Option<String> {
+    url.split('?').nth(1)?.split('&').find_map(|param| {
+        let (key, value) = param.split_once('=')?;
+        if key == "error" || key == "error_description" {
+            Some(urlencoding::decode(value).ok()?.into_owned())
+        } else {
+            None
+        }
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_code_from_url() {
+        let url = "/callback?code=ABC123&state=xyz";
+        assert_eq!(extract_code_from_url(url), Some("ABC123".to_string()));
+
+        let url = "/callback?state=xyz&code=DEF456";
+        assert_eq!(extract_code_from_url(url), Some("DEF456".to_string()));
+
+        let url = "/callback?error=access_denied";
+        assert_eq!(extract_code_from_url(url), None);
+
+        let url = "/callback";
+        assert_eq!(extract_code_from_url(url), None);
+    }
+
+    #[test]
+    fn test_extract_error_from_url() {
+        let url = "/callback?error=access_denied";
+        assert_eq!(
+            extract_error_from_url(url),
+            Some("access_denied".to_string())
+        );
+
+        let url = "/callback?error_description=User%20denied%20access";
+        assert_eq!(
+            extract_error_from_url(url),
+            Some("User denied access".to_string())
+        );
+
+        let url = "/callback?code=ABC123";
+        assert_eq!(extract_error_from_url(url), None);
+    }
+
+    #[test]
+    fn test_oauth_flow_new() {
+        let flow = OAuthFlow::new();
+        assert_eq!(flow.callback_port, DEFAULT_CALLBACK_PORT);
+    }
+
+    #[test]
+    fn test_oauth_flow_with_port() {
+        let flow = OAuthFlow::with_port(8080);
+        assert_eq!(flow.callback_port, 8080);
+    }
+
+    #[test]
+    fn test_authorization_url_format() {
+        let flow = OAuthFlow::new();
+        let url = flow.authorization_url();
+
+        assert!(url.starts_with(config::AUTHORIZATION_URL));
+        assert!(url.contains("response_type=code"));
+        assert!(url.contains("client_id="));
+        assert!(url.contains("redirect_uri="));
+        assert!(url.contains("code_challenge="));
+        assert!(url.contains("code_challenge_method=S256"));
+    }
+}

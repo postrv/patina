@@ -10,7 +10,7 @@ use ratatui::{backend::TestBackend, Terminal};
 use std::path::PathBuf;
 
 /// Helper to render state to a string buffer for snapshot testing.
-fn render_to_string(state: &AppState, width: u16, height: u16) -> String {
+fn render_to_string(state: &mut AppState, width: u16, height: u16) -> String {
     let backend = TestBackend::new(width, height);
     let mut terminal = Terminal::new(backend).expect("Failed to create terminal");
 
@@ -35,7 +35,7 @@ fn render_to_string(state: &AppState, width: u16, height: u16) -> String {
 
 /// Helper to create a new AppState for testing.
 fn new_state() -> AppState {
-    AppState::new(PathBuf::from("/tmp/test"))
+    AppState::new(PathBuf::from("/tmp/test"), false)
 }
 
 // ============================================================================
@@ -45,8 +45,8 @@ fn new_state() -> AppState {
 /// Tests rendering of an empty state - no messages, no input.
 #[test]
 fn test_empty_state_render() {
-    let state = new_state();
-    let output = render_to_string(&state, 60, 20);
+    let mut state = new_state();
+    let output = render_to_string(&mut state, 60, 20);
     insta::assert_snapshot!(output);
 }
 
@@ -60,7 +60,7 @@ fn test_input_only_render() {
     state.insert_char('l');
     state.insert_char('o');
 
-    let output = render_to_string(&state, 60, 20);
+    let output = render_to_string(&mut state, 60, 20);
     insta::assert_snapshot!(output);
 }
 
@@ -77,7 +77,7 @@ fn test_single_user_message_render() {
         content: "Hello, Claude!".to_string(),
     });
 
-    let output = render_to_string(&state, 60, 20);
+    let output = render_to_string(&mut state, 60, 20);
     insta::assert_snapshot!(output);
 }
 
@@ -90,7 +90,7 @@ fn test_single_assistant_message_render() {
         content: "Hello! How can I help you today?".to_string(),
     });
 
-    let output = render_to_string(&state, 60, 20);
+    let output = render_to_string(&mut state, 60, 20);
     insta::assert_snapshot!(output);
 }
 
@@ -116,7 +116,7 @@ fn test_conversation_render() {
         content: "What are its main features?".to_string(),
     });
 
-    let output = render_to_string(&state, 80, 25);
+    let output = render_to_string(&mut state, 80, 25);
     insta::assert_snapshot!(output);
 }
 
@@ -130,7 +130,7 @@ fn test_multiline_message_render() {
         content: "Here's a list:\n- First item\n- Second item\n- Third item".to_string(),
     });
 
-    let output = render_to_string(&state, 60, 20);
+    let output = render_to_string(&mut state, 60, 20);
     insta::assert_snapshot!(output);
 }
 
@@ -149,12 +149,11 @@ fn test_streaming_response_render() {
         content: "Tell me about Rust".to_string(),
     });
 
-    // Simulate streaming response - set current_response and loading state
-    // We need to access internal state, so we'll use a helper approach
-    // For now, just test with the current_response field set directly
-    state.current_response = Some("Rust is a systems programming language that...".to_string());
+    // Simulate streaming response using the timeline API
+    state.set_streaming(true);
+    state.append_streaming_text("Rust is a systems programming language that...");
 
-    let output = render_to_string(&state, 60, 20);
+    let output = render_to_string(&mut state, 60, 20);
     insta::assert_snapshot!(output);
 }
 
@@ -207,7 +206,7 @@ fn test_tui_handles_unicode() {
     });
 
     // Render - should not panic or corrupt
-    let output = render_to_string(&state, 80, 20);
+    let output = render_to_string(&mut state, 80, 20);
 
     // Verify output contains something (rendering didn't fail)
     assert!(!output.is_empty(), "Output should not be empty");
@@ -237,7 +236,7 @@ fn test_tui_unicode_input() {
     assert_eq!(state.input, "你好界"); // "世" was deleted, "界" remains
 
     // Render - should not panic
-    let output = render_to_string(&state, 60, 10);
+    let output = render_to_string(&mut state, 60, 10);
     assert!(!output.is_empty(), "Unicode input should render");
 }
 
@@ -261,12 +260,16 @@ fn test_tui_scrolls_long_content() {
         });
     }
 
+    // Set viewport and content height for scroll to work
+    state.set_viewport_height(15);
+    state.update_content_height(100); // Enough content to scroll
+
     // Render without scroll
-    let output_no_scroll = render_to_string(&state, 60, 15);
+    let output_no_scroll = render_to_string(&mut state, 60, 15);
 
     // Scroll down and render again
     state.scroll_up(5);
-    let output_scrolled = render_to_string(&state, 60, 15);
+    let output_scrolled = render_to_string(&mut state, 60, 15);
 
     // The outputs should be different (content shifted)
     assert_ne!(
@@ -275,7 +278,7 @@ fn test_tui_scrolls_long_content() {
     );
 
     // Verify scroll offset is set
-    assert_eq!(state.scroll_offset, 5);
+    assert_eq!(state.scroll_offset(), 5);
 }
 
 /// Tests that input cursor position tracking works correctly.
@@ -292,7 +295,7 @@ fn test_tui_input_cursor_visible() {
     assert_eq!(state.cursor_position(), 11);
 
     // Render
-    let output = render_to_string(&state, 60, 10);
+    let output = render_to_string(&mut state, 60, 10);
 
     // Input should be visible
     assert!(
@@ -387,10 +390,10 @@ fn test_tui_resize_event() {
     });
 
     // Render at small size
-    let small_output = render_to_string(&state, 40, 10);
+    let small_output = render_to_string(&mut state, 40, 10);
 
     // Render at large size
-    let large_output = render_to_string(&state, 120, 30);
+    let large_output = render_to_string(&mut state, 120, 30);
 
     // Both should produce output
     assert!(
@@ -425,7 +428,7 @@ fn test_tui_paste_event() {
     assert_eq!(state.cursor_position(), pasted_text.chars().count());
 
     // Render should work after paste
-    let output = render_to_string(&state, 60, 10);
+    let output = render_to_string(&mut state, 60, 10);
     assert!(!output.is_empty(), "Render after paste should work");
 }
 
@@ -476,7 +479,7 @@ fn test_status_bar_shows_branch_name() {
     // Set worktree info on state
     state.set_worktree_branch("feature/my-branch".to_string());
 
-    let output = render_to_string(&state, 80, 20);
+    let output = render_to_string(&mut state, 80, 20);
 
     // The branch name should appear in the status bar
     assert!(
@@ -495,7 +498,7 @@ fn test_status_bar_shows_ahead_behind() {
     state.set_worktree_ahead(3);
     state.set_worktree_behind(2);
 
-    let output = render_to_string(&state, 80, 20);
+    let output = render_to_string(&mut state, 80, 20);
 
     // Should show ahead indicator
     assert!(
@@ -520,7 +523,7 @@ fn test_status_bar_shows_modified_count() {
     state.set_worktree_branch("main".to_string());
     state.set_worktree_modified(5);
 
-    let output = render_to_string(&state, 80, 20);
+    let output = render_to_string(&mut state, 80, 20);
 
     // Should show modified count with dirty indicator
     assert!(
@@ -540,7 +543,7 @@ fn test_status_bar_full_worktree_status() {
     state.set_worktree_ahead(1);
     state.set_worktree_behind(0);
 
-    let output = render_to_string(&state, 80, 20);
+    let output = render_to_string(&mut state, 80, 20);
     insta::assert_snapshot!(output);
 }
 
@@ -552,7 +555,7 @@ fn test_status_bar_clean_worktree() {
     state.set_worktree_branch("main".to_string());
     // No modified files, no ahead/behind
 
-    let output = render_to_string(&state, 80, 20);
+    let output = render_to_string(&mut state, 80, 20);
 
     // Branch should still appear
     assert!(
