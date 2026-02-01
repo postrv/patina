@@ -4,12 +4,13 @@
 
 use patina::app::state::AppState;
 use patina::tui::render_timeline_with_throbber;
+use patina::types::config::ParallelMode;
 use patina::types::ConversationEntry;
 use std::path::PathBuf;
 
 /// Helper to create a new AppState for testing.
 fn new_state() -> AppState {
-    AppState::new(PathBuf::from("/tmp/test"), false)
+    AppState::new(PathBuf::from("/tmp/test"), false, ParallelMode::Enabled)
 }
 
 // ============================================================================

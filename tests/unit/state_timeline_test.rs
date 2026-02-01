@@ -4,6 +4,7 @@
 //! and serves as the single source of truth for conversation display.
 
 use patina::app::state::AppState;
+use patina::types::config::ParallelMode;
 use patina::types::{ConversationEntry, Role};
 use std::path::PathBuf;
 
@@ -14,7 +15,7 @@ use std::path::PathBuf;
 /// Tests that AppState exposes timeline accessor.
 #[test]
 fn test_appstate_has_timeline() {
-    let state = AppState::new(PathBuf::from("/tmp"), true);
+    let state = AppState::new(PathBuf::from("/tmp"), true, ParallelMode::Enabled);
     let timeline = state.timeline();
     assert!(timeline.is_empty());
 }
@@ -22,7 +23,7 @@ fn test_appstate_has_timeline() {
 /// Tests that AppState exposes mutable timeline accessor.
 #[test]
 fn test_appstate_timeline_mut() {
-    let mut state = AppState::new(PathBuf::from("/tmp"), true);
+    let mut state = AppState::new(PathBuf::from("/tmp"), true, ParallelMode::Enabled);
     state.timeline_mut().push_user_message("Hello");
     assert_eq!(state.timeline().len(), 1);
 }
@@ -34,7 +35,7 @@ fn test_appstate_timeline_mut() {
 /// Tests that adding a user message updates the timeline.
 #[test]
 fn test_add_user_message_updates_timeline() {
-    let mut state = AppState::new(PathBuf::from("/tmp"), true);
+    let mut state = AppState::new(PathBuf::from("/tmp"), true, ParallelMode::Enabled);
 
     // Use the state's add_message method
     state.add_message(patina::Message {
@@ -56,7 +57,7 @@ fn test_add_user_message_updates_timeline() {
 /// Tests that streaming updates the timeline.
 #[test]
 fn test_streaming_updates_timeline() {
-    let mut state = AppState::new(PathBuf::from("/tmp"), true);
+    let mut state = AppState::new(PathBuf::from("/tmp"), true, ParallelMode::Enabled);
 
     // Start streaming - this should create a streaming entry in timeline
     state.set_streaming(true);
@@ -76,7 +77,7 @@ fn test_streaming_updates_timeline() {
 /// Tests that completing streaming updates the timeline.
 #[test]
 fn test_streaming_complete_updates_timeline() {
-    let mut state = AppState::new(PathBuf::from("/tmp"), true);
+    let mut state = AppState::new(PathBuf::from("/tmp"), true, ParallelMode::Enabled);
 
     // Start and complete streaming as a normal message
     state.set_streaming(true);
@@ -97,7 +98,7 @@ fn test_streaming_complete_updates_timeline() {
 /// Tests that adding a tool block updates the timeline.
 #[test]
 fn test_tool_block_added_to_timeline() {
-    let mut state = AppState::new(PathBuf::from("/tmp"), true);
+    let mut state = AppState::new(PathBuf::from("/tmp"), true, ParallelMode::Enabled);
 
     // First add an assistant message (tool blocks follow assistant messages)
     state.add_message(patina::Message {
@@ -122,7 +123,7 @@ fn test_tool_block_added_to_timeline() {
 /// Tests that tool blocks track the correct assistant message index.
 #[test]
 fn test_tool_block_follows_assistant_message() {
-    let mut state = AppState::new(PathBuf::from("/tmp"), true);
+    let mut state = AppState::new(PathBuf::from("/tmp"), true, ParallelMode::Enabled);
 
     // Add user message
     state.add_message(patina::Message {
@@ -159,7 +160,7 @@ fn test_tool_block_follows_assistant_message() {
 /// Tests that clearing conversation clears the timeline.
 #[test]
 fn test_clear_conversation_clears_timeline() {
-    let mut state = AppState::new(PathBuf::from("/tmp"), true);
+    let mut state = AppState::new(PathBuf::from("/tmp"), true, ParallelMode::Enabled);
 
     state.add_message(patina::Message {
         role: Role::User,
@@ -176,7 +177,7 @@ fn test_clear_conversation_clears_timeline() {
 /// Tests converting AppState to Session preserves messages.
 #[test]
 fn test_to_session_preserves_messages() {
-    let mut state = AppState::new(PathBuf::from("/tmp"), true);
+    let mut state = AppState::new(PathBuf::from("/tmp"), true, ParallelMode::Enabled);
 
     state.add_message(patina::Message {
         role: Role::User,

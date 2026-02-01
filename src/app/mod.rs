@@ -110,9 +110,13 @@ pub async fn run(config: Config) -> Result<()> {
 
     // Check for session resume before initializing terminal
     let mut state = match &config.resume_mode {
-        ResumeMode::None => AppState::new(config.working_dir.clone(), config.skip_permissions),
+        ResumeMode::None => AppState::new(
+            config.working_dir.clone(),
+            config.skip_permissions,
+            config.parallel_mode,
+        ),
         ResumeMode::Last | ResumeMode::SessionId(_) => {
-            load_session_state(&config, config.skip_permissions).await?
+            load_session_state(&config, config.skip_permissions, config.parallel_mode).await?
         }
     };
 
@@ -167,7 +171,11 @@ pub async fn run(config: Config) -> Result<()> {
 }
 
 /// Loads session state based on the resume mode.
-async fn load_session_state(config: &Config, skip_permissions: bool) -> Result<AppState> {
+async fn load_session_state(
+    config: &Config,
+    skip_permissions: bool,
+    parallel_mode: crate::types::config::ParallelMode,
+) -> Result<AppState> {
     let sessions_dir = default_sessions_dir()?;
     let manager = SessionManager::new(sessions_dir);
 
@@ -197,7 +205,11 @@ async fn load_session_state(config: &Config, skip_permissions: bool) -> Result<A
         .context(format!("Failed to load session '{}'", session_id))?;
 
     // Create AppState from the loaded session
-    let mut state = AppState::new(session.working_dir().clone(), skip_permissions);
+    let mut state = AppState::new(
+        session.working_dir().clone(),
+        skip_permissions,
+        parallel_mode,
+    );
     state.restore_from_session(&session);
 
     Ok(state)
@@ -218,7 +230,11 @@ async fn run_print_mode(config: &Config, prompt: &str) -> Result<()> {
     use crate::api::{StreamEvent, ToolChoice};
 
     let client = AnthropicClient::new(config.api_key.clone(), &config.model);
-    let mut state = AppState::new(config.working_dir.clone(), config.skip_permissions);
+    let mut state = AppState::new(
+        config.working_dir.clone(),
+        config.skip_permissions,
+        config.parallel_mode,
+    );
 
     // Add the user's prompt (adds to both display and API messages via submit logic)
     let user_msg = ApiMessageV2::user(prompt);
@@ -888,6 +904,7 @@ async fn auto_save_session(state: &mut AppState, session_manager: &SessionManage
 mod tests {
     use super::*;
     use crate::permissions::PermissionRequest;
+    use crate::types::config::ParallelMode;
     use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
     use std::path::PathBuf;
 
@@ -907,7 +924,7 @@ mod tests {
 
     #[test]
     fn test_y_key_allows_once() {
-        let mut state = AppState::new(PathBuf::from("/test"), false);
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
         let request = PermissionRequest::new("Bash", Some("echo hello"), "Print hello");
         state.set_pending_permission(request);
 
@@ -920,7 +937,7 @@ mod tests {
 
     #[test]
     fn test_y_uppercase_allows_once() {
-        let mut state = AppState::new(PathBuf::from("/test"), false);
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
         let request = PermissionRequest::new("Bash", Some("ls"), "List files");
         state.set_pending_permission(request);
 
@@ -932,7 +949,7 @@ mod tests {
 
     #[test]
     fn test_a_key_allows_always() {
-        let mut state = AppState::new(PathBuf::from("/test"), false);
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
         let request = PermissionRequest::new("Read", Some("/tmp/test.txt"), "Read file");
         state.set_pending_permission(request);
 
@@ -945,7 +962,7 @@ mod tests {
 
     #[test]
     fn test_a_uppercase_allows_always() {
-        let mut state = AppState::new(PathBuf::from("/test"), false);
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
         let request = PermissionRequest::new("Bash", Some("git status"), "Git status");
         state.set_pending_permission(request);
 
@@ -957,7 +974,7 @@ mod tests {
 
     #[test]
     fn test_n_key_denies() {
-        let mut state = AppState::new(PathBuf::from("/test"), false);
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
         let request = PermissionRequest::new("Bash", Some("rm -rf /tmp"), "Delete files");
         state.set_pending_permission(request);
 
@@ -970,7 +987,7 @@ mod tests {
 
     #[test]
     fn test_n_uppercase_denies() {
-        let mut state = AppState::new(PathBuf::from("/test"), false);
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
         let request = PermissionRequest::new("Bash", Some("sudo"), "Sudo command");
         state.set_pending_permission(request);
 
@@ -982,7 +999,7 @@ mod tests {
 
     #[test]
     fn test_escape_key_denies() {
-        let mut state = AppState::new(PathBuf::from("/test"), false);
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
         let request = PermissionRequest::new("Bash", Some("command"), "Test");
         state.set_pending_permission(request);
 
@@ -994,7 +1011,7 @@ mod tests {
 
     #[test]
     fn test_enter_key_confirms_default() {
-        let mut state = AppState::new(PathBuf::from("/test"), false);
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
         let request = PermissionRequest::new("Bash", Some("ls"), "List");
         state.set_pending_permission(request);
 
@@ -1007,7 +1024,7 @@ mod tests {
 
     #[test]
     fn test_navigation_keys_no_response() {
-        let mut state = AppState::new(PathBuf::from("/test"), false);
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
         let request = PermissionRequest::new("Bash", Some("ls"), "List");
         state.set_pending_permission(request);
 
@@ -1021,7 +1038,7 @@ mod tests {
 
     #[test]
     fn test_no_pending_permission_returns_none() {
-        let mut state = AppState::new(PathBuf::from("/test"), false);
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
         // No pending permission set
 
         let key = make_key_event(KeyCode::Char('y'), KeyModifiers::NONE);
@@ -1032,7 +1049,7 @@ mod tests {
 
     #[test]
     fn test_unrecognized_key_returns_none() {
-        let mut state = AppState::new(PathBuf::from("/test"), false);
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
         let request = PermissionRequest::new("Bash", Some("ls"), "List");
         state.set_pending_permission(request);
 
