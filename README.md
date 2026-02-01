@@ -13,8 +13,9 @@ A high-performance terminal client for the Claude API, written in Rust. Designed
 ## Highlights
 
 - **Sub-millisecond rendering** - Full 100-message redraw in <1ms
-- **1,475 tests** with 85%+ code coverage
-- **Zero unsafe code** - Pure safe Rust (~31,000 LOC)
+- **Parallel tool execution** - 5x+ speedup on multi-file operations
+- **1,908 tests** with 85%+ code coverage
+- **Zero unsafe code** - Pure safe Rust (~39,000 LOC)
 - **Cross-platform** - Linux, macOS, Windows
 - **Security-first** - Defense-in-depth with command filtering, path validation, and session integrity
 - **Patina theme** - Distinctive bronze & verdigris color palette
@@ -27,7 +28,9 @@ A high-performance terminal client for the Claude API, written in Rust. Designed
 |---------|-------------|
 | **Streaming TUI** | Real-time response streaming with syntax highlighting |
 | **Agentic Tool Loop** | Claude can autonomously execute tools and continue conversations |
+| **Parallel Execution** | Concurrent tool execution with safety classification (5x+ speedup) |
 | **Session Resume** | Save and restore conversations with full context |
+| **Context Compaction** | Automatic summarization when context window fills |
 | **MCP Support** | Model Context Protocol for tool server integration |
 | **Multi-Model** | Anthropic direct + AWS Bedrock provider support |
 
@@ -41,6 +44,9 @@ A high-performance terminal client for the Claude API, written in Rust. Designed
 | `edit` | Edit files with diff-based changes |
 | `glob` | File discovery with pattern matching |
 | `grep` | Content search with regex support |
+| `web_fetch` | Fetch and convert web pages to markdown |
+| `web_search` | Search the web via DuckDuckGo |
+| `vision` | Analyze images (PNG, JPEG, GIF, WebP) |
 
 ### Extensibility
 
@@ -133,6 +139,8 @@ patina --list-sessions
 | `--list-sessions` | List available sessions | - |
 | `--with-narsil` | Enable narsil-mcp integration | auto |
 | `--no-narsil` | Disable narsil-mcp integration | - |
+| `--no-parallel` | Disable parallel tool execution | - |
+| `--parallel-aggressive` | Parallelize all tools (use with caution) | - |
 | `--debug` | Enable debug logging | `false` |
 
 ## Key Bindings
@@ -225,6 +233,19 @@ Benchmarks (Criterion, 120x40 terminal):
 | Scroll operations | <1μs |
 | Large message rendering | <5ms |
 
+### Parallel Tool Execution
+
+| Scenario | Speedup |
+|----------|---------|
+| Multi-file read (10 files) | 5-8x |
+| Concurrent grep (5 patterns) | 4-6x |
+| Mixed read operations | 3-5x |
+
+Tools are classified by safety:
+- **ReadOnly**: `read`, `glob`, `grep`, `web_fetch`, `web_search` (parallelized)
+- **Mutating**: `write`, `edit` (sequential)
+- **Unknown**: `bash`, MCP tools (sequential by default)
+
 ```bash
 cargo bench
 # HTML reports in target/criterion/
@@ -236,9 +257,9 @@ cargo bench
 src/
 ├── main.rs           # CLI entry point
 ├── app/              # Event loop, application state
-├── api/              # Anthropic API client, streaming
-├── tui/              # Terminal UI (ratatui)
-├── tools/            # Tool execution, security
+├── api/              # Anthropic API client, streaming, vision
+├── tui/              # Terminal UI (ratatui), image display
+├── tools/            # Tool execution, security, parallel execution
 ├── mcp/              # Model Context Protocol client
 ├── hooks/            # Lifecycle events
 ├── skills/           # Context-aware suggestions
@@ -246,10 +267,12 @@ src/
 ├── agents/           # Subagent orchestration
 ├── plugins/          # Plugin system
 ├── session/          # Session persistence
+├── context/          # Context management, compaction, tokens
 ├── worktree/         # Git worktree management
 ├── permissions/      # Permission management
-├── auth/             # Authentication (API key)
+├── auth/             # Authentication (API key, OAuth scaffolding)
 ├── enterprise/       # Audit logging, cost tracking
+├── update/           # Auto-update checking
 └── types/            # Core types
 ```
 
@@ -273,13 +296,13 @@ cargo tarpaulin --out Html
 
 | Metric | Value |
 |--------|-------|
-| Version | 0.3.0 |
+| Version | 0.5.0 |
 | MSRV | Rust 1.75 |
 | Edition | 2021 |
-| Tests | 1,475 |
+| Tests | 1,908 |
 | Coverage | 85%+ |
 | Unsafe | 0 blocks |
-| LOC | ~31,000 |
+| LOC | ~39,000 |
 
 ### Key Dependencies
 
