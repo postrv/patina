@@ -122,6 +122,118 @@ mod tests {
         assert_eq!(pkce.challenge_method(), "S256");
     }
 
+    /// Verifies that the PKCE verifier length meets RFC 7636 requirements.
+    ///
+    /// RFC 7636 Section 4.1 specifies:
+    /// - code_verifier = high-entropy cryptographic random STRING using
+    ///   unreserved characters [A-Z] / [a-z] / [0-9] / "-" / "." / "_" / "~"
+    /// - with a minimum length of 43 characters and a maximum length of 128 characters
+    #[test]
+    fn test_pkce_verifier_length_valid() {
+        let pkce = PkceChallenge::generate();
+        let len = pkce.verifier().len();
+
+        // RFC 7636 requires verifier to be between 43 and 128 characters
+        assert!(
+            len >= 43,
+            "Verifier length {len} is below RFC 7636 minimum of 43"
+        );
+        assert!(
+            len <= 128,
+            "Verifier length {len} exceeds RFC 7636 maximum of 128"
+        );
+
+        // Our implementation uses 32 bytes which encodes to exactly 43 chars
+        // This is the minimum compliant length
+        assert_eq!(len, 43, "Expected 43 chars for 32-byte verifier");
+    }
+
+    /// Verifies that the PKCE challenge is the SHA256 hash of the verifier.
+    ///
+    /// RFC 7636 Section 4.2 specifies the S256 challenge method:
+    /// code_challenge = BASE64URL(SHA256(ASCII(code_verifier)))
+    #[test]
+    fn test_pkce_challenge_is_sha256() {
+        // Use a known verifier to compute expected challenge
+        let verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
+        let pkce = PkceChallenge::from_verifier(verifier.to_string());
+
+        // Manually compute SHA256(verifier) -> base64url
+        let mut hasher = Sha256::new();
+        hasher.update(verifier.as_bytes());
+        let hash = hasher.finalize();
+        let expected_challenge = URL_SAFE_NO_PAD.encode(hash);
+
+        assert_eq!(
+            pkce.challenge(),
+            expected_challenge,
+            "Challenge should be BASE64URL(SHA256(verifier))"
+        );
+
+        // Also verify the challenge method is correctly reported
+        assert_eq!(pkce.challenge_method(), "S256");
+    }
+
+    /// Verifies that the PKCE challenge is base64url encoded without padding.
+    ///
+    /// RFC 7636 Section 4.2 specifies:
+    /// - BASE64URL encoding as defined in RFC 4648 Section 5
+    /// - Without padding (no '=' characters)
+    #[test]
+    fn test_pkce_challenge_base64url_encoded() {
+        let pkce = PkceChallenge::generate();
+        let challenge = pkce.challenge();
+
+        // Verify no standard base64 characters that differ from base64url
+        assert!(
+            !challenge.contains('+'),
+            "Challenge contains '+' (use '-' for base64url)"
+        );
+        assert!(
+            !challenge.contains('/'),
+            "Challenge contains '/' (use '_' for base64url)"
+        );
+        assert!(
+            !challenge.contains('='),
+            "Challenge contains '=' padding (should be unpadded)"
+        );
+
+        // Verify all characters are valid base64url
+        for c in challenge.chars() {
+            assert!(
+                c.is_ascii_alphanumeric() || c == '-' || c == '_',
+                "Invalid base64url character in challenge: {c}"
+            );
+        }
+
+        // SHA256 produces 32 bytes, which encodes to 43 base64url characters (no padding)
+        assert_eq!(challenge.len(), 43, "SHA256 base64url should be 43 chars");
+    }
+
+    /// Verifies that the PKCE verifier uses only RFC 7636 unreserved characters.
+    ///
+    /// RFC 7636 Section 4.1 defines unreserved characters as:
+    /// ALPHA / DIGIT / "-" / "." / "_" / "~"
+    ///
+    /// Our implementation uses base64url encoding which is a subset:
+    /// ALPHA / DIGIT / "-" / "_"
+    #[test]
+    fn test_pkce_verifier_uses_unreserved_chars() {
+        // Generate multiple verifiers to increase confidence
+        for _ in 0..10 {
+            let pkce = PkceChallenge::generate();
+            let verifier = pkce.verifier();
+
+            for c in verifier.chars() {
+                // Base64url uses alphanumeric, '-', and '_' (subset of RFC 7636 unreserved)
+                assert!(
+                    c.is_ascii_alphanumeric() || c == '-' || c == '_',
+                    "Invalid character in verifier: {c}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn test_pkce_uniqueness() {
         let pkce1 = PkceChallenge::generate();
@@ -143,37 +255,11 @@ mod tests {
         assert_eq!(pkce.challenge(), pkce2.challenge());
     }
 
-    #[test]
-    fn test_pkce_challenge_computation() {
-        // Test with a known verifier to verify the challenge computation
-        let verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk".to_string();
-        let pkce = PkceChallenge::from_verifier(verifier);
-
-        // The challenge should be a valid base64url string
-        let challenge = pkce.challenge();
-        assert!(!challenge.is_empty());
-        assert!(!challenge.contains('+')); // No + in URL-safe base64
-        assert!(!challenge.contains('/')); // No / in URL-safe base64
-        assert!(!challenge.contains('=')); // No padding in URL-safe base64 (no pad)
-    }
-
-    #[test]
-    fn test_verifier_character_set() {
-        let pkce = PkceChallenge::generate();
-        let verifier = pkce.verifier();
-
-        // Verifier should only contain URL-safe characters
-        for c in verifier.chars() {
-            assert!(
-                c.is_ascii_alphanumeric() || c == '-' || c == '_',
-                "Invalid character in verifier: {c}"
-            );
-        }
-    }
-
+    /// Verifies that challenge computation is deterministic.
+    ///
+    /// Same verifier must always produce the same challenge.
     #[test]
     fn test_challenge_is_deterministic() {
-        // Same verifier should always produce the same challenge
         let verifier = "my-test-verifier-that-is-long-enough-for-testing".to_string();
 
         let challenge1 = compute_challenge(&verifier);
