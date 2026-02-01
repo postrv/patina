@@ -591,6 +591,25 @@ impl AppState {
         self.api_messages.len()
     }
 
+    /// Returns API messages truncated to fit within the token budget.
+    ///
+    /// This should be used when sending messages to the API instead of
+    /// `api_messages()` directly to prevent context overflow and control costs.
+    ///
+    /// The truncation:
+    /// - Always preserves the first message (system/project context)
+    /// - Prioritizes recent messages over older ones
+    /// - Respects the `DEFAULT_MAX_INPUT_TOKENS` limit
+    ///
+    /// # Returns
+    ///
+    /// A new vector containing the truncated message history.
+    #[must_use]
+    pub fn api_messages_truncated(&self) -> Vec<ApiMessageV2> {
+        use crate::api::{truncate_context, DEFAULT_MAX_INPUT_TOKENS};
+        truncate_context(&self.api_messages, DEFAULT_MAX_INPUT_TOKENS)
+    }
+
     pub async fn submit_message(
         &mut self,
         client: &AnthropicClient,
@@ -619,8 +638,21 @@ impl AppState {
         let (tx, rx) = mpsc::channel(100);
         self.streaming_rx = Some(rx);
 
-        // Use api_messages for the API call to preserve content blocks
-        let api_messages = self.api_messages.clone();
+        // Use truncated api_messages for the API call to control costs
+        // while preserving content blocks for tool results
+        let total_messages = self.api_messages.len();
+        let api_messages = self.api_messages_truncated();
+        let truncated_messages = api_messages.len();
+
+        if truncated_messages < total_messages {
+            tracing::info!(
+                total = total_messages,
+                sending = truncated_messages,
+                dropped = total_messages - truncated_messages,
+                "Context truncated for API call"
+            );
+        }
+
         let client = client.clone();
         let tools = default_tools();
         tokio::spawn(async move {
@@ -1999,5 +2031,84 @@ mod tests {
         state.complete_tool_block(999, "result", false);
 
         assert!(state.tool_blocks().is_empty());
+    }
+
+    // ========================================================================
+    // Context Truncation Integration Tests (Cost Optimization)
+    // ========================================================================
+
+    #[test]
+    fn test_api_messages_truncated_returns_truncated() {
+        let mut state = AppState::new(PathBuf::from("/test"), false);
+
+        // Add many messages to potentially exceed budget
+        for i in 0..50 {
+            state
+                .api_messages
+                .push(ApiMessageV2::user(format!("Message {}", i)));
+        }
+
+        let truncated = state.api_messages_truncated();
+
+        // Should return messages (truncation logic is in api::context)
+        assert!(!truncated.is_empty());
+        // First message preserved
+        assert_eq!(truncated[0].content.to_text(), "Message 0");
+        // Most recent preserved
+        assert_eq!(truncated.last().unwrap().content.to_text(), "Message 49");
+    }
+
+    #[test]
+    fn test_api_messages_truncated_under_budget_unchanged() {
+        let mut state = AppState::new(PathBuf::from("/test"), false);
+
+        state.api_messages.push(ApiMessageV2::user("Hello"));
+        state
+            .api_messages
+            .push(ApiMessageV2::assistant("Hi there!"));
+
+        let truncated = state.api_messages_truncated();
+
+        // Under budget - should be unchanged
+        assert_eq!(truncated.len(), 2);
+        assert_eq!(truncated[0].content.to_text(), "Hello");
+        assert_eq!(truncated[1].content.to_text(), "Hi there!");
+    }
+
+    #[test]
+    fn test_api_messages_truncated_empty() {
+        let state = AppState::new(PathBuf::from("/test"), false);
+
+        let truncated = state.api_messages_truncated();
+
+        assert!(truncated.is_empty());
+    }
+
+    #[test]
+    fn test_api_messages_truncated_with_large_content() {
+        let mut state = AppState::new(PathBuf::from("/test"), false);
+
+        // Add first message (will be preserved)
+        state.api_messages.push(ApiMessageV2::user("System prompt"));
+
+        // Add many large messages that would exceed 100k tokens
+        let large_content = "x".repeat(10_000); // ~2500 tokens each
+        for _ in 0..50 {
+            // 50 * 2500 = 125k tokens
+            state
+                .api_messages
+                .push(ApiMessageV2::assistant(&large_content));
+        }
+
+        let truncated = state.api_messages_truncated();
+
+        // Should be fewer than 51 messages
+        assert!(
+            truncated.len() < 51,
+            "Should be truncated, got {}",
+            truncated.len()
+        );
+        // First message always preserved
+        assert_eq!(truncated[0].content.to_text(), "System prompt");
     }
 }

@@ -1,7 +1,15 @@
 //! Anthropic API client
 
+pub mod context;
 pub mod multi_model;
+pub mod tokens;
 pub mod tools;
+
+// Re-export token utilities for convenience
+pub use tokens::{estimate_message_tokens, estimate_messages_tokens, estimate_tokens};
+
+// Re-export context utilities for convenience
+pub use context::{truncate_context, DEFAULT_MAX_INPUT_TOKENS, DEFAULT_MAX_MESSAGES};
 
 use std::time::Duration;
 
