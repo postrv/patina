@@ -6,7 +6,10 @@
 //! - Edit operations with diff generation
 //! - Glob pattern matching for file discovery
 //! - Grep content search with regex support
+//! - Web content fetching with HTML to markdown conversion
 //! - Hook integration via `HookedToolExecutor`
+
+pub mod web_fetch;
 
 use anyhow::Result;
 use glob::Pattern;

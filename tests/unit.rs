@@ -86,3 +86,6 @@ mod tool_progress_test;
 
 #[path = "unit/selection_test.rs"]
 mod selection_test;
+
+#[path = "unit/web_fetch_test.rs"]
+mod web_fetch_test;
