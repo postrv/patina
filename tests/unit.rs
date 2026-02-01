@@ -89,3 +89,6 @@ mod selection_test;
 
 #[path = "unit/web_fetch_test.rs"]
 mod web_fetch_test;
+
+#[path = "unit/web_search_test.rs"]
+mod web_search_test;

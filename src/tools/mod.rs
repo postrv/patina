@@ -10,6 +10,7 @@
 //! - Hook integration via `HookedToolExecutor`
 
 pub mod web_fetch;
+pub mod web_search;
 
 use anyhow::Result;
 use glob::Pattern;
@@ -436,6 +437,7 @@ impl ToolExecutor {
             "glob" => self.glob_files(&call.input).await,
             "grep" => self.grep_content(&call.input).await,
             "web_fetch" => self.web_fetch(&call.input).await,
+            "web_search" => self.web_search(&call.input).await,
             _ => Ok(ToolResult::Error(format!("Unknown tool: {}", call.name))),
         }
     }
@@ -1117,6 +1119,44 @@ impl ToolExecutor {
             }
         }
     }
+
+    /// Searches the web using the given query.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The query is empty
+    /// - The request times out
+    /// - The search API returns an error
+    async fn web_search(&self, input: &serde_json::Value) -> Result<ToolResult> {
+        let query = input
+            .get("query")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("Missing query"))?;
+
+        let max_results = input
+            .get("max_results")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as usize)
+            .unwrap_or(10);
+
+        let tool = web_search::WebSearchTool::new(web_search::WebSearchConfig::default());
+
+        match tool.search(query, max_results).await {
+            Ok(results) => {
+                let markdown = web_search::WebSearchTool::format_as_markdown(&results);
+                Ok(ToolResult::Success(markdown))
+            }
+            Err(e) => {
+                debug!(
+                    query = %query,
+                    error = %e,
+                    "Web search failed"
+                );
+                Ok(ToolResult::Error(format!("Search failed: {e}")))
+            }
+        }
+    }
 }
 
 /// Tool executor with hook and permission integration.
@@ -1269,6 +1309,11 @@ impl HookedToolExecutor {
                 .get("url")
                 .and_then(|v| v.as_str())
                 .map(String::from),
+            "web_search" => call
+                .input
+                .get("query")
+                .and_then(|v| v.as_str())
+                .map(String::from),
             _ => {
                 // For MCP tools, try to extract a meaningful input
                 serde_json::to_string(&call.input).ok()
@@ -1342,6 +1387,14 @@ impl HookedToolExecutor {
                     .and_then(|v| v.as_str())
                     .unwrap_or("unknown URL");
                 format!("Fetch web content from: {url}")
+            }
+            "web_search" => {
+                let query = call
+                    .input
+                    .get("query")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown query");
+                format!("Search the web for: {query}")
             }
             name if name.starts_with("mcp__") => {
                 format!("Execute MCP tool: {name}")
