@@ -36,32 +36,69 @@ use super::storage;
 use super::OAuthCredentials;
 
 /// Default port for the local OAuth callback server.
-const DEFAULT_CALLBACK_PORT: u16 = 9876;
+/// Using the same port as Claude Code (54545) for compatibility.
+const DEFAULT_CALLBACK_PORT: u16 = 54545;
 
 /// Timeout for waiting for the OAuth callback.
 const CALLBACK_TIMEOUT: Duration = Duration::from_secs(300); // 5 minutes
 
 /// OAuth configuration.
 ///
-/// Note: These values would need to be discovered from Claude Code's actual
-/// OAuth implementation. These are placeholder values.
+/// # OAuth Status: DISABLED
+///
+/// OAuth authentication is currently disabled because Patina does not have
+/// a registered OAuth client_id with Anthropic.
+///
+/// Anthropic's OAuth endpoint requires `client_id` to be a valid UUID that
+/// has been registered through their developer program. Using an unregistered
+/// client_id (like "patina-cli") or borrowing another application's client_id
+/// (like Claude Code's) would violate Anthropic's Terms of Service.
+///
+/// To enable OAuth in the future:
+/// 1. Register Patina with Anthropic's developer program
+/// 2. Obtain a valid UUID client_id
+/// 3. Update the constants below with the registered values
+/// 4. Remove the `OAUTH_DISABLED` flag
+///
+/// For now, users should authenticate using API keys via the `ANTHROPIC_API_KEY`
+/// environment variable or the `--api-key` CLI flag.
 mod config {
+    /// Whether OAuth is currently disabled (pending client_id registration).
+    pub const OAUTH_DISABLED: bool = true;
+
+    /// Message explaining why OAuth is disabled.
+    pub const OAUTH_DISABLED_MESSAGE: &str = "\
+OAuth authentication is not yet available in Patina.
+
+Anthropic's OAuth requires a registered client_id, which Patina does not
+currently have. We are working with Anthropic to obtain proper OAuth
+credentials.
+
+In the meantime, please use API key authentication:
+  • Set the ANTHROPIC_API_KEY environment variable, or
+  • Use the --api-key flag
+
+You can obtain an API key from: https://console.anthropic.com/settings/keys";
+
     /// The authorization endpoint URL.
     ///
-    /// This would be something like `https://claude.ai/oauth/authorize` or
-    /// `https://accounts.anthropic.com/oauth/authorize`.
-    pub const AUTHORIZATION_URL: &str = "https://claude.ai/oauth/authorize";
+    /// Correct URL: `https://console.anthropic.com/oauth/authorize`
+    /// (Placeholder until we have a registered client_id)
+    pub const AUTHORIZATION_URL: &str = "https://console.anthropic.com/oauth/authorize";
 
     /// The token endpoint URL.
-    pub const TOKEN_URL: &str = "https://claude.ai/oauth/token";
+    pub const TOKEN_URL: &str = "https://console.anthropic.com/oauth/token";
 
     /// The client ID for Patina.
     ///
-    /// Note: This would need to be registered with Anthropic.
-    pub const CLIENT_ID: &str = "patina-cli";
+    /// PLACEHOLDER: Must be replaced with a valid UUID from Anthropic's
+    /// developer registration process.
+    pub const CLIENT_ID: &str = "00000000-0000-0000-0000-000000000000";
 
     /// The scopes to request.
-    pub const SCOPES: &str = "api.read api.write";
+    ///
+    /// Based on Claude Code's OAuth scopes.
+    pub const SCOPES: &str = "org:create_api_key user:profile user:inference";
 
     /// The redirect URI (local callback).
     #[must_use]
@@ -131,8 +168,14 @@ impl OAuthFlow {
     ///
     /// # Errors
     ///
-    /// Returns an error if any step of the flow fails.
+    /// Returns an error if OAuth is disabled (pending client_id registration)
+    /// or if any step of the flow fails.
     pub async fn run(&self) -> Result<OAuthCredentials> {
+        // Check if OAuth is disabled (pending client_id registration)
+        if config::OAUTH_DISABLED {
+            bail!("{}", config::OAUTH_DISABLED_MESSAGE);
+        }
+
         info!("Starting OAuth login flow");
 
         // Start local callback server

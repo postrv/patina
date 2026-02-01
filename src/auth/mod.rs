@@ -1,11 +1,28 @@
 //! Authentication module for Patina.
 //!
 //! This module provides support for multiple authentication methods:
-//! - API key authentication (traditional)
-//! - OAuth 2.0 authentication (Claude subscription)
+//! - API key authentication (traditional) - **ACTIVE**
+//! - OAuth 2.0 authentication (Claude subscription) - **DISABLED**
+//!
+//! # OAuth Status
+//!
+//! OAuth authentication is currently **disabled** because Patina does not have
+//! a registered OAuth client_id with Anthropic. Anthropic's OAuth endpoint
+//! requires a valid UUID that has been registered through their developer program.
+//!
+//! For now, please use API key authentication via `ANTHROPIC_API_KEY` or `--api-key`.
 //!
 //! # Architecture
 //!
+//! ```text
+//! Startup
+//!     ↓
+//! Check for API key (env var or CLI flag)
+//!     ├─ Found → Use API key
+//!     └─ Not found → Error
+//! ```
+//!
+//! When OAuth is enabled (future):
 //! ```text
 //! Startup
 //!     ↓
@@ -361,7 +378,10 @@ impl AuthManager {
             return Ok(auth);
         }
 
-        bail!("No authentication available. Set ANTHROPIC_API_KEY or use --oauth-login")
+        bail!(
+            "No authentication available. Set ANTHROPIC_API_KEY environment variable or use --api-key flag.\n\
+             Get your API key at: https://console.anthropic.com/settings/keys"
+        )
     }
 
     /// Clears the current authentication state.
