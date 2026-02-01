@@ -27,6 +27,8 @@
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
+use base64::engine::{general_purpose::URL_SAFE_NO_PAD, Engine};
+use rand::prelude::*;
 use secrecy::SecretString;
 use tiny_http::{Response, Server};
 use tracing::{debug, info, warn};
@@ -34,6 +36,12 @@ use tracing::{debug, info, warn};
 use super::pkce::PkceChallenge;
 use super::storage;
 use super::OAuthCredentials;
+
+/// Length of the state parameter in bytes (before base64 encoding).
+///
+/// RFC 6749 recommends using a random state parameter for CSRF protection.
+/// 32 bytes provides 256 bits of entropy.
+const STATE_LENGTH: usize = 32;
 
 /// Default port for the local OAuth callback server.
 /// Using the same port as Claude Code (54545) for compatibility.
@@ -115,6 +123,9 @@ pub struct OAuthFlow {
 
     /// The PKCE challenge for this flow.
     pkce: PkceChallenge,
+
+    /// The state parameter for CSRF protection (RFC 6749 Section 10.12).
+    state: String,
 }
 
 impl Default for OAuthFlow {
@@ -130,6 +141,7 @@ impl OAuthFlow {
         Self {
             callback_port: DEFAULT_CALLBACK_PORT,
             pkce: PkceChallenge::generate(),
+            state: generate_state(),
         }
     }
 
@@ -139,7 +151,16 @@ impl OAuthFlow {
         Self {
             callback_port: port,
             pkce: PkceChallenge::generate(),
+            state: generate_state(),
         }
+    }
+
+    /// Returns the state parameter for this flow.
+    ///
+    /// Used for CSRF protection per RFC 6749 Section 10.12.
+    #[must_use]
+    pub fn state(&self) -> &str {
+        &self.state
     }
 
     /// Builds the authorization URL.
@@ -147,11 +168,12 @@ impl OAuthFlow {
     pub fn authorization_url(&self) -> String {
         let redirect_uri = config::redirect_uri(self.callback_port);
         format!(
-            "{}?response_type=code&client_id={}&redirect_uri={}&scope={}&code_challenge={}&code_challenge_method={}",
+            "{}?response_type=code&client_id={}&redirect_uri={}&scope={}&state={}&code_challenge={}&code_challenge_method={}",
             config::AUTHORIZATION_URL,
             urlencoding::encode(config::CLIENT_ID),
             urlencoding::encode(&redirect_uri),
             urlencoding::encode(config::SCOPES),
+            urlencoding::encode(&self.state),
             urlencoding::encode(self.pkce.challenge()),
             self.pkce.challenge_method()
         )
@@ -225,6 +247,7 @@ impl OAuthFlow {
     async fn wait_for_callback(&self, server: Server) -> Result<String> {
         // Create a channel to receive the result
         let (tx, rx) = tokio::sync::oneshot::channel();
+        let expected_state = self.state.clone();
 
         // Use a thread for the blocking HTTP server
         std::thread::spawn(move || {
@@ -234,6 +257,22 @@ impl OAuthFlow {
 
                 // Parse the URL to extract the code
                 if let Some(code) = extract_code_from_url(&url) {
+                    // Validate state parameter for CSRF protection (RFC 6749 Section 10.12)
+                    let callback_state = extract_state_from_url(&url);
+                    if callback_state.as_deref() != Some(expected_state.as_str()) {
+                        // State mismatch - possible CSRF attack
+                        let response = Response::from_string(
+                            "<html><body><h1>Authentication failed</h1><p>State parameter mismatch. Please try again.</p></body></html>"
+                        ).with_header(
+                            tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"text/html"[..]).unwrap()
+                        );
+                        let _ = request.respond(response);
+                        let _ = tx.send(Err(anyhow::anyhow!(
+                            "State parameter mismatch - possible CSRF attack"
+                        )));
+                        return;
+                    }
+
                     // Send success response
                     let response = Response::from_string(
                         "<html><body><h1>Authentication successful!</h1><p>You can close this window.</p></body></html>"
@@ -324,12 +363,33 @@ struct TokenResponse {
     _token_type: String,
 }
 
+/// Generates a cryptographically random state parameter for CSRF protection.
+///
+/// The state is base64url encoded to ensure it contains only safe characters.
+fn generate_state() -> String {
+    let mut rng = rand::thread_rng();
+    let random_bytes: Vec<u8> = (0..STATE_LENGTH).map(|_| rng.gen()).collect();
+    URL_SAFE_NO_PAD.encode(random_bytes)
+}
+
 /// Extracts the authorization code from a callback URL.
 fn extract_code_from_url(url: &str) -> Option<String> {
     // URL format: /callback?code=ABC123&state=...
     url.split('?').nth(1)?.split('&').find_map(|param| {
         let (key, value) = param.split_once('=')?;
         if key == "code" {
+            Some(urlencoding::decode(value).ok()?.into_owned())
+        } else {
+            None
+        }
+    })
+}
+
+/// Extracts the state parameter from a callback URL.
+fn extract_state_from_url(url: &str) -> Option<String> {
+    url.split('?').nth(1)?.split('&').find_map(|param| {
+        let (key, value) = param.split_once('=')?;
+        if key == "state" {
             Some(urlencoding::decode(value).ok()?.into_owned())
         } else {
             None
@@ -369,6 +429,24 @@ mod tests {
     }
 
     #[test]
+    fn test_extract_state_from_url() {
+        let url = "/callback?code=ABC123&state=xyz123";
+        assert_eq!(extract_state_from_url(url), Some("xyz123".to_string()));
+
+        let url = "/callback?state=abc456&code=DEF789";
+        assert_eq!(extract_state_from_url(url), Some("abc456".to_string()));
+
+        let url = "/callback?code=ABC123";
+        assert_eq!(extract_state_from_url(url), None);
+
+        let url = "/callback?state=url%20encoded%20state";
+        assert_eq!(
+            extract_state_from_url(url),
+            Some("url encoded state".to_string())
+        );
+    }
+
+    #[test]
     fn test_extract_error_from_url() {
         let url = "/callback?error=access_denied";
         assert_eq!(
@@ -399,6 +477,46 @@ mod tests {
     }
 
     #[test]
+    fn test_oauth_flow_has_state() {
+        let flow = OAuthFlow::new();
+        // State should be a non-empty base64url encoded string
+        let state = flow.state();
+        assert!(!state.is_empty(), "State parameter should not be empty");
+        // 32 bytes base64url encoded = 43 characters
+        assert_eq!(
+            state.len(),
+            43,
+            "State should be 43 chars (32 bytes base64url)"
+        );
+    }
+
+    #[test]
+    fn test_oauth_flow_unique_state_per_instance() {
+        let flow1 = OAuthFlow::new();
+        let flow2 = OAuthFlow::new();
+
+        assert_ne!(
+            flow1.state(),
+            flow2.state(),
+            "Each OAuthFlow instance should have unique state"
+        );
+    }
+
+    #[test]
+    fn test_state_uses_valid_base64url_chars() {
+        // Generate multiple states to increase confidence
+        for _ in 0..10 {
+            let state = generate_state();
+            for c in state.chars() {
+                assert!(
+                    c.is_ascii_alphanumeric() || c == '-' || c == '_',
+                    "Invalid character in state: {c}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn test_authorization_url_format() {
         let flow = OAuthFlow::new();
         let url = flow.authorization_url();
@@ -407,7 +525,20 @@ mod tests {
         assert!(url.contains("response_type=code"));
         assert!(url.contains("client_id="));
         assert!(url.contains("redirect_uri="));
+        assert!(url.contains("state="));
         assert!(url.contains("code_challenge="));
         assert!(url.contains("code_challenge_method=S256"));
+    }
+
+    #[test]
+    fn test_authorization_url_includes_state_parameter() {
+        let flow = OAuthFlow::new();
+        let url = flow.authorization_url();
+
+        // Verify state parameter is present and matches the flow's state
+        assert!(
+            url.contains(&format!("state={}", urlencoding::encode(flow.state()))),
+            "Auth URL should include the flow's state parameter"
+        );
     }
 }
