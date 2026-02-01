@@ -8,7 +8,7 @@ pub mod tools;
 // Re-export token utilities for convenience
 pub use tokens::{
     estimate_image_tokens, estimate_message_tokens, estimate_messages_tokens, estimate_tokens,
-    DEFAULT_IMAGE_TOKENS,
+    TokenBudget, TokenEstimator, DEFAULT_IMAGE_TOKENS,
 };
 
 // Re-export context utilities for convenience

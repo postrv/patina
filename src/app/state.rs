@@ -1,7 +1,7 @@
 //! Application state management
 
 use crate::api::tools::default_tools;
-use crate::api::{AnthropicClient, StreamEvent, ToolChoice};
+use crate::api::{AnthropicClient, StreamEvent, TokenBudget, ToolChoice};
 use crate::app::tool_loop::{ContinuationData, ToolLoop, ToolLoopState};
 use crate::hooks::HookManager;
 use crate::permissions::{PermissionManager, PermissionRequest, PermissionResponse};
@@ -149,6 +149,10 @@ pub struct AppState {
     /// Which area of the UI currently has focus.
     /// Determines how shortcuts like Ctrl+A behave.
     focus_area: FocusArea,
+
+    /// Token budget tracking for the current session.
+    /// Displays usage in the status bar with color-coded warnings.
+    token_budget: TokenBudget,
 }
 
 #[derive(Default)]
@@ -221,6 +225,7 @@ impl AppState {
             copy_pending: false,
             rendered_lines_cache: Vec::new(),
             focus_area: FocusArea::default(),
+            token_budget: TokenBudget::new(100_000), // Claude's typical context window
         }
     }
 
@@ -884,6 +889,35 @@ impl AppState {
     #[must_use]
     pub fn worktree_behind(&self) -> usize {
         self.worktree_behind
+    }
+
+    // ========================================================================
+    // Token Budget Tracking
+    // ========================================================================
+
+    /// Returns a reference to the token budget for display.
+    #[must_use]
+    pub fn token_budget(&self) -> &TokenBudget {
+        &self.token_budget
+    }
+
+    /// Returns a mutable reference to the token budget.
+    pub fn token_budget_mut(&mut self) -> &mut TokenBudget {
+        &mut self.token_budget
+    }
+
+    /// Adds token usage to the budget.
+    ///
+    /// Call this after each API request to track cumulative usage.
+    pub fn add_token_usage(&mut self, tokens: usize) {
+        self.token_budget.add_usage(tokens);
+        self.dirty.full = true;
+    }
+
+    /// Resets the token budget for a new conversation.
+    pub fn reset_token_budget(&mut self) {
+        self.token_budget.reset();
+        self.dirty.full = true;
     }
 
     // ========================================================================

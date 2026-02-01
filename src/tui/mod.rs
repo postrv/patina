@@ -699,6 +699,23 @@ fn render_status_bar(frame: &mut Frame, area: Rect, state: &AppState) {
         ));
     }
 
+    // Token budget display (color-coded based on usage)
+    let budget = state.token_budget();
+    if budget.used() > 0 {
+        spans.push(Span::raw(" "));
+        let budget_color = if budget.is_critical() {
+            PatinaTheme::ERROR
+        } else if budget.is_warning() {
+            PatinaTheme::WARNING
+        } else {
+            PatinaTheme::SUCCESS
+        };
+        spans.push(Span::styled(
+            format!("{}k/{}k", budget.used() / 1000, budget.limit() / 1000),
+            Style::default().fg(budget_color),
+        ));
+    }
+
     // Scroll indicator (right side)
     let scroll = state.scroll_state();
     let mode_char = match scroll.mode() {
