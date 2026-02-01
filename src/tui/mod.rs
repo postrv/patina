@@ -159,6 +159,14 @@ pub fn render_timeline_with_throbber(timeline: &Timeline, throbber: char) -> Vec
             } => {
                 render_tool_execution(&mut lines, name, input, output.as_deref(), *is_error);
             }
+            ConversationEntry::ImageDisplay {
+                width,
+                height,
+                alt_text,
+                ..
+            } => {
+                render_image_display(&mut lines, *width, *height, alt_text.as_deref());
+            }
         }
     }
 
@@ -232,6 +240,45 @@ fn render_streaming_entry_with_throbber(
             PatinaTheme::assistant_message(),
         )));
     }
+}
+
+/// Renders an image display entry to lines.
+///
+/// For now, this renders a placeholder showing image dimensions and alt text.
+/// Future implementations could integrate with `ImageDisplayWidget` for
+/// actual graphical rendering in supported terminals.
+fn render_image_display(
+    lines: &mut Vec<Line<'static>>,
+    width: u32,
+    height: u32,
+    alt_text: Option<&str>,
+) {
+    let alt = alt_text.unwrap_or("image");
+
+    // Image header
+    lines.push(Line::from(vec![
+        Span::styled(
+            "  📷 ".to_string(),
+            Style::default().fg(PatinaTheme::VERDIGRIS),
+        ),
+        Span::styled(
+            format!("Image ({width}×{height})"),
+            Style::default()
+                .fg(PatinaTheme::VERDIGRIS_BRIGHT)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ]));
+
+    // Alt text / description
+    lines.push(Line::from(vec![
+        Span::styled("    › ".to_string(), PatinaTheme::prompt()),
+        Span::styled(
+            alt.to_string(),
+            Style::default().fg(PatinaTheme::TOOL_CONTENT),
+        ),
+    ]));
+
+    lines.push(Line::from("")); // Spacer
 }
 
 /// Renders a tool execution entry to lines.
@@ -1122,5 +1169,75 @@ mod tests {
             height,
             "wrap_lines_to_strings count should match calculate_wrapped_height"
         );
+    }
+
+    // =========================================================================
+    // Image display rendering tests
+    // =========================================================================
+
+    #[test]
+    fn test_render_timeline_with_image() {
+        let mut timeline = Timeline::new();
+        timeline.push_user_message("Here's an image:");
+        timeline.push_image(
+            800,
+            600,
+            vec![0; 800 * 600 * 4],
+            Some("screenshot".to_string()),
+        );
+        timeline.push_assistant_message("I see the image.");
+
+        let lines = render_timeline_to_lines(&timeline, 80);
+
+        // Should contain user message, image display, and assistant message
+        let content: String = lines.iter().map(|l| format!("{}\n", l)).collect();
+
+        assert!(content.contains("You:"), "Should have user label");
+        assert!(
+            content.contains("Here's an image:"),
+            "Should have user message"
+        );
+        assert!(
+            content.contains("Image (800×600)"),
+            "Should have image dimensions"
+        );
+        assert!(content.contains("screenshot"), "Should have alt text");
+        assert!(content.contains("Patina:"), "Should have assistant label");
+        assert!(
+            content.contains("I see the image."),
+            "Should have assistant message"
+        );
+    }
+
+    #[test]
+    fn test_render_timeline_with_image_no_alt() {
+        let mut timeline = Timeline::new();
+        timeline.push_image(100, 50, vec![0; 100 * 50 * 4], None);
+
+        let lines = render_timeline_to_lines(&timeline, 80);
+        let content: String = lines.iter().map(|l| format!("{}\n", l)).collect();
+
+        assert!(
+            content.contains("Image (100×50)"),
+            "Should have image dimensions"
+        );
+        assert!(
+            content.contains("image"),
+            "Should have default 'image' text when no alt"
+        );
+    }
+
+    #[test]
+    fn test_render_image_display_produces_multiple_lines() {
+        let mut lines = Vec::new();
+        render_image_display(&mut lines, 1920, 1080, Some("4K display"));
+
+        // Should produce: header line, alt text line, spacer
+        assert_eq!(lines.len(), 3, "Should produce 3 lines");
+
+        let content: String = lines.iter().map(|l| format!("{}\n", l)).collect();
+        assert!(content.contains("📷"), "Should have camera emoji");
+        assert!(content.contains("1920×1080"), "Should have dimensions");
+        assert!(content.contains("4K display"), "Should have alt text");
     }
 }
