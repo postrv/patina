@@ -126,6 +126,12 @@ pub struct OAuthFlow {
 
     /// The state parameter for CSRF protection (RFC 6749 Section 10.12).
     state: String,
+
+    /// Custom OAuth client ID (overrides the default placeholder).
+    ///
+    /// When set, enables OAuth flow even if `OAUTH_DISABLED` is true,
+    /// as this indicates the user has a registered client ID.
+    custom_client_id: Option<String>,
 }
 
 impl Default for OAuthFlow {
@@ -142,6 +148,7 @@ impl OAuthFlow {
             callback_port: DEFAULT_CALLBACK_PORT,
             pkce: PkceChallenge::generate(),
             state: generate_state(),
+            custom_client_id: None,
         }
     }
 
@@ -152,7 +159,45 @@ impl OAuthFlow {
             callback_port: port,
             pkce: PkceChallenge::generate(),
             state: generate_state(),
+            custom_client_id: None,
         }
+    }
+
+    /// Sets a custom OAuth client ID.
+    ///
+    /// When a custom client ID is provided, OAuth is enabled even if
+    /// `OAUTH_DISABLED` is true in the config, as this indicates the
+    /// user has obtained a registered client ID from Anthropic.
+    #[must_use]
+    pub fn with_client_id(mut self, client_id: impl Into<String>) -> Self {
+        self.custom_client_id = Some(client_id.into());
+        self
+    }
+
+    /// Returns the custom client ID if set.
+    #[must_use]
+    pub fn client_id(&self) -> Option<&str> {
+        self.custom_client_id.as_deref()
+    }
+
+    /// Returns the effective client ID to use in the OAuth flow.
+    ///
+    /// Uses the custom client ID if set, otherwise falls back to the default.
+    #[must_use]
+    fn effective_client_id(&self) -> &str {
+        self.custom_client_id
+            .as_deref()
+            .unwrap_or(config::CLIENT_ID)
+    }
+
+    /// Returns whether OAuth is enabled for this flow.
+    ///
+    /// OAuth is enabled if:
+    /// - A custom client ID has been provided, OR
+    /// - The `OAUTH_DISABLED` flag is false
+    #[must_use]
+    pub fn is_enabled(&self) -> bool {
+        self.custom_client_id.is_some() || !config::OAUTH_DISABLED
     }
 
     /// Returns the state parameter for this flow.
@@ -170,7 +215,7 @@ impl OAuthFlow {
         format!(
             "{}?response_type=code&client_id={}&redirect_uri={}&scope={}&state={}&code_challenge={}&code_challenge_method={}",
             config::AUTHORIZATION_URL,
-            urlencoding::encode(config::CLIENT_ID),
+            urlencoding::encode(self.effective_client_id()),
             urlencoding::encode(&redirect_uri),
             urlencoding::encode(config::SCOPES),
             urlencoding::encode(&self.state),
@@ -193,8 +238,8 @@ impl OAuthFlow {
     /// Returns an error if OAuth is disabled (pending client_id registration)
     /// or if any step of the flow fails.
     pub async fn run(&self) -> Result<OAuthCredentials> {
-        // Check if OAuth is disabled (pending client_id registration)
-        if config::OAUTH_DISABLED {
+        // Check if OAuth is enabled
+        if !self.is_enabled() {
             bail!("{}", config::OAUTH_DISABLED_MESSAGE);
         }
 
@@ -325,7 +370,7 @@ impl OAuthFlow {
             .post(config::TOKEN_URL)
             .form(&[
                 ("grant_type", "authorization_code"),
-                ("client_id", config::CLIENT_ID),
+                ("client_id", self.effective_client_id()),
                 ("code", code),
                 ("redirect_uri", &redirect_uri),
                 ("code_verifier", self.pkce.verifier()),
@@ -540,5 +585,65 @@ mod tests {
             url.contains(&format!("state={}", urlencoding::encode(flow.state()))),
             "Auth URL should include the flow's state parameter"
         );
+    }
+
+    // =========================================================================
+    // Task 0.8.4: OAuth client_id injection tests
+    // =========================================================================
+
+    #[test]
+    fn test_oauth_flow_with_client_id() {
+        let custom_id = "12345678-1234-1234-1234-123456789abc";
+        let flow = OAuthFlow::new().with_client_id(custom_id);
+
+        assert_eq!(flow.client_id(), Some(custom_id));
+    }
+
+    #[test]
+    fn test_oauth_flow_default_client_id_is_none() {
+        let flow = OAuthFlow::new();
+        assert!(flow.client_id().is_none());
+    }
+
+    #[test]
+    fn test_authorization_url_uses_custom_client_id() {
+        let custom_id = "my-custom-client-id";
+        let flow = OAuthFlow::new().with_client_id(custom_id);
+        let url = flow.authorization_url();
+
+        assert!(
+            url.contains(&format!("client_id={}", urlencoding::encode(custom_id))),
+            "Auth URL should use the custom client_id"
+        );
+    }
+
+    #[test]
+    fn test_authorization_url_uses_default_client_id_when_none() {
+        let flow = OAuthFlow::new();
+        let url = flow.authorization_url();
+
+        assert!(
+            url.contains(&format!(
+                "client_id={}",
+                urlencoding::encode(config::CLIENT_ID)
+            )),
+            "Auth URL should use default client_id when custom is not set"
+        );
+    }
+
+    #[test]
+    fn test_oauth_flow_is_enabled_with_custom_client_id() {
+        let flow = OAuthFlow::new().with_client_id("custom-id");
+        assert!(
+            flow.is_enabled(),
+            "OAuth should be enabled when custom client_id is provided"
+        );
+    }
+
+    #[test]
+    fn test_oauth_flow_is_disabled_by_default() {
+        let flow = OAuthFlow::new();
+        // OAuth is disabled by default (no custom client_id and OAUTH_DISABLED is true)
+        assert!(!flow.is_enabled(), "OAuth should be disabled by default");
     }
 }
