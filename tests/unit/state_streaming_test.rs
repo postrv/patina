@@ -6,6 +6,7 @@
 //! - Scroll auto-follow works during streaming
 
 use patina::app::state::AppState;
+use patina::types::config::ParallelMode;
 use patina::types::{ConversationEntry, Role, StopReason, StreamEvent};
 use std::path::PathBuf;
 
@@ -29,7 +30,7 @@ fn is_auto_scrolling(state: &AppState) -> bool {
 /// to API messages (handle_tool_execution will add it later with proper tool_use blocks).
 #[test]
 fn test_tool_use_no_duplicate_message() {
-    let mut state = AppState::new(PathBuf::from("/tmp"), true);
+    let mut state = AppState::new(PathBuf::from("/tmp"), true, ParallelMode::Enabled);
 
     // Start streaming
     state.set_streaming(true);
@@ -67,7 +68,7 @@ fn test_tool_use_no_duplicate_message() {
 /// Tests that normal message completion DOES add the assistant message.
 #[test]
 fn test_normal_completion_adds_message() {
-    let mut state = AppState::new(PathBuf::from("/tmp"), true);
+    let mut state = AppState::new(PathBuf::from("/tmp"), true, ParallelMode::Enabled);
 
     // Initialize streaming
     state.set_streaming(true);
@@ -104,7 +105,7 @@ fn test_normal_completion_adds_message() {
 /// Tests that streaming updates the timeline.
 #[test]
 fn test_streaming_updates_timeline() {
-    let mut state = AppState::new(PathBuf::from("/tmp"), true);
+    let mut state = AppState::new(PathBuf::from("/tmp"), true, ParallelMode::Enabled);
 
     // Initialize streaming
     state.set_streaming(true);
@@ -133,7 +134,7 @@ fn test_streaming_updates_timeline() {
 /// This test simulates what handle_tool_execution should produce.
 #[test]
 fn test_message_ordering_with_tools() {
-    let mut state = AppState::new(PathBuf::from("/tmp"), true);
+    let mut state = AppState::new(PathBuf::from("/tmp"), true, ParallelMode::Enabled);
 
     // Simulate the correct ordering that handle_tool_execution should produce:
     // 1. User message
@@ -169,7 +170,7 @@ fn test_message_ordering_with_tools() {
 /// Tests that multiple tool calls maintain correct ordering.
 #[test]
 fn test_multiple_tools_ordering() {
-    let mut state = AppState::new(PathBuf::from("/tmp"), true);
+    let mut state = AppState::new(PathBuf::from("/tmp"), true, ParallelMode::Enabled);
 
     // User message
     state.add_message(patina::Message {
@@ -205,7 +206,7 @@ fn test_multiple_tools_ordering() {
 /// Tests that adding a message triggers scroll to bottom when in auto-follow mode.
 #[test]
 fn test_scroll_follows_new_message() {
-    let mut state = AppState::new(PathBuf::from("/tmp"), true);
+    let mut state = AppState::new(PathBuf::from("/tmp"), true, ParallelMode::Enabled);
 
     // Set up some content height for scroll to matter
     state.update_content_height(100);
@@ -229,7 +230,7 @@ fn test_scroll_follows_new_message() {
 /// Tests that scroll follows during streaming.
 #[test]
 fn test_scroll_follows_streaming() {
-    let mut state = AppState::new(PathBuf::from("/tmp"), true);
+    let mut state = AppState::new(PathBuf::from("/tmp"), true, ParallelMode::Enabled);
 
     // Set up content height
     state.update_content_height(100);
@@ -252,7 +253,7 @@ fn test_scroll_follows_streaming() {
 /// Tests that adding tool blocks triggers scroll follow.
 #[test]
 fn test_scroll_follows_tool_block() {
-    let mut state = AppState::new(PathBuf::from("/tmp"), true);
+    let mut state = AppState::new(PathBuf::from("/tmp"), true, ParallelMode::Enabled);
 
     // Set up content height
     state.update_content_height(100);
@@ -283,7 +284,7 @@ fn test_scroll_follows_tool_block() {
 /// Tests that MessageStop also doesn't cause issues with timeline.
 #[test]
 fn test_message_stop_updates_timeline() {
-    let mut state = AppState::new(PathBuf::from("/tmp"), true);
+    let mut state = AppState::new(PathBuf::from("/tmp"), true, ParallelMode::Enabled);
 
     // Initialize streaming
     state.set_streaming(true);
@@ -308,7 +309,7 @@ fn test_message_stop_updates_timeline() {
 /// Tests that empty streaming content handles gracefully.
 #[test]
 fn test_empty_streaming_content() {
-    let mut state = AppState::new(PathBuf::from("/tmp"), true);
+    let mut state = AppState::new(PathBuf::from("/tmp"), true, ParallelMode::Enabled);
 
     // Initialize streaming
     state.set_streaming(true);
@@ -335,7 +336,7 @@ fn test_empty_streaming_content() {
 /// if the timeline is still streaming.
 #[test]
 fn test_message_complete_and_stop_no_duplicate() {
-    let mut state = AppState::new(PathBuf::from("/tmp"), true);
+    let mut state = AppState::new(PathBuf::from("/tmp"), true, ParallelMode::Enabled);
 
     // Initialize streaming
     state.set_streaming(true);
@@ -376,7 +377,7 @@ fn test_message_complete_and_stop_no_duplicate() {
 /// Tests that MessageStop alone still works correctly.
 #[test]
 fn test_message_stop_alone_works() {
-    let mut state = AppState::new(PathBuf::from("/tmp"), true);
+    let mut state = AppState::new(PathBuf::from("/tmp"), true, ParallelMode::Enabled);
 
     // Initialize streaming
     state.set_streaming(true);
@@ -411,7 +412,7 @@ fn test_message_stop_alone_works() {
 /// Tests that tool_use responses don't duplicate either with both events.
 #[test]
 fn test_tool_use_no_duplicate_with_both_events() {
-    let mut state = AppState::new(PathBuf::from("/tmp"), true);
+    let mut state = AppState::new(PathBuf::from("/tmp"), true, ParallelMode::Enabled);
 
     // Initialize streaming
     state.set_streaming(true);

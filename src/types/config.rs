@@ -33,6 +33,34 @@ impl ResumeMode {
     }
 }
 
+/// Controls parallel tool execution mode.
+///
+/// Parallel execution improves performance by running read-only tools
+/// concurrently. This enum determines the level of parallelization.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ParallelMode {
+    /// Parallel execution enabled with conservative settings.
+    ///
+    /// Only parallelizes tools that are definitely read-only:
+    /// - `read_file`, `glob`, `grep`, `list_files`
+    /// - Bash commands from a safe whitelist (e.g., `ls`, `cat`, `git status`)
+    #[default]
+    Enabled,
+
+    /// Parallel execution disabled.
+    ///
+    /// All tools run sequentially. Use when debugging race conditions
+    /// or when tool order matters.
+    Disabled,
+
+    /// Aggressive parallel execution.
+    ///
+    /// Also parallelizes tools with unknown side effects.
+    /// WARNING: Can cause race conditions with MCP tools or bash commands.
+    /// Only use when you understand the risks.
+    Aggressive,
+}
+
 /// Controls how narsil-mcp integration is enabled.
 ///
 /// Narsil provides code intelligence and security scanning capabilities.
@@ -75,6 +103,7 @@ pub enum NarsilMode {
 ///     model: "claude-sonnet-4-20250514".to_string(),
 ///     working_dir: PathBuf::from("."),
 ///     narsil_mode: NarsilMode::Auto,
+///     parallel_mode: ParallelMode::Enabled,
 ///     resume_mode: ResumeMode::None,
 ///     skip_permissions: false,
 ///     initial_prompt: None,
@@ -103,6 +132,11 @@ pub struct Config {
     ///
     /// Controls whether narsil code intelligence is enabled.
     pub narsil_mode: NarsilMode,
+
+    /// Parallel tool execution mode.
+    ///
+    /// Controls whether and how tools are executed in parallel.
+    pub parallel_mode: ParallelMode,
 
     /// Session resume mode.
     ///
@@ -177,6 +211,7 @@ impl Config {
             model: model.into(),
             working_dir,
             narsil_mode: NarsilMode::Auto,
+            parallel_mode: ParallelMode::Enabled,
             resume_mode: ResumeMode::None,
             skip_permissions: false,
             initial_prompt: None,
@@ -215,6 +250,37 @@ impl Config {
     #[must_use]
     pub fn narsil_mode(&self) -> NarsilMode {
         self.narsil_mode
+    }
+
+    /// Sets the parallel execution mode for this configuration.
+    ///
+    /// # Arguments
+    ///
+    /// * `mode` - The parallel execution mode to use
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use patina::types::config::{Config, ParallelMode};
+    /// use secrecy::SecretString;
+    /// use std::path::PathBuf;
+    ///
+    /// let config = Config::new(
+    ///     SecretString::new("sk-ant-api...".into()),
+    ///     "claude-sonnet-4-20250514",
+    ///     PathBuf::from("."),
+    /// ).with_parallel_mode(ParallelMode::Disabled);
+    /// ```
+    #[must_use]
+    pub fn with_parallel_mode(mut self, mode: ParallelMode) -> Self {
+        self.parallel_mode = mode;
+        self
+    }
+
+    /// Returns the parallel execution mode.
+    #[must_use]
+    pub fn parallel_mode(&self) -> ParallelMode {
+        self.parallel_mode
     }
 
     /// Returns the model identifier.
@@ -390,6 +456,7 @@ mod tests {
             model: "claude-opus-4-20250514".to_string(),
             working_dir: PathBuf::from("."),
             narsil_mode: NarsilMode::Auto,
+            parallel_mode: ParallelMode::Enabled,
             resume_mode: ResumeMode::None,
             skip_permissions: false,
             initial_prompt: None,
@@ -409,6 +476,7 @@ mod tests {
             model: "model".to_string(),
             working_dir: path.clone(),
             narsil_mode: NarsilMode::Auto,
+            parallel_mode: ParallelMode::Enabled,
             resume_mode: ResumeMode::None,
             skip_permissions: false,
             initial_prompt: None,
@@ -439,6 +507,42 @@ mod tests {
             .with_narsil_mode(NarsilMode::Disabled);
 
         assert_eq!(config.narsil_mode(), NarsilMode::Disabled);
+    }
+
+    // =========================================================================
+    // Phase 1.5: Parallel mode tests
+    // =========================================================================
+
+    #[test]
+    fn test_parallel_mode_default() {
+        assert_eq!(ParallelMode::default(), ParallelMode::Enabled);
+    }
+
+    #[test]
+    fn test_config_default_parallel_mode() {
+        let config = Config::new(
+            SecretString::new("test-key".into()),
+            "test-model",
+            PathBuf::from("/tmp"),
+        );
+
+        assert_eq!(config.parallel_mode(), ParallelMode::Enabled);
+    }
+
+    #[test]
+    fn test_config_with_parallel_disabled() {
+        let config = Config::new(SecretString::new("key".into()), "model", PathBuf::from("."))
+            .with_parallel_mode(ParallelMode::Disabled);
+
+        assert_eq!(config.parallel_mode(), ParallelMode::Disabled);
+    }
+
+    #[test]
+    fn test_config_with_parallel_aggressive() {
+        let config = Config::new(SecretString::new("key".into()), "model", PathBuf::from("."))
+            .with_parallel_mode(ParallelMode::Aggressive);
+
+        assert_eq!(config.parallel_mode(), ParallelMode::Aggressive);
     }
 
     // =========================================================================

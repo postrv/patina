@@ -13,6 +13,7 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use patina::app::state::AppState;
 use patina::tui::render;
+use patina::types::config::ParallelMode;
 use patina::types::message::{Message, Role};
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
@@ -20,7 +21,7 @@ use std::path::PathBuf;
 
 /// Creates an AppState populated with the specified number of messages.
 fn create_state_with_messages(message_count: usize) -> AppState {
-    let mut state = AppState::new(PathBuf::from("/tmp"), false);
+    let mut state = AppState::new(PathBuf::from("/tmp"), false, ParallelMode::Enabled);
 
     for i in 0..message_count {
         let role = if i % 2 == 0 {
@@ -126,7 +127,7 @@ fn bench_input_character_echo(c: &mut Criterion) {
         b.iter_batched(
             || {
                 // Setup: Create state with some existing input
-                let mut state = AppState::new(PathBuf::from("/tmp"), false);
+                let mut state = AppState::new(PathBuf::from("/tmp"), false, ParallelMode::Enabled);
                 state.input = "Hello, this is some existing input text".to_string();
                 state
             },
@@ -148,7 +149,7 @@ fn bench_cursor_movement(c: &mut Criterion) {
     c.bench_function("cursor_movement", |b| {
         b.iter_batched(
             || {
-                let mut state = AppState::new(PathBuf::from("/tmp"), false);
+                let mut state = AppState::new(PathBuf::from("/tmp"), false, ParallelMode::Enabled);
                 state.input = "Hello, this is some text for cursor movement testing".to_string();
                 // Move cursor to middle
                 for _ in 0..25 {
@@ -193,7 +194,7 @@ fn bench_scroll_operations(c: &mut Criterion) {
 ///
 /// Tests rendering performance with messages containing very long content.
 fn bench_large_message_rendering(c: &mut Criterion) {
-    let mut state = AppState::new(PathBuf::from("/tmp"), false);
+    let mut state = AppState::new(PathBuf::from("/tmp"), false, ParallelMode::Enabled);
 
     // Create messages with very long content (simulating code blocks, etc.)
     for i in 0..20 {

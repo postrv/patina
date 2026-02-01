@@ -5,6 +5,7 @@
 
 use patina::app::state::AppState;
 use patina::tui::render;
+use patina::types::config::ParallelMode;
 use patina::types::{Message, Role};
 use ratatui::{backend::TestBackend, Terminal};
 use std::path::PathBuf;
@@ -35,7 +36,7 @@ fn render_to_string(state: &mut AppState, width: u16, height: u16) -> String {
 
 /// Helper to create a new AppState for testing.
 fn new_state() -> AppState {
-    AppState::new(PathBuf::from("/tmp/test"), false)
+    AppState::new(PathBuf::from("/tmp/test"), false, ParallelMode::Enabled)
 }
 
 // ============================================================================

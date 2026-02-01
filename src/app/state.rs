@@ -6,10 +6,11 @@ use crate::app::tool_loop::{ContinuationData, ToolLoop, ToolLoopState};
 use crate::hooks::HookManager;
 use crate::permissions::{PermissionManager, PermissionRequest, PermissionResponse};
 use crate::session::Session;
-use crate::tools::HookedToolExecutor;
+use crate::tools::{HookedToolExecutor, ParallelConfig};
 use crate::tui::scroll::ScrollState;
 use crate::tui::selection::{FocusArea, SelectionState};
 use crate::tui::widgets::{CompactionProgressState, ToolBlockState};
+use crate::types::config::ParallelMode;
 use crate::types::content::StopReason;
 use crate::types::{ApiMessageV2, Message, Role, Timeline};
 use anyhow::Result;
@@ -183,7 +184,8 @@ impl AppState {
     ///
     /// * `working_dir` - The working directory for file operations
     /// * `skip_permissions` - If true, bypass all permission prompts
-    pub fn new(working_dir: PathBuf, skip_permissions: bool) -> Self {
+    /// * `parallel_mode` - Controls parallel tool execution
+    pub fn new(working_dir: PathBuf, skip_permissions: bool, parallel_mode: ParallelMode) -> Self {
         // Generate a unique session ID for hooks
         let hook_session_id = uuid::Uuid::new_v4().to_string();
         let hook_manager = HookManager::new(hook_session_id);
@@ -193,10 +195,18 @@ impl AppState {
         pm.set_skip_permissions(skip_permissions);
         let permission_manager = Arc::new(Mutex::new(pm));
 
-        // Create tool executor with hook and permission integration
+        // Convert ParallelMode to ParallelConfig
+        let parallel_config = match parallel_mode {
+            ParallelMode::Enabled => ParallelConfig::enabled(),
+            ParallelMode::Disabled => ParallelConfig::disabled(),
+            ParallelMode::Aggressive => ParallelConfig::aggressive(),
+        };
+
+        // Create tool executor with hook, permission, and parallel configuration
         let tool_executor = Arc::new(
             HookedToolExecutor::new(working_dir.clone(), hook_manager)
-                .with_permissions(Arc::clone(&permission_manager)),
+                .with_permissions(Arc::clone(&permission_manager))
+                .with_parallel_config(parallel_config),
         );
 
         Self {
@@ -1684,7 +1694,7 @@ mod tests {
 
     #[test]
     fn test_app_state_new() {
-        let state = AppState::new(PathBuf::from("/test"), false);
+        let state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
         assert!(state.timeline().is_empty());
         assert!(state.input.is_empty());
         assert_eq!(state.scroll_offset(), 0);
@@ -1694,7 +1704,7 @@ mod tests {
     #[test]
     fn test_restore_from_session_messages() {
         use crate::types::ConversationEntry;
-        let mut state = AppState::new(PathBuf::from("/test"), false);
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
 
         // Create a session with messages
         let mut session = Session::new(PathBuf::from("/project"));
@@ -1711,7 +1721,7 @@ mod tests {
 
     #[test]
     fn test_restore_from_session_with_ui_state() {
-        let mut state = AppState::new(PathBuf::from("/test"), false);
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
 
         // Create a session with UI state
         let mut session = Session::new(PathBuf::from("/project"));
@@ -1727,7 +1737,7 @@ mod tests {
 
     #[test]
     fn test_restore_from_session_without_ui_state() {
-        let mut state = AppState::new(PathBuf::from("/test"), false);
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
         // Set some initial state
         state.scroll.restore_offset(100);
         state.input = "existing".to_string();
@@ -1747,7 +1757,7 @@ mod tests {
 
     #[test]
     fn test_restore_marks_dirty() {
-        let mut state = AppState::new(PathBuf::from("/test"), false);
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
         state.mark_rendered(); // Clear dirty flags
 
         let session = Session::new(PathBuf::from("/project"));
@@ -1762,20 +1772,20 @@ mod tests {
 
     #[test]
     fn test_app_state_session_id_none_initially() {
-        let state = AppState::new(PathBuf::from("/test"), false);
+        let state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
         assert!(state.session_id().is_none());
     }
 
     #[test]
     fn test_app_state_set_session_id() {
-        let mut state = AppState::new(PathBuf::from("/test"), false);
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
         state.set_session_id("abc123".to_string());
         assert_eq!(state.session_id(), Some("abc123"));
     }
 
     #[test]
     fn test_to_session_empty() {
-        let state = AppState::new(PathBuf::from("/project"), false);
+        let state = AppState::new(PathBuf::from("/project"), false, ParallelMode::Enabled);
         let session = state.to_session();
 
         assert!(session.messages().is_empty());
@@ -1784,7 +1794,7 @@ mod tests {
 
     #[test]
     fn test_to_session_with_messages() {
-        let mut state = AppState::new(PathBuf::from("/project"), false);
+        let mut state = AppState::new(PathBuf::from("/project"), false, ParallelMode::Enabled);
         state.add_message(test_message(Role::User, "Hello"));
         state.add_message(test_message(Role::Assistant, "Hi!"));
 
@@ -1797,7 +1807,7 @@ mod tests {
 
     #[test]
     fn test_to_session_preserves_ui_state() {
-        let mut state = AppState::new(PathBuf::from("/project"), false);
+        let mut state = AppState::new(PathBuf::from("/project"), false, ParallelMode::Enabled);
         state.scroll.restore_offset(42);
         state.input = "draft text".to_string();
         state.cursor_pos = 5;
@@ -1813,7 +1823,7 @@ mod tests {
     #[test]
     fn test_to_session_roundtrip() {
         // Create state with data
-        let mut state = AppState::new(PathBuf::from("/project"), false);
+        let mut state = AppState::new(PathBuf::from("/project"), false, ParallelMode::Enabled);
         state.add_message(test_message(Role::User, "Test message"));
         state.scroll.restore_offset(100);
         state.input = "unsent input".to_string();
@@ -1823,7 +1833,8 @@ mod tests {
         let session = state.to_session();
 
         // Create new state and restore
-        let mut new_state = AppState::new(PathBuf::from("/different"), false);
+        let mut new_state =
+            AppState::new(PathBuf::from("/different"), false, ParallelMode::Enabled);
         new_state.restore_from_session(&session);
 
         // Verify roundtrip preserves data
@@ -1839,7 +1850,7 @@ mod tests {
 
     #[test]
     fn test_restore_from_session_restores_session_id() {
-        let mut state = AppState::new(PathBuf::from("/test"), false);
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
         assert!(state.session_id().is_none());
 
         // Create session with an ID (simulating a saved session)
@@ -1861,13 +1872,13 @@ mod tests {
 
     #[test]
     fn test_appstate_has_tool_loop() {
-        let state = AppState::new(PathBuf::from("/test"), false);
+        let state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
         assert!(matches!(state.tool_loop_state(), ToolLoopState::Idle));
     }
 
     #[test]
     fn test_appstate_receives_tool_use() {
-        let mut state = AppState::new(PathBuf::from("/test"), false);
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
 
         // Start streaming
         state.tool_loop_mut().start_streaming().unwrap();
@@ -1892,7 +1903,7 @@ mod tests {
 
     #[test]
     fn test_appstate_approve_and_deny_tools() {
-        let mut state = AppState::new(PathBuf::from("/test"), false);
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
 
         // Set up tool use
         state.tool_loop_mut().start_streaming().unwrap();
@@ -1908,7 +1919,7 @@ mod tests {
 
     #[test]
     fn test_appstate_pending_permission() {
-        let mut state = AppState::new(PathBuf::from("/test"), false);
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
 
         assert!(!state.has_pending_permission());
         assert!(state.pending_permission().is_none());
@@ -1929,7 +1940,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_appstate_handles_permission_response() {
-        let mut state = AppState::new(PathBuf::from("/test"), false);
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
 
         // Set a pending permission
         let request = PermissionRequest::new("bash", Some("echo hello"), "Execute command");
@@ -1946,7 +1957,7 @@ mod tests {
 
     #[test]
     fn test_appstate_reset_tool_loop() {
-        let mut state = AppState::new(PathBuf::from("/test"), false);
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
 
         // Set up some state
         state.tool_loop_mut().start_streaming().unwrap();
@@ -1963,7 +1974,7 @@ mod tests {
 
     #[test]
     fn test_appstate_tool_loop_state_helpers() {
-        let mut state = AppState::new(PathBuf::from("/test"), false);
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
 
         // Initially idle - needs user action
         assert!(state.tool_loop_needs_user_action());
@@ -1983,7 +1994,7 @@ mod tests {
     fn test_scroll_state_initial() {
         use crate::tui::scroll::AutoScrollMode;
 
-        let state = AppState::new(PathBuf::from("/test"), false);
+        let state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
 
         // Should start in Follow mode at offset 0
         assert_eq!(state.scroll_offset(), 0);
@@ -1994,7 +2005,7 @@ mod tests {
     fn test_streaming_content_auto_scrolls() {
         use crate::tui::scroll::AutoScrollMode;
 
-        let mut state = AppState::new(PathBuf::from("/test"), false);
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
         state.set_viewport_height(20);
 
         // Simulate content growth (streaming updates)
@@ -2013,7 +2024,7 @@ mod tests {
     fn test_user_scroll_preserved_during_streaming() {
         use crate::tui::scroll::AutoScrollMode;
 
-        let mut state = AppState::new(PathBuf::from("/test"), false);
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
         state.set_viewport_height(20);
         state.update_content_height(50);
 
@@ -2034,7 +2045,7 @@ mod tests {
     fn test_scroll_down_resumes_follow_mode() {
         use crate::tui::scroll::AutoScrollMode;
 
-        let mut state = AppState::new(PathBuf::from("/test"), false);
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
         state.set_viewport_height(20);
         state.update_content_height(50);
 
@@ -2054,7 +2065,7 @@ mod tests {
     fn test_scroll_to_bottom_method() {
         use crate::tui::scroll::AutoScrollMode;
 
-        let mut state = AppState::new(PathBuf::from("/test"), false);
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
         state.set_viewport_height(20);
         state.update_content_height(50);
 
@@ -2072,7 +2083,7 @@ mod tests {
 
     #[test]
     fn test_scroll_state_accessor() {
-        let state = AppState::new(PathBuf::from("/test"), false);
+        let state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
 
         // Should be able to access scroll state
         let scroll = state.scroll_state();
@@ -2085,14 +2096,14 @@ mod tests {
 
     #[test]
     fn test_tool_blocks_initially_empty() {
-        let state = AppState::new(PathBuf::from("/test"), false);
+        let state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
         assert!(state.tool_blocks().is_empty());
         assert!(!state.has_tool_blocks());
     }
 
     #[test]
     fn test_start_tool_block() {
-        let mut state = AppState::new(PathBuf::from("/test"), false);
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
 
         let index = state.start_tool_block("bash", "git status");
 
@@ -2108,7 +2119,7 @@ mod tests {
 
     #[test]
     fn test_complete_tool_block_success() {
-        let mut state = AppState::new(PathBuf::from("/test"), false);
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
         let index = state.start_tool_block("bash", "echo hello");
 
         state.complete_tool_block(index, "hello", false);
@@ -2121,7 +2132,7 @@ mod tests {
 
     #[test]
     fn test_complete_tool_block_error() {
-        let mut state = AppState::new(PathBuf::from("/test"), false);
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
         let index = state.start_tool_block("bash", "bad-command");
 
         state.complete_tool_block(index, "Command not found", true);
@@ -2134,7 +2145,7 @@ mod tests {
 
     #[test]
     fn test_multiple_tool_blocks() {
-        let mut state = AppState::new(PathBuf::from("/test"), false);
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
 
         let idx1 = state.start_tool_block("bash", "ls");
         let idx2 = state.start_tool_block("read", "/tmp/file.txt");
@@ -2152,7 +2163,7 @@ mod tests {
 
     #[test]
     fn test_clear_tool_blocks() {
-        let mut state = AppState::new(PathBuf::from("/test"), false);
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
 
         state.start_tool_block("bash", "ls");
         state.start_tool_block("read", "/tmp/test");
@@ -2166,7 +2177,7 @@ mod tests {
 
     #[test]
     fn test_complete_invalid_index_is_safe() {
-        let mut state = AppState::new(PathBuf::from("/test"), false);
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
 
         // Completing a non-existent index should not panic
         state.complete_tool_block(999, "result", false);
@@ -2180,7 +2191,7 @@ mod tests {
 
     #[test]
     fn test_api_messages_truncated_returns_truncated() {
-        let mut state = AppState::new(PathBuf::from("/test"), false);
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
 
         // Add many messages to potentially exceed budget
         for i in 0..50 {
@@ -2201,7 +2212,7 @@ mod tests {
 
     #[test]
     fn test_api_messages_truncated_under_budget_unchanged() {
-        let mut state = AppState::new(PathBuf::from("/test"), false);
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
 
         state.api_messages.push(ApiMessageV2::user("Hello"));
         state
@@ -2218,7 +2229,7 @@ mod tests {
 
     #[test]
     fn test_api_messages_truncated_empty() {
-        let state = AppState::new(PathBuf::from("/test"), false);
+        let state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
 
         let truncated = state.api_messages_truncated();
 
@@ -2227,7 +2238,7 @@ mod tests {
 
     #[test]
     fn test_api_messages_truncated_with_large_content() {
-        let mut state = AppState::new(PathBuf::from("/test"), false);
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
 
         // Add first message (will be preserved)
         state.api_messages.push(ApiMessageV2::user("System prompt"));
@@ -2260,14 +2271,14 @@ mod tests {
     #[test]
     fn test_focus_area_default_is_input() {
         use crate::tui::selection::FocusArea;
-        let state = AppState::new(PathBuf::from("/test"), false);
+        let state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
         assert_eq!(state.focus_area(), FocusArea::Input);
     }
 
     #[test]
     fn test_focus_area_can_be_set() {
         use crate::tui::selection::FocusArea;
-        let mut state = AppState::new(PathBuf::from("/test"), false);
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
 
         state.set_focus_area(FocusArea::Content);
         assert_eq!(state.focus_area(), FocusArea::Content);
@@ -2279,7 +2290,7 @@ mod tests {
     #[test]
     fn test_focus_change_clears_selection() {
         use crate::tui::selection::{ContentPosition, FocusArea};
-        let mut state = AppState::new(PathBuf::from("/test"), false);
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
 
         // Create a selection
         state.selection_mut().start(ContentPosition::new(0, 0));
@@ -2295,7 +2306,7 @@ mod tests {
     #[test]
     fn test_focus_same_area_preserves_selection() {
         use crate::tui::selection::{ContentPosition, FocusArea};
-        let mut state = AppState::new(PathBuf::from("/test"), false);
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
 
         // Set focus to content
         state.set_focus_area(FocusArea::Content);

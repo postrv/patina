@@ -3,6 +3,7 @@
 //! These tests verify that tool execution doesn't block the UI event loop.
 
 use patina::app::state::AppState;
+use patina::types::config::ParallelMode;
 use patina::types::{ConversationEntry, ToolResultBlock, ToolUseBlock};
 use std::path::PathBuf;
 use std::time::Duration;
@@ -11,7 +12,7 @@ use tokio::time::timeout;
 
 /// Helper to create a new AppState for testing.
 fn new_state() -> AppState {
-    AppState::new(PathBuf::from("/tmp/test"), false)
+    AppState::new(PathBuf::from("/tmp/test"), false, ParallelMode::Enabled)
 }
 
 /// Helper to create a mock tool use block.

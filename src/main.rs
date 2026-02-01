@@ -8,7 +8,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use patina::app;
 use patina::auth::{flow::OAuthFlow, storage as auth_storage};
 use patina::session::{default_sessions_dir, format_session_list, SessionManager};
-use patina::types::config::{NarsilMode, ResumeMode};
+use patina::types::config::{NarsilMode, ParallelMode, ResumeMode};
 
 #[derive(Parser, Debug)]
 #[command(name = "patina")]
@@ -48,6 +48,16 @@ struct Args {
     /// Disable narsil-mcp integration
     #[arg(long, conflicts_with = "with_narsil")]
     no_narsil: bool,
+
+    /// Disable parallel tool execution (run all tools sequentially)
+    #[arg(long, conflicts_with = "parallel_aggressive")]
+    no_parallel: bool,
+
+    /// Enable aggressive parallel execution (includes MCP tools)
+    ///
+    /// WARNING: Can cause race conditions with external tools.
+    #[arg(long, conflicts_with = "no_parallel")]
+    parallel_aggressive: bool,
 
     /// Continue the most recent conversation in the current directory.
     #[arg(short = 'c', long = "continue")]
@@ -172,6 +182,15 @@ async fn main() -> Result<()> {
         NarsilMode::Auto
     };
 
+    // Determine parallel mode from CLI flags
+    let parallel_mode = if args.no_parallel {
+        ParallelMode::Disabled
+    } else if args.parallel_aggressive {
+        ParallelMode::Aggressive
+    } else {
+        ParallelMode::Enabled
+    };
+
     // Determine resume mode from CLI flags
     let resume_mode = if args.continue_session {
         ResumeMode::Last
@@ -202,6 +221,7 @@ async fn main() -> Result<()> {
         model: args.model,
         working_dir: args.directory,
         narsil_mode,
+        parallel_mode,
         resume_mode,
         skip_permissions: args.dangerously_skip_permissions,
         initial_prompt,
