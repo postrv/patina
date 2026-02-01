@@ -107,3 +107,6 @@ mod compaction_progress_test;
 
 #[path = "unit/oauth_flow_test.rs"]
 mod oauth_flow_test;
+
+#[path = "unit/token_refresh_test.rs"]
+mod token_refresh_test;
