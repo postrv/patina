@@ -92,3 +92,6 @@ mod web_fetch_test;
 
 #[path = "unit/web_search_test.rs"]
 mod web_search_test;
+
+#[path = "unit/image_test.rs"]
+mod image_test;

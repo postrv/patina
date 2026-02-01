@@ -116,6 +116,7 @@ fn estimate_content_tokens(content: &MessageContent) -> usize {
 /// - Text blocks: just the text content
 /// - Tool use blocks: name + ID + JSON input
 /// - Tool result blocks: ID + content + is_error flag
+/// - Image blocks: estimated based on Claude's image token formula
 #[must_use]
 fn estimate_block_tokens(block: &ContentBlock) -> usize {
     match block {
@@ -134,6 +135,13 @@ fn estimate_block_tokens(block: &ContentBlock) -> usize {
             overhead
                 + estimate_tokens(&tool_result.tool_use_id)
                 + estimate_tokens(&tool_result.content)
+        }
+        ContentBlock::Image { .. } => {
+            // Image tokens are calculated as (width × height) / 750 by Claude.
+            // Without decoding the image, we use a conservative estimate based on
+            // a typical image size. A 1024x1024 image ≈ 1400 tokens.
+            // We use 1500 as a safe default estimate.
+            1500
         }
     }
 }

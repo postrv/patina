@@ -32,6 +32,7 @@
 //! }
 //! ```
 
+use crate::types::image::ImageSource;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -54,6 +55,15 @@ pub enum ContentBlock {
 
     /// The result of a tool execution (sent by the client).
     ToolResult(ToolResultBlock),
+
+    /// An image content block for vision requests.
+    ///
+    /// Images can be provided as base64-encoded data or as URLs.
+    /// This is used when sending images to Claude for analysis.
+    Image {
+        /// The source of the image (base64 data or URL).
+        source: ImageSource,
+    },
 }
 
 impl ContentBlock {
@@ -93,6 +103,12 @@ impl ContentBlock {
         })
     }
 
+    /// Creates a new image content block from an image source.
+    #[must_use]
+    pub fn image(source: ImageSource) -> Self {
+        Self::Image { source }
+    }
+
     /// Returns true if this is a text block.
     #[must_use]
     pub fn is_text(&self) -> bool {
@@ -109,6 +125,12 @@ impl ContentBlock {
     #[must_use]
     pub fn is_tool_result(&self) -> bool {
         matches!(self, Self::ToolResult(_))
+    }
+
+    /// Returns true if this is an image block.
+    #[must_use]
+    pub fn is_image(&self) -> bool {
+        matches!(self, Self::Image { .. })
     }
 
     /// Extracts the text content if this is a text block.
@@ -134,6 +156,15 @@ impl ContentBlock {
     pub fn as_tool_result(&self) -> Option<&ToolResultBlock> {
         match self {
             Self::ToolResult(block) => Some(block),
+            _ => None,
+        }
+    }
+
+    /// Extracts the image source if this is an image block.
+    #[must_use]
+    pub fn as_image(&self) -> Option<&ImageSource> {
+        match self {
+            Self::Image { source } => Some(source),
             _ => None,
         }
     }
@@ -517,15 +548,138 @@ mod tests {
         assert!(text.is_text());
         assert!(!text.is_tool_use());
         assert!(!text.is_tool_result());
+        assert!(!text.is_image());
 
         let tool_use = ContentBlock::tool_use("id", "name", json!({}));
         assert!(!tool_use.is_text());
         assert!(tool_use.is_tool_use());
         assert!(!tool_use.is_tool_result());
+        assert!(!tool_use.is_image());
 
         let result = ContentBlock::tool_result("id", "content");
         assert!(!result.is_text());
         assert!(!result.is_tool_use());
         assert!(result.is_tool_result());
+        assert!(!result.is_image());
+    }
+
+    #[test]
+    fn test_content_block_image_creation() {
+        let source = ImageSource::Base64 {
+            media_type: "image/png".to_string(),
+            data: "iVBORw0KGgo=".to_string(),
+        };
+        let block = ContentBlock::image(source.clone());
+
+        assert!(block.is_image());
+        assert!(!block.is_text());
+        assert!(!block.is_tool_use());
+        assert!(!block.is_tool_result());
+
+        let extracted = block.as_image().unwrap();
+        assert_eq!(extracted, &source);
+    }
+
+    #[test]
+    fn test_image_block_serialization_base64() {
+        let source = ImageSource::Base64 {
+            media_type: "image/png".to_string(),
+            data: "iVBORw0KGgo=".to_string(),
+        };
+        let block = ContentBlock::image(source);
+        let json = serde_json::to_string(&block).expect("serialization should succeed");
+
+        assert!(
+            json.contains("\"type\":\"image\""),
+            "Should have image type"
+        );
+        assert!(json.contains("\"source\":"), "Should have source field");
+        assert!(
+            json.contains("\"media_type\":\"image/png\""),
+            "Should have media_type in source"
+        );
+        assert!(
+            json.contains("\"data\":\"iVBORw0KGgo=\""),
+            "Should have data in source"
+        );
+    }
+
+    #[test]
+    fn test_image_block_serialization_url() {
+        let source = ImageSource::Url {
+            url: "https://example.com/image.png".to_string(),
+        };
+        let block = ContentBlock::image(source);
+        let json = serde_json::to_string(&block).expect("serialization should succeed");
+
+        assert!(json.contains("\"type\":\"image\""));
+        assert!(json.contains("\"source\":"));
+        assert!(json.contains("\"url\":\"https://example.com/image.png\""));
+    }
+
+    #[test]
+    fn test_image_block_deserialization_base64() {
+        let json = r#"{
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": "image/jpeg",
+                "data": "SGVsbG8="
+            }
+        }"#;
+        let block: ContentBlock =
+            serde_json::from_str(json).expect("deserialization should succeed");
+
+        assert!(block.is_image());
+        let source = block.as_image().unwrap();
+        match source {
+            ImageSource::Base64 { media_type, data } => {
+                assert_eq!(media_type, "image/jpeg");
+                assert_eq!(data, "SGVsbG8=");
+            }
+            _ => panic!("Expected Base64 source"),
+        }
+    }
+
+    #[test]
+    fn test_image_block_deserialization_url() {
+        let json = r#"{
+            "type": "image",
+            "source": {
+                "type": "url",
+                "url": "https://example.com/photo.jpg"
+            }
+        }"#;
+        let block: ContentBlock =
+            serde_json::from_str(json).expect("deserialization should succeed");
+
+        assert!(block.is_image());
+        let source = block.as_image().unwrap();
+        match source {
+            ImageSource::Url { url } => {
+                assert_eq!(url, "https://example.com/photo.jpg");
+            }
+            _ => panic!("Expected URL source"),
+        }
+    }
+
+    #[test]
+    fn test_content_block_image_accessors_return_none_for_wrong_type() {
+        let image_source = ImageSource::Url {
+            url: "https://example.com/img.png".to_string(),
+        };
+        let image_block = ContentBlock::image(image_source);
+        assert!(image_block.as_text().is_none());
+        assert!(image_block.as_tool_use().is_none());
+        assert!(image_block.as_tool_result().is_none());
+
+        let text_block = ContentBlock::text("text");
+        assert!(text_block.as_image().is_none());
+
+        let tool_use_block = ContentBlock::tool_use("id", "name", json!({}));
+        assert!(tool_use_block.as_image().is_none());
+
+        let result_block = ContentBlock::tool_result("id", "content");
+        assert!(result_block.as_image().is_none());
     }
 }
