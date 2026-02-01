@@ -435,6 +435,7 @@ impl ToolExecutor {
             "list_files" => self.list_files(&call.input).await,
             "glob" => self.glob_files(&call.input).await,
             "grep" => self.grep_content(&call.input).await,
+            "web_fetch" => self.web_fetch(&call.input).await,
             _ => Ok(ToolResult::Error(format!("Unknown tool: {}", call.name))),
         }
     }
@@ -1078,6 +1079,44 @@ impl ToolExecutor {
 
         Ok(ToolResult::Success(results.join("\n")))
     }
+
+    /// Fetches content from a URL and converts HTML to markdown.
+    ///
+    /// # Arguments
+    ///
+    /// * `url` - The URL to fetch content from
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The URL is invalid
+    /// - The URL uses a disallowed scheme (file://)
+    /// - The URL points to localhost or private IP ranges
+    /// - The request times out
+    /// - The content exceeds the maximum length
+    async fn web_fetch(&self, input: &serde_json::Value) -> Result<ToolResult> {
+        let url = input
+            .get("url")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("Missing url"))?;
+
+        let tool = web_fetch::WebFetchTool::new(web_fetch::WebFetchConfig::default());
+
+        match tool.fetch(url).await {
+            Ok(result) => Ok(ToolResult::Success(format!(
+                "Fetched {} ({}, status {})\n\n{}",
+                url, result.content_type, result.status, result.content
+            ))),
+            Err(e) => {
+                debug!(
+                    url = %url,
+                    error = %e,
+                    "Web fetch failed"
+                );
+                Ok(ToolResult::Error(format!("Failed to fetch URL: {e}")))
+            }
+        }
+    }
 }
 
 /// Tool executor with hook and permission integration.
@@ -1225,6 +1264,11 @@ impl HookedToolExecutor {
                 .get("pattern")
                 .and_then(|v| v.as_str())
                 .map(String::from),
+            "web_fetch" => call
+                .input
+                .get("url")
+                .and_then(|v| v.as_str())
+                .map(String::from),
             _ => {
                 // For MCP tools, try to extract a meaningful input
                 serde_json::to_string(&call.input).ok()
@@ -1290,6 +1334,14 @@ impl HookedToolExecutor {
                     .and_then(|v| v.as_str())
                     .unwrap_or("*");
                 format!("Search file contents for: {pattern}")
+            }
+            "web_fetch" => {
+                let url = call
+                    .input
+                    .get("url")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown URL");
+                format!("Fetch web content from: {url}")
             }
             name if name.starts_with("mcp__") => {
                 format!("Execute MCP tool: {name}")

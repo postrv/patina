@@ -82,7 +82,7 @@ pub enum ToolChoice {
 
 /// Returns the default set of tools for Patina.
 ///
-/// Includes: bash, read_file, write_file, edit, list_files, glob, grep
+/// Includes: bash, read_file, write_file, edit, list_files, glob, grep, web_fetch
 #[must_use]
 pub fn default_tools() -> Vec<ToolDefinition> {
     vec![
@@ -93,6 +93,7 @@ pub fn default_tools() -> Vec<ToolDefinition> {
         list_files_tool(),
         glob_tool(),
         grep_tool(),
+        web_fetch_tool(),
     ]
 }
 
@@ -280,6 +281,29 @@ pub fn grep_tool() -> ToolDefinition {
     )
 }
 
+/// Creates the web_fetch tool definition.
+///
+/// Fetches content from a URL and converts HTML to markdown.
+#[must_use]
+pub fn web_fetch_tool() -> ToolDefinition {
+    ToolDefinition::new(
+        "web_fetch",
+        "Fetch content from a URL. HTML content is automatically converted to markdown \
+         for better readability. The URL must be http or https - file:// and localhost \
+         URLs are blocked for security. Has a 30 second timeout and 1MB content limit.",
+        json!({
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "The URL to fetch content from (must be http or https)"
+                }
+            },
+            "required": ["url"]
+        }),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -331,7 +355,7 @@ mod tests {
     fn test_default_tools_contains_all_tools() {
         let tools = default_tools();
 
-        assert_eq!(tools.len(), 7, "should have 7 default tools");
+        assert_eq!(tools.len(), 8, "should have 8 default tools");
 
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains(&"bash"), "should contain bash");
@@ -341,6 +365,7 @@ mod tests {
         assert!(names.contains(&"list_files"), "should contain list_files");
         assert!(names.contains(&"glob"), "should contain glob");
         assert!(names.contains(&"grep"), "should contain grep");
+        assert!(names.contains(&"web_fetch"), "should contain web_fetch");
     }
 
     #[test]
@@ -439,6 +464,19 @@ mod tests {
     }
 
     #[test]
+    fn test_web_fetch_tool_schema() {
+        let tool = web_fetch_tool();
+
+        assert_eq!(tool.name, "web_fetch");
+        assert!(tool.description.contains("URL"));
+
+        let schema = &tool.input_schema;
+        assert_eq!(schema["type"], "object");
+        assert!(schema["properties"]["url"].is_object());
+        assert_eq!(schema["required"], json!(["url"]));
+    }
+
+    #[test]
     fn test_tool_choice_auto_serialization() {
         let choice = ToolChoice::Auto;
         let json = serde_json::to_string(&choice).expect("serialization should succeed");
@@ -522,6 +560,7 @@ mod tests {
             "list_files",
             "glob",
             "grep",
+            "web_fetch",
         ];
         let tools = default_tools();
 
