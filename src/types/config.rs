@@ -94,7 +94,7 @@ pub enum NarsilMode {
 /// # Examples
 ///
 /// ```no_run
-/// use patina::types::config::{Config, NarsilMode, ResumeMode};
+/// use patina::types::config::{Config, NarsilMode, ParallelMode, ResumeMode};
 /// use secrecy::SecretString;
 /// use std::path::PathBuf;
 ///

@@ -699,21 +699,22 @@ impl ParallelExecutor {
     ///
     /// # Examples
     ///
-    /// ```no_run
+    /// ```ignore
     /// use patina::tools::parallel::{ParallelExecutor, ParallelConfig};
+    /// use serde_json::json;
     ///
     /// #[tokio::main]
     /// async fn main() {
     ///     let executor = ParallelExecutor::new(ParallelConfig::default());
     ///
     ///     let tools = vec![
-    ///         ("read_file", "file1.txt"),
-    ///         ("read_file", "file2.txt"),
-    ///         ("write_file", "output.txt"),
+    ///         ("read_file", json!({"path": "file1.txt"})),
+    ///         ("read_file", json!({"path": "file2.txt"})),
+    ///         ("write_file", json!({"path": "output.txt", "content": "data"})),
     ///     ];
     ///
     ///     let results = executor.execute_batch(
-    ///         tools.into_iter(),
+    ///         tools.iter().map(|(n, v)| (*n, v.clone())),
     ///         |name, input| async move {
     ///             // Execute the tool
     ///             format!("Executed {} with {}", name, input)

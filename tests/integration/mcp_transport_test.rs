@@ -10,6 +10,7 @@
 use patina::mcp::protocol::JsonRpcRequest;
 use patina::mcp::transport::{StdioTransport, Transport};
 use serde_json::json;
+use serial_test::serial;
 use std::time::Duration;
 
 /// Startup warmup delay to allow the mock server's stdin read loop to initialize.
@@ -65,6 +66,7 @@ async fn start_with_warmup(transport: &mut StdioTransport) -> anyhow::Result<()>
 /// 2. Server responds with its capabilities and version
 /// 3. Client sends "initialized" notification
 #[tokio::test]
+#[serial]
 async fn test_mcp_stdio_initialization() {
     let (cmd, args) = mock_mcp_server_command();
 
@@ -118,6 +120,7 @@ async fn test_mcp_stdio_initialization() {
 /// 2. Receive correct responses
 /// 3. Handle concurrent messages
 #[tokio::test]
+#[serial]
 async fn test_mcp_stdio_bidirectional() {
     let (cmd, args) = mock_mcp_server_command();
 
@@ -176,6 +179,7 @@ async fn test_mcp_stdio_bidirectional() {
 
 /// Tests that transport handles unknown methods correctly.
 #[tokio::test]
+#[serial]
 async fn test_mcp_stdio_method_not_found() {
     let (cmd, args) = mock_mcp_server_command();
 
@@ -197,6 +201,7 @@ async fn test_mcp_stdio_method_not_found() {
 
 /// Tests that transport handles timeout correctly.
 #[tokio::test]
+#[serial]
 async fn test_mcp_stdio_timeout() {
     // Use mock server with --no-response flag - reads input but never responds
     let mut transport = StdioTransport::new(mock_mcp_server_path(), vec!["--no-response"]);
@@ -222,6 +227,7 @@ async fn test_mcp_stdio_timeout() {
 
 /// Tests that transport can be stopped and restarted.
 #[tokio::test]
+#[serial]
 async fn test_mcp_stdio_restart() {
     let (cmd, args) = mock_mcp_server_command();
 
@@ -259,6 +265,7 @@ async fn test_mcp_stdio_restart() {
 
 /// Tests that MCP tool discovery returns available tools.
 #[tokio::test]
+#[serial]
 async fn test_mcp_tool_discovery() {
     let (cmd, args) = mock_mcp_server_command();
 
@@ -306,6 +313,7 @@ async fn test_mcp_tool_discovery() {
 
 /// Tests that MCP tool schema is properly parsed.
 #[tokio::test]
+#[serial]
 async fn test_mcp_tool_schema_parsing() {
     let (cmd, args) = mock_mcp_server_command();
 
@@ -352,6 +360,7 @@ async fn test_mcp_tool_schema_parsing() {
 
 /// Tests that MCP tool can be called successfully.
 #[tokio::test]
+#[serial]
 async fn test_mcp_tool_call() {
     let (cmd, args) = mock_mcp_server_command();
 
@@ -404,6 +413,7 @@ async fn test_mcp_tool_call() {
 
 /// Tests that MCP tool call errors are properly returned.
 #[tokio::test]
+#[serial]
 async fn test_mcp_tool_call_error() {
     let (cmd, args) = mock_mcp_server_command();
 
@@ -453,6 +463,7 @@ use patina::mcp::client::McpClient;
 
 /// Tests that MCP server can be started and stopped cleanly.
 #[tokio::test]
+#[serial]
 async fn test_mcp_server_start_stop() {
     let (cmd, args) = mock_mcp_server_command();
 
@@ -474,6 +485,7 @@ async fn test_mcp_server_start_stop() {
 
 /// Tests that MCP client recovers from server crash.
 #[tokio::test]
+#[serial]
 async fn test_mcp_server_crash_recovery() {
     let (cmd, args) = mock_mcp_server_command();
 
@@ -508,6 +520,7 @@ async fn test_mcp_server_crash_recovery() {
 /// - Valid responses after invalid ones are still processed
 /// - Timeouts occur correctly when no valid response is received
 #[tokio::test]
+#[serial]
 async fn test_stdio_invalid_json() {
     // Create a server that outputs invalid JSON for first message
     let mut transport = StdioTransport::new(mock_mcp_server_path(), vec!["--invalid-json-at", "1"]);
@@ -560,6 +573,7 @@ async fn test_stdio_invalid_json() {
 /// - Pending requests receive appropriate errors
 /// - The transport can be stopped cleanly after crash
 #[tokio::test]
+#[serial]
 async fn test_stdio_process_crash() {
     // Create a server that crashes after responding to first message
     let mut transport = StdioTransport::new(
@@ -597,6 +611,7 @@ async fn test_stdio_process_crash() {
 
 /// Tests that MCP server can be restarted after clean stop.
 #[tokio::test]
+#[serial]
 async fn test_mcp_server_restart() {
     let (cmd, args) = mock_mcp_server_command();
 
