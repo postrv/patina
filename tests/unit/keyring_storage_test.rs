@@ -479,3 +479,98 @@ async fn test_mock_storage_error_simulation() {
         "Store should succeed after error is consumed"
     );
 }
+
+// ============================================================================
+// AuthManager + Keyring Integration Tests (0.10.3)
+// ============================================================================
+
+/// Tests that AuthManager can store credentials to keyring.
+#[tokio::test]
+async fn test_auth_manager_stores_to_keyring() {
+    use patina::auth::storage::{CredentialStorage, MockCredentialStorage};
+    use patina::auth::{AuthManager, OAuthCredentials};
+
+    let mut storage = MockCredentialStorage::new();
+
+    let creds = OAuthCredentials::new(
+        SecretString::new("access_for_keyring".into()),
+        SecretString::new("refresh_for_keyring".into()),
+        Duration::from_secs(3600),
+    );
+
+    // Use the new store_to_storage method
+    AuthManager::store_credentials_to_storage(&creds, &mut storage)
+        .await
+        .expect("Should store to mock storage");
+
+    // Verify credentials are in storage
+    assert!(storage.has_stored(), "Storage should have credentials");
+
+    let loaded = storage.load().await.unwrap().unwrap();
+    assert_eq!(loaded.access_token().expose_secret(), "access_for_keyring");
+}
+
+/// Tests that AuthManager clears credentials from keyring.
+#[tokio::test]
+async fn test_auth_manager_clears_keyring() {
+    use patina::auth::storage::{CredentialStorage, MockCredentialStorage};
+    use patina::auth::AuthManager;
+
+    let mut storage = MockCredentialStorage::new();
+
+    // Store some credentials
+    let creds = OAuthCredentials::new(
+        SecretString::new("access".into()),
+        SecretString::new("refresh".into()),
+        Duration::from_secs(3600),
+    );
+    storage.store(&creds).await.unwrap();
+    assert!(storage.has_stored());
+
+    // Clear using AuthManager helper
+    AuthManager::clear_storage(&mut storage)
+        .await
+        .expect("Should clear storage");
+
+    // Verify credentials are gone
+    assert!(!storage.has_stored(), "Storage should be empty after clear");
+}
+
+/// Tests that credentials persist across AuthManager instances (simulated).
+#[tokio::test]
+async fn test_credentials_persist_across_sessions() {
+    use patina::auth::storage::{CredentialStorage, MockCredentialStorage};
+    use patina::auth::{AuthManager, OAuthCredentials};
+
+    // Simulate session 1: Store credentials
+    let mut storage = MockCredentialStorage::new();
+
+    let creds = OAuthCredentials::new(
+        SecretString::new("persistent_access".into()),
+        SecretString::new("persistent_refresh".into()),
+        Duration::from_secs(3600),
+    );
+
+    AuthManager::store_credentials_to_storage(&creds, &mut storage)
+        .await
+        .unwrap();
+
+    // Simulate session 2: Load credentials from storage
+    // (In real usage, the storage would be the OS keyring)
+    let loaded = storage
+        .load()
+        .await
+        .unwrap()
+        .expect("Should have credentials");
+
+    assert_eq!(
+        loaded.access_token().expose_secret(),
+        "persistent_access",
+        "Credentials should persist"
+    );
+    assert_eq!(
+        loaded.refresh_token().expose_secret(),
+        "persistent_refresh",
+        "Refresh token should persist"
+    );
+}
