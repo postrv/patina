@@ -458,6 +458,52 @@ impl AuthManager {
         }
     }
 
+    /// Stores OAuth credentials to the provided storage backend.
+    ///
+    /// This is a helper for testing and for explicit storage operations.
+    /// Normally, credentials are stored automatically during the OAuth flow.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the storage operation fails.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use patina::auth::{AuthManager, OAuthCredentials};
+    /// # use patina::auth::storage::{CredentialStorage, MockCredentialStorage};
+    /// # use secrecy::SecretString;
+    /// # use std::time::Duration;
+    /// # #[tokio::main]
+    /// # async fn main() -> anyhow::Result<()> {
+    /// let creds = OAuthCredentials::new(
+    ///     SecretString::new("access".into()),
+    ///     SecretString::new("refresh".into()),
+    ///     Duration::from_secs(3600),
+    /// );
+    /// let mut storage = MockCredentialStorage::new();
+    /// AuthManager::store_credentials_to_storage(&creds, &mut storage).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn store_credentials_to_storage<S: storage::CredentialStorage>(
+        credentials: &OAuthCredentials,
+        storage: &mut S,
+    ) -> Result<()> {
+        storage.store(credentials).await
+    }
+
+    /// Clears credentials from the provided storage backend.
+    ///
+    /// This is a helper for testing and for explicit clear operations.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the clear operation fails.
+    pub async fn clear_storage<S: storage::CredentialStorage>(storage: &mut S) -> Result<()> {
+        storage.clear().await
+    }
+
     /// Shuts down the authentication manager.
     ///
     /// This stops any running background token refresher. Safe to call
