@@ -15,6 +15,7 @@ pub mod error;
 pub mod hooks;
 pub mod ide;
 pub mod mcp;
+pub mod narsil;
 pub mod permissions;
 pub mod plugins;
 pub mod session;
