@@ -113,6 +113,7 @@ pub enum NarsilMode {
 ///     initial_images: Vec::new(),
 ///     plugins_enabled: true,
 ///     subagents_enabled: false,
+///     ide_port: None,
 /// };
 /// ```
 pub struct Config {
@@ -203,6 +204,14 @@ pub struct Config {
     ///
     /// Enable with `--enable-subagents` CLI flag.
     pub subagents_enabled: bool,
+
+    /// Optional port for IDE integration server.
+    ///
+    /// When set, starts a TCP server on the specified port for IDE extensions
+    /// to communicate with Patina. Used for VS Code and JetBrains integration.
+    ///
+    /// Enable with `--ide-port <PORT>` CLI flag.
+    pub ide_port: Option<u16>,
 }
 
 impl Config {
@@ -247,6 +256,7 @@ impl Config {
             initial_images: Vec::new(),
             plugins_enabled: true,
             subagents_enabled: false,
+            ide_port: None,
         }
     }
 
@@ -535,6 +545,7 @@ mod tests {
             initial_images: Vec::new(),
             plugins_enabled: true,
             subagents_enabled: false,
+            ide_port: None,
         };
 
         assert_eq!(config.model(), "claude-opus-4-20250514");
@@ -558,6 +569,7 @@ mod tests {
             initial_images: Vec::new(),
             plugins_enabled: true,
             subagents_enabled: false,
+            ide_port: None,
         };
 
         assert_eq!(config.working_dir(), &path);
