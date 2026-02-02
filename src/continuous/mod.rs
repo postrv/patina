@@ -6,7 +6,10 @@
 //! # Submodules
 //!
 //! - [`events`]: Event types emitted during continuous coding sessions
+//! - [`plugin`]: Plugin trait and quality gate definitions
 
 pub mod events;
+pub mod plugin;
 
 pub use events::ContinuousEvent;
+pub use plugin::{ContinuousCodingPlugin, QualityGate};
