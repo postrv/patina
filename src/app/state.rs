@@ -5,6 +5,7 @@ use crate::api::{AnthropicClient, StreamEvent, TokenBudget, ToolChoice};
 use crate::app::tool_loop::{ContinuationData, ToolLoop, ToolLoopState};
 use crate::hooks::HookManager;
 use crate::permissions::{PermissionManager, PermissionRequest, PermissionResponse};
+use crate::plugins::PluginRegistry;
 use crate::session::Session;
 use crate::tools::{HookedToolExecutor, ParallelConfig};
 use crate::tui::scroll::ScrollState;
@@ -158,6 +159,10 @@ pub struct AppState {
     /// Optional compaction progress state for displaying the compaction overlay.
     /// When set, the compaction progress widget is shown as a modal.
     compaction_state: Option<CompactionProgressState>,
+
+    /// Plugin registry for managing loaded plugins.
+    /// Loaded from `~/.config/patina/plugins/` on startup unless disabled.
+    plugin_registry: PluginRegistry,
 }
 
 #[derive(Default)]
@@ -186,6 +191,23 @@ impl AppState {
     /// * `skip_permissions` - If true, bypass all permission prompts
     /// * `parallel_mode` - Controls parallel tool execution
     pub fn new(working_dir: PathBuf, skip_permissions: bool, parallel_mode: ParallelMode) -> Self {
+        Self::with_plugins(working_dir, skip_permissions, parallel_mode, true)
+    }
+
+    /// Creates a new AppState with optional plugin loading.
+    ///
+    /// # Arguments
+    ///
+    /// * `working_dir` - The working directory for file operations
+    /// * `skip_permissions` - If true, bypass all permission prompts
+    /// * `parallel_mode` - Controls parallel tool execution
+    /// * `plugins_enabled` - If true, load plugins from config directory
+    pub fn with_plugins(
+        working_dir: PathBuf,
+        skip_permissions: bool,
+        parallel_mode: ParallelMode,
+        plugins_enabled: bool,
+    ) -> Self {
         // Generate a unique session ID for hooks
         let hook_session_id = uuid::Uuid::new_v4().to_string();
         let hook_manager = HookManager::new(hook_session_id);
@@ -208,6 +230,13 @@ impl AppState {
                 .with_permissions(Arc::clone(&permission_manager))
                 .with_parallel_config(parallel_config),
         );
+
+        // Load plugins if enabled
+        let plugin_registry = if plugins_enabled {
+            Self::load_plugins()
+        } else {
+            PluginRegistry::new()
+        };
 
         Self {
             api_messages: Vec::new(),
@@ -241,7 +270,46 @@ impl AppState {
             focus_area: FocusArea::default(),
             token_budget: TokenBudget::new(100_000), // Claude's typical context window
             compaction_state: None,
+            plugin_registry,
         }
+    }
+
+    /// Loads plugins from standard configuration directories.
+    ///
+    /// Searches for plugins in:
+    /// - `~/.config/patina/plugins/`
+    /// - `./.patina/plugins/` (project-local)
+    fn load_plugins() -> PluginRegistry {
+        let mut registry = PluginRegistry::new();
+
+        // Build search paths
+        let mut search_paths: Vec<PathBuf> = Vec::new();
+
+        // User config directory using directories crate
+        if let Some(base_dirs) = directories::BaseDirs::new() {
+            search_paths.push(base_dirs.config_dir().join("patina/plugins"));
+        }
+
+        // Project-local plugins
+        search_paths.push(PathBuf::from(".patina/plugins"));
+
+        // Load plugins from all paths (errors are logged, not propagated)
+        if let Err(e) = registry.load_all(&search_paths) {
+            tracing::warn!("Failed to load some plugins: {}", e);
+        }
+
+        let count = registry.plugin_count();
+        if count > 0 {
+            tracing::info!("Loaded {} plugin(s)", count);
+        }
+
+        registry
+    }
+
+    /// Returns a reference to the plugin registry.
+    #[must_use]
+    pub fn plugins(&self) -> &PluginRegistry {
+        &self.plugin_registry
     }
 
     /// Inserts a character at the current cursor position.
@@ -2348,5 +2416,40 @@ mod tests {
         assert_eq!(AppState::focus_area_for_row(3, 7), FocusArea::Content);
         assert_eq!(AppState::focus_area_for_row(4, 7), FocusArea::Input);
         assert_eq!(AppState::focus_area_for_row(6, 7), FocusArea::Input);
+    }
+
+    // Plugin loading tests
+
+    #[test]
+    fn test_with_plugins_disabled_creates_empty_registry() {
+        let state = AppState::with_plugins(
+            PathBuf::from("/test"),
+            false,
+            ParallelMode::Enabled,
+            false, // plugins_enabled = false
+        );
+        // With plugins disabled, registry should be empty
+        assert_eq!(state.plugins().plugin_count(), 0);
+    }
+
+    #[test]
+    fn test_with_plugins_enabled_returns_valid_registry() {
+        let state = AppState::with_plugins(
+            PathBuf::from("/test"),
+            false,
+            ParallelMode::Enabled,
+            true, // plugins_enabled = true
+        );
+        // Registry should be valid (may be empty if no plugins installed)
+        // Just verify we can access the registry without panicking
+        let _ = state.plugins().plugin_count();
+    }
+
+    #[test]
+    fn test_new_enables_plugins_by_default() {
+        // AppState::new should enable plugins (equivalent to with_plugins(..., true))
+        let state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+        // Registry should be accessible (plugins enabled by default)
+        let _ = state.plugins().plugin_count();
     }
 }

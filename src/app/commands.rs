@@ -10,8 +10,9 @@
 //!
 //! ```rust
 //! use patina::app::commands::{SlashCommandHandler, CommandResult};
+//! use std::path::PathBuf;
 //!
-//! let handler = SlashCommandHandler::new();
+//! let handler = SlashCommandHandler::new(PathBuf::from("."));
 //!
 //! match handler.handle("/help") {
 //!     CommandResult::Executed(output) => println!("{}", output),
