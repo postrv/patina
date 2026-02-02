@@ -10,6 +10,7 @@ pub mod app;
 pub mod auth;
 pub mod commands;
 pub mod context;
+pub mod continuous;
 pub mod enterprise;
 pub mod error;
 pub mod hooks;
