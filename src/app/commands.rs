@@ -26,6 +26,21 @@ use crate::commands::worktree::{parse_worktree_command, WorktreeCommand};
 use crate::worktree::WorktreeManager;
 use std::path::PathBuf;
 
+/// Information about a loaded plugin for display purposes.
+#[derive(Debug, Clone, Default)]
+pub struct PluginInfo {
+    /// The plugin name.
+    pub name: String,
+    /// The plugin version.
+    pub version: String,
+    /// Optional description of the plugin.
+    pub description: Option<String>,
+    /// List of command names provided by this plugin.
+    pub commands: Vec<String>,
+    /// List of skill names provided by this plugin.
+    pub skills: Vec<String>,
+}
+
 /// Result of handling a slash command.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CommandResult {
@@ -49,13 +64,27 @@ pub enum CommandResult {
 pub struct SlashCommandHandler {
     /// Working directory for command execution.
     working_dir: PathBuf,
+    /// Information about loaded plugins.
+    plugins: Vec<PluginInfo>,
 }
 
 impl SlashCommandHandler {
     /// Creates a new slash command handler.
     #[must_use]
     pub fn new(working_dir: PathBuf) -> Self {
-        Self { working_dir }
+        Self {
+            working_dir,
+            plugins: Vec::new(),
+        }
+    }
+
+    /// Adds plugin information to the handler.
+    ///
+    /// Use this to enable the `/plugins` command to display loaded plugins.
+    #[must_use]
+    pub fn with_plugins(mut self, plugins: Vec<PluginInfo>) -> Self {
+        self.plugins = plugins;
+        self
     }
 
     /// Handles user input, checking if it's a slash command.
@@ -94,8 +123,46 @@ impl SlashCommandHandler {
         match command_name {
             "worktree" => self.handle_worktree(&args),
             "help" => self.handle_help(if args.is_empty() { None } else { Some(&args) }),
+            "plugins" => self.handle_plugins(),
             _ => CommandResult::UnknownCommand(command_name.to_string()),
         }
+    }
+
+    /// Handles the `/plugins` command.
+    fn handle_plugins(&self) -> CommandResult {
+        if self.plugins.is_empty() {
+            return CommandResult::Executed("No plugins loaded.".to_string());
+        }
+
+        let mut output = String::from("Loaded Plugins:\n");
+
+        for plugin in &self.plugins {
+            output.push_str(&format!("\n  {} v{}", plugin.name, plugin.version));
+
+            if let Some(desc) = &plugin.description {
+                output.push_str(&format!("\n    {}", desc));
+            }
+
+            if !plugin.commands.is_empty() {
+                let cmd_list = plugin.commands.join(", ");
+                output.push_str(&format!(
+                    "\n    Commands ({}): {}",
+                    plugin.commands.len(),
+                    cmd_list
+                ));
+            }
+
+            if !plugin.skills.is_empty() {
+                let skill_list = plugin.skills.join(", ");
+                output.push_str(&format!(
+                    "\n    Skills ({}): {}",
+                    plugin.skills.len(),
+                    skill_list
+                ));
+            }
+        }
+
+        CommandResult::Executed(output)
     }
 
     /// Handles the `/worktree` command.
@@ -108,7 +175,12 @@ impl SlashCommandHandler {
         // Create worktree manager - handle potential failure
         let manager = match WorktreeManager::new(&self.working_dir) {
             Ok(m) => m,
-            Err(e) => return CommandResult::Error(format!("Failed to initialize worktree manager: {}", e)),
+            Err(e) => {
+                return CommandResult::Error(format!(
+                    "Failed to initialize worktree manager: {}",
+                    e
+                ))
+            }
         };
 
         match worktree_cmd {
@@ -134,12 +206,7 @@ impl SlashCommandHandler {
                                 } else {
                                     &wt.branch
                                 };
-                                format!(
-                                    "  {} ({}) - {}",
-                                    wt.name,
-                                    branch,
-                                    wt.path.display()
-                                )
+                                format!("  {} ({}) - {}", wt.name, branch, wt.path.display())
                             })
                             .collect::<Vec<_>>()
                             .join("\n");
@@ -178,7 +245,9 @@ impl SlashCommandHandler {
                             CommandResult::Error(format!("Failed to prune worktrees: {}", stderr))
                         }
                     }
-                    Err(e) => CommandResult::Error(format!("Failed to run git worktree prune: {}", e)),
+                    Err(e) => {
+                        CommandResult::Error(format!("Failed to run git worktree prune: {}", e))
+                    }
                 }
             }
 
@@ -225,6 +294,8 @@ impl SlashCommandHandler {
   /worktree <subcommand>  - Manage git worktrees
     Subcommands: new, list, switch, remove, clean, status
 
+  /plugins                - List loaded plugins
+
   /help [command]         - Show help for a command
 
 Type /help <command> for detailed help on a specific command."#;
@@ -262,6 +333,23 @@ Examples:
                 CommandResult::Executed(help_text.to_string())
             }
 
+            Some("plugins") => {
+                let help_text = r#"/plugins - List loaded plugins
+
+Usage:
+  /plugins       Show all loaded plugins with details
+
+Displays:
+  - Plugin name and version
+  - Plugin description (if available)
+  - Commands provided by the plugin
+  - Skills provided by the plugin
+
+Plugins are loaded from ~/.config/patina/plugins/ at startup.
+Use --no-plugins flag to disable plugin loading."#;
+                CommandResult::Executed(help_text.to_string())
+            }
+
             Some(cmd) => CommandResult::UnknownCommand(cmd.to_string()),
         }
     }
@@ -269,7 +357,45 @@ Examples:
     /// Returns available command names for tab completion.
     #[must_use]
     pub fn available_commands(&self) -> Vec<&'static str> {
-        vec!["worktree", "help"]
+        vec!["worktree", "help", "plugins"]
+    }
+
+    /// Creates plugin info from a plugin registry.
+    ///
+    /// Extracts plugin metadata including name, version, description,
+    /// commands, and skills for display by the `/plugins` command.
+    #[must_use]
+    pub fn build_plugin_info(registry: &crate::plugins::PluginRegistry) -> Vec<PluginInfo> {
+        let plugin_names = registry.list_plugins();
+        let all_commands = registry.list_commands();
+
+        plugin_names
+            .into_iter()
+            .map(|name| {
+                let manifest = registry.get_manifest(&name);
+
+                // Collect commands for this plugin (format: "plugin:command")
+                let prefix = format!("{}:", name);
+                let commands: Vec<String> = all_commands
+                    .iter()
+                    .filter(|cmd| cmd.starts_with(&prefix))
+                    .map(|cmd| cmd.strip_prefix(&prefix).unwrap_or(cmd).to_string())
+                    .collect();
+
+                // Get skills from manifest (future enhancement)
+                let skills = Vec::new();
+
+                PluginInfo {
+                    name: name.clone(),
+                    version: manifest
+                        .map(|m| m.version.clone())
+                        .unwrap_or_else(|| "unknown".to_string()),
+                    description: manifest.and_then(|m| m.description.clone()),
+                    commands,
+                    skills,
+                }
+            })
+            .collect()
     }
 }
 
@@ -524,5 +650,154 @@ mod tests {
         let result = CommandResult::Executed("output".to_string());
         let debug_str = format!("{:?}", result);
         assert!(debug_str.contains("Executed"));
+    }
+
+    // =========================================================================
+    // Plugin command tests
+    // =========================================================================
+
+    #[test]
+    fn test_handle_slash_command_plugins_no_plugins() {
+        let (handler, _temp) = create_handler_in_temp();
+
+        let result = handler.handle("/plugins");
+
+        match result {
+            CommandResult::Executed(output) => {
+                assert!(
+                    output.contains("No plugins loaded") || output.contains("no plugins"),
+                    "Should indicate no plugins: {}",
+                    output
+                );
+            }
+            other => panic!("Expected executed result: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_handle_slash_command_plugins_with_plugins() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let handler = SlashCommandHandler::new(temp_dir.path().to_path_buf());
+
+        // Add mock plugin info
+        let plugins = vec![
+            PluginInfo {
+                name: "test-plugin".to_string(),
+                version: "1.0.0".to_string(),
+                description: Some("A test plugin".to_string()),
+                commands: vec!["test-cmd".to_string()],
+                skills: vec!["test-skill".to_string()],
+            },
+            PluginInfo {
+                name: "another-plugin".to_string(),
+                version: "2.0.0".to_string(),
+                description: None,
+                commands: vec![],
+                skills: vec![],
+            },
+        ];
+        let handler = handler.with_plugins(plugins);
+
+        let result = handler.handle("/plugins");
+
+        match result {
+            CommandResult::Executed(output) => {
+                // Should list plugin names and versions
+                assert!(output.contains("test-plugin"), "Should show plugin name");
+                assert!(output.contains("1.0.0"), "Should show version");
+                assert!(
+                    output.contains("another-plugin"),
+                    "Should show second plugin"
+                );
+                assert!(output.contains("2.0.0"), "Should show second version");
+            }
+            other => panic!("Expected plugin listing: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_handle_slash_command_plugins_shows_commands_and_skills() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let handler = SlashCommandHandler::new(temp_dir.path().to_path_buf());
+
+        let plugins = vec![PluginInfo {
+            name: "my-plugin".to_string(),
+            version: "1.0.0".to_string(),
+            description: Some("Plugin with features".to_string()),
+            commands: vec!["cmd1".to_string(), "cmd2".to_string()],
+            skills: vec!["skill1".to_string()],
+        }];
+        let handler = handler.with_plugins(plugins);
+
+        let result = handler.handle("/plugins");
+
+        match result {
+            CommandResult::Executed(output) => {
+                // Should show commands and skills count or names
+                assert!(
+                    output.contains("cmd1") || output.contains("2 command"),
+                    "Should show commands info: {}",
+                    output
+                );
+                assert!(
+                    output.contains("skill1") || output.contains("1 skill"),
+                    "Should show skills info: {}",
+                    output
+                );
+            }
+            other => panic!("Expected plugin details: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_help_includes_plugins_command() {
+        let (handler, _temp) = create_handler_in_temp();
+
+        let result = handler.handle("/help");
+
+        match result {
+            CommandResult::Executed(output) => {
+                assert!(
+                    output.contains("plugins"),
+                    "Help should mention plugins command: {}",
+                    output
+                );
+            }
+            other => panic!("Expected help output: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_help_plugins_shows_detailed_help() {
+        let (handler, _temp) = create_handler_in_temp();
+
+        let result = handler.handle("/help plugins");
+
+        match result {
+            CommandResult::Executed(output) => {
+                assert!(
+                    output.contains("/plugins"),
+                    "Should describe plugins command"
+                );
+                assert!(
+                    output.contains("loaded") || output.contains("list"),
+                    "Should explain what it does: {}",
+                    output
+                );
+            }
+            other => panic!("Expected plugins help: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_available_commands_includes_plugins() {
+        let (handler, _temp) = create_handler_in_temp();
+
+        let commands = handler.available_commands();
+
+        assert!(
+            commands.contains(&"plugins"),
+            "Available commands should include 'plugins'"
+        );
     }
 }

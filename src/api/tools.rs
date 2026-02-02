@@ -425,7 +425,10 @@ mod tests {
         assert!(names.contains(&"grep"), "should contain grep");
         assert!(names.contains(&"web_fetch"), "should contain web_fetch");
         assert!(names.contains(&"web_search"), "should contain web_search");
-        assert!(names.contains(&"analyze_image"), "should contain analyze_image");
+        assert!(
+            names.contains(&"analyze_image"),
+            "should contain analyze_image"
+        );
     }
 
     #[test]
