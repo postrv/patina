@@ -375,3 +375,201 @@ fn test_media_type_serialization() {
         assert_eq!(json, expected_json, "MediaType should serialize correctly");
     }
 }
+
+// ============================================================================
+// End-to-End Tool Workflow Tests
+// ============================================================================
+
+use patina::tools::{ToolCall, ToolExecutor, ToolResult};
+use serde_json::json;
+use std::io::Write;
+use tempfile::TempDir;
+
+/// Minimal valid PNG image (1x1 red pixel).
+///
+/// This is a self-contained minimal PNG for testing purposes.
+/// It consists of: PNG signature + IHDR + IDAT + IEND chunks.
+const MINIMAL_PNG: &[u8] = &[
+    // PNG signature
+    0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
+    // IHDR chunk (width=1, height=1, bit_depth=8, color_type=2 RGB)
+    0x00, 0x00, 0x00, 0x0D, // Length: 13
+    0x49, 0x48, 0x44, 0x52, // Type: IHDR
+    0x00, 0x00, 0x00, 0x01, // Width: 1
+    0x00, 0x00, 0x00, 0x01, // Height: 1
+    0x08,                   // Bit depth: 8
+    0x02,                   // Color type: 2 (RGB)
+    0x00,                   // Compression: 0
+    0x00,                   // Filter: 0
+    0x00,                   // Interlace: 0
+    0x90, 0x77, 0x53, 0xDE, // CRC
+    // IDAT chunk (zlib compressed: filter=0, R=255, G=0, B=0)
+    0x00, 0x00, 0x00, 0x0C, // Length: 12
+    0x49, 0x44, 0x41, 0x54, // Type: IDAT
+    0x08, 0xD7, 0x63, 0xF8, 0xCF, 0xC0, 0x00, 0x00, 0x01, 0x01, 0x01, 0x00,
+    0x18, 0xDD, 0x8D, 0xB4, // CRC
+    // IEND chunk
+    0x00, 0x00, 0x00, 0x00, // Length: 0
+    0x49, 0x45, 0x4E, 0x44, // Type: IEND
+    0xAE, 0x42, 0x60, 0x82, // CRC
+];
+
+/// End-to-end test for image analysis workflow through ToolExecutor.
+///
+/// This test verifies the full vision tool workflow:
+/// 1. Create a test image file
+/// 2. Execute the analyze_image tool
+/// 3. Verify the result contains expected image information
+#[tokio::test]
+async fn test_image_analysis_end_to_end() {
+    // Create a temporary directory with a test image
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let image_path = temp_dir.path().join("test_image.png");
+
+    // Write the minimal PNG to the temp file
+    let mut file = std::fs::File::create(&image_path).expect("Failed to create test image");
+    file.write_all(MINIMAL_PNG)
+        .expect("Failed to write test image");
+
+    // Create a ToolExecutor with the temp directory as working directory
+    let executor = ToolExecutor::new(temp_dir.path().to_path_buf());
+
+    // Execute the analyze_image tool
+    let call = ToolCall {
+        name: "analyze_image".to_string(),
+        input: json!({
+            "path": "test_image.png",
+            "prompt": "Describe this image"
+        }),
+    };
+
+    let result = executor.execute(call).await.expect("Execution should succeed");
+
+    // Verify the result
+    match result {
+        ToolResult::Success(output) => {
+            assert!(
+                output.contains("Image loaded successfully"),
+                "Should report successful load: {}",
+                output
+            );
+            assert!(
+                output.contains("test_image.png"),
+                "Should include file path: {}",
+                output
+            );
+            assert!(
+                output.contains("image/png"),
+                "Should include media type: {}",
+                output
+            );
+            assert!(
+                output.contains("Describe this image"),
+                "Should include the prompt: {}",
+                output
+            );
+        }
+        ToolResult::Error(err) => {
+            panic!("Tool execution failed: {}", err);
+        }
+        ToolResult::Cancelled => {
+            panic!("Tool execution was cancelled");
+        }
+        ToolResult::NeedsPermission(_) => {
+            panic!("Tool unexpectedly needs permission");
+        }
+    }
+}
+
+/// Test that analyze_image returns appropriate error for non-existent file.
+#[tokio::test]
+async fn test_image_analysis_file_not_found() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let executor = ToolExecutor::new(temp_dir.path().to_path_buf());
+
+    let call = ToolCall {
+        name: "analyze_image".to_string(),
+        input: json!({
+            "path": "nonexistent.png"
+        }),
+    };
+
+    let result = executor.execute(call).await.expect("Execution should succeed");
+
+    match result {
+        ToolResult::Error(err) => {
+            assert!(
+                err.contains("Failed to analyze image"),
+                "Should contain error message: {}",
+                err
+            );
+        }
+        ToolResult::Success(output) => {
+            panic!("Should have failed for non-existent file: {}", output);
+        }
+        _ => panic!("Unexpected result type"),
+    }
+}
+
+/// Test that analyze_image blocks path traversal attempts.
+#[tokio::test]
+async fn test_image_analysis_path_traversal_blocked() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let executor = ToolExecutor::new(temp_dir.path().to_path_buf());
+
+    let call = ToolCall {
+        name: "analyze_image".to_string(),
+        input: json!({
+            "path": "../../../etc/passwd"
+        }),
+    };
+
+    let result = executor.execute(call).await.expect("Execution should succeed");
+
+    match result {
+        ToolResult::Error(err) => {
+            assert!(
+                err.contains("path traversal") || err.contains("outside working directory"),
+                "Should block path traversal: {}",
+                err
+            );
+        }
+        ToolResult::Success(output) => {
+            panic!("Should have blocked path traversal: {}", output);
+        }
+        _ => panic!("Unexpected result type"),
+    }
+}
+
+/// Test analyze_image without optional prompt.
+#[tokio::test]
+async fn test_image_analysis_without_prompt() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let image_path = temp_dir.path().join("no_prompt.png");
+
+    let mut file = std::fs::File::create(&image_path).expect("Failed to create test image");
+    file.write_all(MINIMAL_PNG)
+        .expect("Failed to write test image");
+
+    let executor = ToolExecutor::new(temp_dir.path().to_path_buf());
+
+    let call = ToolCall {
+        name: "analyze_image".to_string(),
+        input: json!({
+            "path": "no_prompt.png"
+        }),
+    };
+
+    let result = executor.execute(call).await.expect("Execution should succeed");
+
+    match result {
+        ToolResult::Success(output) => {
+            assert!(output.contains("Image loaded successfully"));
+            assert!(output.contains("(none)"), "Should show no prompt: {}", output);
+        }
+        ToolResult::Error(err) => {
+            panic!("Tool execution failed: {}", err);
+        }
+        _ => panic!("Unexpected result type"),
+    }
+}
