@@ -5,6 +5,7 @@
 pub mod compaction_progress;
 pub mod image_display;
 pub mod permission_prompt;
+pub mod subagent;
 pub mod tool_block;
 pub mod worktree_picker;
 
@@ -17,6 +18,9 @@ pub use image_display::{
 pub use permission_prompt::{
     handle_key_input as handle_permission_key, PermissionPromptState, PermissionPromptWidget,
     SelectedOption as PermissionSelectedOption,
+};
+pub use subagent::{
+    SubagentDisplayInfo, SubagentDisplayStatus, SubagentPanelState, SubagentPanelWidget,
 };
 pub use tool_block::{ToolBlockState, ToolBlockWidget};
 pub use worktree_picker::{WorktreePickerState, WorktreePickerWidget};
