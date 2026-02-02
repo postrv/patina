@@ -26,7 +26,8 @@ pub use context::{
 };
 pub use integration::{
     build_context_suggestion_from_callers, build_context_suggestion_from_dependencies,
-    parse_callers_response, parse_dependencies_response, CallerInfo, DependencyInfo,
-    NarsilCapabilities, NarsilCapability, NarsilIntegration,
+    parse_callers_response, parse_dependencies_response, parse_security_findings,
+    security_verdict_from_findings, CallerInfo, DependencyInfo, NarsilCapabilities,
+    NarsilCapability, NarsilIntegration, SecurityFinding,
 };
 pub use security::SecurityVerdict;
