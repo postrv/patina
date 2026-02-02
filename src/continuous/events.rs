@@ -2,7 +2,7 @@
 //!
 //! Events emitted during continuous coding sessions for plugin hooks and monitoring.
 //!
-//! # Event Types (Task 2.4.2 will implement)
+//! # Event Types
 //!
 //! - `IterationStart` - Emitted when a new iteration begins
 //! - `IterationComplete` - Emitted when an iteration finishes
@@ -10,15 +10,32 @@
 //! - `QualityGateResult` - Emitted with the result of a quality gate
 //! - `StagnationDetected` - Emitted when no progress is detected
 //! - `HumanCheckpointRequired` - Emitted when human intervention is needed
+//!
+//! # Example
+//!
+//! ```
+//! use patina::continuous::ContinuousEvent;
+//!
+//! let event = ContinuousEvent::IterationStart { iteration: 1 };
+//! assert_eq!(event.event_type(), "iteration_start");
+//! assert!(event.is_iteration_event());
+//! ```
 
-// NOTE: Task 2.4.1 (RED) - Tests below document expected behavior
-// Task 2.4.2 (GREEN) will add serde derives and impl methods to make tests pass
+use serde::{Deserialize, Serialize};
 
 /// Events emitted during continuous coding sessions.
 ///
 /// These events are sent to plugins via the `ContinuousCodingPlugin::on_event` method
 /// and can be used for logging, metrics, or custom automation logic.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// # Serialization
+///
+/// Events are serialized as tagged JSON objects with a `type` field:
+/// ```json
+/// {"type":"iteration_start","iteration":1}
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum ContinuousEvent {
     /// A new iteration is starting.
     IterationStart {
@@ -65,8 +82,89 @@ pub enum ContinuousEvent {
     },
 }
 
-// NOTE: impl block with event_type(), is_iteration_event(), requires_attention()
-// will be added in Task 2.4.2 (GREEN) to make tests pass
+impl ContinuousEvent {
+    /// Returns the event type name as a string slice.
+    ///
+    /// This matches the serialized `type` field in JSON.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use patina::continuous::ContinuousEvent;
+    ///
+    /// let event = ContinuousEvent::IterationStart { iteration: 1 };
+    /// assert_eq!(event.event_type(), "iteration_start");
+    /// ```
+    #[must_use]
+    pub fn event_type(&self) -> &'static str {
+        match self {
+            Self::IterationStart { .. } => "iteration_start",
+            Self::IterationComplete { .. } => "iteration_complete",
+            Self::QualityGateCheck { .. } => "quality_gate_check",
+            Self::QualityGateResult { .. } => "quality_gate_result",
+            Self::StagnationDetected { .. } => "stagnation_detected",
+            Self::HumanCheckpointRequired { .. } => "human_checkpoint_required",
+        }
+    }
+
+    /// Returns true if this is an iteration-related event.
+    ///
+    /// Iteration events are `IterationStart` and `IterationComplete`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use patina::continuous::ContinuousEvent;
+    ///
+    /// let start = ContinuousEvent::IterationStart { iteration: 1 };
+    /// assert!(start.is_iteration_event());
+    ///
+    /// let gate = ContinuousEvent::QualityGateCheck { gate: "tests".into() };
+    /// assert!(!gate.is_iteration_event());
+    /// ```
+    #[must_use]
+    pub fn is_iteration_event(&self) -> bool {
+        matches!(
+            self,
+            Self::IterationStart { .. } | Self::IterationComplete { .. }
+        )
+    }
+
+    /// Returns true if this event indicates an issue requiring attention.
+    ///
+    /// Events that require attention:
+    /// - `StagnationDetected` - automation is stuck
+    /// - `HumanCheckpointRequired` - human intervention needed
+    /// - `QualityGateResult` with `passed: false` - quality check failed
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use patina::continuous::ContinuousEvent;
+    ///
+    /// let stagnation = ContinuousEvent::StagnationDetected {
+    ///     iterations_without_progress: 5,
+    ///     threshold: 3,
+    /// };
+    /// assert!(stagnation.requires_attention());
+    ///
+    /// let success = ContinuousEvent::QualityGateResult {
+    ///     gate: "tests".into(),
+    ///     passed: true,
+    ///     message: None,
+    /// };
+    /// assert!(!success.requires_attention());
+    /// ```
+    #[must_use]
+    pub fn requires_attention(&self) -> bool {
+        matches!(
+            self,
+            Self::StagnationDetected { .. }
+                | Self::HumanCheckpointRequired { .. }
+                | Self::QualityGateResult { passed: false, .. }
+        )
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -198,7 +296,8 @@ mod tests {
 
     #[test]
     fn test_continuous_event_deserialize_stagnation() {
-        let json = r#"{"type":"stagnation_detected","iterations_without_progress":5,"threshold":3}"#;
+        let json =
+            r#"{"type":"stagnation_detected","iterations_without_progress":5,"threshold":3}"#;
         let event: ContinuousEvent =
             serde_json::from_str(json).expect("deserialization should succeed");
         assert!(matches!(
