@@ -609,9 +609,95 @@ pub fn build_context_suggestion_from_dependencies(
     }
 }
 
+// =============================================================================
+// Security pre-flight types and helpers (Task 2.3.3)
+// =============================================================================
+
+/// A security finding from narsil scan_security.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SecurityFinding {
+    /// Severity level: CRITICAL, HIGH, MEDIUM, LOW, INFO.
+    pub severity: String,
+    /// The rule that triggered this finding (e.g., CWE-78).
+    pub rule: String,
+    /// Human-readable description of the issue.
+    pub message: String,
+}
+
+/// Parses a narsil `scan_security` response into security findings.
+///
+/// # Arguments
+///
+/// * `response` - JSON response from narsil scan_security tool
+///
+/// # Returns
+///
+/// A vector of security findings extracted from the response.
+#[must_use]
+pub fn parse_security_findings(response: &serde_json::Value) -> Vec<SecurityFinding> {
+    let Some(findings) = response.get("findings").and_then(|f| f.as_array()) else {
+        return Vec::new();
+    };
+
+    findings
+        .iter()
+        .filter_map(|finding| {
+            let severity = finding.get("severity")?.as_str()?.to_string();
+            let rule = finding.get("rule")?.as_str()?.to_string();
+            let message = finding.get("message")?.as_str()?.to_string();
+            Some(SecurityFinding {
+                severity,
+                rule,
+                message,
+            })
+        })
+        .collect()
+}
+
+/// Converts security findings into a security verdict.
+///
+/// # Arguments
+///
+/// * `findings` - Security findings from narsil scan
+///
+/// # Returns
+///
+/// - `Block` if any CRITICAL findings exist
+/// - `Warn` if any HIGH findings exist (and no CRITICAL)
+/// - `Allow` if only MEDIUM/LOW/INFO findings or no findings
+#[must_use]
+pub fn security_verdict_from_findings(
+    findings: &[SecurityFinding],
+) -> crate::narsil::SecurityVerdict {
+    use crate::narsil::SecurityVerdict;
+
+    // Check for CRITICAL first (highest priority)
+    if let Some(critical) = findings
+        .iter()
+        .find(|f| f.severity.eq_ignore_ascii_case("critical"))
+    {
+        return SecurityVerdict::Block(format!(
+            "CRITICAL: {} ({})",
+            critical.message, critical.rule
+        ));
+    }
+
+    // Check for HIGH (warning, but allows execution)
+    if let Some(high) = findings
+        .iter()
+        .find(|f| f.severity.eq_ignore_ascii_case("high"))
+    {
+        return SecurityVerdict::Warn(format!("HIGH: {} ({})", high.message, high.rule));
+    }
+
+    // MEDIUM, LOW, INFO are allowed without warning
+    SecurityVerdict::Allow
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::narsil::SecurityVerdict;
     use std::path::PathBuf;
 
     // =============================================================================
@@ -1019,5 +1105,108 @@ mod tests {
 
         assert_eq!(info.path, "std::io");
         assert_eq!(info.kind, "use");
+    }
+
+    // =============================================================================
+    // Task 2.3.3 - security_check tests
+    // =============================================================================
+
+    #[test]
+    fn test_parse_security_findings_no_findings() {
+        let response = serde_json::json!({
+            "findings": []
+        });
+
+        let findings = parse_security_findings(&response);
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn test_parse_security_findings_with_findings() {
+        let response = serde_json::json!({
+            "findings": [
+                {"severity": "CRITICAL", "rule": "CWE-78", "message": "Command injection"},
+                {"severity": "HIGH", "rule": "CWE-22", "message": "Path traversal"}
+            ]
+        });
+
+        let findings = parse_security_findings(&response);
+        assert_eq!(findings.len(), 2);
+        assert_eq!(findings[0].severity, "CRITICAL");
+        assert_eq!(findings[0].rule, "CWE-78");
+        assert_eq!(findings[1].severity, "HIGH");
+    }
+
+    #[test]
+    fn test_parse_security_findings_missing_field() {
+        let response = serde_json::json!({
+            "other": "data"
+        });
+
+        let findings = parse_security_findings(&response);
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn test_security_verdict_from_findings_empty() {
+        use crate::narsil::SecurityVerdict;
+
+        let findings: Vec<SecurityFinding> = vec![];
+        let verdict = security_verdict_from_findings(&findings);
+        assert_eq!(verdict, SecurityVerdict::Allow);
+    }
+
+    #[test]
+    fn test_security_verdict_from_findings_critical() {
+        let findings = vec![SecurityFinding {
+            severity: "CRITICAL".to_string(),
+            rule: "CWE-78".to_string(),
+            message: "Command injection".to_string(),
+        }];
+        let verdict = security_verdict_from_findings(&findings);
+        assert!(verdict.blocks_execution());
+        assert!(verdict.reason().unwrap().contains("CRITICAL"));
+    }
+
+    #[test]
+    fn test_security_verdict_from_findings_high() {
+        let findings = vec![SecurityFinding {
+            severity: "HIGH".to_string(),
+            rule: "CWE-22".to_string(),
+            message: "Path traversal".to_string(),
+        }];
+        let verdict = security_verdict_from_findings(&findings);
+        assert!(verdict.has_warning());
+        assert!(verdict.allows_execution());
+    }
+
+    #[test]
+    fn test_security_verdict_from_findings_low_allows() {
+        let findings = vec![SecurityFinding {
+            severity: "LOW".to_string(),
+            rule: "STYLE-001".to_string(),
+            message: "Formatting issue".to_string(),
+        }];
+        let verdict = security_verdict_from_findings(&findings);
+        assert_eq!(verdict, SecurityVerdict::Allow);
+    }
+
+    #[test]
+    fn test_security_verdict_critical_takes_precedence() {
+        // If both CRITICAL and HIGH exist, CRITICAL takes precedence (blocks)
+        let findings = vec![
+            SecurityFinding {
+                severity: "HIGH".to_string(),
+                rule: "CWE-22".to_string(),
+                message: "Path traversal".to_string(),
+            },
+            SecurityFinding {
+                severity: "CRITICAL".to_string(),
+                rule: "CWE-78".to_string(),
+                message: "Command injection".to_string(),
+            },
+        ];
+        let verdict = security_verdict_from_findings(&findings);
+        assert!(verdict.blocks_execution());
     }
 }
