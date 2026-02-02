@@ -27,6 +27,7 @@ use state::AppState;
 use tool_loop::ToolLoopState;
 
 use crate::api::AnthropicClient;
+use crate::ide::controller::IdeController;
 use crate::permissions::PermissionResponse;
 use crate::session::{default_sessions_dir, SessionManager};
 use crate::terminal;
@@ -150,6 +151,17 @@ pub async fn run(config: Config) -> Result<()> {
     let mut terminal = Terminal::new(backend)?;
 
     let client = AnthropicClient::new(config.api_key.clone(), &config.model);
+
+    // Start IDE server if port is specified
+    if let Some(port) = config.ide_port {
+        let controller = IdeController::new(port);
+        tokio::spawn(async move {
+            if let Err(e) = controller.run().await {
+                warn!("IDE server error: {}", e);
+            }
+        });
+        info!("IDE server started on port {}", port);
+    }
 
     // If there's an initial prompt, submit it immediately
     if let Some(ref prompt) = config.initial_prompt {

@@ -121,6 +121,13 @@ struct Args {
     /// that benefit from parallel exploration or specialized roles.
     #[arg(long)]
     enable_subagents: bool,
+
+    /// Start IDE integration server on the specified port.
+    ///
+    /// When set, a TCP server is started on 127.0.0.1:<PORT> for IDE
+    /// extensions (VS Code, JetBrains) to communicate with Patina.
+    #[arg(long, value_name = "PORT")]
+    ide_port: Option<u16>,
 }
 
 #[tokio::main]
@@ -253,6 +260,7 @@ async fn main() -> Result<()> {
         initial_images: args.image,
         plugins_enabled: !args.no_plugins,
         subagents_enabled: args.enable_subagents,
+        ide_port: args.ide_port,
     })
     .await
 }
