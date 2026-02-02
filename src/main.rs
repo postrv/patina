@@ -99,6 +99,15 @@ struct Args {
     /// Must be a valid UUID registered with Anthropic's developer program.
     #[arg(long, env = "PATINA_OAUTH_CLIENT_ID")]
     oauth_client_id: Option<String>,
+
+    /// Image file(s) to include in the initial message.
+    ///
+    /// Can be specified multiple times to include multiple images.
+    /// Supported formats: PNG, JPEG, GIF, WebP (max 20MB each).
+    ///
+    /// Example: patina --image screenshot.png "What's in this image?"
+    #[arg(long, value_name = "PATH")]
+    image: Vec<std::path::PathBuf>,
 }
 
 #[tokio::main]
@@ -228,6 +237,7 @@ async fn main() -> Result<()> {
         print_mode,
         vision_model: None,
         oauth_client_id: args.oauth_client_id,
+        initial_images: args.image,
     })
     .await
 }
@@ -266,4 +276,74 @@ async fn oauth_logout() -> Result<()> {
     auth_storage::clear_oauth_credentials().await?;
     println!("OAuth credentials cleared from system keychain.");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    /// Test that the --image flag parses a single image path correctly.
+    ///
+    /// This test documents the expected CLI interface for vision support:
+    /// - `--image <PATH>` should accept a file path
+    /// - The path should be stored for later processing
+    #[test]
+    fn test_cli_image_flag_parsing() {
+        let args = Args::parse_from(["patina", "--image", "screenshot.png"]);
+
+        assert_eq!(args.image.len(), 1);
+        assert_eq!(args.image[0], std::path::PathBuf::from("screenshot.png"));
+    }
+
+    /// Test that multiple --image flags can be used to pass multiple images.
+    ///
+    /// Claude Vision API supports up to 100 images per request, so users
+    /// should be able to specify multiple images on the command line:
+    /// - `patina --image a.png --image b.jpg --image c.gif`
+    #[test]
+    fn test_cli_image_multiple_images() {
+        let args = Args::parse_from([
+            "patina",
+            "--image",
+            "photo1.png",
+            "--image",
+            "photo2.jpg",
+            "--image",
+            "photo3.webp",
+        ]);
+
+        assert_eq!(args.image.len(), 3);
+        assert_eq!(args.image[0], std::path::PathBuf::from("photo1.png"));
+        assert_eq!(args.image[1], std::path::PathBuf::from("photo2.jpg"));
+        assert_eq!(args.image[2], std::path::PathBuf::from("photo3.webp"));
+    }
+
+    /// Test that --image flag is optional (no images by default).
+    #[test]
+    fn test_cli_image_flag_optional() {
+        let args = Args::parse_from(["patina"]);
+
+        assert!(args.image.is_empty());
+    }
+
+    /// Test that --image can be combined with a prompt.
+    ///
+    /// Common use case: `patina --image photo.png "What's in this image?"`
+    #[test]
+    fn test_cli_image_with_prompt() {
+        let args = Args::parse_from([
+            "patina",
+            "--image",
+            "diagram.png",
+            "Explain this architecture diagram",
+        ]);
+
+        assert_eq!(args.image.len(), 1);
+        assert_eq!(args.image[0], std::path::PathBuf::from("diagram.png"));
+        assert_eq!(
+            args.prompt,
+            Some("Explain this architecture diagram".to_string())
+        );
+    }
 }

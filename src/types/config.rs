@@ -110,6 +110,7 @@ pub enum NarsilMode {
 ///     print_mode: false,
 ///     vision_model: None,
 ///     oauth_client_id: None,
+///     initial_images: Vec::new(),
 /// };
 /// ```
 pub struct Config {
@@ -177,6 +178,12 @@ pub struct Config {
     /// enables OAuth flow using the specified client ID. The client ID must be
     /// a valid UUID registered with Anthropic's developer program.
     pub oauth_client_id: Option<String>,
+
+    /// Optional image paths to include in the initial message.
+    ///
+    /// When set, these images are loaded and included as `ContentBlock::Image`
+    /// in the first user message. Supports PNG, JPEG, GIF, and WebP formats.
+    pub initial_images: Vec<PathBuf>,
 }
 
 impl Config {
@@ -218,6 +225,7 @@ impl Config {
             print_mode: false,
             vision_model: None,
             oauth_client_id: None,
+            initial_images: Vec::new(),
         }
     }
 
@@ -430,6 +438,26 @@ impl Config {
     pub fn oauth_client_id(&self) -> Option<&str> {
         self.oauth_client_id.as_deref()
     }
+
+    /// Sets the initial images to include in the first message.
+    ///
+    /// Images are loaded and sent as `ContentBlock::Image` along with
+    /// the initial prompt.
+    ///
+    /// # Arguments
+    ///
+    /// * `images` - Paths to image files (PNG, JPEG, GIF, or WebP)
+    #[must_use]
+    pub fn with_initial_images(mut self, images: Vec<PathBuf>) -> Self {
+        self.initial_images = images;
+        self
+    }
+
+    /// Returns the initial image paths.
+    #[must_use]
+    pub fn initial_images(&self) -> &[PathBuf] {
+        &self.initial_images
+    }
 }
 
 #[cfg(test)]
@@ -463,6 +491,7 @@ mod tests {
             print_mode: false,
             vision_model: None,
             oauth_client_id: None,
+            initial_images: Vec::new(),
         };
 
         assert_eq!(config.model(), "claude-opus-4-20250514");
@@ -483,6 +512,7 @@ mod tests {
             print_mode: false,
             vision_model: None,
             oauth_client_id: None,
+            initial_images: Vec::new(),
         };
 
         assert_eq!(config.working_dir(), &path);
@@ -738,5 +768,37 @@ mod tests {
             .with_oauth_client_id(String::from("uuid-from-string"));
 
         assert_eq!(config.oauth_client_id(), Some("uuid-from-string"));
+    }
+
+    // =========================================================================
+    // Initial images tests (1.5.1.4)
+    // =========================================================================
+
+    #[test]
+    fn test_config_default_initial_images() {
+        let config = Config::new(
+            SecretString::new("test-key".into()),
+            "test-model",
+            PathBuf::from("/tmp"),
+        );
+
+        assert!(config.initial_images().is_empty());
+    }
+
+    #[test]
+    fn test_config_with_initial_images() {
+        let images = vec![PathBuf::from("photo1.png"), PathBuf::from("photo2.jpg")];
+        let config = Config::new(SecretString::new("key".into()), "model", PathBuf::from("."))
+            .with_initial_images(images.clone());
+
+        assert_eq!(config.initial_images(), &images);
+    }
+
+    #[test]
+    fn test_config_initial_images_empty_vec() {
+        let config = Config::new(SecretString::new("key".into()), "model", PathBuf::from("."))
+            .with_initial_images(Vec::new());
+
+        assert!(config.initial_images().is_empty());
     }
 }
