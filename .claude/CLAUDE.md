@@ -67,16 +67,20 @@ panic!("not implemented")     // Implement or remove
 ## TDD CYCLE
 
 ```
-REINDEX → RED → GREEN → REFACTOR → REVIEW → COMMIT → REINDEX
+REINDEX → RED → COMMIT → GREEN → COMMIT → REFACTOR → REVIEW → COMMIT → REINDEX
 ```
 
 1. **REINDEX**: Run `narsil reindex` to refresh code intelligence
 2. **RED**: Write failing test first - test names describe expected behavior
-3. **GREEN**: Write minimal code to make test pass
-4. **REFACTOR**: Clean up while keeping tests green
-5. **REVIEW**: Run all quality gates
-6. **COMMIT**: Descriptive commit message
-7. **REINDEX**: Refresh index with new code
+3. **COMMIT**: Commit failing tests (documents intent, signals progress)
+4. **GREEN**: Write minimal code to make test pass
+5. **COMMIT**: Commit working implementation (checkpoint before refactor)
+6. **REFACTOR**: Clean up while keeping tests green
+7. **REVIEW**: Run all quality gates (clippy, tests, fmt)
+8. **COMMIT**: Final commit with task marked complete
+9. **REINDEX**: Refresh index with new code
+
+**Key insight:** Commits at steps 3, 5, and 8 ensure Ralph always sees progress.
 
 ### Test Requirements
 
@@ -125,6 +129,46 @@ git remote -v  # Should show https:// URLs, NOT git@github.com
 - Always create NEW commits after hook failures
 - NEVER use SSH URLs or SSH keys for git operations
 
+### Commit Cadence (CRITICAL for Ralph)
+
+**Ralph detects stagnation by commit hash changes. No commits = stagnation detected.**
+
+**MANDATORY commit points:**
+1. **After each task completion** - When marking `[x]`, commit immediately
+2. **After quality gates pass** - Don't proceed to next task without committing
+3. **After RED phase** - Commit failing tests before implementing (documents intent)
+4. **After GREEN phase** - Commit working implementation before refactoring
+
+**Commit message format:**
+```
+feat(module): Brief description (task-number)
+
+Co-Authored-By: Claude <noreply@anthropic.com>
+```
+
+**Example cadence for task 2.4.1:**
+```bash
+# RED: Write failing tests
+git commit -m "test(continuous): Add ContinuousEvent tests (2.4.1 RED)"
+
+# GREEN: Make tests pass
+git commit -m "feat(continuous): Implement ContinuousEvent enum (2.4.1 GREEN)"
+
+# Update checkbox and commit
+git commit -m "docs: Mark 2.4.1 complete"
+```
+
+**Anti-patterns to avoid:**
+- ❌ Completing multiple tasks before committing
+- ❌ Running quality gates without committing passing code
+- ❌ Moving to next task without committing current progress
+- ❌ Large commits spanning multiple tasks
+
+**Why this matters:**
+- Ralph tracks `last_commit_hash` to detect progress
+- No new commits after N iterations = stagnation warning
+- Small, frequent commits = clear progress signal
+
 ---
 
 ## NARSIL-MCP INTEGRATION
@@ -169,22 +213,31 @@ If narsil-mcp is unavailable:
 
 ## STAGNATION HANDLING
 
+### Prevention (Most Important)
+
+**Commit frequently to signal progress:**
+- Commit after writing tests (RED phase)
+- Commit after tests pass (GREEN phase)
+- Commit after marking task complete
+- If stuck for more than 10 minutes, commit partial progress with `WIP:` prefix
+
 ### Detection Levels
 
 | Level | Condition | Action |
 |-------|-----------|--------|
-| Warning | 3 iterations, no checkbox progress | Review blockers in IMPLEMENTATION_PLAN.md |
+| Warning | 3 iterations, no commit | **Commit immediately** - even WIP progress |
 | Elevated | 5 iterations, no progress | Re-read task requirements, consider alternative approach |
 | Critical | 8 iterations, no progress | Stop and document blocker, request human review |
 
 ### Recovery Steps
 
-1. Check `IMPLEMENTATION_PLAN.md` for blocked tasks
-2. Run tests to identify specific failures
-3. Run linters to find warnings
-4. Use narsil `get_call_graph` to understand dependencies
-5. Check if task requires clarification
-6. Document blocker and move task to Blocked section
+1. **First: Commit any uncommitted work** (prevents false stagnation)
+2. Check `IMPLEMENTATION_PLAN.md` for blocked tasks
+3. Run tests to identify specific failures
+4. Run linters to find warnings
+5. Use narsil `get_call_graph` to understand dependencies
+6. Check if task requires clarification
+7. Document blocker and move task to Blocked section
 
 ---
 
