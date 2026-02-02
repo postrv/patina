@@ -93,7 +93,9 @@ REINDEX → RED → GREEN → REFACTOR → REVIEW → COMMIT → REINDEX
 
 ### Required Setup
 
-Ralph requires `gh` CLI for all GitHub operations. **No SSH keys.**
+**HTTPS only. NEVER use SSH for git operations.**
+
+Ralph requires `gh` CLI for all GitHub operations:
 
 ```bash
 # Verify gh CLI is authenticated
@@ -101,7 +103,19 @@ gh auth status
 
 # If not authenticated:
 gh auth login
+
+# Ensure git uses HTTPS (not SSH)
+git remote -v  # Should show https:// URLs, NOT git@github.com
 ```
+
+### Protocol Rules
+
+| Action | Use | NEVER Use |
+|--------|-----|-----------|
+| Clone | `gh repo clone` or `https://` URL | `git@github.com:` |
+| Push/Pull | `git push/pull` via HTTPS | SSH remotes |
+| Auth | `gh auth login` | SSH keys |
+| API calls | `gh api`, `gh pr`, `gh issue` | Direct curl with tokens |
 
 ### Git Safety
 
@@ -109,6 +123,7 @@ gh auth login
 - NEVER skip hooks (`--no-verify`) unless explicitly requested
 - NEVER amend commits unless explicitly requested
 - Always create NEW commits after hook failures
+- NEVER use SSH URLs or SSH keys for git operations
 
 ---
 
