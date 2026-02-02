@@ -5,6 +5,7 @@ use crate::api::tools::default_tools;
 use crate::api::{AnthropicClient, StreamEvent, TokenBudget, ToolChoice};
 use crate::app::tool_loop::{ContinuationData, ToolLoop, ToolLoopState};
 use crate::hooks::HookManager;
+use crate::narsil::context::ContextSuggestion;
 use crate::permissions::{PermissionManager, PermissionRequest, PermissionResponse};
 use crate::plugins::PluginRegistry;
 use crate::session::Session;
@@ -168,6 +169,14 @@ pub struct AppState {
     /// Optional subagent spawner for creating subagent sessions.
     /// Only initialized when subagent orchestration is enabled via `--enable-subagents`.
     subagent_spawner: Option<SubagentSpawner>,
+
+    /// Whether auto-context injection is enabled.
+    /// When true, context suggestions are injected before API calls.
+    auto_context_enabled: bool,
+
+    /// Pending context suggestions to be injected into the next message.
+    /// Set by external code when narsil context is available.
+    pending_context: Vec<ContextSuggestion>,
 }
 
 #[derive(Default)]
@@ -309,6 +318,8 @@ impl AppState {
             compaction_state: None,
             plugin_registry,
             subagent_spawner,
+            auto_context_enabled: false,
+            pending_context: Vec::new(),
         }
     }
 
@@ -360,6 +371,91 @@ impl AppState {
     #[must_use]
     pub fn subagent_spawner(&self) -> Option<&SubagentSpawner> {
         self.subagent_spawner.as_ref()
+    }
+
+    // =========================================================================
+    // Auto-context methods (Task 2.2.4)
+    // =========================================================================
+
+    /// Returns whether auto-context injection is enabled.
+    ///
+    /// When enabled, context suggestions from narsil are injected into
+    /// user messages before API calls.
+    #[must_use]
+    pub fn auto_context_enabled(&self) -> bool {
+        self.auto_context_enabled
+    }
+
+    /// Sets whether auto-context injection is enabled.
+    ///
+    /// # Arguments
+    ///
+    /// * `enabled` - Whether to enable auto-context injection
+    pub fn set_auto_context_enabled(&mut self, enabled: bool) {
+        self.auto_context_enabled = enabled;
+    }
+
+    /// Returns whether there are pending context suggestions.
+    #[must_use]
+    pub fn has_pending_context(&self) -> bool {
+        !self.pending_context.is_empty()
+    }
+
+    /// Returns a reference to the pending context suggestions.
+    #[must_use]
+    pub fn pending_context(&self) -> &[ContextSuggestion] {
+        &self.pending_context
+    }
+
+    /// Sets the pending context suggestions to be injected into the next message.
+    ///
+    /// These suggestions will be cleared after being consumed by `take_pending_context`.
+    ///
+    /// # Arguments
+    ///
+    /// * `suggestions` - Context suggestions from narsil
+    pub fn set_pending_context(&mut self, suggestions: Vec<ContextSuggestion>) {
+        self.pending_context = suggestions;
+    }
+
+    /// Takes and returns the pending context suggestions, clearing them.
+    ///
+    /// After calling this method, `has_pending_context()` will return false.
+    #[must_use]
+    pub fn take_pending_context(&mut self) -> Vec<ContextSuggestion> {
+        std::mem::take(&mut self.pending_context)
+    }
+
+    /// Clears the pending context suggestions without returning them.
+    pub fn clear_pending_context(&mut self) {
+        self.pending_context.clear();
+    }
+
+    /// Formats context suggestions into a string suitable for prepending to a message.
+    ///
+    /// Returns an empty string if suggestions is empty.
+    ///
+    /// # Arguments
+    ///
+    /// * `suggestions` - Context suggestions to format
+    ///
+    /// # Returns
+    ///
+    /// A formatted string containing all context suggestions.
+    #[must_use]
+    pub fn format_context_suggestions(suggestions: &[ContextSuggestion]) -> String {
+        if suggestions.is_empty() {
+            return String::new();
+        }
+
+        let mut parts = Vec::new();
+        for suggestion in suggestions {
+            parts.push(format!(
+                "[Context: {}]\n{}",
+                suggestion.description, suggestion.content
+            ));
+        }
+        parts.join("\n\n")
     }
 
     /// Inserts a character at the current cursor position.
@@ -2568,5 +2664,134 @@ mod tests {
         );
         assert!(!state.subagents_enabled());
         assert!(state.subagent_spawner().is_none());
+    }
+
+    // =========================================================================
+    // 2.2.4 - Auto-context injection tests
+    // =========================================================================
+
+    #[test]
+    fn test_auto_context_disabled_by_default() {
+        // AppState should have auto_context disabled by default
+        // (Config enables it, but AppState needs explicit opt-in)
+        let state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+        assert!(!state.auto_context_enabled());
+    }
+
+    #[test]
+    fn test_set_auto_context_enabled() {
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+
+        // Initially disabled
+        assert!(!state.auto_context_enabled());
+
+        // Enable it
+        state.set_auto_context_enabled(true);
+        assert!(state.auto_context_enabled());
+
+        // Disable it
+        state.set_auto_context_enabled(false);
+        assert!(!state.auto_context_enabled());
+    }
+
+    #[test]
+    fn test_inject_context_suggestions() {
+        use crate::narsil::context::{CodeReference, ContextKind, ContextSuggestion};
+
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+
+        // Create test suggestions
+        let suggestions = vec![
+            ContextSuggestion {
+                source: CodeReference::function("process_data"),
+                kind: ContextKind::Callers,
+                description: "Functions that call process_data".to_string(),
+                content: "main() in src/main.rs:10".to_string(),
+            },
+            ContextSuggestion {
+                source: CodeReference::file("src/handler.rs"),
+                kind: ContextKind::Imports,
+                description: "Imports in src/handler.rs".to_string(),
+                content: "use std::io".to_string(),
+            },
+        ];
+
+        // Inject the suggestions
+        state.set_pending_context(suggestions.clone());
+
+        // Verify we have pending context
+        assert!(state.has_pending_context());
+        assert_eq!(state.pending_context().len(), 2);
+    }
+
+    #[test]
+    fn test_take_pending_context_clears() {
+        use crate::narsil::context::{CodeReference, ContextKind, ContextSuggestion};
+
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+
+        let suggestions = vec![ContextSuggestion {
+            source: CodeReference::function("test_fn"),
+            kind: ContextKind::Callers,
+            description: "Test".to_string(),
+            content: "Content".to_string(),
+        }];
+
+        state.set_pending_context(suggestions);
+        assert!(state.has_pending_context());
+
+        // Take should return and clear
+        let taken = state.take_pending_context();
+        assert_eq!(taken.len(), 1);
+        assert!(!state.has_pending_context());
+        assert!(state.pending_context().is_empty());
+    }
+
+    #[test]
+    fn test_format_context_for_message() {
+        use crate::narsil::context::{CodeReference, ContextKind, ContextSuggestion};
+
+        let suggestions = vec![ContextSuggestion {
+            source: CodeReference::function("process_data"),
+            kind: ContextKind::Callers,
+            description: "Functions that call process_data".to_string(),
+            content: "main() in src/main.rs:10\nhandle_request() in src/api.rs:25".to_string(),
+        }];
+
+        let formatted = AppState::format_context_suggestions(&suggestions);
+
+        // Should contain the description and content
+        assert!(formatted.contains("Functions that call process_data"));
+        assert!(formatted.contains("main() in src/main.rs:10"));
+        assert!(formatted.contains("handle_request() in src/api.rs:25"));
+    }
+
+    #[test]
+    fn test_format_context_empty_suggestions() {
+        let suggestions: Vec<crate::narsil::context::ContextSuggestion> = vec![];
+        let formatted = AppState::format_context_suggestions(&suggestions);
+
+        // Empty suggestions should return empty string
+        assert!(formatted.is_empty());
+    }
+
+    #[test]
+    fn test_clear_pending_context() {
+        use crate::narsil::context::{CodeReference, ContextKind, ContextSuggestion};
+
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+
+        let suggestions = vec![ContextSuggestion {
+            source: CodeReference::function("test_fn"),
+            kind: ContextKind::Callers,
+            description: "Test".to_string(),
+            content: "Content".to_string(),
+        }];
+
+        state.set_pending_context(suggestions);
+        assert!(state.has_pending_context());
+
+        state.clear_pending_context();
+        assert!(!state.has_pending_context());
     }
 }
