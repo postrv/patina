@@ -108,6 +108,12 @@ struct Args {
     /// Example: patina --image screenshot.png "What's in this image?"
     #[arg(long, value_name = "PATH")]
     image: Vec<std::path::PathBuf>,
+
+    /// Disable plugin loading on startup.
+    ///
+    /// Skips loading plugins from ~/.config/patina/plugins/ and ./.patina/plugins/.
+    #[arg(long)]
+    no_plugins: bool,
 }
 
 #[tokio::main]
@@ -238,6 +244,7 @@ async fn main() -> Result<()> {
         vision_model: None,
         oauth_client_id: args.oauth_client_id,
         initial_images: args.image,
+        plugins_enabled: !args.no_plugins,
     })
     .await
 }

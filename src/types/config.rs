@@ -111,6 +111,7 @@ pub enum NarsilMode {
 ///     vision_model: None,
 ///     oauth_client_id: None,
 ///     initial_images: Vec::new(),
+///     plugins_enabled: true,
 /// };
 /// ```
 pub struct Config {
@@ -184,6 +185,15 @@ pub struct Config {
     /// When set, these images are loaded and included as `ContentBlock::Image`
     /// in the first user message. Supports PNG, JPEG, GIF, and WebP formats.
     pub initial_images: Vec<PathBuf>,
+
+    /// Whether to load plugins on startup.
+    ///
+    /// When true (default), plugins are loaded from standard locations:
+    /// - `~/.config/patina/plugins/` (user plugins)
+    /// - `./.patina/plugins/` (project-local plugins)
+    ///
+    /// Disable with `--no-plugins` CLI flag.
+    pub plugins_enabled: bool,
 }
 
 impl Config {
@@ -226,6 +236,7 @@ impl Config {
             vision_model: None,
             oauth_client_id: None,
             initial_images: Vec::new(),
+            plugins_enabled: true,
         }
     }
 
@@ -492,6 +503,7 @@ mod tests {
             vision_model: None,
             oauth_client_id: None,
             initial_images: Vec::new(),
+            plugins_enabled: true,
         };
 
         assert_eq!(config.model(), "claude-opus-4-20250514");
@@ -513,6 +525,7 @@ mod tests {
             vision_model: None,
             oauth_client_id: None,
             initial_images: Vec::new(),
+            plugins_enabled: true,
         };
 
         assert_eq!(config.working_dir(), &path);

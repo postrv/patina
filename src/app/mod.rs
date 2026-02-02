@@ -111,10 +111,11 @@ pub async fn run(config: Config) -> Result<()> {
 
     // Check for session resume before initializing terminal
     let mut state = match &config.resume_mode {
-        ResumeMode::None => AppState::new(
+        ResumeMode::None => AppState::with_plugins(
             config.working_dir.clone(),
             config.skip_permissions,
             config.parallel_mode,
+            config.plugins_enabled,
         ),
         ResumeMode::Last | ResumeMode::SessionId(_) => {
             load_session_state(&config, config.skip_permissions, config.parallel_mode).await?
@@ -206,10 +207,11 @@ async fn load_session_state(
         .context(format!("Failed to load session '{}'", session_id))?;
 
     // Create AppState from the loaded session
-    let mut state = AppState::new(
+    let mut state = AppState::with_plugins(
         session.working_dir().clone(),
         skip_permissions,
         parallel_mode,
+        config.plugins_enabled,
     );
     state.restore_from_session(&session);
 
@@ -231,10 +233,11 @@ async fn run_print_mode(config: &Config, prompt: &str) -> Result<()> {
     use crate::api::{StreamEvent, ToolChoice};
 
     let client = AnthropicClient::new(config.api_key.clone(), &config.model);
-    let mut state = AppState::new(
+    let mut state = AppState::with_plugins(
         config.working_dir.clone(),
         config.skip_permissions,
         config.parallel_mode,
+        config.plugins_enabled,
     );
 
     // Add the user's prompt (adds to both display and API messages via submit logic)
