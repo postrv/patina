@@ -114,6 +114,7 @@ pub enum NarsilMode {
 ///     plugins_enabled: true,
 ///     subagents_enabled: false,
 ///     ide_port: None,
+///     auto_context_enabled: true,
 /// };
 /// ```
 pub struct Config {
@@ -212,6 +213,17 @@ pub struct Config {
     ///
     /// Enable with `--ide-port <PORT>` CLI flag.
     pub ide_port: Option<u16>,
+
+    /// Whether to auto-inject context suggestions from narsil.
+    ///
+    /// When true and narsil is connected, code references in user messages
+    /// are automatically analyzed and relevant context (callers, dependencies)
+    /// is injected before API calls.
+    ///
+    /// Default: `true` (enabled when narsil is available)
+    ///
+    /// Disable with `--no-auto-context` CLI flag.
+    pub auto_context_enabled: bool,
 }
 
 impl Config {
@@ -257,6 +269,7 @@ impl Config {
             plugins_enabled: true,
             subagents_enabled: false,
             ide_port: None,
+            auto_context_enabled: true,
         }
     }
 
@@ -509,6 +522,26 @@ impl Config {
     pub fn subagents_enabled(&self) -> bool {
         self.subagents_enabled
     }
+
+    /// Enables or disables auto-context injection from narsil.
+    ///
+    /// When enabled and narsil is connected, code references in user messages
+    /// are automatically analyzed and relevant context is injected before API calls.
+    ///
+    /// # Arguments
+    ///
+    /// * `enabled` - If true, enable auto-context injection
+    #[must_use]
+    pub fn with_auto_context_enabled(mut self, enabled: bool) -> Self {
+        self.auto_context_enabled = enabled;
+        self
+    }
+
+    /// Returns whether auto-context injection is enabled.
+    #[must_use]
+    pub fn auto_context_enabled(&self) -> bool {
+        self.auto_context_enabled
+    }
 }
 
 #[cfg(test)]
@@ -546,6 +579,7 @@ mod tests {
             plugins_enabled: true,
             subagents_enabled: false,
             ide_port: None,
+            auto_context_enabled: true,
         };
 
         assert_eq!(config.model(), "claude-opus-4-20250514");
@@ -570,6 +604,7 @@ mod tests {
             plugins_enabled: true,
             subagents_enabled: false,
             ide_port: None,
+            auto_context_enabled: true,
         };
 
         assert_eq!(config.working_dir(), &path);
@@ -888,5 +923,37 @@ mod tests {
             .with_subagents_enabled(false);
 
         assert!(!config.subagents_enabled());
+    }
+
+    // =========================================================================
+    // Auto-context enabled tests (2.2.4)
+    // =========================================================================
+
+    #[test]
+    fn test_config_default_auto_context_enabled() {
+        let config = Config::new(
+            SecretString::new("test-key".into()),
+            "test-model",
+            PathBuf::from("/tmp"),
+        );
+
+        // Auto-context is enabled by default when narsil is available
+        assert!(config.auto_context_enabled());
+    }
+
+    #[test]
+    fn test_config_with_auto_context_disabled() {
+        let config = Config::new(SecretString::new("key".into()), "model", PathBuf::from("."))
+            .with_auto_context_enabled(false);
+
+        assert!(!config.auto_context_enabled());
+    }
+
+    #[test]
+    fn test_config_with_auto_context_enabled() {
+        let config = Config::new(SecretString::new("key".into()), "model", PathBuf::from("."))
+            .with_auto_context_enabled(true);
+
+        assert!(config.auto_context_enabled());
     }
 }

@@ -128,6 +128,13 @@ struct Args {
     /// extensions (VS Code, JetBrains) to communicate with Patina.
     #[arg(long, value_name = "PORT")]
     ide_port: Option<u16>,
+
+    /// Disable auto-context injection from narsil.
+    ///
+    /// When set, code references in user messages are not automatically
+    /// analyzed for context suggestions (callers, dependencies).
+    #[arg(long)]
+    no_auto_context: bool,
 }
 
 #[tokio::main]
@@ -261,6 +268,7 @@ async fn main() -> Result<()> {
         plugins_enabled: !args.no_plugins,
         subagents_enabled: args.enable_subagents,
         ide_port: args.ide_port,
+        auto_context_enabled: !args.no_auto_context,
     })
     .await
 }
