@@ -14,14 +14,24 @@
 //!
 //! Implement `ContinuousCodingPlugin` to create custom automation plugins.
 
-use super::ContinuousEvent;
+use std::fmt;
 
-// NOTE: Task 2.4.3 (RED) - Tests below document expected behavior
-// Task 2.4.4 (GREEN) will complete the implementation
+use super::ContinuousEvent;
 
 /// Quality gates that must pass for an iteration to succeed.
 ///
 /// Each gate represents a specific check that the automation loop can verify.
+///
+/// # Example
+///
+/// ```
+/// use patina::continuous::QualityGate;
+///
+/// let gate = QualityGate::TestsPass;
+/// assert_eq!(gate.name(), "tests_pass");
+/// assert_eq!(gate.command(), "cargo test");
+/// assert_eq!(format!("{}", gate), "Tests Pass");
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum QualityGate {
     /// All tests must pass (`cargo test`).
@@ -35,6 +45,59 @@ pub enum QualityGate {
 
     /// Code must be formatted (`cargo fmt --check`).
     FormatCheck,
+}
+
+impl QualityGate {
+    /// Returns the gate name as a snake_case string.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use patina::continuous::QualityGate;
+    ///
+    /// assert_eq!(QualityGate::TestsPass.name(), "tests_pass");
+    /// assert_eq!(QualityGate::ClippyClean.name(), "clippy_clean");
+    /// ```
+    #[must_use]
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::TestsPass => "tests_pass",
+            Self::ClippyClean => "clippy_clean",
+            Self::SecurityScan => "security_scan",
+            Self::FormatCheck => "format_check",
+        }
+    }
+
+    /// Returns the command to run for this quality gate.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use patina::continuous::QualityGate;
+    ///
+    /// assert_eq!(QualityGate::TestsPass.command(), "cargo test");
+    /// assert_eq!(QualityGate::ClippyClean.command(), "cargo clippy --all-targets -- -D warnings");
+    /// ```
+    #[must_use]
+    pub fn command(&self) -> &'static str {
+        match self {
+            Self::TestsPass => "cargo test",
+            Self::ClippyClean => "cargo clippy --all-targets -- -D warnings",
+            Self::SecurityScan => "scan_security",
+            Self::FormatCheck => "cargo fmt -- --check",
+        }
+    }
+}
+
+impl fmt::Display for QualityGate {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::TestsPass => write!(f, "Tests Pass"),
+            Self::ClippyClean => write!(f, "Clippy Clean"),
+            Self::SecurityScan => write!(f, "Security Scan"),
+            Self::FormatCheck => write!(f, "Format Check"),
+        }
+    }
 }
 
 /// Trait for continuous coding automation plugins.
