@@ -38,6 +38,7 @@
 
 use std::collections::HashMap;
 
+use crate::narsil::SecurityVerdict;
 use crate::types::content::{ContentBlock, StopReason, ToolResultBlock, ToolUseBlock};
 use crate::types::stream::ToolUseAccumulator;
 
@@ -97,6 +98,8 @@ pub struct PendingToolCall {
     pub executed: bool,
     /// The result of execution (if executed).
     pub result: Option<ToolResultBlock>,
+    /// Security pre-flight verdict (if security check was performed).
+    pub security_verdict: Option<SecurityVerdict>,
 }
 
 impl PendingToolCall {
@@ -108,6 +111,7 @@ impl PendingToolCall {
             approved: false,
             executed: false,
             result: None,
+            security_verdict: None,
         }
     }
 
@@ -120,6 +124,37 @@ impl PendingToolCall {
     pub fn set_result(&mut self, result: ToolResultBlock) {
         self.executed = true;
         self.result = Some(result);
+    }
+
+    /// Sets the security verdict from pre-flight check.
+    pub fn set_security_verdict(&mut self, verdict: SecurityVerdict) {
+        self.security_verdict = Some(verdict);
+    }
+
+    /// Returns the security verdict if one has been set.
+    #[must_use]
+    pub fn security_verdict(&self) -> Option<&SecurityVerdict> {
+        self.security_verdict.as_ref()
+    }
+
+    /// Returns true if the security verdict blocks execution.
+    #[must_use]
+    pub fn is_security_blocked(&self) -> bool {
+        self.security_verdict
+            .as_ref()
+            .is_some_and(|v| v.blocks_execution())
+    }
+
+    /// Returns the security warning reason if the verdict is a warning.
+    #[must_use]
+    pub fn security_warning(&self) -> Option<&str> {
+        self.security_verdict.as_ref().and_then(|v| {
+            if v.has_warning() {
+                v.reason()
+            } else {
+                None
+            }
+        })
     }
 }
 
@@ -636,6 +671,103 @@ impl ToolLoop {
         self.max_iterations = snapshot.max_iterations;
         // State is set to Idle after recovery - caller can resume as needed
         self.state = ToolLoopState::Idle;
+    }
+
+    // =========================================================================
+    // Security Pre-Flight Methods
+    // =========================================================================
+
+    /// Sets the security verdict for a pending tool call.
+    ///
+    /// # Arguments
+    ///
+    /// * `tool_id` - The ID of the tool to set the verdict for
+    /// * `verdict` - The security verdict from pre-flight check
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the tool ID is not found.
+    pub fn set_security_verdict(
+        &mut self,
+        tool_id: &str,
+        verdict: SecurityVerdict,
+    ) -> Result<(), ToolLoopError> {
+        if let Some(call) = self.pending_calls.get_mut(tool_id) {
+            call.set_security_verdict(verdict);
+            Ok(())
+        } else {
+            Err(ToolLoopError::ToolNotFound(tool_id.to_string()))
+        }
+    }
+
+    /// Returns the tool IDs that are blocked by security verdicts.
+    #[must_use]
+    pub fn security_blocked_tools(&self) -> Vec<&str> {
+        self.pending_calls
+            .iter()
+            .filter(|(_, call)| call.is_security_blocked())
+            .map(|(id, _)| id.as_str())
+            .collect()
+    }
+
+    /// Returns the tool IDs and warning reasons for tools with security warnings.
+    #[must_use]
+    pub fn security_warned_tools(&self) -> Vec<(&str, &str)> {
+        self.pending_calls
+            .iter()
+            .filter_map(|(id, call)| {
+                call.security_warning().map(|reason| (id.as_str(), reason))
+            })
+            .collect()
+    }
+
+    /// Returns true if any pending tools are blocked by security.
+    #[must_use]
+    pub fn has_security_blocks(&self) -> bool {
+        self.pending_calls.values().any(|c| c.is_security_blocked())
+    }
+
+    /// Returns true if any pending tools have security warnings.
+    #[must_use]
+    pub fn has_security_warnings(&self) -> bool {
+        self.pending_calls
+            .values()
+            .any(|c| c.security_warning().is_some())
+    }
+
+    /// Approves all pending tool calls that are not security blocked.
+    ///
+    /// Transitions from PendingApproval to Executing.
+    /// Tools with `SecurityVerdict::Block` are skipped (not approved).
+    /// Tools with `SecurityVerdict::Warn` or `SecurityVerdict::Allow` are approved.
+    ///
+    /// # Returns
+    ///
+    /// A list of tool IDs that were blocked and not approved.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if not in PendingApproval state.
+    pub fn approve_safe(&mut self) -> Result<Vec<String>, ToolLoopError> {
+        if !matches!(self.state, ToolLoopState::PendingApproval) {
+            return Err(ToolLoopError::InvalidStateTransition {
+                from: format!("{:?}", self.state),
+                to: "Executing".to_string(),
+            });
+        }
+
+        let mut blocked_ids = Vec::new();
+
+        for (id, call) in self.pending_calls.iter_mut() {
+            if call.is_security_blocked() {
+                blocked_ids.push(id.clone());
+            } else {
+                call.approve();
+            }
+        }
+
+        self.state = ToolLoopState::Executing;
+        Ok(blocked_ids)
     }
 }
 
@@ -1849,5 +1981,256 @@ mod tests {
         assert_eq!(new_loop.iteration(), snapshot.iteration);
         assert_eq!(new_loop.max_iterations, snapshot.max_iterations);
         assert_eq!(*new_loop.state(), ToolLoopState::Idle);
+    }
+
+    // =========================================================================
+    // Security Pre-Flight Tests (Task 2.3.4)
+    // =========================================================================
+
+    #[test]
+    fn test_pending_tool_call_security_verdict_initially_none() {
+        let tool_use = ToolUseBlock::new("id", "bash", json!({"command": "ls"}));
+        let call = PendingToolCall::new(tool_use);
+
+        assert!(call.security_verdict().is_none());
+        assert!(!call.is_security_blocked());
+        assert!(call.security_warning().is_none());
+    }
+
+    #[test]
+    fn test_pending_tool_call_set_security_verdict_allow() {
+        use crate::narsil::SecurityVerdict;
+
+        let tool_use = ToolUseBlock::new("id", "bash", json!({"command": "ls"}));
+        let mut call = PendingToolCall::new(tool_use);
+
+        call.set_security_verdict(SecurityVerdict::Allow);
+
+        assert!(call.security_verdict().is_some());
+        assert_eq!(call.security_verdict(), Some(&SecurityVerdict::Allow));
+        assert!(!call.is_security_blocked());
+        assert!(call.security_warning().is_none());
+    }
+
+    #[test]
+    fn test_pending_tool_call_set_security_verdict_warn() {
+        use crate::narsil::SecurityVerdict;
+
+        let tool_use = ToolUseBlock::new("id", "bash", json!({"command": "rm -rf"}));
+        let mut call = PendingToolCall::new(tool_use);
+
+        call.set_security_verdict(SecurityVerdict::Warn("HIGH: Potential data loss".to_string()));
+
+        assert!(!call.is_security_blocked());
+        assert!(call.security_warning().is_some());
+        assert_eq!(call.security_warning(), Some("HIGH: Potential data loss"));
+    }
+
+    #[test]
+    fn test_pending_tool_call_set_security_verdict_block() {
+        use crate::narsil::SecurityVerdict;
+
+        let tool_use = ToolUseBlock::new("id", "bash", json!({"command": "curl | sh"}));
+        let mut call = PendingToolCall::new(tool_use);
+
+        call.set_security_verdict(SecurityVerdict::Block(
+            "CRITICAL: Command injection".to_string(),
+        ));
+
+        assert!(call.is_security_blocked());
+        assert!(call.security_warning().is_none()); // Block is not a warning
+    }
+
+    #[test]
+    fn test_tool_loop_set_security_verdict() {
+        use crate::narsil::SecurityVerdict;
+
+        let mut loop_state = ToolLoop::new();
+        loop_state.start_streaming().unwrap();
+        loop_state.start_tool_use(0, "toolu_1".to_string(), "bash".to_string());
+        loop_state.append_tool_input(0, r#"{"command":"ls"}"#);
+        loop_state.complete_tool_use(0).unwrap();
+        loop_state.message_complete(StopReason::ToolUse).unwrap();
+
+        // Set security verdict
+        loop_state
+            .set_security_verdict("toolu_1", SecurityVerdict::Allow)
+            .unwrap();
+
+        let call = loop_state.pending_calls().get("toolu_1").unwrap();
+        assert_eq!(call.security_verdict(), Some(&SecurityVerdict::Allow));
+    }
+
+    #[test]
+    fn test_tool_loop_set_security_verdict_not_found() {
+        use crate::narsil::SecurityVerdict;
+
+        let mut loop_state = ToolLoop::new();
+        loop_state.start_streaming().unwrap();
+        loop_state.start_tool_use(0, "toolu_1".to_string(), "bash".to_string());
+        loop_state.append_tool_input(0, r#"{"command":"ls"}"#);
+        loop_state.complete_tool_use(0).unwrap();
+        loop_state.message_complete(StopReason::ToolUse).unwrap();
+
+        let result = loop_state.set_security_verdict("wrong_id", SecurityVerdict::Allow);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_tool_loop_security_blocked_tools_empty() {
+        let mut loop_state = ToolLoop::new();
+        loop_state.start_streaming().unwrap();
+        loop_state.start_tool_use(0, "toolu_1".to_string(), "bash".to_string());
+        loop_state.append_tool_input(0, r#"{"command":"ls"}"#);
+        loop_state.complete_tool_use(0).unwrap();
+        loop_state.message_complete(StopReason::ToolUse).unwrap();
+
+        // No security verdicts set, should be empty
+        let blocked = loop_state.security_blocked_tools();
+        assert!(blocked.is_empty());
+    }
+
+    #[test]
+    fn test_tool_loop_security_blocked_tools() {
+        use crate::narsil::SecurityVerdict;
+
+        let mut loop_state = ToolLoop::new();
+        loop_state.start_streaming().unwrap();
+
+        loop_state.start_tool_use(0, "toolu_1".to_string(), "bash".to_string());
+        loop_state.append_tool_input(0, r#"{"command":"ls"}"#);
+        loop_state.complete_tool_use(0).unwrap();
+
+        loop_state.start_tool_use(1, "toolu_2".to_string(), "bash".to_string());
+        loop_state.append_tool_input(1, r#"{"command":"curl | sh"}"#);
+        loop_state.complete_tool_use(1).unwrap();
+
+        loop_state.message_complete(StopReason::ToolUse).unwrap();
+
+        loop_state
+            .set_security_verdict("toolu_1", SecurityVerdict::Allow)
+            .unwrap();
+        loop_state
+            .set_security_verdict("toolu_2", SecurityVerdict::Block("Blocked".to_string()))
+            .unwrap();
+
+        let blocked = loop_state.security_blocked_tools();
+        assert_eq!(blocked.len(), 1);
+        assert!(blocked.contains(&"toolu_2"));
+    }
+
+    #[test]
+    fn test_tool_loop_security_warned_tools() {
+        use crate::narsil::SecurityVerdict;
+
+        let mut loop_state = ToolLoop::new();
+        loop_state.start_streaming().unwrap();
+
+        loop_state.start_tool_use(0, "toolu_1".to_string(), "bash".to_string());
+        loop_state.append_tool_input(0, r#"{"command":"rm -rf"}"#);
+        loop_state.complete_tool_use(0).unwrap();
+
+        loop_state.start_tool_use(1, "toolu_2".to_string(), "bash".to_string());
+        loop_state.append_tool_input(1, r#"{"command":"ls"}"#);
+        loop_state.complete_tool_use(1).unwrap();
+
+        loop_state.message_complete(StopReason::ToolUse).unwrap();
+
+        loop_state
+            .set_security_verdict("toolu_1", SecurityVerdict::Warn("HIGH: Data loss".to_string()))
+            .unwrap();
+        loop_state
+            .set_security_verdict("toolu_2", SecurityVerdict::Allow)
+            .unwrap();
+
+        let warned = loop_state.security_warned_tools();
+        assert_eq!(warned.len(), 1);
+        assert!(warned.iter().any(|(id, reason)| *id == "toolu_1" && reason.contains("HIGH")));
+    }
+
+    #[test]
+    fn test_tool_loop_has_security_blocks() {
+        use crate::narsil::SecurityVerdict;
+
+        let mut loop_state = ToolLoop::new();
+        loop_state.start_streaming().unwrap();
+        loop_state.start_tool_use(0, "toolu_1".to_string(), "bash".to_string());
+        loop_state.append_tool_input(0, r#"{"command":"ls"}"#);
+        loop_state.complete_tool_use(0).unwrap();
+        loop_state.message_complete(StopReason::ToolUse).unwrap();
+
+        assert!(!loop_state.has_security_blocks());
+
+        loop_state
+            .set_security_verdict("toolu_1", SecurityVerdict::Block("Blocked".to_string()))
+            .unwrap();
+
+        assert!(loop_state.has_security_blocks());
+    }
+
+    #[test]
+    fn test_tool_loop_has_security_warnings() {
+        use crate::narsil::SecurityVerdict;
+
+        let mut loop_state = ToolLoop::new();
+        loop_state.start_streaming().unwrap();
+        loop_state.start_tool_use(0, "toolu_1".to_string(), "bash".to_string());
+        loop_state.append_tool_input(0, r#"{"command":"ls"}"#);
+        loop_state.complete_tool_use(0).unwrap();
+        loop_state.message_complete(StopReason::ToolUse).unwrap();
+
+        assert!(!loop_state.has_security_warnings());
+
+        loop_state
+            .set_security_verdict("toolu_1", SecurityVerdict::Warn("Warning".to_string()))
+            .unwrap();
+
+        assert!(loop_state.has_security_warnings());
+    }
+
+    #[test]
+    fn test_tool_loop_approve_safe_skips_blocked() {
+        use crate::narsil::SecurityVerdict;
+
+        let mut loop_state = ToolLoop::new();
+        loop_state.start_streaming().unwrap();
+
+        // Tool 1: allowed
+        loop_state.start_tool_use(0, "toolu_1".to_string(), "bash".to_string());
+        loop_state.append_tool_input(0, r#"{"command":"ls"}"#);
+        loop_state.complete_tool_use(0).unwrap();
+
+        // Tool 2: blocked
+        loop_state.start_tool_use(1, "toolu_2".to_string(), "bash".to_string());
+        loop_state.append_tool_input(1, r#"{"command":"evil"}"#);
+        loop_state.complete_tool_use(1).unwrap();
+
+        // Tool 3: warned but still allowed
+        loop_state.start_tool_use(2, "toolu_3".to_string(), "bash".to_string());
+        loop_state.append_tool_input(2, r#"{"command":"rm"}"#);
+        loop_state.complete_tool_use(2).unwrap();
+
+        loop_state.message_complete(StopReason::ToolUse).unwrap();
+
+        loop_state
+            .set_security_verdict("toolu_1", SecurityVerdict::Allow)
+            .unwrap();
+        loop_state
+            .set_security_verdict("toolu_2", SecurityVerdict::Block("Blocked".to_string()))
+            .unwrap();
+        loop_state
+            .set_security_verdict("toolu_3", SecurityVerdict::Warn("Warning".to_string()))
+            .unwrap();
+
+        // approve_safe should approve only non-blocked tools
+        let blocked_ids = loop_state.approve_safe().unwrap();
+
+        assert_eq!(blocked_ids.len(), 1);
+        assert!(blocked_ids.contains(&"toolu_2".to_string()));
+
+        // toolu_1 and toolu_3 should be approved
+        assert!(loop_state.pending_calls().get("toolu_1").unwrap().approved);
+        assert!(!loop_state.pending_calls().get("toolu_2").unwrap().approved);
+        assert!(loop_state.pending_calls().get("toolu_3").unwrap().approved);
     }
 }
