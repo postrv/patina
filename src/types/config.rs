@@ -112,6 +112,7 @@ pub enum NarsilMode {
 ///     oauth_client_id: None,
 ///     initial_images: Vec::new(),
 ///     plugins_enabled: true,
+///     subagents_enabled: false,
 /// };
 /// ```
 pub struct Config {
@@ -194,6 +195,14 @@ pub struct Config {
     ///
     /// Disable with `--no-plugins` CLI flag.
     pub plugins_enabled: bool,
+
+    /// Whether subagent orchestration is enabled.
+    ///
+    /// When true, the `SubagentSpawner` is initialized and subagents can be
+    /// spawned for parallel task execution. Disabled by default.
+    ///
+    /// Enable with `--enable-subagents` CLI flag.
+    pub subagents_enabled: bool,
 }
 
 impl Config {
@@ -237,6 +246,7 @@ impl Config {
             oauth_client_id: None,
             initial_images: Vec::new(),
             plugins_enabled: true,
+            subagents_enabled: false,
         }
     }
 
@@ -469,6 +479,26 @@ impl Config {
     pub fn initial_images(&self) -> &[PathBuf] {
         &self.initial_images
     }
+
+    /// Enables subagent orchestration.
+    ///
+    /// When enabled, the `SubagentSpawner` is initialized and subagents can be
+    /// spawned for parallel task execution.
+    ///
+    /// # Arguments
+    ///
+    /// * `enabled` - If true, enable subagent orchestration
+    #[must_use]
+    pub fn with_subagents_enabled(mut self, enabled: bool) -> Self {
+        self.subagents_enabled = enabled;
+        self
+    }
+
+    /// Returns whether subagent orchestration is enabled.
+    #[must_use]
+    pub fn subagents_enabled(&self) -> bool {
+        self.subagents_enabled
+    }
 }
 
 #[cfg(test)]
@@ -504,6 +534,7 @@ mod tests {
             oauth_client_id: None,
             initial_images: Vec::new(),
             plugins_enabled: true,
+            subagents_enabled: false,
         };
 
         assert_eq!(config.model(), "claude-opus-4-20250514");
@@ -526,6 +557,7 @@ mod tests {
             oauth_client_id: None,
             initial_images: Vec::new(),
             plugins_enabled: true,
+            subagents_enabled: false,
         };
 
         assert_eq!(config.working_dir(), &path);
@@ -813,5 +845,36 @@ mod tests {
             .with_initial_images(Vec::new());
 
         assert!(config.initial_images().is_empty());
+    }
+
+    // =========================================================================
+    // Subagents enabled tests (1.5.4.3)
+    // =========================================================================
+
+    #[test]
+    fn test_config_default_subagents_disabled() {
+        let config = Config::new(
+            SecretString::new("test-key".into()),
+            "test-model",
+            PathBuf::from("/tmp"),
+        );
+
+        assert!(!config.subagents_enabled());
+    }
+
+    #[test]
+    fn test_config_with_subagents_enabled() {
+        let config = Config::new(SecretString::new("key".into()), "model", PathBuf::from("."))
+            .with_subagents_enabled(true);
+
+        assert!(config.subagents_enabled());
+    }
+
+    #[test]
+    fn test_config_with_subagents_disabled() {
+        let config = Config::new(SecretString::new("key".into()), "model", PathBuf::from("."))
+            .with_subagents_enabled(false);
+
+        assert!(!config.subagents_enabled());
     }
 }

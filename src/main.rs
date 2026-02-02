@@ -114,6 +114,13 @@ struct Args {
     /// Skips loading plugins from ~/.config/patina/plugins/ and ./.patina/plugins/.
     #[arg(long)]
     no_plugins: bool,
+
+    /// Enable subagent orchestration for parallel task execution.
+    ///
+    /// When enabled, subagents can be spawned to handle complex tasks
+    /// that benefit from parallel exploration or specialized roles.
+    #[arg(long)]
+    enable_subagents: bool,
 }
 
 #[tokio::main]
@@ -245,6 +252,7 @@ async fn main() -> Result<()> {
         oauth_client_id: args.oauth_client_id,
         initial_images: args.image,
         plugins_enabled: !args.no_plugins,
+        subagents_enabled: args.enable_subagents,
     })
     .await
 }
