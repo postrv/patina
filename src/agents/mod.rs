@@ -28,8 +28,8 @@ pub mod orchestrator;
 
 // Re-export new orchestrator types for convenience
 pub use orchestrator::{
-    SubagentContext, SubagentExecutionResult, SubagentResultCollector, SubagentSession,
-    SubagentSpawner,
+    SubagentContext, SubagentExecutionResult, SubagentResultCollector, SubagentRunner,
+    SubagentSession, SubagentSpawner,
 };
 
 use anyhow::Result;
