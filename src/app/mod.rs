@@ -466,7 +466,10 @@ async fn event_loop(
                                 if input.trim().starts_with('/') {
                                     use crate::app::commands::{CommandResult, SlashCommandHandler};
 
-                                    let handler = SlashCommandHandler::new(state.working_dir.clone());
+                                    let plugin_info =
+                                        SlashCommandHandler::build_plugin_info(state.plugins());
+                                    let handler = SlashCommandHandler::new(state.working_dir.clone())
+                                        .with_plugins(plugin_info);
                                     let result = handler.handle(&input);
 
                                     // Display the user's command in timeline

@@ -397,17 +397,17 @@ const MINIMAL_PNG: &[u8] = &[
     0x49, 0x48, 0x44, 0x52, // Type: IHDR
     0x00, 0x00, 0x00, 0x01, // Width: 1
     0x00, 0x00, 0x00, 0x01, // Height: 1
-    0x08,                   // Bit depth: 8
-    0x02,                   // Color type: 2 (RGB)
-    0x00,                   // Compression: 0
-    0x00,                   // Filter: 0
-    0x00,                   // Interlace: 0
+    0x08, // Bit depth: 8
+    0x02, // Color type: 2 (RGB)
+    0x00, // Compression: 0
+    0x00, // Filter: 0
+    0x00, // Interlace: 0
     0x90, 0x77, 0x53, 0xDE, // CRC
     // IDAT chunk (zlib compressed: filter=0, R=255, G=0, B=0)
     0x00, 0x00, 0x00, 0x0C, // Length: 12
     0x49, 0x44, 0x41, 0x54, // Type: IDAT
-    0x08, 0xD7, 0x63, 0xF8, 0xCF, 0xC0, 0x00, 0x00, 0x01, 0x01, 0x01, 0x00,
-    0x18, 0xDD, 0x8D, 0xB4, // CRC
+    0x08, 0xD7, 0x63, 0xF8, 0xCF, 0xC0, 0x00, 0x00, 0x01, 0x01, 0x01, 0x00, 0x18, 0xDD, 0x8D,
+    0xB4, // CRC
     // IEND chunk
     0x00, 0x00, 0x00, 0x00, // Length: 0
     0x49, 0x45, 0x4E, 0x44, // Type: IEND
@@ -443,7 +443,10 @@ async fn test_image_analysis_end_to_end() {
         }),
     };
 
-    let result = executor.execute(call).await.expect("Execution should succeed");
+    let result = executor
+        .execute(call)
+        .await
+        .expect("Execution should succeed");
 
     // Verify the result
     match result {
@@ -494,7 +497,10 @@ async fn test_image_analysis_file_not_found() {
         }),
     };
 
-    let result = executor.execute(call).await.expect("Execution should succeed");
+    let result = executor
+        .execute(call)
+        .await
+        .expect("Execution should succeed");
 
     match result {
         ToolResult::Error(err) => {
@@ -524,7 +530,10 @@ async fn test_image_analysis_path_traversal_blocked() {
         }),
     };
 
-    let result = executor.execute(call).await.expect("Execution should succeed");
+    let result = executor
+        .execute(call)
+        .await
+        .expect("Execution should succeed");
 
     match result {
         ToolResult::Error(err) => {
@@ -560,12 +569,19 @@ async fn test_image_analysis_without_prompt() {
         }),
     };
 
-    let result = executor.execute(call).await.expect("Execution should succeed");
+    let result = executor
+        .execute(call)
+        .await
+        .expect("Execution should succeed");
 
     match result {
         ToolResult::Success(output) => {
             assert!(output.contains("Image loaded successfully"));
-            assert!(output.contains("(none)"), "Should show no prompt: {}", output);
+            assert!(
+                output.contains("(none)"),
+                "Should show no prompt: {}",
+                output
+            );
         }
         ToolResult::Error(err) => {
             panic!("Tool execution failed: {}", err);
