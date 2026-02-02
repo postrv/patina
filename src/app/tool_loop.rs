@@ -148,13 +148,9 @@ impl PendingToolCall {
     /// Returns the security warning reason if the verdict is a warning.
     #[must_use]
     pub fn security_warning(&self) -> Option<&str> {
-        self.security_verdict.as_ref().and_then(|v| {
-            if v.has_warning() {
-                v.reason()
-            } else {
-                None
-            }
-        })
+        self.security_verdict
+            .as_ref()
+            .and_then(|v| if v.has_warning() { v.reason() } else { None })
     }
 }
 
@@ -715,9 +711,7 @@ impl ToolLoop {
     pub fn security_warned_tools(&self) -> Vec<(&str, &str)> {
         self.pending_calls
             .iter()
-            .filter_map(|(id, call)| {
-                call.security_warning().map(|reason| (id.as_str(), reason))
-            })
+            .filter_map(|(id, call)| call.security_warning().map(|reason| (id.as_str(), reason)))
             .collect()
     }
 
@@ -2019,7 +2013,9 @@ mod tests {
         let tool_use = ToolUseBlock::new("id", "bash", json!({"command": "rm -rf"}));
         let mut call = PendingToolCall::new(tool_use);
 
-        call.set_security_verdict(SecurityVerdict::Warn("HIGH: Potential data loss".to_string()));
+        call.set_security_verdict(SecurityVerdict::Warn(
+            "HIGH: Potential data loss".to_string(),
+        ));
 
         assert!(!call.is_security_blocked());
         assert!(call.security_warning().is_some());
@@ -2137,7 +2133,10 @@ mod tests {
         loop_state.message_complete(StopReason::ToolUse).unwrap();
 
         loop_state
-            .set_security_verdict("toolu_1", SecurityVerdict::Warn("HIGH: Data loss".to_string()))
+            .set_security_verdict(
+                "toolu_1",
+                SecurityVerdict::Warn("HIGH: Data loss".to_string()),
+            )
             .unwrap();
         loop_state
             .set_security_verdict("toolu_2", SecurityVerdict::Allow)
@@ -2145,7 +2144,9 @@ mod tests {
 
         let warned = loop_state.security_warned_tools();
         assert_eq!(warned.len(), 1);
-        assert!(warned.iter().any(|(id, reason)| *id == "toolu_1" && reason.contains("HIGH")));
+        assert!(warned
+            .iter()
+            .any(|(id, reason)| *id == "toolu_1" && reason.contains("HIGH")));
     }
 
     #[test]
