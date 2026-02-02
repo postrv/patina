@@ -119,9 +119,7 @@ pub async fn run(config: Config) -> Result<()> {
             config.plugins_enabled,
             config.subagents_enabled,
         ),
-        ResumeMode::Last | ResumeMode::SessionId(_) => {
-            load_session_state(&config).await?
-        }
+        ResumeMode::Last | ResumeMode::SessionId(_) => load_session_state(&config).await?,
     };
 
     enable_raw_mode()?;

@@ -533,7 +533,10 @@ mod tests {
 
         // Update to running
         assert!(state.update_status(id, SubagentDisplayStatus::Running));
-        assert_eq!(state.get(id).unwrap().status, SubagentDisplayStatus::Running);
+        assert_eq!(
+            state.get(id).unwrap().status,
+            SubagentDisplayStatus::Running
+        );
 
         // Verify running count
         assert_eq!(state.running_count(), 1);
@@ -844,11 +847,7 @@ mod tests {
     #[test]
     fn test_widget_render_collapsed() {
         let mut state = SubagentPanelState::new();
-        state.add_subagent(SubagentDisplayInfo::new(
-            Uuid::new_v4(),
-            "hidden-agent",
-            10,
-        ));
+        state.add_subagent(SubagentDisplayInfo::new(Uuid::new_v4(), "hidden-agent", 10));
         state.set_collapsed(true);
 
         let widget = SubagentPanelWidget::new(&state);

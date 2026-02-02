@@ -158,11 +158,7 @@ pub fn handle_cancel(request_id: &str, pending_requests: &HashSet<String>) -> Id
 ///
 /// Returns [`IdeResponse::InitAck`] with server capabilities.
 #[must_use]
-pub fn handle_init(
-    workspace: &PathBuf,
-    capabilities: &[String],
-    session_id: &str,
-) -> IdeResponse {
+pub fn handle_init(workspace: &PathBuf, capabilities: &[String], session_id: &str) -> IdeResponse {
     tracing::info!(
         "IDE session initialized: workspace={:?}, capabilities={:?}",
         workspace,
@@ -211,7 +207,11 @@ pub fn route_request(
         } => handle_init(&workspace, &capabilities, session_id),
         IdeRequest::ApplyEdit { file, diff } => {
             // Edit application is handled separately through the tool system
-            tracing::info!("Apply edit request: {:?} with diff length {}", file, diff.len());
+            tracing::info!(
+                "Apply edit request: {:?} with diff length {}",
+                file,
+                diff.len()
+            );
             IdeResponse::Error {
                 code: "NOT_IMPLEMENTED".to_string(),
                 message: "Edit application through IDE protocol is not yet implemented".to_string(),
