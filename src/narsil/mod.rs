@@ -23,4 +23,8 @@ pub mod integration;
 pub use context::{
     extract_code_references, CodeReference, ContextKind, ContextSuggestion, LineRef,
 };
-pub use integration::{NarsilCapabilities, NarsilCapability, NarsilIntegration};
+pub use integration::{
+    build_context_suggestion_from_callers, build_context_suggestion_from_dependencies,
+    parse_callers_response, parse_dependencies_response, CallerInfo, DependencyInfo,
+    NarsilCapabilities, NarsilCapability, NarsilIntegration,
+};

@@ -35,6 +35,7 @@
 //! ```
 
 use crate::mcp::client::McpClient;
+use crate::narsil::context::{CodeReference, ContextKind, ContextSuggestion};
 use anyhow::Result;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -368,6 +369,244 @@ impl NarsilIntegration {
     pub fn disconnect(&mut self) {
         self.connected = false;
     }
+
+    /// Suggests relevant context for the given code references.
+    ///
+    /// This method analyzes the provided code references and queries narsil-mcp
+    /// for related context:
+    /// - For function references: returns callers of the function
+    /// - For file references: returns imports/dependencies of the file
+    ///
+    /// # Arguments
+    ///
+    /// * `client` - An active MCP client connected to narsil-mcp
+    /// * `references` - Code references to get context for
+    ///
+    /// # Returns
+    ///
+    /// A vector of context suggestions, one for each reference that could be resolved.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if MCP calls fail.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use patina::narsil::{NarsilIntegration, extract_code_references};
+    ///
+    /// let refs = extract_code_references("Look at the `process_data` function");
+    /// let suggestions = integration.suggest_context(&mut client, &refs).await?;
+    /// ```
+    pub async fn suggest_context(
+        &self,
+        client: &mut McpClient,
+        references: &[CodeReference],
+    ) -> Result<Vec<ContextSuggestion>> {
+        let mut suggestions = Vec::new();
+
+        for reference in references {
+            match reference {
+                CodeReference::Function { name } => {
+                    // Query callers for function references if we have CallGraph capability
+                    if self.has_capability(NarsilCapability::CallGraph) {
+                        if let Ok(response) = client
+                            .call_tool(
+                                "get_callers",
+                                serde_json::json!({
+                                    "repo": self.repo_path.to_string_lossy(),
+                                    "function": name,
+                                }),
+                            )
+                            .await
+                        {
+                            let callers = parse_callers_response(&response);
+                            let suggestion =
+                                build_context_suggestion_from_callers(reference.clone(), &callers);
+                            suggestions.push(suggestion);
+                        }
+                    }
+                }
+                CodeReference::File { path, .. } => {
+                    // Query dependencies for file references if we have DependencyAnalysis capability
+                    if self.has_capability(NarsilCapability::DependencyAnalysis) {
+                        if let Ok(response) = client
+                            .call_tool(
+                                "get_dependencies",
+                                serde_json::json!({
+                                    "repo": self.repo_path.to_string_lossy(),
+                                    "path": path,
+                                    "direction": "imports",
+                                }),
+                            )
+                            .await
+                        {
+                            let deps = parse_dependencies_response(&response);
+                            let suggestion = build_context_suggestion_from_dependencies(
+                                reference.clone(),
+                                &deps,
+                            );
+                            suggestions.push(suggestion);
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(suggestions)
+    }
+}
+
+/// Information about a function that calls another function.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CallerInfo {
+    /// Name of the calling function.
+    pub function: String,
+    /// File containing the caller.
+    pub file: String,
+    /// Line number of the call site.
+    pub line: u32,
+}
+
+/// Information about a dependency/import.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DependencyInfo {
+    /// The import path (e.g., "std::collections::HashMap").
+    pub path: String,
+    /// The kind of import (e.g., "use", "mod").
+    pub kind: String,
+}
+
+/// Parses a narsil `get_callers` response into caller information.
+///
+/// # Arguments
+///
+/// * `response` - JSON response from narsil get_callers tool
+///
+/// # Returns
+///
+/// A vector of caller information extracted from the response.
+#[must_use]
+pub fn parse_callers_response(response: &serde_json::Value) -> Vec<CallerInfo> {
+    let Some(callers) = response.get("callers").and_then(|c| c.as_array()) else {
+        return Vec::new();
+    };
+
+    callers
+        .iter()
+        .filter_map(|caller| {
+            let function = caller.get("function")?.as_str()?.to_string();
+            let file = caller.get("file")?.as_str()?.to_string();
+            let line = caller.get("line")?.as_u64()? as u32;
+            Some(CallerInfo {
+                function,
+                file,
+                line,
+            })
+        })
+        .collect()
+}
+
+/// Parses a narsil `get_dependencies` response into dependency information.
+///
+/// # Arguments
+///
+/// * `response` - JSON response from narsil get_dependencies tool
+///
+/// # Returns
+///
+/// A vector of dependency information extracted from the response.
+#[must_use]
+pub fn parse_dependencies_response(response: &serde_json::Value) -> Vec<DependencyInfo> {
+    let Some(imports) = response.get("imports").and_then(|i| i.as_array()) else {
+        return Vec::new();
+    };
+
+    imports
+        .iter()
+        .filter_map(|dep| {
+            let path = dep.get("path")?.as_str()?.to_string();
+            let kind = dep
+                .get("kind")
+                .and_then(|k| k.as_str())
+                .unwrap_or("use")
+                .to_string();
+            Some(DependencyInfo { path, kind })
+        })
+        .collect()
+}
+
+/// Builds a context suggestion from caller information.
+///
+/// # Arguments
+///
+/// * `source` - The code reference that was queried
+/// * `callers` - The caller information from narsil
+///
+/// # Returns
+///
+/// A context suggestion describing the callers.
+#[must_use]
+pub fn build_context_suggestion_from_callers(
+    source: CodeReference,
+    callers: &[CallerInfo],
+) -> ContextSuggestion {
+    let function_name = source.as_function_name().unwrap_or("unknown");
+
+    let description = format!("Functions that call `{}`", function_name);
+
+    let content = if callers.is_empty() {
+        "No callers found".to_string()
+    } else {
+        callers
+            .iter()
+            .map(|c| format!("{}() in {}:{}", c.function, c.file, c.line))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
+    ContextSuggestion {
+        source,
+        kind: ContextKind::Callers,
+        description,
+        content,
+    }
+}
+
+/// Builds a context suggestion from dependency information.
+///
+/// # Arguments
+///
+/// * `source` - The code reference that was queried
+/// * `deps` - The dependency information from narsil
+///
+/// # Returns
+///
+/// A context suggestion describing the imports.
+#[must_use]
+pub fn build_context_suggestion_from_dependencies(
+    source: CodeReference,
+    deps: &[DependencyInfo],
+) -> ContextSuggestion {
+    let file_path = source.as_file_path().unwrap_or("unknown");
+
+    let description = format!("Imports in `{}`", file_path);
+
+    let content = if deps.is_empty() {
+        "No imports found".to_string()
+    } else {
+        deps.iter()
+            .map(|d| format!("{} {}", d.kind, d.path))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
+    ContextSuggestion {
+        source,
+        kind: ContextKind::Imports,
+        description,
+        content,
+    }
 }
 
 #[cfg(test)]
@@ -596,5 +835,189 @@ mod tests {
         assert!(integration.is_connected());
         assert!(!integration.capabilities().is_available());
         assert_eq!(integration.capabilities().count(), 0);
+    }
+
+    // =============================================================================
+    // Task 2.2.3 - suggest_context tests
+    // =============================================================================
+
+    #[test]
+    fn test_parse_callers_response_valid() {
+        // Simulated response from narsil get_callers
+        let response = serde_json::json!({
+            "callers": [
+                {"function": "main", "file": "src/main.rs", "line": 10},
+                {"function": "handle_request", "file": "src/handler.rs", "line": 42}
+            ]
+        });
+
+        let callers = parse_callers_response(&response);
+        assert_eq!(callers.len(), 2);
+        assert_eq!(callers[0].function, "main");
+        assert_eq!(callers[0].file, "src/main.rs");
+        assert_eq!(callers[0].line, 10);
+    }
+
+    #[test]
+    fn test_parse_callers_response_empty() {
+        let response = serde_json::json!({
+            "callers": []
+        });
+
+        let callers = parse_callers_response(&response);
+        assert!(callers.is_empty());
+    }
+
+    #[test]
+    fn test_parse_callers_response_missing_field() {
+        // Response without callers field
+        let response = serde_json::json!({
+            "other": "data"
+        });
+
+        let callers = parse_callers_response(&response);
+        assert!(callers.is_empty());
+    }
+
+    #[test]
+    fn test_parse_dependencies_response_valid() {
+        // Simulated response from narsil get_dependencies
+        let response = serde_json::json!({
+            "imports": [
+                {"path": "std::collections::HashMap", "kind": "use"},
+                {"path": "crate::utils", "kind": "mod"}
+            ]
+        });
+
+        let deps = parse_dependencies_response(&response);
+        assert_eq!(deps.len(), 2);
+        assert_eq!(deps[0].path, "std::collections::HashMap");
+        assert_eq!(deps[0].kind, "use");
+    }
+
+    #[test]
+    fn test_parse_dependencies_response_empty() {
+        let response = serde_json::json!({
+            "imports": []
+        });
+
+        let deps = parse_dependencies_response(&response);
+        assert!(deps.is_empty());
+    }
+
+    #[test]
+    fn test_parse_dependencies_response_missing_field() {
+        let response = serde_json::json!({
+            "other": "data"
+        });
+
+        let deps = parse_dependencies_response(&response);
+        assert!(deps.is_empty());
+    }
+
+    #[test]
+    fn test_build_context_suggestion_from_callers() {
+        use crate::narsil::context::{CodeReference, ContextKind};
+
+        let callers = vec![
+            CallerInfo {
+                function: "main".to_string(),
+                file: "src/main.rs".to_string(),
+                line: 10,
+            },
+            CallerInfo {
+                function: "handle_request".to_string(),
+                file: "src/handler.rs".to_string(),
+                line: 42,
+            },
+        ];
+
+        let source = CodeReference::function("process_data");
+        let suggestion = build_context_suggestion_from_callers(source, &callers);
+
+        assert_eq!(suggestion.kind, ContextKind::Callers);
+        assert!(suggestion.description.contains("process_data"));
+        assert!(suggestion.content.contains("main"));
+        assert!(suggestion.content.contains("handle_request"));
+    }
+
+    #[test]
+    fn test_build_context_suggestion_from_dependencies() {
+        use crate::narsil::context::{CodeReference, ContextKind};
+
+        let deps = vec![
+            DependencyInfo {
+                path: "std::collections::HashMap".to_string(),
+                kind: "use".to_string(),
+            },
+            DependencyInfo {
+                path: "crate::utils".to_string(),
+                kind: "mod".to_string(),
+            },
+        ];
+
+        let source = CodeReference::file("src/handler.rs");
+        let suggestion = build_context_suggestion_from_dependencies(source, &deps);
+
+        assert_eq!(suggestion.kind, ContextKind::Imports);
+        assert!(suggestion.description.contains("src/handler.rs"));
+        assert!(suggestion.content.contains("std::collections::HashMap"));
+        assert!(suggestion.content.contains("crate::utils"));
+    }
+
+    #[test]
+    fn test_build_context_suggestion_from_callers_empty() {
+        use crate::narsil::context::{CodeReference, ContextKind};
+
+        let callers: Vec<CallerInfo> = vec![];
+        let source = CodeReference::function("unused_function");
+        let suggestion = build_context_suggestion_from_callers(source, &callers);
+
+        assert_eq!(suggestion.kind, ContextKind::Callers);
+        assert!(
+            suggestion.content.contains("No callers found")
+                || suggestion.content.is_empty()
+                || suggestion.content == "None"
+        );
+    }
+
+    #[test]
+    fn test_build_context_suggestion_from_dependencies_empty() {
+        use crate::narsil::context::{CodeReference, ContextKind};
+
+        let deps: Vec<DependencyInfo> = vec![];
+        let source = CodeReference::file("isolated_file.rs");
+        let suggestion = build_context_suggestion_from_dependencies(source, &deps);
+
+        assert_eq!(suggestion.kind, ContextKind::Imports);
+        assert!(
+            suggestion.content.contains("No imports found")
+                || suggestion.content.is_empty()
+                || suggestion.content == "None"
+        );
+    }
+
+    #[test]
+    fn test_caller_info_struct() {
+        let info = CallerInfo {
+            function: "test_fn".to_string(),
+            file: "src/test.rs".to_string(),
+            line: 100,
+        };
+
+        assert_eq!(info.function, "test_fn");
+        assert_eq!(info.file, "src/test.rs");
+        assert_eq!(info.line, 100);
+    }
+
+    #[test]
+    fn test_dependency_info_struct() {
+        let info = DependencyInfo {
+            path: "std::io".to_string(),
+            kind: "use".to_string(),
+        };
+
+        assert_eq!(info.path, "std::io");
+        assert_eq!(info.kind, "use");
     }
 }
