@@ -2076,7 +2076,7 @@ dependencies = [
 
 [[package]]
 name = "patina"
-version = "0.5.0"
+version = "0.5.5"
 dependencies = [
  "anyhow",
  "arboard",

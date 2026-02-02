@@ -39,8 +39,8 @@ A high-performance terminal client for the Claude API, written in Rust. Designed
 | Tool | Description |
 |------|-------------|
 | `bash` | Execute shell commands with security filtering |
-| `read` | Read file contents with path traversal protection |
-| `write` | Write files with validation |
+| `read_file` | Read file contents with path traversal protection |
+| `write_file` | Write files with validation |
 | `edit` | Edit files with diff-based changes |
 | `glob` | File discovery with pattern matching |
 | `grep` | Content search with regex support |
@@ -54,7 +54,7 @@ A high-performance terminal client for the Claude API, written in Rust. Designed
 |---------|-------------|
 | **Plugin System** | TOML-based plugins with auto-discovery |
 | **Skills Engine** | Context-aware suggestions via SKILL.md files |
-| **Hooks** | 10 lifecycle events (PreToolUse, PostToolUse, SessionStart, etc.) |
+| **Hooks** | 11 lifecycle events (PreToolUse, PostToolUse, SessionStart, etc.) |
 | **Slash Commands** | `/worktree`, `/help`, and user-defined workflows |
 | **Subagent Orchestration** | Multi-agent coordination for complex tasks |
 
@@ -242,8 +242,8 @@ Benchmarks (Criterion, 120x40 terminal):
 | Mixed read operations | 3-5x |
 
 Tools are classified by safety:
-- **ReadOnly**: `read`, `glob`, `grep`, `web_fetch`, `web_search` (parallelized)
-- **Mutating**: `write`, `edit` (sequential)
+- **ReadOnly**: `read_file`, `glob`, `grep`, `web_fetch`, `web_search` (parallelized)
+- **Mutating**: `write_file`, `edit` (sequential)
 - **Unknown**: `bash`, MCP tools (sequential by default)
 
 ```bash
@@ -296,7 +296,7 @@ cargo tarpaulin --out Html
 
 | Metric | Value |
 |--------|-------|
-| Version | 0.5.0 |
+| Version | 0.5.5 |
 | MSRV | Rust 1.75 |
 | Edition | 2021 |
 | Tests | 1,908 |
