@@ -19,6 +19,7 @@
 
 pub mod context;
 pub mod integration;
+pub mod security;
 
 pub use context::{
     extract_code_references, CodeReference, ContextKind, ContextSuggestion, LineRef,
@@ -28,3 +29,4 @@ pub use integration::{
     parse_callers_response, parse_dependencies_response, CallerInfo, DependencyInfo,
     NarsilCapabilities, NarsilCapability, NarsilIntegration,
 };
+pub use security::SecurityVerdict;
