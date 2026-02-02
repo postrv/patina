@@ -82,7 +82,7 @@ pub enum ToolChoice {
 
 /// Returns the default set of tools for Patina.
 ///
-/// Includes: bash, read_file, write_file, edit, list_files, glob, grep, web_fetch, web_search
+/// Includes: bash, read_file, write_file, edit, list_files, glob, grep, web_fetch, web_search, analyze_image
 #[must_use]
 pub fn default_tools() -> Vec<ToolDefinition> {
     vec![
@@ -95,6 +95,7 @@ pub fn default_tools() -> Vec<ToolDefinition> {
         grep_tool(),
         web_fetch_tool(),
         web_search_tool(),
+        vision_tool(),
     ]
 }
 
@@ -412,7 +413,7 @@ mod tests {
     fn test_default_tools_contains_all_tools() {
         let tools = default_tools();
 
-        assert_eq!(tools.len(), 9, "should have 9 default tools");
+        assert_eq!(tools.len(), 10, "should have 10 default tools");
 
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains(&"bash"), "should contain bash");
@@ -424,6 +425,7 @@ mod tests {
         assert!(names.contains(&"grep"), "should contain grep");
         assert!(names.contains(&"web_fetch"), "should contain web_fetch");
         assert!(names.contains(&"web_search"), "should contain web_search");
+        assert!(names.contains(&"analyze_image"), "should contain analyze_image");
     }
 
     #[test]
