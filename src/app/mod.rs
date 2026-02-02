@@ -458,9 +458,46 @@ async fn event_loop(
                             // Submit input
                             (KeyCode::Enter, KeyModifiers::NONE) if !state.input.is_empty() => {
                                 let input = state.take_input();
-                                state.submit_message(client, input).await?;
-                                // Auto-save after user message
-                                auto_save_session(state, session_manager).await;
+
+                                // Check for slash commands before sending to API
+                                if input.trim().starts_with('/') {
+                                    use crate::app::commands::{CommandResult, SlashCommandHandler};
+
+                                    let handler = SlashCommandHandler::new(state.working_dir.clone());
+                                    let result = handler.handle(&input);
+
+                                    // Display the user's command in timeline
+                                    state.add_message(Message {
+                                        role: Role::User,
+                                        content: input.clone(),
+                                    });
+
+                                    // Display the command result
+                                    let response = match result {
+                                        CommandResult::Executed(output) => output,
+                                        CommandResult::NotACommand => {
+                                            // This shouldn't happen since we checked for /
+                                            format!("Input doesn't look like a command: {}", input)
+                                        }
+                                        CommandResult::UnknownCommand(cmd) => {
+                                            format!("Unknown command: /{}. Type /help for available commands.", cmd)
+                                        }
+                                        CommandResult::Error(err) => {
+                                            format!("Error: {}", err)
+                                        }
+                                    };
+
+                                    state.add_message(Message {
+                                        role: Role::Assistant,
+                                        content: response,
+                                    });
+
+                                    state.mark_full_redraw();
+                                } else {
+                                    state.submit_message(client, input).await?;
+                                    // Auto-save after user message
+                                    auto_save_session(state, session_manager).await;
+                                }
                             }
 
                             // Delete character
