@@ -111,14 +111,15 @@ pub async fn run(config: Config) -> Result<()> {
 
     // Check for session resume before initializing terminal
     let mut state = match &config.resume_mode {
-        ResumeMode::None => AppState::with_plugins(
+        ResumeMode::None => AppState::with_options(
             config.working_dir.clone(),
             config.skip_permissions,
             config.parallel_mode,
             config.plugins_enabled,
+            config.subagents_enabled,
         ),
         ResumeMode::Last | ResumeMode::SessionId(_) => {
-            load_session_state(&config, config.skip_permissions, config.parallel_mode).await?
+            load_session_state(&config).await?
         }
     };
 
@@ -173,11 +174,7 @@ pub async fn run(config: Config) -> Result<()> {
 }
 
 /// Loads session state based on the resume mode.
-async fn load_session_state(
-    config: &Config,
-    skip_permissions: bool,
-    parallel_mode: crate::types::config::ParallelMode,
-) -> Result<AppState> {
+async fn load_session_state(config: &Config) -> Result<AppState> {
     let sessions_dir = default_sessions_dir()?;
     let manager = SessionManager::new(sessions_dir);
 
@@ -207,11 +204,12 @@ async fn load_session_state(
         .context(format!("Failed to load session '{}'", session_id))?;
 
     // Create AppState from the loaded session
-    let mut state = AppState::with_plugins(
+    let mut state = AppState::with_options(
         session.working_dir().clone(),
-        skip_permissions,
-        parallel_mode,
+        config.skip_permissions,
+        config.parallel_mode,
         config.plugins_enabled,
+        config.subagents_enabled,
     );
     state.restore_from_session(&session);
 
@@ -233,11 +231,12 @@ async fn run_print_mode(config: &Config, prompt: &str) -> Result<()> {
     use crate::api::{StreamEvent, ToolChoice};
 
     let client = AnthropicClient::new(config.api_key.clone(), &config.model);
-    let mut state = AppState::with_plugins(
+    let mut state = AppState::with_options(
         config.working_dir.clone(),
         config.skip_permissions,
         config.parallel_mode,
         config.plugins_enabled,
+        config.subagents_enabled,
     );
 
     // Add the user's prompt (adds to both display and API messages via submit logic)

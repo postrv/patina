@@ -1,5 +1,6 @@
 //! Application state management
 
+use crate::agents::SubagentSpawner;
 use crate::api::tools::default_tools;
 use crate::api::{AnthropicClient, StreamEvent, TokenBudget, ToolChoice};
 use crate::app::tool_loop::{ContinuationData, ToolLoop, ToolLoopState};
@@ -163,6 +164,10 @@ pub struct AppState {
     /// Plugin registry for managing loaded plugins.
     /// Loaded from `~/.config/patina/plugins/` on startup unless disabled.
     plugin_registry: PluginRegistry,
+
+    /// Optional subagent spawner for creating subagent sessions.
+    /// Only initialized when subagent orchestration is enabled via `--enable-subagents`.
+    subagent_spawner: Option<SubagentSpawner>,
 }
 
 #[derive(Default)]
@@ -191,7 +196,7 @@ impl AppState {
     /// * `skip_permissions` - If true, bypass all permission prompts
     /// * `parallel_mode` - Controls parallel tool execution
     pub fn new(working_dir: PathBuf, skip_permissions: bool, parallel_mode: ParallelMode) -> Self {
-        Self::with_plugins(working_dir, skip_permissions, parallel_mode, true)
+        Self::with_options(working_dir, skip_permissions, parallel_mode, true, false)
     }
 
     /// Creates a new AppState with optional plugin loading.
@@ -207,6 +212,31 @@ impl AppState {
         skip_permissions: bool,
         parallel_mode: ParallelMode,
         plugins_enabled: bool,
+    ) -> Self {
+        Self::with_options(
+            working_dir,
+            skip_permissions,
+            parallel_mode,
+            plugins_enabled,
+            false,
+        )
+    }
+
+    /// Creates a new AppState with all options.
+    ///
+    /// # Arguments
+    ///
+    /// * `working_dir` - The working directory for file operations
+    /// * `skip_permissions` - If true, bypass all permission prompts
+    /// * `parallel_mode` - Controls parallel tool execution
+    /// * `plugins_enabled` - If true, load plugins from config directory
+    /// * `subagents_enabled` - If true, initialize subagent spawner
+    pub fn with_options(
+        working_dir: PathBuf,
+        skip_permissions: bool,
+        parallel_mode: ParallelMode,
+        plugins_enabled: bool,
+        subagents_enabled: bool,
     ) -> Self {
         // Generate a unique session ID for hooks
         let hook_session_id = uuid::Uuid::new_v4().to_string();
@@ -236,6 +266,13 @@ impl AppState {
             Self::load_plugins()
         } else {
             PluginRegistry::new()
+        };
+
+        // Initialize subagent spawner if enabled
+        let subagent_spawner = if subagents_enabled {
+            Some(SubagentSpawner::new())
+        } else {
+            None
         };
 
         Self {
@@ -271,6 +308,7 @@ impl AppState {
             token_budget: TokenBudget::new(100_000), // Claude's typical context window
             compaction_state: None,
             plugin_registry,
+            subagent_spawner,
         }
     }
 
@@ -310,6 +348,18 @@ impl AppState {
     #[must_use]
     pub fn plugins(&self) -> &PluginRegistry {
         &self.plugin_registry
+    }
+
+    /// Returns whether subagent orchestration is enabled.
+    #[must_use]
+    pub fn subagents_enabled(&self) -> bool {
+        self.subagent_spawner.is_some()
+    }
+
+    /// Returns a reference to the subagent spawner if enabled.
+    #[must_use]
+    pub fn subagent_spawner(&self) -> Option<&SubagentSpawner> {
+        self.subagent_spawner.as_ref()
     }
 
     /// Inserts a character at the current cursor position.
@@ -2451,5 +2501,72 @@ mod tests {
         let state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
         // Registry should be accessible (plugins enabled by default)
         let _ = state.plugins().plugin_count();
+    }
+
+    // =========================================================================
+    // 1.5.4.3 - Subagent wiring tests
+    // =========================================================================
+
+    #[test]
+    fn test_new_disables_subagents_by_default() {
+        // AppState::new should disable subagents by default
+        let state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+        assert!(!state.subagents_enabled());
+        assert!(state.subagent_spawner().is_none());
+    }
+
+    #[test]
+    fn test_with_options_subagents_disabled() {
+        let state = AppState::with_options(
+            PathBuf::from("/test"),
+            false,
+            ParallelMode::Enabled,
+            true,  // plugins_enabled
+            false, // subagents_enabled
+        );
+        assert!(!state.subagents_enabled());
+        assert!(state.subagent_spawner().is_none());
+    }
+
+    #[test]
+    fn test_with_options_subagents_enabled() {
+        let state = AppState::with_options(
+            PathBuf::from("/test"),
+            false,
+            ParallelMode::Enabled,
+            true, // plugins_enabled
+            true, // subagents_enabled
+        );
+        assert!(state.subagents_enabled());
+        assert!(state.subagent_spawner().is_some());
+    }
+
+    #[test]
+    fn test_subagent_spawner_returns_valid_spawner_when_enabled() {
+        let state = AppState::with_options(
+            PathBuf::from("/test"),
+            false,
+            ParallelMode::Enabled,
+            false, // plugins_enabled
+            true,  // subagents_enabled
+        );
+
+        // Verify we can access the spawner
+        let spawner = state.subagent_spawner().expect("spawner should be Some");
+        // Verify spawner has a valid model configured
+        assert!(spawner.model().contains("claude"));
+    }
+
+    #[test]
+    fn test_with_plugins_disables_subagents() {
+        // with_plugins should disable subagents (for backward compatibility)
+        let state = AppState::with_plugins(
+            PathBuf::from("/test"),
+            false,
+            ParallelMode::Enabled,
+            true, // plugins_enabled
+        );
+        assert!(!state.subagents_enabled());
+        assert!(state.subagent_spawner().is_none());
     }
 }
