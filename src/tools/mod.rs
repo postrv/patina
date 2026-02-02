@@ -444,6 +444,7 @@ impl ToolExecutor {
             "grep" => self.grep_content(&call.input).await,
             "web_fetch" => self.web_fetch(&call.input).await,
             "web_search" => self.web_search(&call.input).await,
+            "analyze_image" => self.analyze_image(&call.input).await,
             _ => Ok(ToolResult::Error(format!("Unknown tool: {}", call.name))),
         }
     }
@@ -1160,6 +1161,63 @@ impl ToolExecutor {
                     "Web search failed"
                 );
                 Ok(ToolResult::Error(format!("Search failed: {e}")))
+            }
+        }
+    }
+
+    /// Analyzes an image using Claude's vision capabilities.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - The relative path to the image file
+    /// * `prompt` - Optional prompt to guide the analysis
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The path is missing
+    /// - The file cannot be read
+    /// - The image format is not supported
+    async fn analyze_image(&self, input: &serde_json::Value) -> Result<ToolResult> {
+        let path = input
+            .get("path")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("Missing path"))?;
+
+        let prompt = input.get("prompt").and_then(|v| v.as_str());
+
+        // Check for symlinks BEFORE path validation to prevent TOCTOU attacks
+        if let Err(e) = self.check_symlink(path) {
+            return Ok(ToolResult::Error(e));
+        }
+
+        // Validate path is within working directory
+        let full_path = match self.validate_path(path) {
+            Ok(p) => p,
+            Err(e) => return Ok(ToolResult::Error(e)),
+        };
+
+        let tool = vision::VisionTool::new(vision::VisionConfig::default());
+
+        match tool.analyze(&full_path, prompt) {
+            Ok(result) => {
+                // Return information about the loaded image
+                // The actual image data is available via result.image for API submission
+                let response = format!(
+                    "Image loaded successfully:\n- Path: {}\n- Format: {}\n- Prompt: {}",
+                    path,
+                    result.media_type.as_str(),
+                    result.prompt.as_deref().unwrap_or("(none)")
+                );
+                Ok(ToolResult::Success(response))
+            }
+            Err(e) => {
+                debug!(
+                    path = %path,
+                    error = %e,
+                    "Image analysis failed"
+                );
+                Ok(ToolResult::Error(format!("Failed to analyze image: {e}")))
             }
         }
     }
