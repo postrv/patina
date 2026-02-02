@@ -24,6 +24,14 @@
 //! assert!(!orchestrator.is_tool_allowed(id, "bash"));
 //! ```
 
+pub mod orchestrator;
+
+// Re-export new orchestrator types for convenience
+pub use orchestrator::{
+    SubagentContext, SubagentExecutionResult, SubagentResultCollector, SubagentSession,
+    SubagentSpawner,
+};
+
 use anyhow::Result;
 use std::collections::HashMap;
 use uuid::Uuid;
