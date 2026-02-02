@@ -25,6 +25,7 @@
 //! ```
 
 pub mod orchestrator;
+pub mod parallel;
 
 // Re-export new orchestrator types for convenience
 pub use orchestrator::{
