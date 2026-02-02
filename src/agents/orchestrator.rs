@@ -540,12 +540,7 @@ impl SubagentRunner {
             };
 
             if let Err(e) = client
-                .stream_message_v2_with_tools(
-                    &messages_clone,
-                    tools_ref,
-                    tool_choice.as_ref(),
-                    tx,
-                )
+                .stream_message_v2_with_tools(&messages_clone, tools_ref, tool_choice.as_ref(), tx)
                 .await
             {
                 tracing::error!("Subagent API error: {}", e);
@@ -583,7 +578,7 @@ impl SubagentRunner {
             name: session.name().to_string(),
             output,
             success,
-            turns_used: 1, // Single turn for now
+            turns_used: 1,          // Single turn for now
             files_modified: vec![], // Would be tracked by tool execution
             errors,
         })
@@ -628,22 +623,12 @@ mod tests {
 
         // When we spawn multiple subagents
         let session1 = spawner
-            .spawn(
-                "agent1",
-                "First agent",
-                SubagentContext::default(),
-                vec![],
-            )
+            .spawn("agent1", "First agent", SubagentContext::default(), vec![])
             .await
             .unwrap();
 
         let session2 = spawner
-            .spawn(
-                "agent2",
-                "Second agent",
-                SubagentContext::default(),
-                vec![],
-            )
+            .spawn("agent2", "Second agent", SubagentContext::default(), vec![])
             .await
             .unwrap();
 
