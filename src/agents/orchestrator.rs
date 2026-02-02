@@ -391,6 +391,205 @@ impl SubagentResultCollector {
     }
 }
 
+/// Runner for executing subagent sessions against the API.
+///
+/// The runner handles:
+/// - Filtering tools based on session permissions
+/// - Building initial messages with inherited context
+/// - Executing API calls with streaming
+/// - Collecting results into `SubagentExecutionResult`
+///
+/// # Example
+///
+/// ```ignore
+/// use patina::agents::{SubagentRunner, SubagentSpawner, SubagentContext};
+/// use patina::api::AnthropicClient;
+/// use std::path::PathBuf;
+///
+/// # async fn example() -> anyhow::Result<()> {
+/// let client = AnthropicClient::new(api_key, "claude-sonnet-4-20250514");
+/// let runner = SubagentRunner::new(client);
+///
+/// let spawner = SubagentSpawner::new();
+/// let context = SubagentContext::new(PathBuf::from("/project"));
+/// let session = spawner.spawn(
+///     "explorer",
+///     "You explore codebases",
+///     context,
+///     vec!["read_file".into(), "glob".into()],
+/// ).await?;
+///
+/// let result = runner.execute(&session, "Find all Rust files").await?;
+/// assert!(result.success);
+/// # Ok(())
+/// # }
+/// ```
+pub struct SubagentRunner {
+    /// The API client used for requests.
+    client: crate::api::AnthropicClient,
+}
+
+impl SubagentRunner {
+    /// Creates a new runner with the given API client.
+    #[must_use]
+    pub fn new(client: crate::api::AnthropicClient) -> Self {
+        Self { client }
+    }
+
+    /// Filters tools to only those allowed by the session.
+    ///
+    /// Returns an empty vector if no tools are allowed.
+    #[must_use]
+    pub fn filter_tools(
+        &self,
+        session: &SubagentSession,
+    ) -> Vec<crate::api::tools::ToolDefinition> {
+        let all_tools = crate::api::tools::default_tools();
+        all_tools
+            .into_iter()
+            .filter(|tool| session.is_tool_allowed(&tool.name))
+            .collect()
+    }
+
+    /// Builds the initial system context message for the subagent.
+    ///
+    /// Combines the system prompt with inherited context (parent messages, project files).
+    #[must_use]
+    pub fn build_context_message(&self, session: &SubagentSession) -> String {
+        let mut context_parts = Vec::new();
+
+        // Add system prompt
+        context_parts.push(session.system_prompt().to_string());
+
+        // Add working directory context
+        context_parts.push(format!(
+            "\nWorking directory: {}",
+            session.working_dir().display()
+        ));
+
+        // Add project files if any
+        if !session.project_files().is_empty() {
+            context_parts.push("\nRelevant project files:".to_string());
+            for file in session.project_files() {
+                context_parts.push(format!("- {}", file));
+            }
+        }
+
+        // Add parent conversation context if any
+        if !session.parent_messages().is_empty() {
+            context_parts.push("\nContext from parent conversation:".to_string());
+            for msg in session.parent_messages() {
+                context_parts.push(format!("- {}", msg));
+            }
+        }
+
+        context_parts.join("\n")
+    }
+
+    /// Executes a subagent session with the given task.
+    ///
+    /// # Arguments
+    ///
+    /// * `session` - The session to execute
+    /// * `task` - The task/prompt for the subagent to perform
+    ///
+    /// # Returns
+    ///
+    /// Returns a `SubagentExecutionResult` with the output, success status,
+    /// and execution metadata.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the API request fails.
+    pub async fn execute(
+        &self,
+        session: &SubagentSession,
+        task: &str,
+    ) -> Result<SubagentExecutionResult> {
+        use crate::api::tools::ToolChoice;
+        use crate::types::{ApiMessageV2, StreamEvent};
+        use tokio::sync::mpsc;
+
+        // Build initial messages with context
+        let context_message = self.build_context_message(session);
+        let initial_message = format!("{}\n\nTask: {}", context_message, task);
+
+        let messages = vec![ApiMessageV2::user(&initial_message)];
+
+        // Filter tools for this session
+        let tools = self.filter_tools(session);
+        let tool_choice = if tools.is_empty() {
+            None
+        } else {
+            Some(ToolChoice::Auto)
+        };
+
+        // Create channel for streaming
+        let (tx, mut rx) = mpsc::channel::<StreamEvent>(100);
+
+        // Execute API call
+        let client = self.client.clone();
+        let tools_clone = tools.clone();
+        let messages_clone = messages.clone();
+
+        tokio::spawn(async move {
+            let tools_ref: Option<&[_]> = if tools_clone.is_empty() {
+                None
+            } else {
+                Some(&tools_clone)
+            };
+
+            if let Err(e) = client
+                .stream_message_v2_with_tools(
+                    &messages_clone,
+                    tools_ref,
+                    tool_choice.as_ref(),
+                    tx,
+                )
+                .await
+            {
+                tracing::error!("Subagent API error: {}", e);
+            }
+        });
+
+        // Collect streaming response
+        let mut output = String::new();
+        let mut errors = Vec::new();
+        let mut success = true;
+
+        while let Some(event) = rx.recv().await {
+            match event {
+                StreamEvent::ContentDelta(text) => {
+                    output.push_str(&text);
+                }
+                StreamEvent::Error(err) => {
+                    errors.push(err);
+                    success = false;
+                }
+                StreamEvent::MessageComplete { .. } | StreamEvent::MessageStop => break,
+                // Tool calls would need a tool execution loop in a full implementation
+                StreamEvent::ToolUseStart { .. }
+                | StreamEvent::ToolUseInputDelta { .. }
+                | StreamEvent::ToolUseComplete { .. }
+                | StreamEvent::ContentBlockComplete { .. } => {
+                    // For now, we don't execute tools in the subagent
+                    // This would be extended in task 1.5.4.3 when wiring into app state
+                }
+            }
+        }
+
+        Ok(SubagentExecutionResult {
+            session_id: session.id(),
+            name: session.name().to_string(),
+            output,
+            success,
+            turns_used: 1, // Single turn for now
+            files_modified: vec![], // Would be tracked by tool execution
+            errors,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -777,5 +976,147 @@ mod tests {
 
         assert_eq!(result.errors.len(), 2);
         assert!(result.errors.contains(&"Error 1".to_string()));
+    }
+
+    // ============================================================================
+    // 1.5.4.2 - SubagentRunner tests
+    // ============================================================================
+
+    #[tokio::test]
+    async fn test_runner_filter_tools_filters_to_allowed() {
+        use secrecy::SecretString;
+
+        // Given a runner and session with specific allowed tools
+        let client = crate::api::AnthropicClient::new(
+            SecretString::from("test-key"),
+            "claude-sonnet-4-20250514",
+        );
+        let runner = SubagentRunner::new(client);
+
+        let spawner = SubagentSpawner::new();
+        let session = spawner
+            .spawn(
+                "reader",
+                "Reads files only",
+                SubagentContext::default(),
+                vec!["read_file".into(), "glob".into()],
+            )
+            .await
+            .unwrap();
+
+        // When filtering tools
+        let filtered = runner.filter_tools(&session);
+
+        // Then only allowed tools are returned
+        assert_eq!(filtered.len(), 2);
+        let names: Vec<&str> = filtered.iter().map(|t| t.name.as_str()).collect();
+        assert!(names.contains(&"read_file"));
+        assert!(names.contains(&"glob"));
+        assert!(!names.contains(&"bash"));
+        assert!(!names.contains(&"write_file"));
+    }
+
+    #[tokio::test]
+    async fn test_runner_filter_tools_empty_when_no_tools_allowed() {
+        use secrecy::SecretString;
+
+        let client = crate::api::AnthropicClient::new(
+            SecretString::from("test-key"),
+            "claude-sonnet-4-20250514",
+        );
+        let runner = SubagentRunner::new(client);
+
+        let spawner = SubagentSpawner::new();
+        let session = spawner
+            .spawn(
+                "no-tools",
+                "Has no tools",
+                SubagentContext::default(),
+                vec![], // No tools allowed
+            )
+            .await
+            .unwrap();
+
+        let filtered = runner.filter_tools(&session);
+
+        assert!(filtered.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_runner_build_context_includes_system_prompt() {
+        use secrecy::SecretString;
+
+        let client = crate::api::AnthropicClient::new(
+            SecretString::from("test-key"),
+            "claude-sonnet-4-20250514",
+        );
+        let runner = SubagentRunner::new(client);
+
+        let spawner = SubagentSpawner::new();
+        let session = spawner
+            .spawn(
+                "explorer",
+                "You are an expert code explorer.",
+                SubagentContext::new(PathBuf::from("/project")),
+                vec![],
+            )
+            .await
+            .unwrap();
+
+        let context = runner.build_context_message(&session);
+
+        assert!(context.contains("You are an expert code explorer."));
+        assert!(context.contains("/project"));
+    }
+
+    #[tokio::test]
+    async fn test_runner_build_context_includes_parent_messages() {
+        use secrecy::SecretString;
+
+        let client = crate::api::AnthropicClient::new(
+            SecretString::from("test-key"),
+            "claude-sonnet-4-20250514",
+        );
+        let runner = SubagentRunner::new(client);
+
+        let spawner = SubagentSpawner::new();
+        let context = SubagentContext::new(PathBuf::from("/project"))
+            .with_messages(vec!["User wants to add authentication".into()]);
+
+        let session = spawner
+            .spawn("helper", "You help with tasks.", context, vec![])
+            .await
+            .unwrap();
+
+        let ctx_msg = runner.build_context_message(&session);
+
+        assert!(ctx_msg.contains("Context from parent conversation"));
+        assert!(ctx_msg.contains("authentication"));
+    }
+
+    #[tokio::test]
+    async fn test_runner_build_context_includes_project_files() {
+        use secrecy::SecretString;
+
+        let client = crate::api::AnthropicClient::new(
+            SecretString::from("test-key"),
+            "claude-sonnet-4-20250514",
+        );
+        let runner = SubagentRunner::new(client);
+
+        let spawner = SubagentSpawner::new();
+        let context = SubagentContext::new(PathBuf::from("/project"))
+            .with_project_files(vec!["CLAUDE.md".into(), "README.md".into()]);
+
+        let session = spawner
+            .spawn("reader", "Reads files.", context, vec![])
+            .await
+            .unwrap();
+
+        let ctx_msg = runner.build_context_message(&session);
+
+        assert!(ctx_msg.contains("Relevant project files"));
+        assert!(ctx_msg.contains("CLAUDE.md"));
+        assert!(ctx_msg.contains("README.md"));
     }
 }
