@@ -17,6 +17,10 @@
 //! }
 //! ```
 
+pub mod context;
 pub mod integration;
 
+pub use context::{
+    extract_code_references, CodeReference, ContextKind, ContextSuggestion, LineRef,
+};
 pub use integration::{NarsilCapabilities, NarsilCapability, NarsilIntegration};
