@@ -19,8 +19,97 @@
 //! ```
 
 use crate::plugins::manifest::{Manifest, ManifestError};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
+
+/// Represents a plugin source location for installation.
+///
+/// Plugins can be installed from GitHub repositories (via shorthand notation)
+/// or from local filesystem paths.
+///
+/// # Examples
+///
+/// ```
+/// use patina::plugins::registry::PluginSource;
+///
+/// // GitHub shorthand
+/// let source = PluginSource::parse("gh:user/repo").unwrap();
+///
+/// // GitHub with version
+/// let source = PluginSource::parse("gh:user/repo@v1.0.0").unwrap();
+///
+/// // Local path
+/// let source = PluginSource::parse("/path/to/plugin").unwrap();
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PluginSource {
+    /// A GitHub repository source.
+    GitHub {
+        /// Repository owner (user or organization).
+        owner: String,
+        /// Repository name.
+        repo: String,
+        /// Optional version tag (e.g., "v1.0.0", "main", "latest").
+        version: Option<String>,
+    },
+    /// A local filesystem path.
+    Local {
+        /// Path to the plugin directory.
+        path: PathBuf,
+    },
+}
+
+/// Errors that can occur when parsing a plugin source specification.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum PluginSourceError {
+    /// The source specification is empty.
+    #[error("empty source specification")]
+    Empty,
+    /// Invalid GitHub shorthand format.
+    #[error("invalid GitHub shorthand: {0}")]
+    InvalidGitHubShorthand(String),
+    /// Invalid local path.
+    #[error("invalid local path: {0}")]
+    InvalidLocalPath(String),
+}
+
+impl PluginSource {
+    /// Parses a plugin source specification string.
+    ///
+    /// # Supported Formats
+    ///
+    /// - `gh:owner/repo` - GitHub repository (latest/default branch)
+    /// - `gh:owner/repo@version` - GitHub repository at specific version/tag
+    /// - `/absolute/path` - Absolute local path
+    /// - `./relative/path` - Relative local path
+    /// - `../relative/path` - Relative local path
+    ///
+    /// # Arguments
+    ///
+    /// * `spec` - The source specification string
+    ///
+    /// # Returns
+    ///
+    /// A `PluginSource` variant representing the parsed source.
+    ///
+    /// # Errors
+    ///
+    /// Returns `PluginSourceError` if the specification is invalid.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use patina::plugins::registry::PluginSource;
+    ///
+    /// let gh = PluginSource::parse("gh:anthropics/patina-plugins").unwrap();
+    /// let versioned = PluginSource::parse("gh:user/repo@v2.1.0").unwrap();
+    /// let local = PluginSource::parse("./my-plugin").unwrap();
+    /// ```
+    pub fn parse(_spec: &str) -> Result<Self, PluginSourceError> {
+        // TODO: Implement in 2.6.2
+        Err(PluginSourceError::Empty)
+    }
+}
 
 /// The standard manifest filename for Patina plugins.
 pub const MANIFEST_FILENAME: &str = "rct-plugin.toml";
@@ -572,5 +661,194 @@ version = "1.0.0""#,
             discovered.is_empty(),
             "Should reject symlinked manifest files"
         );
+    }
+
+    // ==========================================================================
+    // PluginSource Tests (Task 2.6.1)
+    // ==========================================================================
+
+    /// Tests parsing GitHub shorthand without version: `gh:owner/repo`
+    #[test]
+    fn test_parse_github_shorthand() {
+        use super::{PluginSource, PluginSourceError};
+
+        // Basic GitHub shorthand
+        let source = PluginSource::parse("gh:anthropics/claude-plugins").unwrap();
+        assert_eq!(
+            source,
+            PluginSource::GitHub {
+                owner: "anthropics".to_string(),
+                repo: "claude-plugins".to_string(),
+                version: None,
+            }
+        );
+
+        // Single-character owner/repo names
+        let source = PluginSource::parse("gh:a/b").unwrap();
+        assert_eq!(
+            source,
+            PluginSource::GitHub {
+                owner: "a".to_string(),
+                repo: "b".to_string(),
+                version: None,
+            }
+        );
+
+        // Owner/repo with hyphens and underscores
+        let source = PluginSource::parse("gh:my-org/my_plugin").unwrap();
+        assert_eq!(
+            source,
+            PluginSource::GitHub {
+                owner: "my-org".to_string(),
+                repo: "my_plugin".to_string(),
+                version: None,
+            }
+        );
+
+        // Invalid: missing repo
+        let err = PluginSource::parse("gh:owner").unwrap_err();
+        assert!(matches!(err, PluginSourceError::InvalidGitHubShorthand(_)));
+
+        // Invalid: empty owner
+        let err = PluginSource::parse("gh:/repo").unwrap_err();
+        assert!(matches!(err, PluginSourceError::InvalidGitHubShorthand(_)));
+
+        // Invalid: empty repo
+        let err = PluginSource::parse("gh:owner/").unwrap_err();
+        assert!(matches!(err, PluginSourceError::InvalidGitHubShorthand(_)));
+
+        // Invalid: just the prefix
+        let err = PluginSource::parse("gh:").unwrap_err();
+        assert!(matches!(err, PluginSourceError::InvalidGitHubShorthand(_)));
+    }
+
+    /// Tests parsing GitHub shorthand with version: `gh:owner/repo@version`
+    #[test]
+    fn test_parse_github_with_version() {
+        use super::PluginSource;
+
+        // Semantic version tag
+        let source = PluginSource::parse("gh:user/repo@v1.0.0").unwrap();
+        assert_eq!(
+            source,
+            PluginSource::GitHub {
+                owner: "user".to_string(),
+                repo: "repo".to_string(),
+                version: Some("v1.0.0".to_string()),
+            }
+        );
+
+        // Branch name
+        let source = PluginSource::parse("gh:user/repo@main").unwrap();
+        assert_eq!(
+            source,
+            PluginSource::GitHub {
+                owner: "user".to_string(),
+                repo: "repo".to_string(),
+                version: Some("main".to_string()),
+            }
+        );
+
+        // Commit SHA
+        let source = PluginSource::parse("gh:user/repo@abc123def").unwrap();
+        assert_eq!(
+            source,
+            PluginSource::GitHub {
+                owner: "user".to_string(),
+                repo: "repo".to_string(),
+                version: Some("abc123def".to_string()),
+            }
+        );
+
+        // Version with special characters (release-v1.2.3-beta)
+        let source = PluginSource::parse("gh:org/plugin@release-v1.2.3-beta").unwrap();
+        assert_eq!(
+            source,
+            PluginSource::GitHub {
+                owner: "org".to_string(),
+                repo: "plugin".to_string(),
+                version: Some("release-v1.2.3-beta".to_string()),
+            }
+        );
+
+        // Empty version after @ is treated as None (latest)
+        let source = PluginSource::parse("gh:user/repo@").unwrap();
+        assert_eq!(
+            source,
+            PluginSource::GitHub {
+                owner: "user".to_string(),
+                repo: "repo".to_string(),
+                version: None,
+            }
+        );
+    }
+
+    /// Tests parsing local filesystem paths
+    #[test]
+    fn test_parse_local_path() {
+        use super::PluginSource;
+        use std::path::PathBuf;
+
+        // Absolute path
+        let source = PluginSource::parse("/home/user/plugins/my-plugin").unwrap();
+        assert_eq!(
+            source,
+            PluginSource::Local {
+                path: PathBuf::from("/home/user/plugins/my-plugin"),
+            }
+        );
+
+        // Relative path with ./
+        let source = PluginSource::parse("./plugins/local").unwrap();
+        assert_eq!(
+            source,
+            PluginSource::Local {
+                path: PathBuf::from("./plugins/local"),
+            }
+        );
+
+        // Relative path with ../
+        let source = PluginSource::parse("../sibling-project/plugin").unwrap();
+        assert_eq!(
+            source,
+            PluginSource::Local {
+                path: PathBuf::from("../sibling-project/plugin"),
+            }
+        );
+
+        // Windows-style absolute path (for cross-platform)
+        #[cfg(windows)]
+        {
+            let source = PluginSource::parse("C:\\Users\\user\\plugin").unwrap();
+            assert_eq!(
+                source,
+                PluginSource::Local {
+                    path: PathBuf::from("C:\\Users\\user\\plugin"),
+                }
+            );
+        }
+
+        // Path with spaces
+        let source = PluginSource::parse("/path/with spaces/plugin").unwrap();
+        assert_eq!(
+            source,
+            PluginSource::Local {
+                path: PathBuf::from("/path/with spaces/plugin"),
+            }
+        );
+    }
+
+    /// Tests empty and whitespace-only specifications
+    #[test]
+    fn test_parse_empty_spec() {
+        use super::{PluginSource, PluginSourceError};
+
+        // Empty string
+        let err = PluginSource::parse("").unwrap_err();
+        assert_eq!(err, PluginSourceError::Empty);
+
+        // Whitespace only
+        let err = PluginSource::parse("   ").unwrap_err();
+        assert_eq!(err, PluginSourceError::Empty);
     }
 }
