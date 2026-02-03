@@ -175,6 +175,9 @@ pub fn render_timeline_with_throbber(timeline: &Timeline, throbber: char) -> Vec
 }
 
 /// Renders a user message to lines.
+///
+/// Note: User messages don't apply diff styling to avoid false positives
+/// with markdown lists (e.g., `- item` would incorrectly appear as deletion).
 fn render_user_message(lines: &mut Vec<Line<'static>>, text: &str) {
     lines.push(Line::from(vec![Span::styled(
         "You: ".to_string(),
@@ -182,24 +185,19 @@ fn render_user_message(lines: &mut Vec<Line<'static>>, text: &str) {
     )]));
 
     for line in text.lines() {
-        // Detect diff patterns and apply appropriate styling
-        let line_style = if line.starts_with("+ ") || line.starts_with("+\t") || line == "+" {
-            PatinaTheme::diff_addition()
-        } else if line.starts_with("- ") || line.starts_with("-\t") || line == "-" {
-            PatinaTheme::diff_deletion()
-        } else if line.starts_with("@@") && line.contains("@@") {
-            PatinaTheme::diff_hunk()
-        } else {
-            PatinaTheme::user_message()
-        };
-
-        lines.push(Line::from(Span::styled(line.to_string(), line_style)));
+        lines.push(Line::from(Span::styled(
+            line.to_string(),
+            PatinaTheme::user_message(),
+        )));
     }
 
     lines.push(Line::from(""));
 }
 
 /// Renders an assistant message to lines.
+///
+/// Note: Assistant messages don't apply diff styling to avoid false positives
+/// with markdown lists (e.g., `- item` would incorrectly appear as deletion).
 fn render_assistant_message(lines: &mut Vec<Line<'static>>, text: &str) {
     lines.push(Line::from(vec![Span::styled(
         "Patina: ".to_string(),
@@ -207,18 +205,10 @@ fn render_assistant_message(lines: &mut Vec<Line<'static>>, text: &str) {
     )]));
 
     for line in text.lines() {
-        // Detect diff patterns and apply appropriate styling
-        let line_style = if line.starts_with("+ ") || line.starts_with("+\t") || line == "+" {
-            PatinaTheme::diff_addition()
-        } else if line.starts_with("- ") || line.starts_with("-\t") || line == "-" {
-            PatinaTheme::diff_deletion()
-        } else if line.starts_with("@@") && line.contains("@@") {
-            PatinaTheme::diff_hunk()
-        } else {
-            PatinaTheme::assistant_message()
-        };
-
-        lines.push(Line::from(Span::styled(line.to_string(), line_style)));
+        lines.push(Line::from(Span::styled(
+            line.to_string(),
+            PatinaTheme::assistant_message(),
+        )));
     }
 
     lines.push(Line::from(""));
@@ -282,6 +272,26 @@ fn render_image_display(
     lines.push(Line::from("")); // Spacer
 }
 
+/// Checks if content looks like a unified diff format.
+///
+/// Returns true if the content contains both addition (`+ `) and deletion (`- `)
+/// line patterns, which indicates it's likely an actual diff rather than a
+/// markdown list or other content that happens to start with these characters.
+fn looks_like_diff(content: &str) -> bool {
+    let has_addition = content
+        .lines()
+        .any(|line| line.starts_with("+ ") || line.starts_with("+\t") || line == "+");
+    let has_deletion = content
+        .lines()
+        .any(|line| line.starts_with("- ") || line.starts_with("-\t") || line == "-");
+    let has_hunk = content
+        .lines()
+        .any(|line| line.starts_with("@@") && line.contains("@@"));
+
+    // Consider it a diff if it has both additions and deletions, or has hunk markers
+    (has_addition && has_deletion) || has_hunk
+}
+
 /// Renders a tool execution entry to lines.
 fn render_tool_execution(
     lines: &mut Vec<Line<'static>>,
@@ -315,18 +325,26 @@ fn render_tool_execution(
 
     // Tool result (if complete) or pending status
     if let Some(result) = output {
+        // Only apply diff styling if the content actually looks like a diff
+        // This prevents false positives with markdown lists (e.g., "- item")
+        let is_diff_content = name == "edit" || looks_like_diff(result);
+
         // Show first few lines of result (truncate long output)
         let result_lines: Vec<&str> = result.lines().take(5).collect();
         for line in &result_lines {
-            // Determine style based on diff pattern
+            // Determine style based on diff pattern (only if content is diff-like)
             let line_style = if is_error {
                 PatinaTheme::error()
-            } else if line.starts_with("+ ") || line.starts_with("+\t") || *line == "+" {
-                PatinaTheme::diff_addition()
-            } else if line.starts_with("- ") || line.starts_with("-\t") || *line == "-" {
-                PatinaTheme::diff_deletion()
-            } else if line.starts_with("@@") && line.contains("@@") {
-                PatinaTheme::diff_hunk()
+            } else if is_diff_content {
+                if line.starts_with("+ ") || line.starts_with("+\t") || *line == "+" {
+                    PatinaTheme::diff_addition()
+                } else if line.starts_with("- ") || line.starts_with("-\t") || *line == "-" {
+                    PatinaTheme::diff_deletion()
+                } else if line.starts_with("@@") && line.contains("@@") {
+                    PatinaTheme::diff_hunk()
+                } else {
+                    Style::default().fg(PatinaTheme::TOOL_CONTENT)
+                }
             } else {
                 Style::default().fg(PatinaTheme::TOOL_CONTENT)
             };
@@ -1103,6 +1121,67 @@ mod tests {
         // Last line is ~100+ chars = 2 lines
         let height = calculate_wrapped_height(&lines, 80);
         assert!(height >= 5, "Should have at least 5 lines, got {}", height);
+    }
+
+    // =========================================================================
+    // looks_like_diff tests
+    // =========================================================================
+
+    #[test]
+    fn test_looks_like_diff_actual_diff() {
+        let diff = "- old line\n+ new line";
+        assert!(looks_like_diff(diff), "Should detect actual diff");
+    }
+
+    #[test]
+    fn test_looks_like_diff_with_hunk_markers() {
+        let diff = "@@ -1,3 +1,3 @@\n some context";
+        assert!(
+            looks_like_diff(diff),
+            "Should detect diff with hunk markers"
+        );
+    }
+
+    #[test]
+    fn test_looks_like_diff_edit_output() {
+        let output = "Successfully replaced in file.rs:\n- old code\n+ new code";
+        assert!(looks_like_diff(output), "Should detect edit tool output");
+    }
+
+    #[test]
+    fn test_looks_like_diff_markdown_list_not_diff() {
+        // Markdown list with only deletions (no additions) should NOT be a diff
+        let markdown = "- item 1\n- item 2\n- item 3";
+        assert!(
+            !looks_like_diff(markdown),
+            "Markdown list should not be detected as diff"
+        );
+    }
+
+    #[test]
+    fn test_looks_like_diff_addition_only_not_diff() {
+        // Only additions should not be a diff (no context)
+        let output = "+ line 1\n+ line 2";
+        // This IS detected as diff-like if it has only additions
+        // Actually, our logic requires BOTH additions and deletions or hunk markers
+        assert!(
+            !looks_like_diff(output),
+            "Addition-only should not be detected as diff"
+        );
+    }
+
+    #[test]
+    fn test_looks_like_diff_plain_text() {
+        let text = "Hello world\nThis is plain text\nNo diff here";
+        assert!(
+            !looks_like_diff(text),
+            "Plain text should not be detected as diff"
+        );
+    }
+
+    #[test]
+    fn test_looks_like_diff_empty_string() {
+        assert!(!looks_like_diff(""), "Empty string should not be a diff");
     }
 
     // =========================================================================

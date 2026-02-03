@@ -285,6 +285,45 @@ pub fn is_iterm2() -> bool {
     false
 }
 
+/// Detects if running inside a JetBrains IDE terminal (IntelliJ, RustRover, etc.).
+///
+/// JetBrains IDEs use JediTerm as their terminal emulator and set the
+/// `TERMINAL_EMULATOR` environment variable to `JetBrains-JediTerm`.
+///
+/// # Returns
+///
+/// `true` if running inside a JetBrains IDE terminal.
+///
+/// # Note
+///
+/// JetBrains terminals do not support the Kitty keyboard protocol, so
+/// Cmd+key shortcuts won't be detected with the SUPER modifier. Users
+/// should use Ctrl+A (select all), Ctrl+Y (copy), and Ctrl+Shift+V (paste)
+/// or Option+A/C/V as alternatives.
+#[must_use]
+pub fn is_jetbrains_terminal() -> bool {
+    if let Ok(emulator) = env::var("TERMINAL_EMULATOR") {
+        return emulator == "JetBrains-JediTerm";
+    }
+    false
+}
+
+/// Returns a description of the current terminal for keyboard support hints.
+///
+/// This helps users understand what keyboard shortcuts are available.
+#[must_use]
+pub fn terminal_keyboard_hint() -> &'static str {
+    if is_iterm2() {
+        "iTerm2 (Cmd+A/C/V supported)"
+    } else if is_jetbrains_terminal() {
+        "JetBrains (use Ctrl+A, Option+C/V, or Ctrl+Y)"
+    } else if is_kitty_terminal() {
+        "Kitty (Cmd+A/C/V supported)"
+    } else {
+        "Standard (Ctrl+A, Ctrl+Y, Ctrl+Shift+V)"
+    }
+}
+
 /// Detects if running on macOS.
 #[must_use]
 pub fn is_macos() -> bool {
@@ -571,5 +610,23 @@ mod tests {
         let is_iterm = is_iterm2();
         // Function should return a boolean without panicking
         let _ = is_iterm; // Consume the result to verify the function completes
+    }
+
+    #[test]
+    fn test_is_jetbrains_terminal() {
+        // JetBrains detection should check TERMINAL_EMULATOR
+        // In CI/test environment, this should return false
+        let is_jetbrains = is_jetbrains_terminal();
+        // Function should return a boolean without panicking
+        let _ = is_jetbrains;
+    }
+
+    #[test]
+    fn test_terminal_keyboard_hint() {
+        // Should return a non-empty string describing keyboard support
+        let hint = terminal_keyboard_hint();
+        assert!(!hint.is_empty());
+        // In test environment, should return "Standard" hint
+        // (unless running in iTerm2, Kitty, or JetBrains)
     }
 }

@@ -21,6 +21,20 @@ use anyhow::Result;
 use base64::{engine::general_purpose::STANDARD, Engine};
 use std::io::{self, Write};
 
+/// Reads text from the system clipboard.
+///
+/// Uses the native clipboard via arboard.
+///
+/// # Errors
+///
+/// Returns an error if clipboard access fails.
+pub fn paste_from_clipboard() -> Result<String> {
+    let mut clipboard = arboard::Clipboard::new()?;
+    let text = clipboard.get_text()?;
+    tracing::debug!(len = text.len(), "Read from clipboard");
+    Ok(text)
+}
+
 /// Copies text to the system clipboard.
 ///
 /// Tries multiple methods in order:
