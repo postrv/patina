@@ -708,6 +708,7 @@ impl PluginManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::plugins::manifest::Capability;
     use std::fs;
     use tempfile::TempDir;
 
@@ -1442,5 +1443,60 @@ version = "1.0.0""#,
         // Second install of same plugin fails
         let result = installer.install(&PluginSource::Local { path: source_dir });
         assert!(matches!(result, Err(InstallError::AlreadyInstalled(_))));
+    }
+
+    // ============================================================================
+    // Example Plugin Tests (Phase 2.7)
+    // ============================================================================
+
+    /// Test that the template plugin manifest exists and is valid.
+    #[test]
+    fn test_template_plugin_manifest_valid() {
+        let manifest_path = Path::new("plugins/template/rct-plugin.toml");
+        let manifest = Manifest::from_file(manifest_path).expect("template plugin manifest should be valid");
+        assert_eq!(manifest.name, "template-plugin");
+        assert!(!manifest.has_capability(Capability::Commands));
+        assert!(!manifest.has_capability(Capability::Skills));
+        assert!(!manifest.has_capability(Capability::Tools));
+        assert!(!manifest.has_capability(Capability::Hooks));
+        assert!(!manifest.has_capability(Capability::Mcp));
+    }
+
+    /// Test that the echo plugin manifest exists and is valid.
+    #[test]
+    fn test_echo_plugin_manifest_valid() {
+        let manifest_path = Path::new("plugins/echo/rct-plugin.toml");
+        let manifest = Manifest::from_file(manifest_path).expect("echo plugin manifest should be valid");
+        assert_eq!(manifest.name, "echo-plugin");
+        assert!(manifest.has_capability(Capability::Tools));
+    }
+
+    /// Test that the file-stats plugin manifest exists and is valid.
+    #[test]
+    fn test_file_stats_plugin_manifest_valid() {
+        let manifest_path = Path::new("plugins/file-stats/rct-plugin.toml");
+        let manifest = Manifest::from_file(manifest_path).expect("file-stats plugin manifest should be valid");
+        assert_eq!(manifest.name, "file-stats");
+        assert!(manifest.has_capability(Capability::Tools));
+    }
+
+    /// Test that all example plugins can be discovered from the plugins directory.
+    #[test]
+    fn test_example_plugins_discoverable() {
+        let plugins_dir = Path::new("plugins");
+        let discovered = discover_plugins(plugins_dir).expect("should discover example plugins");
+
+        // Should find at least the 3 example plugins
+        assert!(
+            discovered.len() >= 3,
+            "Expected at least 3 plugins, found {}",
+            discovered.len()
+        );
+
+        // Verify each example plugin is present
+        let names: Vec<&str> = discovered.iter().map(|m| m.name.as_str()).collect();
+        assert!(names.contains(&"template-plugin"), "template-plugin not found");
+        assert!(names.contains(&"echo-plugin"), "echo-plugin not found");
+        assert!(names.contains(&"file-stats"), "file-stats not found");
     }
 }
