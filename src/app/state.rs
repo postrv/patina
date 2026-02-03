@@ -4,6 +4,7 @@ use crate::agents::SubagentSpawner;
 use crate::api::tools::default_tools;
 use crate::api::{AnthropicClient, StreamEvent, TokenBudget, ToolChoice};
 use crate::app::tool_loop::{ContinuationData, ToolLoop, ToolLoopState};
+use crate::app::STREAMING_CHANNEL_BUFFER;
 use crate::hooks::HookManager;
 use crate::narsil::context::ContextSuggestion;
 use crate::permissions::{PermissionManager, PermissionRequest, PermissionResponse};
@@ -86,6 +87,18 @@ fn compact_json(value: &Value) -> &str {
         Value::String(s) => s.as_str(),
         _ => "...",
     }
+}
+
+/// Events received from background tasks (API streaming or tool execution).
+///
+/// Used by `recv_background_event()` to return events from multiple channels
+/// without borrow checker conflicts.
+#[derive(Debug)]
+pub enum BackgroundEvent {
+    /// An API streaming chunk was received.
+    ApiChunk(StreamEvent),
+    /// A tool execution completed with its result.
+    ToolResult(String, crate::types::ToolResultBlock),
 }
 
 pub struct AppState {
@@ -914,7 +927,7 @@ impl AppState {
             self.tool_loop.start_streaming().ok();
         }
 
-        let (tx, rx) = mpsc::channel(100);
+        let (tx, rx) = mpsc::channel(STREAMING_CHANNEL_BUFFER);
         self.streaming_rx = Some(rx);
 
         // Use truncated api_messages for the API call to control costs
@@ -951,11 +964,79 @@ impl AppState {
         Ok(())
     }
 
+    /// Receives the next API streaming chunk, if available.
+    ///
+    /// Returns `None` immediately when no streaming is active. This is critical
+    /// for event loop responsiveness - returning `pending()` would cause the
+    /// `tokio::select!` to wait indefinitely, blocking keyboard input processing.
+    ///
+    /// # Returns
+    ///
+    /// - `Some(chunk)` - Next streaming event from the API
+    /// - `None` - Channel closed or no active streaming
     pub async fn recv_api_chunk(&mut self) -> Option<StreamEvent> {
-        if let Some(rx) = &mut self.streaming_rx {
-            rx.recv().await
-        } else {
-            std::future::pending::<Option<StreamEvent>>().await
+        match &mut self.streaming_rx {
+            Some(rx) => rx.recv().await,
+            None => None, // Return immediately - don't block with pending()
+        }
+    }
+
+    /// Returns true if there is an active streaming receiver.
+    ///
+    /// Used for guard conditions in the event loop to skip polling
+    /// when no streaming is active.
+    #[must_use]
+    pub fn has_streaming(&self) -> bool {
+        self.streaming_rx.is_some()
+    }
+
+    /// Returns true if there are any active background channels (API streaming or tool results).
+    ///
+    /// Used for guard conditions in the event loop.
+    #[must_use]
+    pub fn has_background_work(&self) -> bool {
+        self.streaming_rx.is_some() || self.tool_result_rx.is_some()
+    }
+
+    /// Receives the next background event from either API streaming or tool execution.
+    ///
+    /// This combines both channels into a single async receive to avoid borrow checker
+    /// issues in the event loop's `tokio::select!`. Returns immediately if both
+    /// channels are `None`.
+    ///
+    /// # Returns
+    ///
+    /// - `Some(BackgroundEvent::ApiChunk(chunk))` - API streaming event
+    /// - `Some(BackgroundEvent::ToolResult(id, result))` - Tool execution completed
+    /// - `None` - Both channels closed or not set
+    pub async fn recv_background_event(&mut self) -> Option<BackgroundEvent> {
+        // Use tokio::select! to receive from whichever channel is ready first
+        // Since this is a single method, there's no borrow conflict
+        tokio::select! {
+            biased;
+
+            // Prioritize tool results to update UI quickly
+            result = async {
+                match &mut self.tool_result_rx {
+                    Some(rx) => rx.recv().await,
+                    None => std::future::pending().await,
+                }
+            }, if self.tool_result_rx.is_some() => {
+                result.map(|(id, r)| BackgroundEvent::ToolResult(id, r))
+            }
+
+            // Then API streaming chunks
+            chunk = async {
+                match &mut self.streaming_rx {
+                    Some(rx) => rx.recv().await,
+                    None => std::future::pending().await,
+                }
+            }, if self.streaming_rx.is_some() => {
+                chunk.map(BackgroundEvent::ApiChunk)
+            }
+
+            // If neither channel is active, return None immediately
+            else => None
         }
     }
 
@@ -1692,6 +1773,29 @@ impl AppState {
         } else {
             None
         }
+    }
+
+    /// Receives a tool result asynchronously.
+    ///
+    /// Returns `None` immediately if no channel is set, otherwise waits for
+    /// the next result. This is designed for use in `tokio::select!`.
+    ///
+    /// # Returns
+    ///
+    /// - `Some((tool_id, result))` - A tool completed execution
+    /// - `None` - Channel closed or no channel set
+    pub async fn recv_tool_result(&mut self) -> Option<(String, crate::types::ToolResultBlock)> {
+        match &mut self.tool_result_rx {
+            Some(rx) => rx.recv().await,
+            None => None, // Return immediately - don't block with pending()
+        }
+    }
+
+    /// Clears the tool result channel.
+    ///
+    /// Called after all tools have completed and results have been processed.
+    pub fn clear_tool_result_rx(&mut self) {
+        self.tool_result_rx = None;
     }
 
     /// Adds a pending tool to the tool loop.
@@ -2793,5 +2897,264 @@ mod tests {
 
         state.clear_pending_context();
         assert!(!state.has_pending_context());
+    }
+
+    // ========================================================================
+    // Event Loop Responsiveness Tests
+    //
+    // These tests ensure the event loop remains responsive during streaming
+    // and tool execution. Key behaviors:
+    // 1. recv_api_chunk() returns None immediately when no streaming
+    // 2. recv_tool_result() returns None immediately when no channel
+    // 3. recv_background_event() returns None when both channels are None
+    // 4. has_* methods accurately reflect channel state
+    // ========================================================================
+
+    #[tokio::test]
+    async fn test_recv_api_chunk_returns_none_when_no_streaming() {
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+
+        // Initially streaming_rx is None
+        assert!(!state.has_streaming());
+
+        // recv_api_chunk should return None immediately, not block
+        let result = state.recv_api_chunk().await;
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_recv_api_chunk_receives_chunks_when_streaming() {
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+
+        // Set up a streaming channel
+        let (tx, rx) = mpsc::channel(100);
+        state.set_streaming_rx(rx);
+        assert!(state.has_streaming());
+
+        // Send a chunk
+        tx.send(StreamEvent::ContentDelta("Hello".to_string()))
+            .await
+            .unwrap();
+
+        // Should receive the chunk
+        let result = state.recv_api_chunk().await;
+        assert!(matches!(result, Some(StreamEvent::ContentDelta(s)) if s == "Hello"));
+    }
+
+    #[tokio::test]
+    async fn test_recv_tool_result_returns_none_when_no_channel() {
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+
+        // Initially tool_result_rx is None
+        assert!(!state.has_tool_result_rx());
+
+        // recv_tool_result should return None immediately, not block
+        let result = state.recv_tool_result().await;
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_recv_tool_result_receives_results_when_channel_set() {
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+
+        // Set up a tool result channel
+        let (tx, rx) = mpsc::unbounded_channel();
+        state.set_tool_result_rx(rx);
+        assert!(state.has_tool_result_rx());
+
+        // Send a result
+        let result_block = crate::types::ToolResultBlock {
+            tool_use_id: "toolu_123".to_string(),
+            content: "Success".to_string(),
+            is_error: false,
+        };
+        tx.send(("toolu_123".to_string(), result_block)).unwrap();
+
+        // Should receive the result
+        let result = state.recv_tool_result().await;
+        assert!(result.is_some());
+        let (id, block) = result.unwrap();
+        assert_eq!(id, "toolu_123");
+        assert_eq!(block.content, "Success");
+        assert!(!block.is_error);
+    }
+
+    #[tokio::test]
+    async fn test_recv_background_event_returns_none_when_no_channels() {
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+
+        // Initially both channels are None
+        assert!(!state.has_streaming());
+        assert!(!state.has_tool_result_rx());
+        assert!(!state.has_background_work());
+
+        // recv_background_event should return None immediately, not block
+        let result = state.recv_background_event().await;
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_recv_background_event_prioritizes_tool_results() {
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+
+        // Set up both channels
+        let (api_tx, api_rx) = mpsc::channel(100);
+        let (tool_tx, tool_rx) = mpsc::unbounded_channel();
+        state.set_streaming_rx(api_rx);
+        state.set_tool_result_rx(tool_rx);
+
+        // Send to both channels
+        api_tx
+            .send(StreamEvent::ContentDelta("API chunk".to_string()))
+            .await
+            .unwrap();
+        let result_block = crate::types::ToolResultBlock {
+            tool_use_id: "toolu_456".to_string(),
+            content: "Tool result".to_string(),
+            is_error: false,
+        };
+        tool_tx
+            .send(("toolu_456".to_string(), result_block))
+            .unwrap();
+
+        // Tool results are prioritized (biased select)
+        let result = state.recv_background_event().await;
+        assert!(matches!(result, Some(BackgroundEvent::ToolResult(id, _)) if id == "toolu_456"));
+    }
+
+    #[tokio::test]
+    async fn test_recv_background_event_receives_api_chunks() {
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+
+        // Set up only API channel (no tool channel)
+        let (api_tx, api_rx) = mpsc::channel(100);
+        state.set_streaming_rx(api_rx);
+
+        // Send an API chunk
+        api_tx
+            .send(StreamEvent::ContentDelta("API data".to_string()))
+            .await
+            .unwrap();
+
+        // Should receive the API chunk
+        let result = state.recv_background_event().await;
+        assert!(
+            matches!(result, Some(BackgroundEvent::ApiChunk(StreamEvent::ContentDelta(s))) if s == "API data")
+        );
+    }
+
+    #[test]
+    fn test_has_background_work() {
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+
+        // Initially no background work
+        assert!(!state.has_background_work());
+
+        // Set up streaming channel
+        let (_tx, rx) = mpsc::channel::<StreamEvent>(100);
+        state.set_streaming_rx(rx);
+        assert!(state.has_background_work());
+
+        // Clear streaming, set tool channel
+        state.streaming_rx = None;
+        let (_tx, rx) = mpsc::unbounded_channel();
+        state.set_tool_result_rx(rx);
+        assert!(state.has_background_work());
+
+        // Clear tool channel
+        state.clear_tool_result_rx();
+        assert!(!state.has_background_work());
+    }
+
+    #[test]
+    fn test_clear_tool_result_rx() {
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+
+        // Set up channel
+        let (_tx, rx) = mpsc::unbounded_channel();
+        state.set_tool_result_rx(rx);
+        assert!(state.has_tool_result_rx());
+
+        // Clear it
+        state.clear_tool_result_rx();
+        assert!(!state.has_tool_result_rx());
+    }
+
+    #[test]
+    fn test_background_event_enum() {
+        // Test ApiChunk variant
+        let chunk = BackgroundEvent::ApiChunk(StreamEvent::ContentDelta("test".to_string()));
+        assert!(matches!(chunk, BackgroundEvent::ApiChunk(_)));
+
+        // Test ToolResult variant
+        let result = crate::types::ToolResultBlock {
+            tool_use_id: "id".to_string(),
+            content: "result".to_string(),
+            is_error: false,
+        };
+        let event = BackgroundEvent::ToolResult("id".to_string(), result);
+        assert!(matches!(event, BackgroundEvent::ToolResult(_, _)));
+    }
+
+    #[tokio::test]
+    async fn test_spawn_tool_execution_sets_channel() {
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+
+        // No channel initially
+        assert!(!state.has_tool_result_rx());
+
+        // Set up tool use and spawn
+        state.tool_loop_mut().start_streaming().unwrap();
+        state.handle_tool_use_start("toolu_789".to_string(), "bash".to_string(), 0);
+        state.handle_tool_use_input_delta(0, r#"{"command":"echo hi"}"#);
+        state.handle_tool_use_complete(0).unwrap();
+        state.handle_message_complete(StopReason::ToolUse).unwrap();
+        state.approve_all_tools().unwrap();
+
+        // Spawn should set up channel (requires tokio runtime)
+        let _handle = state.spawn_tool_execution();
+        assert!(state.has_tool_result_rx());
+        assert!(state.has_executing_tools());
+    }
+
+    #[test]
+    fn test_record_tool_result_updates_state() {
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+
+        // Mark a tool as executing
+        state.mark_tool_executing("toolu_abc");
+        assert!(state.has_executing_tools());
+
+        // Record result
+        let result = crate::types::ToolResultBlock {
+            tool_use_id: "toolu_abc".to_string(),
+            content: "Done".to_string(),
+            is_error: false,
+        };
+        state.record_tool_result("toolu_abc", result);
+
+        // Should no longer have executing tools
+        assert!(!state.has_executing_tools());
+    }
+
+    #[test]
+    fn test_all_tools_complete() {
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+
+        // No executing tools initially
+        assert!(state.all_tools_complete());
+
+        // Mark a tool as executing
+        state.mark_tool_executing("toolu_xyz");
+        assert!(!state.all_tools_complete());
+
+        // Record result
+        let result = crate::types::ToolResultBlock {
+            tool_use_id: "toolu_xyz".to_string(),
+            content: "Complete".to_string(),
+            is_error: false,
+        };
+        state.record_tool_result("toolu_xyz", result);
+        assert!(state.all_tools_complete());
     }
 }
