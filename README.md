@@ -14,7 +14,7 @@ A high-performance terminal client for the Claude API, written in Rust. Designed
 
 - **Sub-millisecond rendering** - Full 100-message redraw in <1ms
 - **Parallel tool execution** - 5x+ speedup on multi-file operations
-- **1,908 tests** with 85%+ code coverage
+- **1,100+ tests** with 85%+ code coverage
 - **Zero unsafe code** - Pure safe Rust (~39,000 LOC)
 - **Cross-platform** - Linux, macOS, Windows
 - **Security-first** - Defense-in-depth with command filtering, path validation, and session integrity
@@ -202,17 +202,45 @@ Place a `CLAUDE.md` file in your project root to provide project-specific instru
 
 ### Plugins
 
+Plugins extend Patina with custom tools, commands, skills, and hooks.
+
+**Plugin Management CLI:**
+
+```bash
+# Install from local directory
+patina plugin install ./my-plugin
+
+# Install from GitHub (coming soon)
+patina plugin install gh:user/repo
+
+# List installed plugins
+patina plugin list
+
+# Update all plugins
+patina plugin update
+
+# Remove a plugin
+patina plugin remove my-plugin
+```
+
+**Example Plugin Manifest:**
+
 ```toml
-# ~/.config/patina/plugins/my-plugin/rct-plugin.toml
-[plugin]
+# rct-plugin.toml
 name = "my-plugin"
 version = "1.0.0"
 description = "My custom plugin"
+author = "Your Name"
 
 [capabilities]
-commands = true
-skills = true
+commands = true   # Provides slash commands
+skills = true     # Provides skills
+tools = true      # Provides tools for the agent
+hooks = false     # No lifecycle hooks
+mcp = false       # No MCP server
 ```
+
+See `plugins/template/` for a minimal plugin template to get started.
 
 ## MCP Support
 
@@ -296,10 +324,10 @@ cargo tarpaulin --out Html
 
 | Metric | Value |
 |--------|-------|
-| Version | 0.5.5 |
+| Version | 0.6.0 |
 | MSRV | Rust 1.75 |
 | Edition | 2021 |
-| Tests | 1,908 |
+| Tests | 1,100+ |
 | Coverage | 85%+ |
 | Unsafe | 0 blocks |
 | LOC | ~39,000 |
