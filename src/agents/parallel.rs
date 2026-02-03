@@ -16,6 +16,7 @@
 
 use std::fmt;
 use std::path::PathBuf;
+use uuid::Uuid;
 
 /// Strategy for dividing work among parallel agents.
 ///
@@ -153,6 +154,60 @@ impl fmt::Display for DivisionStrategy {
     }
 }
 
+// NOTE: Task 2.5.3 (RED) - Stub types for tests
+// Task 2.5.4 (GREEN) will complete the implementation
+
+/// Strategy for merging results from parallel agents.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MergeStrategy {
+    /// Use the first agent that completes successfully.
+    FirstSuccess,
+    /// Compare results and choose the best one.
+    BestResult,
+    /// Combine all results (for non-conflicting changes).
+    CombineAll,
+    /// Require manual review and selection.
+    Manual,
+}
+
+/// Status of the parallel orchestrator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OrchestratorStatus {
+    /// No tasks are running.
+    Idle,
+    /// Tasks are being executed in parallel.
+    Running,
+    /// All tasks completed, results available.
+    Completed,
+    /// One or more tasks failed.
+    Failed,
+}
+
+/// Result from a parallel agent execution.
+#[derive(Debug, Clone)]
+pub struct ParallelTaskResult {
+    /// Unique task ID.
+    pub task_id: Uuid,
+    /// The worktree path where changes were made.
+    pub worktree_path: PathBuf,
+    /// Whether the task succeeded.
+    pub success: bool,
+    /// Output from the task.
+    pub output: String,
+}
+
+/// Orchestrator for managing parallel agent execution in git worktrees.
+///
+/// Spawns multiple agents working on different aspects of a task,
+/// each in its own isolated worktree.
+pub struct ParallelAgentOrchestrator {
+    strategy: Option<DivisionStrategy>,
+    merge_strategy: MergeStrategy,
+    tasks: Vec<Uuid>,
+    results: Vec<ParallelTaskResult>,
+    status: OrchestratorStatus,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -264,5 +319,98 @@ mod tests {
     fn test_division_strategy_empty_partitions() {
         let strategy = DivisionStrategy::ByModule { modules: vec![] };
         assert_eq!(strategy.partition_count(), 0);
+    }
+
+    // =============================================================================
+    // MergeStrategy enum tests (Task 2.5.3)
+    // =============================================================================
+
+    #[test]
+    fn test_merge_strategy_variants() {
+        let strategies = [
+            MergeStrategy::FirstSuccess,
+            MergeStrategy::BestResult,
+            MergeStrategy::CombineAll,
+            MergeStrategy::Manual,
+        ];
+
+        for strategy in strategies {
+            match strategy {
+                MergeStrategy::FirstSuccess => assert_eq!(strategy.name(), "first_success"),
+                MergeStrategy::BestResult => assert_eq!(strategy.name(), "best_result"),
+                MergeStrategy::CombineAll => assert_eq!(strategy.name(), "combine_all"),
+                MergeStrategy::Manual => assert_eq!(strategy.name(), "manual"),
+            }
+        }
+    }
+
+    #[test]
+    fn test_merge_strategy_display() {
+        assert!(format!("{}", MergeStrategy::FirstSuccess).contains("First Success"));
+        assert!(format!("{}", MergeStrategy::BestResult).contains("Best Result"));
+    }
+
+    // =============================================================================
+    // ParallelAgentOrchestrator tests (Task 2.5.3)
+    // =============================================================================
+
+    #[test]
+    fn test_orchestrator_new() {
+        let orchestrator = ParallelAgentOrchestrator::new();
+        assert_eq!(orchestrator.active_count(), 0);
+        assert!(orchestrator.results().is_empty());
+    }
+
+    #[test]
+    fn test_orchestrator_with_strategy() {
+        let strategy = DivisionStrategy::ByModule {
+            modules: vec![PathBuf::from("src/api")],
+        };
+        let orchestrator = ParallelAgentOrchestrator::new().with_strategy(strategy.clone());
+        assert_eq!(orchestrator.strategy(), Some(&strategy));
+    }
+
+    #[test]
+    fn test_orchestrator_with_merge_strategy() {
+        let orchestrator =
+            ParallelAgentOrchestrator::new().with_merge_strategy(MergeStrategy::BestResult);
+        assert_eq!(orchestrator.merge_strategy(), MergeStrategy::BestResult);
+    }
+
+    #[test]
+    fn test_orchestrator_spawn_parallel() {
+        let strategy = DivisionStrategy::AlternativeApproaches {
+            count: 3,
+            problem: "test".to_string(),
+        };
+        let mut orchestrator = ParallelAgentOrchestrator::new().with_strategy(strategy);
+
+        // spawn_parallel should create worktree-based tasks
+        let task_ids = orchestrator.spawn_parallel();
+        assert_eq!(task_ids.len(), 3);
+        assert_eq!(orchestrator.active_count(), 3);
+    }
+
+    #[test]
+    fn test_orchestrator_collect_results() {
+        let strategy = DivisionStrategy::ByModule {
+            modules: vec![PathBuf::from("src")],
+        };
+        let mut orchestrator = ParallelAgentOrchestrator::new()
+            .with_strategy(strategy)
+            .with_merge_strategy(MergeStrategy::FirstSuccess);
+
+        // After spawning and completing, results can be collected
+        let _task_ids = orchestrator.spawn_parallel();
+
+        // Simulate completion (in real use, this would be async)
+        let results = orchestrator.collect_results();
+        assert!(!results.is_empty());
+    }
+
+    #[test]
+    fn test_orchestrator_status() {
+        let orchestrator = ParallelAgentOrchestrator::new();
+        assert_eq!(orchestrator.status(), OrchestratorStatus::Idle);
     }
 }
