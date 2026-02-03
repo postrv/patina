@@ -9,7 +9,7 @@ description = "Code intelligence, static analysis, and security scanning via nar
 author = "Patina Authors"
 license = "MIT"
 repository = "https://github.com/postrv/patina"
-min_patina_version = "0.3.0"
+min_patina_version = "0.6.0"
 
 [capabilities]
 mcp = true
