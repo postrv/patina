@@ -377,6 +377,16 @@ impl NarsilIntegration {
     /// - For function references: returns callers of the function
     /// - For file references: returns imports/dependencies of the file
     ///
+    /// # Library-Only
+    ///
+    /// This function is exposed for programmatic context building in custom tools.
+    /// It is not called automatically by Patina to avoid adding narsil-mcp as a
+    /// required dependency in performance-critical paths.
+    ///
+    /// Use cases:
+    /// - Building IDE integrations that want proactive context suggestions
+    /// - Creating automation tools that need code-aware context
+    ///
     /// # Arguments
     ///
     /// * `client` - An active MCP client connected to narsil-mcp

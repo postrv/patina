@@ -4,6 +4,17 @@
 //! Experiments create dedicated worktrees where changes can be safely made,
 //! then either merged back (accepted) or discarded (rejected).
 //!
+//! # Library-Only
+//!
+//! This module provides programmatic API for experiment-based development workflows.
+//! It is tested and stable but not yet exposed through the CLI. Planned for CLI
+//! integration in a future phase.
+//!
+//! Use cases:
+//! - Automated code exploration (try changes, evaluate, accept or reject)
+//! - Safe refactoring workflows with built-in rollback
+//! - Parallel AI development with isolated workspaces
+//!
 //! # Example
 //!
 //! ```no_run

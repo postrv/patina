@@ -15,7 +15,7 @@
 | Test Files | 33 | `find tests -name '*.rs' \| wc -l` |
 | Clippy Warnings | 0 | `cargo clippy --all-targets -- -D warnings` |
 | Source Files | 28 | `find src -name '*.rs' \| wc -l` |
-| LOC | ~6600 | `tokei src` |
+| LOC | ~6600 | `find src -name '*.rs' -exec cat {} + \| wc -l` |
 | Coverage | 84.38% | `cargo tarpaulin --out Stdout` |
 
 **Baseline Rule:** Test count must never decrease. Clippy warnings must reach 0.

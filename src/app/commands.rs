@@ -23,7 +23,7 @@
 //! ```
 
 use crate::commands::worktree::{parse_worktree_command, WorktreeCommand};
-use crate::worktree::WorktreeManager;
+use crate::worktree::{WorktreeInfo, WorktreeManager};
 use std::path::PathBuf;
 
 /// Information about a loaded plugin for display purposes.
@@ -124,6 +124,7 @@ impl SlashCommandHandler {
             "worktree" => self.handle_worktree(&args),
             "help" => self.handle_help(if args.is_empty() { None } else { Some(&args) }),
             "plugins" => self.handle_plugins(),
+            "terminal-setup" => self.handle_terminal_setup(),
             _ => CommandResult::UnknownCommand(command_name.to_string()),
         }
     }
@@ -165,6 +166,31 @@ impl SlashCommandHandler {
         CommandResult::Executed(output)
     }
 
+    /// Formats a worktree entry for display.
+    fn format_worktree(wt: &WorktreeInfo) -> String {
+        let branch = if wt.branch.is_empty() {
+            "detached"
+        } else {
+            &wt.branch
+        };
+        format!("  {} ({}) - {}", wt.name, branch, wt.path.display())
+    }
+
+    /// Formats a worktree entry with full status details.
+    fn format_worktree_status(wt: &WorktreeInfo) -> String {
+        let branch = if wt.branch.is_empty() {
+            "detached"
+        } else {
+            &wt.branch
+        };
+        format!(
+            "  {} ({})\n    Path: {}",
+            wt.name,
+            branch,
+            wt.path.display()
+        )
+    }
+
     /// Handles the `/worktree` command.
     fn handle_worktree(&self, args: &str) -> CommandResult {
         let worktree_cmd = match parse_worktree_command(args) {
@@ -194,24 +220,16 @@ impl SlashCommandHandler {
             },
 
             WorktreeCommand::List => match manager.list() {
+                Ok(worktrees) if worktrees.is_empty() => {
+                    CommandResult::Executed("No worktrees found.".to_string())
+                }
                 Ok(worktrees) => {
-                    if worktrees.is_empty() {
-                        CommandResult::Executed("No worktrees found.".to_string())
-                    } else {
-                        let output = worktrees
-                            .iter()
-                            .map(|wt| {
-                                let branch = if wt.branch.is_empty() {
-                                    "detached"
-                                } else {
-                                    &wt.branch
-                                };
-                                format!("  {} ({}) - {}", wt.name, branch, wt.path.display())
-                            })
-                            .collect::<Vec<_>>()
-                            .join("\n");
-                        CommandResult::Executed(format!("Worktrees:\n{}", output))
-                    }
+                    let output = worktrees
+                        .iter()
+                        .map(Self::format_worktree)
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    CommandResult::Executed(format!("Worktrees:\n{}", output))
                 }
                 Err(e) => CommandResult::Error(format!("Failed to list worktrees: {}", e)),
             },
@@ -251,36 +269,20 @@ impl SlashCommandHandler {
                 }
             }
 
-            WorktreeCommand::Status => {
-                // Status showing all worktrees with their git status
-                match manager.list() {
-                    Ok(worktrees) => {
-                        if worktrees.is_empty() {
-                            CommandResult::Executed("No worktrees found.".to_string())
-                        } else {
-                            let output = worktrees
-                                .iter()
-                                .map(|wt| {
-                                    let branch = if wt.branch.is_empty() {
-                                        "detached"
-                                    } else {
-                                        &wt.branch
-                                    };
-                                    format!(
-                                        "  {} ({})\n    Path: {}",
-                                        wt.name,
-                                        branch,
-                                        wt.path.display()
-                                    )
-                                })
-                                .collect::<Vec<_>>()
-                                .join("\n\n");
-                            CommandResult::Executed(format!("Worktree Status:\n{}", output))
-                        }
-                    }
-                    Err(e) => CommandResult::Error(format!("Failed to get worktree status: {}", e)),
+            WorktreeCommand::Status => match manager.list() {
+                Ok(worktrees) if worktrees.is_empty() => {
+                    CommandResult::Executed("No worktrees found.".to_string())
                 }
-            }
+                Ok(worktrees) => {
+                    let output = worktrees
+                        .iter()
+                        .map(Self::format_worktree_status)
+                        .collect::<Vec<_>>()
+                        .join("\n\n");
+                    CommandResult::Executed(format!("Worktree Status:\n{}", output))
+                }
+                Err(e) => CommandResult::Error(format!("Failed to get worktree status: {}", e)),
+            },
         }
     }
 
@@ -295,6 +297,8 @@ impl SlashCommandHandler {
     Subcommands: new, list, switch, remove, clean, status
 
   /plugins                - List loaded plugins
+
+  /terminal-setup         - Configure terminal keyboard shortcuts
 
   /help [command]         - Show help for a command
 
@@ -350,14 +354,125 @@ Use --no-plugins flag to disable plugin loading."#;
                 CommandResult::Executed(help_text.to_string())
             }
 
+            Some("terminal-setup") => {
+                let help_text = r#"/terminal-setup - Configure terminal for optimal keyboard shortcuts
+
+Usage:
+  /terminal-setup    Auto-detect terminal and show configuration instructions
+
+This command helps configure your terminal for Cmd+A/C/V (macOS) or
+equivalent shortcuts. Configuration depends on your terminal:
+
+iTerm2:
+  Automatically configured on first run. Restart iTerm2 if prompted.
+
+JetBrains (RustRover, IntelliJ, etc.):
+  Requires manual configuration:
+  1. Open Settings → Tools → Terminal
+  2. Enable "Use Option as Meta key"
+  3. Use Option+A/C/V for select all, copy, paste
+
+Kitty, WezTerm, Ghostty:
+  Cmd+A/C/V works natively (Kitty keyboard protocol).
+
+Other terminals:
+  Use Ctrl+A (select all), Ctrl+Y (copy), Ctrl+Shift+V (paste)."#;
+                CommandResult::Executed(help_text.to_string())
+            }
+
             Some(cmd) => CommandResult::UnknownCommand(cmd.to_string()),
         }
+    }
+
+    /// Handles the `/terminal-setup` command.
+    ///
+    /// Detects the current terminal and provides configuration instructions
+    /// for enabling Cmd+A/C/V (macOS) or equivalent shortcuts.
+    fn handle_terminal_setup(&self) -> CommandResult {
+        use crate::terminal::{
+            configure_iterm2_keybindings, is_iterm2, is_jetbrains_terminal, is_kitty_terminal,
+            is_macos,
+        };
+
+        let mut output = String::from("🔧 Terminal Keyboard Configuration\n\n");
+
+        if is_iterm2() {
+            output.push_str("Terminal: iTerm2\n\n");
+            match configure_iterm2_keybindings() {
+                Ok(true) => {
+                    output.push_str("✅ Configured iTerm2 key bindings!\n\n");
+                    output.push_str("Please restart iTerm2 for changes to take effect.\n\n");
+                    output.push_str("After restart, you can use:\n");
+                    output.push_str("  • Cmd+A - Select all\n");
+                    output.push_str("  • Cmd+C - Copy selection\n");
+                    output.push_str("  • Cmd+V - Paste\n");
+                }
+                Ok(false) => {
+                    output.push_str("✅ iTerm2 is already configured!\n\n");
+                    output.push_str("You can use:\n");
+                    output.push_str("  • Cmd+A - Select all\n");
+                    output.push_str("  • Cmd+C - Copy selection\n");
+                    output.push_str("  • Cmd+V - Paste\n");
+                }
+                Err(e) => {
+                    output.push_str(&format!("⚠️  Failed to configure: {}\n\n", e));
+                    output.push_str("Manual setup:\n");
+                    output.push_str("  1. Open iTerm2 → Settings → Profiles → Keys\n");
+                    output
+                        .push_str("  2. Add key mappings for Cmd+A/C/V to send escape sequences\n");
+                }
+            }
+        } else if is_jetbrains_terminal() {
+            output.push_str("Terminal: JetBrains IDE (RustRover, IntelliJ, etc.)\n\n");
+            output.push_str("⚠️  JetBrains terminals don't support Cmd+key passthrough.\n");
+            output.push_str("The IDE intercepts Cmd+keys for its own shortcuts.\n\n");
+            output.push_str("📋 To enable Option+A/C/V shortcuts:\n\n");
+            output.push_str("  1. Open IDE Settings (Cmd+,)\n");
+            output.push_str("  2. Navigate to: Tools → Terminal\n");
+            output.push_str("  3. Enable: \"Use Option as Meta key\" ✓\n");
+            output.push_str("  4. Click Apply, then OK\n\n");
+            output.push_str("After configuration, you can use:\n");
+            output.push_str("  • Option+A - Select all\n");
+            output.push_str("  • Option+C - Copy selection\n");
+            output.push_str("  • Option+V - Paste\n\n");
+            output.push_str("Alternative shortcuts (always work):\n");
+            output.push_str("  • Ctrl+A    - Select all\n");
+            output.push_str("  • Ctrl+Y    - Copy selection (yank)\n");
+            output.push_str("  • Ctrl+Shift+V - Paste\n");
+        } else if is_kitty_terminal() {
+            output.push_str("Terminal: Kitty\n\n");
+            output.push_str("✅ Kitty supports the Kitty keyboard protocol natively!\n\n");
+            output.push_str("You can use:\n");
+            output.push_str("  • Cmd+A - Select all\n");
+            output.push_str("  • Cmd+C - Copy selection\n");
+            output.push_str("  • Cmd+V - Paste\n");
+        } else if is_macos() {
+            output.push_str("Terminal: macOS (unknown terminal)\n\n");
+            output.push_str("Your terminal may not support Cmd+key detection.\n\n");
+            output.push_str("Recommended terminals with Cmd+key support:\n");
+            output.push_str("  • iTerm2 (configure with /terminal-setup)\n");
+            output.push_str("  • Kitty (native support)\n");
+            output.push_str("  • WezTerm (native support)\n");
+            output.push_str("  • Ghostty (native support)\n\n");
+            output.push_str("Universal shortcuts (always work):\n");
+            output.push_str("  • Ctrl+A    - Select all\n");
+            output.push_str("  • Ctrl+Y    - Copy selection (yank)\n");
+            output.push_str("  • Ctrl+Shift+V - Paste\n");
+        } else {
+            output.push_str("Terminal: Linux/Windows\n\n");
+            output.push_str("Standard keyboard shortcuts:\n");
+            output.push_str("  • Ctrl+A       - Select all\n");
+            output.push_str("  • Ctrl+Y       - Copy selection (yank)\n");
+            output.push_str("  • Ctrl+Shift+V - Paste\n");
+        }
+
+        CommandResult::Executed(output)
     }
 
     /// Returns available command names for tab completion.
     #[must_use]
     pub fn available_commands(&self) -> Vec<&'static str> {
-        vec!["worktree", "help", "plugins"]
+        vec!["worktree", "help", "plugins", "terminal-setup"]
     }
 
     /// Creates plugin info from a plugin registry.
@@ -798,6 +913,87 @@ mod tests {
         assert!(
             commands.contains(&"plugins"),
             "Available commands should include 'plugins'"
+        );
+    }
+
+    // =========================================================================
+    // Terminal setup command tests
+    // =========================================================================
+
+    #[test]
+    fn test_handle_terminal_setup_command() {
+        let (handler, _temp) = create_handler_in_temp();
+
+        let result = handler.handle("/terminal-setup");
+
+        match result {
+            CommandResult::Executed(output) => {
+                // Should contain terminal configuration info
+                assert!(
+                    output.contains("Terminal") || output.contains("terminal"),
+                    "Should mention terminal: {}",
+                    output
+                );
+                // Should contain keyboard shortcut info
+                assert!(
+                    output.contains("Ctrl") || output.contains("Cmd") || output.contains("Option"),
+                    "Should mention keyboard shortcuts: {}",
+                    output
+                );
+            }
+            other => panic!("Expected executed result: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_help_includes_terminal_setup() {
+        let (handler, _temp) = create_handler_in_temp();
+
+        let result = handler.handle("/help");
+
+        match result {
+            CommandResult::Executed(output) => {
+                assert!(
+                    output.contains("terminal-setup"),
+                    "Help should mention terminal-setup command: {}",
+                    output
+                );
+            }
+            other => panic!("Expected help output: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_help_terminal_setup_shows_detailed_help() {
+        let (handler, _temp) = create_handler_in_temp();
+
+        let result = handler.handle("/help terminal-setup");
+
+        match result {
+            CommandResult::Executed(output) => {
+                assert!(
+                    output.contains("/terminal-setup"),
+                    "Should describe terminal-setup command"
+                );
+                assert!(
+                    output.contains("JetBrains") || output.contains("iTerm"),
+                    "Should mention supported terminals: {}",
+                    output
+                );
+            }
+            other => panic!("Expected terminal-setup help: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_available_commands_includes_terminal_setup() {
+        let (handler, _temp) = create_handler_in_temp();
+
+        let commands = handler.available_commands();
+
+        assert!(
+            commands.contains(&"terminal-setup"),
+            "Available commands should include 'terminal-setup'"
         );
     }
 }
