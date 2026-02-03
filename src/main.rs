@@ -1,14 +1,16 @@
 //! Patina - High-performance terminal client for Claude API
 
 use anyhow::Result;
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 // Use the library crate
 use patina::app;
 use patina::auth::{flow::OAuthFlow, storage as auth_storage};
+use patina::plugins::registry::{PluginInstaller, PluginSource};
 use patina::session::{default_sessions_dir, format_session_list, SessionManager};
 use patina::types::config::{NarsilMode, ParallelMode, ResumeMode};
+use patina::util::get_cache_dir;
 
 #[derive(Parser, Debug)]
 #[command(name = "patina")]
@@ -135,11 +137,57 @@ struct Args {
     /// analyzed for context suggestions (callers, dependencies).
     #[arg(long)]
     no_auto_context: bool,
+
+    /// Subcommand for plugin and other operations.
+    #[command(subcommand)]
+    command: Option<Command>,
+}
+
+/// Available subcommands.
+#[derive(Subcommand, Debug)]
+enum Command {
+    /// Manage installed plugins.
+    Plugin {
+        #[command(subcommand)]
+        action: PluginAction,
+    },
+}
+
+/// Plugin management actions.
+#[derive(Subcommand, Debug)]
+enum PluginAction {
+    /// Install a plugin from GitHub or local path.
+    ///
+    /// Examples:
+    ///   patina plugin install gh:user/repo
+    ///   patina plugin install gh:user/repo@v1.0.0
+    ///   patina plugin install ./my-local-plugin
+    Install {
+        /// Plugin source (gh:user/repo[@version] or path).
+        source: String,
+    },
+
+    /// List installed plugins.
+    List,
+
+    /// Update all installed plugins.
+    Update,
+
+    /// Remove an installed plugin.
+    Remove {
+        /// Name of the plugin to remove.
+        name: String,
+    },
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
+
+    // Handle subcommands first
+    if let Some(cmd) = args.command {
+        return handle_command(cmd).await;
+    }
 
     // Handle --list-sessions before any other initialization
     if args.list_sessions {
@@ -307,6 +355,102 @@ async fn oauth_logout() -> Result<()> {
     auth_storage::clear_oauth_credentials().await?;
     println!("OAuth credentials cleared from system keychain.");
     Ok(())
+}
+
+/// Handles subcommands.
+async fn handle_command(cmd: Command) -> Result<()> {
+    match cmd {
+        Command::Plugin { action } => handle_plugin_action(action).await,
+    }
+}
+
+/// Returns the default plugin cache directory.
+fn plugin_cache_dir() -> Result<std::path::PathBuf> {
+    let cache_dir = get_cache_dir()
+        .ok_or_else(|| anyhow::anyhow!("Could not determine cache directory"))?
+        .join("installed-plugins");
+    Ok(cache_dir)
+}
+
+/// Handles plugin management actions.
+async fn handle_plugin_action(action: PluginAction) -> Result<()> {
+    let cache_dir = plugin_cache_dir()?;
+
+    match action {
+        PluginAction::Install { source } => {
+            let plugin_source = PluginSource::parse(&source)
+                .map_err(|e| anyhow::anyhow!("Invalid plugin source: {e}"))?;
+
+            let mut installer = PluginInstaller::new(&cache_dir)?;
+            let installed = installer.install(&plugin_source)?;
+
+            println!(
+                "✓ Installed {} v{} to {}",
+                installed.name,
+                installed.version,
+                installed.path.display()
+            );
+            Ok(())
+        }
+
+        PluginAction::List => {
+            if !cache_dir.exists() {
+                println!("No plugins installed.");
+                return Ok(());
+            }
+
+            let installer = PluginInstaller::new(&cache_dir)?;
+            let plugins = installer.list();
+
+            if plugins.is_empty() {
+                println!("No plugins installed.");
+            } else {
+                println!("Installed plugins:\n");
+                for plugin in plugins {
+                    println!("  {} v{}", plugin.name, plugin.version);
+                    println!("    Path: {}", plugin.path.display());
+                    println!();
+                }
+            }
+            Ok(())
+        }
+
+        PluginAction::Update => {
+            if !cache_dir.exists() {
+                println!("No plugins installed.");
+                return Ok(());
+            }
+
+            let mut installer = PluginInstaller::new(&cache_dir)?;
+            let updated = installer.update_all()?;
+
+            if updated.is_empty() {
+                println!("All plugins are up to date.");
+            } else {
+                println!("Updated {} plugin(s):", updated.len());
+                for name in updated {
+                    println!("  ✓ {name}");
+                }
+            }
+            Ok(())
+        }
+
+        PluginAction::Remove { name } => {
+            if !cache_dir.exists() {
+                anyhow::bail!("Plugin '{name}' not found.");
+            }
+
+            let mut installer = PluginInstaller::new(&cache_dir)?;
+            let removed = installer.remove(&name)?;
+
+            if removed {
+                println!("✓ Removed plugin '{name}'");
+            } else {
+                anyhow::bail!("Plugin '{name}' not found.");
+            }
+            Ok(())
+        }
+    }
 }
 
 #[cfg(test)]
