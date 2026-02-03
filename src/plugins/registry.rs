@@ -176,6 +176,158 @@ impl PluginSource {
     }
 }
 
+/// Metadata for an installed plugin.
+#[derive(Debug, Clone)]
+pub struct InstalledPlugin {
+    /// Plugin name from manifest.
+    pub name: String,
+    /// Plugin version from manifest.
+    pub version: String,
+    /// The source this plugin was installed from.
+    pub source: PluginSource,
+    /// Path to the installed plugin in the cache directory.
+    pub path: PathBuf,
+}
+
+/// Errors that can occur during plugin installation.
+#[derive(Debug, thiserror::Error)]
+pub enum InstallError {
+    /// The plugin source manifest could not be found or parsed.
+    #[error("manifest error: {0}")]
+    ManifestError(#[from] ManifestError),
+
+    /// I/O error during installation.
+    #[error("I/O error: {0}")]
+    Io(#[from] std::io::Error),
+
+    /// Plugin is already installed.
+    #[error("plugin already installed: {0}")]
+    AlreadyInstalled(String),
+
+    /// Plugin not found for removal/update.
+    #[error("plugin not found: {0}")]
+    NotFound(String),
+
+    /// GitHub installation not yet implemented.
+    #[error("GitHub plugin installation not yet implemented")]
+    GitHubNotYetImplemented,
+}
+
+/// Manages plugin installation, updates, and removal.
+///
+/// The `PluginInstaller` handles downloading/copying plugins from various
+/// sources (GitHub, local paths) to a cache directory, and tracks installed
+/// plugins.
+///
+/// # Example
+///
+/// ```no_run
+/// use patina::plugins::registry::{PluginInstaller, PluginSource};
+///
+/// let mut installer = PluginInstaller::new("~/.cache/patina/plugins")?;
+///
+/// // Install from local path
+/// let source = PluginSource::parse("./my-plugin")?;
+/// let installed = installer.install(&source)?;
+/// println!("Installed {} v{}", installed.name, installed.version);
+///
+/// // List installed plugins
+/// for plugin in installer.list() {
+///     println!("  - {} v{}", plugin.name, plugin.version);
+/// }
+///
+/// // Update all plugins
+/// let updated = installer.update_all()?;
+/// println!("Updated {} plugins", updated.len());
+///
+/// // Remove a plugin
+/// installer.remove("my-plugin")?;
+/// # Ok::<(), patina::plugins::registry::InstallError>(())
+/// ```
+/// Internal state for the plugin installer - fields added during implementation.
+#[derive(Debug, Default)]
+pub struct PluginInstaller {
+    /// Placeholder to make the struct non-empty. Real fields added in 2.6.4.
+    _placeholder: (),
+}
+
+impl PluginInstaller {
+    /// Creates a new plugin installer with the specified cache directory.
+    ///
+    /// Creates the cache directory if it doesn't exist.
+    ///
+    /// # Arguments
+    ///
+    /// * `cache_dir` - Directory to store installed plugins
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the cache directory cannot be created.
+    pub fn new(_cache_dir: impl AsRef<Path>) -> Result<Self, InstallError> {
+        // TODO: Implement in 2.6.4
+        Err(InstallError::Io(std::io::Error::other("not implemented")))
+    }
+
+    /// Installs a plugin from the given source.
+    ///
+    /// For local sources, copies the plugin to the cache directory.
+    /// For GitHub sources, downloads and extracts the repository.
+    ///
+    /// # Arguments
+    ///
+    /// * `source` - The plugin source to install from
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if installation fails.
+    pub fn install(&mut self, _source: &PluginSource) -> Result<InstalledPlugin, InstallError> {
+        // TODO: Implement in 2.6.4
+        Err(InstallError::NotFound("not implemented".to_string()))
+    }
+
+    /// Returns a list of all installed plugins.
+    #[must_use]
+    pub fn list(&self) -> Vec<&InstalledPlugin> {
+        // TODO: Implement in 2.6.4
+        Vec::new()
+    }
+
+    /// Updates all installed plugins to their latest versions.
+    ///
+    /// For local sources, re-reads the manifest from the source path.
+    /// For GitHub sources, fetches the latest version (or specified tag).
+    ///
+    /// # Returns
+    ///
+    /// A list of plugin names that were updated.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any update fails.
+    pub fn update_all(&mut self) -> Result<Vec<String>, InstallError> {
+        // TODO: Implement in 2.6.4
+        Ok(Vec::new())
+    }
+
+    /// Removes an installed plugin.
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - Name of the plugin to remove
+    ///
+    /// # Returns
+    ///
+    /// `true` if the plugin was removed, `false` if it wasn't installed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if removal fails (e.g., I/O error).
+    pub fn remove(&mut self, _name: &str) -> Result<bool, InstallError> {
+        // TODO: Implement in 2.6.4
+        Ok(false)
+    }
+}
+
 /// The standard manifest filename for Patina plugins.
 pub const MANIFEST_FILENAME: &str = "rct-plugin.toml";
 
@@ -915,5 +1067,266 @@ version = "1.0.0""#,
         // Whitespace only
         let err = PluginSource::parse("   ").unwrap_err();
         assert_eq!(err, PluginSourceError::Empty);
+    }
+
+    // ==========================================================================
+    // PluginInstaller Tests (Task 2.6.3)
+    // ==========================================================================
+
+    /// Tests installing a plugin from a local path source.
+    ///
+    /// Note: GitHub installation requires network access and is tested
+    /// separately in integration tests. This test verifies the core
+    /// installation logic using a local source.
+    #[test]
+    fn test_registry_install_from_local() {
+        use super::{PluginInstaller, PluginSource};
+
+        let temp_dir = TempDir::new().unwrap();
+        let cache_dir = temp_dir.path().join("cache");
+
+        // Create a source plugin directory with a valid manifest
+        let source_plugin = temp_dir.path().join("source-plugin");
+        fs::create_dir_all(&source_plugin).unwrap();
+        fs::write(
+            source_plugin.join(MANIFEST_FILENAME),
+            r#"name = "my-local-plugin"
+version = "1.0.0"
+description = "A local plugin for testing""#,
+        )
+        .unwrap();
+
+        // Create installer with cache directory
+        let mut installer = PluginInstaller::new(&cache_dir).unwrap();
+
+        // Install from local source
+        let source = PluginSource::Local {
+            path: source_plugin.clone(),
+        };
+        let installed = installer.install(&source).unwrap();
+
+        // Verify installation
+        assert_eq!(installed.name, "my-local-plugin");
+        assert_eq!(installed.version, "1.0.0");
+        assert!(installed.path.exists());
+        assert!(installed.path.join(MANIFEST_FILENAME).exists());
+
+        // Verify cache directory structure
+        assert!(cache_dir.exists());
+    }
+
+    /// Tests installing a plugin from GitHub source (mock/stub test).
+    ///
+    /// This test documents the expected behavior for GitHub installation.
+    /// Actual network testing is done in integration tests.
+    #[test]
+    fn test_registry_install_from_github() {
+        use super::{InstallError, PluginInstaller, PluginSource};
+
+        let temp_dir = TempDir::new().unwrap();
+        let cache_dir = temp_dir.path().join("cache");
+
+        let mut installer = PluginInstaller::new(&cache_dir).unwrap();
+
+        // GitHub source - this should return NotImplemented or similar
+        // until GitHub download is fully implemented
+        let source = PluginSource::GitHub {
+            owner: "test-org".to_string(),
+            repo: "test-plugin".to_string(),
+            version: Some("v1.0.0".to_string()),
+        };
+
+        let result = installer.install(&source);
+
+        // GitHub installation is expected to either succeed (if implemented)
+        // or return a specific error indicating it's not yet available
+        match result {
+            Ok(installed) => {
+                // If implemented, verify basic properties
+                assert!(!installed.name.is_empty());
+            }
+            Err(InstallError::GitHubNotYetImplemented) => {
+                // Expected during initial implementation
+            }
+            Err(e) => {
+                panic!("Unexpected error: {e}");
+            }
+        }
+    }
+
+    /// Tests listing installed plugins.
+    #[test]
+    fn test_registry_list_installed() {
+        use super::{PluginInstaller, PluginSource};
+
+        let temp_dir = TempDir::new().unwrap();
+        let cache_dir = temp_dir.path().join("cache");
+
+        // Create two source plugins
+        for (name, version) in [("plugin-a", "1.0.0"), ("plugin-b", "2.0.0")] {
+            let plugin_dir = temp_dir.path().join(name);
+            fs::create_dir_all(&plugin_dir).unwrap();
+            fs::write(
+                plugin_dir.join(MANIFEST_FILENAME),
+                format!(
+                    r#"name = "{name}"
+version = "{version}""#
+                ),
+            )
+            .unwrap();
+        }
+
+        let mut installer = PluginInstaller::new(&cache_dir).unwrap();
+
+        // Initially no plugins installed
+        assert!(installer.list().is_empty());
+
+        // Install first plugin
+        installer
+            .install(&PluginSource::Local {
+                path: temp_dir.path().join("plugin-a"),
+            })
+            .unwrap();
+
+        let installed = installer.list();
+        assert_eq!(installed.len(), 1);
+        assert_eq!(installed[0].name, "plugin-a");
+
+        // Install second plugin
+        installer
+            .install(&PluginSource::Local {
+                path: temp_dir.path().join("plugin-b"),
+            })
+            .unwrap();
+
+        let installed = installer.list();
+        assert_eq!(installed.len(), 2);
+
+        // Verify both plugins are listed
+        let names: Vec<_> = installed.iter().map(|p| p.name.as_str()).collect();
+        assert!(names.contains(&"plugin-a"));
+        assert!(names.contains(&"plugin-b"));
+    }
+
+    /// Tests removing an installed plugin.
+    #[test]
+    fn test_registry_remove() {
+        use super::{PluginInstaller, PluginSource};
+
+        let temp_dir = TempDir::new().unwrap();
+        let cache_dir = temp_dir.path().join("cache");
+
+        // Create source plugin
+        let source_dir = temp_dir.path().join("removable-plugin");
+        fs::create_dir_all(&source_dir).unwrap();
+        fs::write(
+            source_dir.join(MANIFEST_FILENAME),
+            r#"name = "removable-plugin"
+version = "1.0.0""#,
+        )
+        .unwrap();
+
+        let mut installer = PluginInstaller::new(&cache_dir).unwrap();
+
+        // Install plugin
+        let installed = installer
+            .install(&PluginSource::Local { path: source_dir })
+            .unwrap();
+        let installed_path = installed.path.clone();
+
+        assert_eq!(installer.list().len(), 1);
+        assert!(installed_path.exists());
+
+        // Remove plugin
+        let removed = installer.remove("removable-plugin").unwrap();
+        assert!(removed);
+        assert!(installer.list().is_empty());
+        assert!(!installed_path.exists(), "Plugin directory should be deleted");
+
+        // Removing again returns false
+        let removed_again = installer.remove("removable-plugin").unwrap();
+        assert!(!removed_again);
+    }
+
+    /// Tests updating installed plugins.
+    ///
+    /// Note: Full update testing requires network access for GitHub sources.
+    /// This test verifies the update mechanics with local sources.
+    #[test]
+    fn test_registry_update_all() {
+        use super::{PluginInstaller, PluginSource};
+
+        let temp_dir = TempDir::new().unwrap();
+        let cache_dir = temp_dir.path().join("cache");
+
+        // Create a source plugin at v1.0.0
+        let source_dir = temp_dir.path().join("updatable-plugin");
+        fs::create_dir_all(&source_dir).unwrap();
+        fs::write(
+            source_dir.join(MANIFEST_FILENAME),
+            r#"name = "updatable-plugin"
+version = "1.0.0""#,
+        )
+        .unwrap();
+
+        let mut installer = PluginInstaller::new(&cache_dir).unwrap();
+
+        // Install v1.0.0
+        installer
+            .install(&PluginSource::Local {
+                path: source_dir.clone(),
+            })
+            .unwrap();
+
+        let installed = installer.list();
+        assert_eq!(installed[0].version, "1.0.0");
+
+        // Update source to v2.0.0
+        fs::write(
+            source_dir.join(MANIFEST_FILENAME),
+            r#"name = "updatable-plugin"
+version = "2.0.0""#,
+        )
+        .unwrap();
+
+        // Run update_all
+        let updated = installer.update_all().unwrap();
+        assert_eq!(updated.len(), 1);
+        assert_eq!(updated[0], "updatable-plugin");
+
+        // Verify version updated
+        let installed = installer.list();
+        assert_eq!(installed[0].version, "2.0.0");
+    }
+
+    /// Tests that installing duplicate plugin fails appropriately.
+    #[test]
+    fn test_registry_install_duplicate() {
+        use super::{InstallError, PluginInstaller, PluginSource};
+
+        let temp_dir = TempDir::new().unwrap();
+        let cache_dir = temp_dir.path().join("cache");
+
+        let source_dir = temp_dir.path().join("duplicate-plugin");
+        fs::create_dir_all(&source_dir).unwrap();
+        fs::write(
+            source_dir.join(MANIFEST_FILENAME),
+            r#"name = "duplicate-plugin"
+version = "1.0.0""#,
+        )
+        .unwrap();
+
+        let mut installer = PluginInstaller::new(&cache_dir).unwrap();
+
+        // First install succeeds
+        installer
+            .install(&PluginSource::Local {
+                path: source_dir.clone(),
+            })
+            .unwrap();
+
+        // Second install of same plugin fails
+        let result = installer.install(&PluginSource::Local { path: source_dir });
+        assert!(matches!(result, Err(InstallError::AlreadyInstalled(_))));
     }
 }
