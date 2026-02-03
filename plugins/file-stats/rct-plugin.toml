@@ -1,0 +1,7 @@
+name = "file-stats"
+version = "0.1.0"
+description = "Get file statistics (size, modified time, etc.)"
+author = "Patina Team"
+
+[capabilities]
+tools = true

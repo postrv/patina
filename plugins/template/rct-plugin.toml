@@ -1,0 +1,11 @@
+name = "template-plugin"
+version = "0.1.0"
+description = "A template plugin for Patina"
+author = "Your Name"
+
+[capabilities]
+commands = false
+skills = false
+tools = false
+hooks = false
+mcp = false
