@@ -244,11 +244,13 @@ pub enum InstallError {
 /// installer.remove("my-plugin")?;
 /// # Ok::<(), patina::plugins::registry::InstallError>(())
 /// ```
-/// Internal state for the plugin installer - fields added during implementation.
-#[derive(Debug, Default)]
+/// Manages plugin installation, updates, and removal.
+#[derive(Debug)]
 pub struct PluginInstaller {
-    /// Placeholder to make the struct non-empty. Real fields added in 2.6.4.
-    _placeholder: (),
+    /// Directory where plugins are cached/installed.
+    cache_dir: PathBuf,
+    /// Map of installed plugins by name.
+    installed: std::collections::HashMap<String, InstalledPlugin>,
 }
 
 impl PluginInstaller {
@@ -263,9 +265,14 @@ impl PluginInstaller {
     /// # Errors
     ///
     /// Returns an error if the cache directory cannot be created.
-    pub fn new(_cache_dir: impl AsRef<Path>) -> Result<Self, InstallError> {
-        // TODO: Implement in 2.6.4
-        Err(InstallError::Io(std::io::Error::other("not implemented")))
+    pub fn new(cache_dir: impl AsRef<Path>) -> Result<Self, InstallError> {
+        let cache_dir = cache_dir.as_ref().to_path_buf();
+        std::fs::create_dir_all(&cache_dir)?;
+
+        Ok(Self {
+            cache_dir,
+            installed: std::collections::HashMap::new(),
+        })
     }
 
     /// Installs a plugin from the given source.
@@ -280,16 +287,52 @@ impl PluginInstaller {
     /// # Errors
     ///
     /// Returns an error if installation fails.
-    pub fn install(&mut self, _source: &PluginSource) -> Result<InstalledPlugin, InstallError> {
-        // TODO: Implement in 2.6.4
-        Err(InstallError::NotFound("not implemented".to_string()))
+    pub fn install(&mut self, source: &PluginSource) -> Result<InstalledPlugin, InstallError> {
+        match source {
+            PluginSource::Local { path } => self.install_from_local(path, source),
+            PluginSource::GitHub { .. } => Err(InstallError::GitHubNotYetImplemented),
+        }
+    }
+
+    /// Installs a plugin from a local path.
+    fn install_from_local(
+        &mut self,
+        source_path: &Path,
+        source: &PluginSource,
+    ) -> Result<InstalledPlugin, InstallError> {
+        // Read manifest from source
+        let manifest_path = source_path.join(MANIFEST_FILENAME);
+        let manifest = Manifest::from_file(&manifest_path)?;
+
+        // Check for duplicate
+        if self.installed.contains_key(&manifest.name) {
+            return Err(InstallError::AlreadyInstalled(manifest.name));
+        }
+
+        // Create destination directory in cache
+        let dest_dir = self.cache_dir.join(&manifest.name);
+        if dest_dir.exists() {
+            std::fs::remove_dir_all(&dest_dir)?;
+        }
+
+        // Copy plugin files to cache
+        copy_dir_recursive(source_path, &dest_dir)?;
+
+        let installed = InstalledPlugin {
+            name: manifest.name.clone(),
+            version: manifest.version,
+            source: source.clone(),
+            path: dest_dir,
+        };
+
+        self.installed.insert(manifest.name, installed.clone());
+        Ok(installed)
     }
 
     /// Returns a list of all installed plugins.
     #[must_use]
     pub fn list(&self) -> Vec<&InstalledPlugin> {
-        // TODO: Implement in 2.6.4
-        Vec::new()
+        self.installed.values().collect()
     }
 
     /// Updates all installed plugins to their latest versions.
@@ -305,8 +348,47 @@ impl PluginInstaller {
     ///
     /// Returns an error if any update fails.
     pub fn update_all(&mut self) -> Result<Vec<String>, InstallError> {
-        // TODO: Implement in 2.6.4
-        Ok(Vec::new())
+        let mut updated = Vec::new();
+
+        // Collect plugins to update (can't mutate while iterating)
+        let plugins: Vec<_> = self
+            .installed
+            .values()
+            .map(|p| (p.name.clone(), p.source.clone()))
+            .collect();
+
+        for (name, source) in plugins {
+            match &source {
+                PluginSource::Local { path } => {
+                    // Re-read manifest from source
+                    let manifest_path = path.join(MANIFEST_FILENAME);
+                    let manifest = Manifest::from_file(&manifest_path)?;
+
+                    // Check if version changed
+                    let current = self.installed.get(&name);
+                    if current.map(|p| p.version.as_str()) != Some(&manifest.version) {
+                        // Update by re-copying
+                        let dest_dir = self.cache_dir.join(&name);
+                        if dest_dir.exists() {
+                            std::fs::remove_dir_all(&dest_dir)?;
+                        }
+                        copy_dir_recursive(path, &dest_dir)?;
+
+                        // Update installed record
+                        if let Some(plugin) = self.installed.get_mut(&name) {
+                            plugin.version = manifest.version;
+                        }
+
+                        updated.push(name);
+                    }
+                }
+                PluginSource::GitHub { .. } => {
+                    // GitHub update not yet implemented - skip
+                }
+            }
+        }
+
+        Ok(updated)
     }
 
     /// Removes an installed plugin.
@@ -322,10 +404,36 @@ impl PluginInstaller {
     /// # Errors
     ///
     /// Returns an error if removal fails (e.g., I/O error).
-    pub fn remove(&mut self, _name: &str) -> Result<bool, InstallError> {
-        // TODO: Implement in 2.6.4
-        Ok(false)
+    pub fn remove(&mut self, name: &str) -> Result<bool, InstallError> {
+        if let Some(plugin) = self.installed.remove(name) {
+            // Remove the plugin directory from cache
+            if plugin.path.exists() {
+                std::fs::remove_dir_all(&plugin.path)?;
+            }
+            Ok(true)
+        } else {
+            Ok(false)
+        }
     }
+}
+
+/// Recursively copies a directory and its contents.
+fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), std::io::Error> {
+    std::fs::create_dir_all(dst)?;
+
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let src_path = entry.path();
+        let dst_path = dst.join(entry.file_name());
+
+        if src_path.is_dir() {
+            copy_dir_recursive(&src_path, &dst_path)?;
+        } else {
+            std::fs::copy(&src_path, &dst_path)?;
+        }
+    }
+
+    Ok(())
 }
 
 /// The standard manifest filename for Patina plugins.
