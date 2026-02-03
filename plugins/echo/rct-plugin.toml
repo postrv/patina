@@ -1,0 +1,7 @@
+name = "echo-plugin"
+version = "0.1.0"
+description = "Simple echo tool for testing"
+author = "Patina Team"
+
+[capabilities]
+tools = true

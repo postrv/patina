@@ -1453,7 +1453,8 @@ version = "1.0.0""#,
     #[test]
     fn test_template_plugin_manifest_valid() {
         let manifest_path = Path::new("plugins/template/rct-plugin.toml");
-        let manifest = Manifest::from_file(manifest_path).expect("template plugin manifest should be valid");
+        let manifest =
+            Manifest::from_file(manifest_path).expect("template plugin manifest should be valid");
         assert_eq!(manifest.name, "template-plugin");
         assert!(!manifest.has_capability(Capability::Commands));
         assert!(!manifest.has_capability(Capability::Skills));
@@ -1466,7 +1467,8 @@ version = "1.0.0""#,
     #[test]
     fn test_echo_plugin_manifest_valid() {
         let manifest_path = Path::new("plugins/echo/rct-plugin.toml");
-        let manifest = Manifest::from_file(manifest_path).expect("echo plugin manifest should be valid");
+        let manifest =
+            Manifest::from_file(manifest_path).expect("echo plugin manifest should be valid");
         assert_eq!(manifest.name, "echo-plugin");
         assert!(manifest.has_capability(Capability::Tools));
     }
@@ -1475,7 +1477,8 @@ version = "1.0.0""#,
     #[test]
     fn test_file_stats_plugin_manifest_valid() {
         let manifest_path = Path::new("plugins/file-stats/rct-plugin.toml");
-        let manifest = Manifest::from_file(manifest_path).expect("file-stats plugin manifest should be valid");
+        let manifest =
+            Manifest::from_file(manifest_path).expect("file-stats plugin manifest should be valid");
         assert_eq!(manifest.name, "file-stats");
         assert!(manifest.has_capability(Capability::Tools));
     }
@@ -1495,7 +1498,10 @@ version = "1.0.0""#,
 
         // Verify each example plugin is present
         let names: Vec<&str> = discovered.iter().map(|m| m.name.as_str()).collect();
-        assert!(names.contains(&"template-plugin"), "template-plugin not found");
+        assert!(
+            names.contains(&"template-plugin"),
+            "template-plugin not found"
+        );
         assert!(names.contains(&"echo-plugin"), "echo-plugin not found");
         assert!(names.contains(&"file-stats"), "file-stats not found");
     }
