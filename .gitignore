@@ -32,7 +32,7 @@ Thumbs.db
 # Ralph Automation Suite
 .ralph/
 .archive/
-.claude/CLAUDE.local.md
+.claude/
 context*.txt
 sbom.json
 
