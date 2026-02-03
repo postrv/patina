@@ -105,9 +105,74 @@ impl PluginSource {
     /// let versioned = PluginSource::parse("gh:user/repo@v2.1.0").unwrap();
     /// let local = PluginSource::parse("./my-plugin").unwrap();
     /// ```
-    pub fn parse(_spec: &str) -> Result<Self, PluginSourceError> {
-        // TODO: Implement in 2.6.2
-        Err(PluginSourceError::Empty)
+    pub fn parse(spec: &str) -> Result<Self, PluginSourceError> {
+        let spec = spec.trim();
+
+        if spec.is_empty() {
+            return Err(PluginSourceError::Empty);
+        }
+
+        // Check for GitHub shorthand (gh:owner/repo[@version])
+        if let Some(gh_spec) = spec.strip_prefix("gh:") {
+            return Self::parse_github(gh_spec);
+        }
+
+        // Otherwise treat as local path
+        Ok(PluginSource::Local {
+            path: PathBuf::from(spec),
+        })
+    }
+
+    /// Parses a GitHub shorthand specification after the `gh:` prefix.
+    ///
+    /// Expected format: `owner/repo` or `owner/repo@version`
+    fn parse_github(spec: &str) -> Result<Self, PluginSourceError> {
+        if spec.is_empty() {
+            return Err(PluginSourceError::InvalidGitHubShorthand(
+                "missing owner/repo".to_string(),
+            ));
+        }
+
+        // Split by first '/' to get owner and rest
+        let Some(slash_pos) = spec.find('/') else {
+            return Err(PluginSourceError::InvalidGitHubShorthand(format!(
+                "missing '/' in '{spec}'"
+            )));
+        };
+
+        let owner = &spec[..slash_pos];
+        let rest = &spec[slash_pos + 1..];
+
+        // Validate owner
+        if owner.is_empty() {
+            return Err(PluginSourceError::InvalidGitHubShorthand(
+                "empty owner".to_string(),
+            ));
+        }
+
+        // Split rest by '@' to get repo and optional version
+        let (repo, version) = if let Some(at_pos) = rest.find('@') {
+            let repo = &rest[..at_pos];
+            let ver = &rest[at_pos + 1..];
+            // Empty version after @ is treated as None (latest)
+            let version = if ver.is_empty() { None } else { Some(ver.to_string()) };
+            (repo, version)
+        } else {
+            (rest, None)
+        };
+
+        // Validate repo
+        if repo.is_empty() {
+            return Err(PluginSourceError::InvalidGitHubShorthand(
+                "empty repo".to_string(),
+            ));
+        }
+
+        Ok(PluginSource::GitHub {
+            owner: owner.to_string(),
+            repo: repo.to_string(),
+            version,
+        })
     }
 }
 
