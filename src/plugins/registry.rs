@@ -155,7 +155,11 @@ impl PluginSource {
             let repo = &rest[..at_pos];
             let ver = &rest[at_pos + 1..];
             // Empty version after @ is treated as None (latest)
-            let version = if ver.is_empty() { None } else { Some(ver.to_string()) };
+            let version = if ver.is_empty() {
+                None
+            } else {
+                Some(ver.to_string())
+            };
             (repo, version)
         } else {
             (rest, None)
@@ -227,7 +231,7 @@ pub enum InstallError {
 /// let mut installer = PluginInstaller::new("~/.cache/patina/plugins")?;
 ///
 /// // Install from local path
-/// let source = PluginSource::parse("./my-plugin")?;
+/// let source = PluginSource::parse("./my-plugin").expect("valid source");
 /// let installed = installer.install(&source)?;
 /// println!("Installed {} v{}", installed.name, installed.version);
 ///
@@ -244,7 +248,6 @@ pub enum InstallError {
 /// installer.remove("my-plugin")?;
 /// # Ok::<(), patina::plugins::registry::InstallError>(())
 /// ```
-/// Manages plugin installation, updates, and removal.
 #[derive(Debug)]
 pub struct PluginInstaller {
     /// Directory where plugins are cached/installed.
@@ -1349,7 +1352,10 @@ version = "1.0.0""#,
         let removed = installer.remove("removable-plugin").unwrap();
         assert!(removed);
         assert!(installer.list().is_empty());
-        assert!(!installed_path.exists(), "Plugin directory should be deleted");
+        assert!(
+            !installed_path.exists(),
+            "Plugin directory should be deleted"
+        );
 
         // Removing again returns false
         let removed_again = installer.remove("removable-plugin").unwrap();
