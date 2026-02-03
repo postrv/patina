@@ -321,11 +321,11 @@ Add project-specific notes below. This section is preserved during regeneration.
 
 ### Patina Project Notes
 
-**Current State (2026-01-31):**
+**Current State (2026-02-03):**
 - **All Phases Complete:** TUI, API streaming, tools, MCP, hooks, skills, commands, agents, plugins
-- **Test Coverage:** 85.84% (911 tests)
+- **Test Coverage:** 85%+ (1186 tests)
 - **Cross-Platform:** Linux, macOS, Windows
-- **Version:** 0.3.0
+- **Version:** 0.6.1
 
 **Security Audit (2026-01-30) - ALL RESOLVED:**
 | ID | Severity | Status | Issue | Resolution |

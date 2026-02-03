@@ -80,10 +80,10 @@ Download the `.deb` package from [GitHub Releases](https://github.com/postrv/pat
 
 ```bash
 # Download the package (replace VERSION with latest)
-wget https://github.com/postrv/patina/releases/download/v0.1.0/patina_0.4.0_amd64.deb
+wget https://github.com/postrv/patina/releases/download/v0.6.1/patina_0.6.1_amd64.deb
 
 # Install
-sudo dpkg -i patina_0.4.0_amd64.deb
+sudo dpkg -i patina_0.6.1_amd64.deb
 ```
 
 ### Fedora/RHEL/CentOS (dnf/yum)
@@ -92,13 +92,13 @@ Download the `.rpm` package from [GitHub Releases](https://github.com/postrv/pat
 
 ```bash
 # Download the package (replace VERSION with latest)
-wget https://github.com/postrv/patina/releases/download/v0.1.0/patina-0.4.0-1.x86_64.rpm
+wget https://github.com/postrv/patina/releases/download/v0.6.1/patina-0.6.1-1.x86_64.rpm
 
 # Install with dnf
-sudo dnf install patina-0.4.0-1.x86_64.rpm
+sudo dnf install patina-0.6.1-1.x86_64.rpm
 
 # Or with yum
-sudo yum localinstall patina-0.4.0-1.x86_64.rpm
+sudo yum localinstall patina-0.6.1-1.x86_64.rpm
 ```
 
 ### Windows (Scoop)
@@ -552,7 +552,7 @@ Place plugins in:
 
 ### Parallel Tool Execution
 
-Patina v0.5.0 introduces parallel tool execution for improved performance on multi-file operations.
+Patina v0.5.0+ includes parallel tool execution for improved performance on multi-file operations.
 
 #### How It Works
 
@@ -837,4 +837,4 @@ patina
 
 ---
 
-*Patina v0.5.0*
+*Patina v0.6.1*
