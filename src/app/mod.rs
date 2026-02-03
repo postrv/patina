@@ -3,9 +3,9 @@
 use anyhow::{Context, Result};
 use crossterm::{
     event::{
-        DisableMouseCapture, EnableMouseCapture, Event, EventStream, KeyCode, KeyModifiers,
-        KeyboardEnhancementFlags, MouseButton, MouseEventKind, PopKeyboardEnhancementFlags,
-        PushKeyboardEnhancementFlags,
+        DisableMouseCapture, EnableMouseCapture, Event, EventStream, KeyCode, KeyEventKind,
+        KeyModifiers, KeyboardEnhancementFlags, MouseButton, MouseEventKind,
+        PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
     },
     execute,
     terminal::{
@@ -23,7 +23,7 @@ pub mod commands;
 pub mod state;
 pub mod tool_loop;
 
-use state::AppState;
+use state::{AppState, BackgroundEvent};
 use tool_loop::ToolLoopState;
 
 use crate::api::AnthropicClient;
@@ -40,6 +40,71 @@ use crate::types::{ApiMessageV2, Message, Role};
 
 // Re-export Config for backward compatibility
 pub use crate::types::Config;
+
+/// Buffer size for API streaming channels.
+///
+/// This value needs to be large enough to handle rapid tool execution iterations
+/// where Claude generates many events faster than the event loop can process them.
+/// A small buffer (e.g., 100) can cause backpressure and block the API streaming task,
+/// leading to UI freezing during intensive tool execution.
+///
+/// Setting to 1000 provides headroom for ~50 tool_use events (each generates ~20 events)
+/// without causing backpressure.
+pub const STREAMING_CHANNEL_BUFFER: usize = 1000;
+
+/// Result of processing a print mode stream.
+enum PrintStreamResult {
+    /// Stream completed successfully (MessageStop or MessageComplete).
+    Completed(String),
+    /// Stream ended with an error.
+    Error(String),
+}
+
+/// Processes a print mode stream, printing content and handling tool use events.
+///
+/// Returns the accumulated response text and the final result.
+async fn process_print_stream(
+    rx: &mut tokio::sync::mpsc::Receiver<crate::api::StreamEvent>,
+    state: &mut AppState,
+) -> Result<PrintStreamResult> {
+    use crate::api::StreamEvent;
+
+    let mut response = String::new();
+
+    while let Some(event) = rx.recv().await {
+        match event {
+            StreamEvent::ContentDelta(text) => {
+                print!("{}", text);
+                response.push_str(&text);
+            }
+            StreamEvent::MessageStop | StreamEvent::MessageComplete { .. } => {
+                println!(); // Newline after response
+                return Ok(PrintStreamResult::Completed(response));
+            }
+            StreamEvent::Error(e) => {
+                eprintln!("Error: {}", e);
+                return Ok(PrintStreamResult::Error(e));
+            }
+            StreamEvent::ToolUseStart { id, name, index } => {
+                state.tool_loop_mut().start_streaming().ok();
+                state.handle_tool_use_start(id, name, index);
+            }
+            StreamEvent::ToolUseInputDelta {
+                index,
+                partial_json,
+            } => {
+                state.handle_tool_use_input_delta(index, &partial_json);
+            }
+            StreamEvent::ToolUseComplete { index } => {
+                state.handle_tool_use_complete(index)?;
+            }
+            _ => {}
+        }
+    }
+
+    // Channel closed without explicit completion
+    Ok(PrintStreamResult::Completed(response))
+}
 
 /// Handles copy operation with detailed logging.
 ///
@@ -128,7 +193,15 @@ pub async fn run(config: Config) -> Result<()> {
     // Check if terminal supports enhanced keyboard mode (kitty protocol)
     // This enables proper Cmd+key detection on iTerm2, kitty, WezTerm, etc.
     // Full enhancement flags are required for SUPER (Cmd) modifier detection.
-    let keyboard_enhancement_supported = supports_keyboard_enhancement().unwrap_or(false);
+    //
+    // Note: supports_keyboard_enhancement() may return false on some terminals
+    // (like iTerm2) even when they actually support the protocol with proper
+    // configuration. We force-enable on known-good terminals.
+    let is_iterm2 = terminal::is_iterm2();
+    let is_jetbrains = terminal::is_jetbrains_terminal();
+    let query_supported = supports_keyboard_enhancement().unwrap_or(false);
+    let keyboard_enhancement_supported = query_supported || is_iterm2;
+
     if keyboard_enhancement_supported {
         execute!(
             stdout,
@@ -139,7 +212,15 @@ pub async fn run(config: Config) -> Result<()> {
                     | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
             )
         )?;
-        info!("Keyboard enhancement enabled (kitty protocol) - Cmd+A/Cmd+C supported");
+        if query_supported {
+            info!("Keyboard enhancement enabled (kitty protocol) - Cmd+A/Cmd+C supported");
+        } else {
+            info!("Keyboard enhancement force-enabled for iTerm2 - Cmd+A/Cmd+C may work if keys configured");
+        }
+    } else if is_jetbrains {
+        // JetBrains terminals (JediTerm) don't support Kitty protocol
+        // Cmd+keys are intercepted by the IDE before reaching the terminal
+        info!("JetBrains terminal detected - use Option+A/C/V or Ctrl+A/Y for clipboard");
     } else {
         info!("Keyboard enhancement not supported - use Ctrl+A/Ctrl+Y instead");
     }
@@ -238,7 +319,7 @@ async fn load_session_state(config: &Config) -> Result<AppState> {
 /// This matches Claude Code's `-p` / `--print` flag behavior.
 async fn run_print_mode(config: &Config, prompt: &str) -> Result<()> {
     use crate::api::tools::default_tools;
-    use crate::api::{StreamEvent, ToolChoice};
+    use crate::api::ToolChoice;
 
     let client = AnthropicClient::new(config.api_key.clone(), &config.model);
     let mut state = AppState::with_options(
@@ -259,7 +340,7 @@ async fn run_print_mode(config: &Config, prompt: &str) -> Result<()> {
 
     // Set up streaming using API messages
     let tools = default_tools();
-    let (tx, mut rx) = tokio::sync::mpsc::channel(100);
+    let (tx, mut rx) = tokio::sync::mpsc::channel(STREAMING_CHANNEL_BUFFER);
     let api_messages = state.api_messages().to_vec();
     let client_clone = client.clone();
     let tools_clone = tools.clone();
@@ -279,39 +360,10 @@ async fn run_print_mode(config: &Config, prompt: &str) -> Result<()> {
     });
 
     // Collect and print the response
-    let mut response = String::new();
-
-    while let Some(event) = rx.recv().await {
-        match event {
-            StreamEvent::ContentDelta(text) => {
-                print!("{}", text);
-                response.push_str(&text);
-            }
-            StreamEvent::MessageStop | StreamEvent::MessageComplete { .. } => {
-                println!(); // Newline after response
-                break;
-            }
-            StreamEvent::Error(e) => {
-                eprintln!("Error: {}", e);
-                return Err(anyhow::anyhow!("API error: {}", e));
-            }
-            // Handle tool use events for the tool loop
-            StreamEvent::ToolUseStart { id, name, index } => {
-                state.tool_loop_mut().start_streaming().ok();
-                state.handle_tool_use_start(id, name, index);
-            }
-            StreamEvent::ToolUseInputDelta {
-                index,
-                partial_json,
-            } => {
-                state.handle_tool_use_input_delta(index, &partial_json);
-            }
-            StreamEvent::ToolUseComplete { index } => {
-                state.handle_tool_use_complete(index)?;
-            }
-            _ => {}
-        }
-    }
+    let response = match process_print_stream(&mut rx, &mut state).await? {
+        PrintStreamResult::Completed(text) => text,
+        PrintStreamResult::Error(e) => return Err(anyhow::anyhow!("API error: {}", e)),
+    };
 
     // If there are no tool uses, add the assistant message to both display and API
     if !response.is_empty() && !matches!(state.tool_loop_state(), ToolLoopState::PendingApproval) {
@@ -363,7 +415,7 @@ async fn run_print_mode(config: &Config, prompt: &str) -> Result<()> {
 
         state.tool_loop_mut().start_streaming()?;
 
-        let (tx, mut rx) = tokio::sync::mpsc::channel(100);
+        let (tx, mut rx) = tokio::sync::mpsc::channel(STREAMING_CHANNEL_BUFFER);
         let api_messages = state.api_messages().to_vec();
         let client_clone = client.clone();
         let tools = default_tools();
@@ -382,35 +434,12 @@ async fn run_print_mode(config: &Config, prompt: &str) -> Result<()> {
             }
         });
 
-        // Process the continuation
-        response.clear();
-        while let Some(event) = rx.recv().await {
-            match event {
-                StreamEvent::ContentDelta(text) => {
-                    print!("{}", text);
-                    response.push_str(&text);
-                }
-                StreamEvent::MessageStop | StreamEvent::MessageComplete { .. } => {
-                    println!();
-                    break;
-                }
-                StreamEvent::ToolUseStart { id, name, index } => {
-                    state.handle_tool_use_start(id, name, index);
-                }
-                StreamEvent::ToolUseInputDelta {
-                    index,
-                    partial_json,
-                } => {
-                    state.handle_tool_use_input_delta(index, &partial_json);
-                }
-                StreamEvent::ToolUseComplete { index } => {
-                    state.handle_tool_use_complete(index)?;
-                }
-                StreamEvent::Error(e) => {
-                    eprintln!("Error: {}", e);
-                    break;
-                }
-                _ => {}
+        // Process the continuation using the same helper
+        match process_print_stream(&mut rx, &mut state).await? {
+            PrintStreamResult::Completed(_) => {} // Continue loop if more tools
+            PrintStreamResult::Error(e) => {
+                warn!("Error during tool continuation: {}", e);
+                break;
             }
         }
     }
@@ -439,6 +468,12 @@ async fn event_loop(
             Some(Ok(event)) = events.next() => {
                 match event {
                     Event::Key(key) => {
+                        // Skip key release events - only process Press and Repeat
+                        // This prevents character duplication when REPORT_EVENT_TYPES is enabled
+                        if key.kind == KeyEventKind::Release {
+                            continue;
+                        }
+
                         // Check if we have a pending permission - handle that first
                         if state.has_pending_permission() {
                             if let Some(response) = handle_permission_key_event(state, key) {
@@ -547,11 +582,13 @@ async fn event_loop(
                                 state.scroll_to_bottom(height);
                             }
 
-                            // Select all: Cmd+A (macOS), Ctrl+A, or Ctrl+Shift+A
+                            // Select all: Cmd+A (macOS), Option+A (JetBrains fallback), Ctrl+A, or Ctrl+Shift+A
                             // Cmd+A works when kitty protocol is enabled (iTerm2, kitty, WezTerm)
+                            // Option+A works in JetBrains terminals where Cmd is intercepted by IDE
                             // Always selects all content regardless of focus area
                             (KeyCode::Char('a') | KeyCode::Char('A'), modifiers)
                                 if modifiers == KeyModifiers::SUPER
+                                    || modifiers == KeyModifiers::ALT
                                     || modifiers == KeyModifiers::CONTROL
                                     || modifiers.contains(KeyModifiers::CONTROL | KeyModifiers::SHIFT) =>
                             {
@@ -559,6 +596,8 @@ async fn event_loop(
                                 let timeline_len = state.timeline().len();
                                 let modifier_name = if modifiers == KeyModifiers::SUPER {
                                     "Cmd+A"
+                                } else if modifiers == KeyModifiers::ALT {
+                                    "Option+A"
                                 } else {
                                     "Ctrl+A"
                                 };
@@ -579,6 +618,8 @@ async fn event_loop(
                                     state.mark_full_redraw();
                                     let copy_hint = if modifiers == KeyModifiers::SUPER {
                                         "Cmd+C"
+                                    } else if modifiers == KeyModifiers::ALT {
+                                        "Option+C"
                                     } else {
                                         "Ctrl+Y"
                                     };
@@ -591,11 +632,13 @@ async fn event_loop(
                                 }
                             }
 
-                            // Copy selection: Cmd+C (macOS), Ctrl+Shift+C, or Ctrl+Y (yank)
+                            // Copy selection: Cmd+C (macOS), Option+C (JetBrains fallback), Ctrl+Shift+C, or Ctrl+Y (yank)
                             // Cmd+C works when kitty protocol is enabled (iTerm2, kitty, WezTerm)
+                            // Option+C works in JetBrains terminals where Cmd is intercepted by IDE
                             // Note: Ctrl+C alone is reserved for exit
                             (KeyCode::Char('c') | KeyCode::Char('C'), modifiers)
                                 if modifiers == KeyModifiers::SUPER
+                                    || modifiers == KeyModifiers::ALT
                                     || modifiers.contains(KeyModifiers::CONTROL | KeyModifiers::SHIFT) =>
                             {
                                 debug!(modifier = ?modifiers, "copy triggered");
@@ -607,6 +650,32 @@ async fn event_loop(
                             (KeyCode::Char('y') | KeyCode::Char('Y'), KeyModifiers::CONTROL) =>
                             {
                                 handle_copy(state);
+                            }
+
+                            // Paste: Cmd+V (macOS), Option+V (JetBrains fallback), Ctrl+Shift+V
+                            // Cmd+V works when iTerm2 is configured to send escape sequences
+                            // Option+V works in JetBrains terminals where Cmd is intercepted by IDE
+                            (KeyCode::Char('v') | KeyCode::Char('V'), modifiers)
+                                if modifiers == KeyModifiers::SUPER
+                                    || modifiers == KeyModifiers::ALT
+                                    || modifiers.contains(KeyModifiers::CONTROL | KeyModifiers::SHIFT) =>
+                            {
+                                debug!(modifier = ?modifiers, "paste triggered");
+                                match tui::clipboard::paste_from_clipboard() {
+                                    Ok(text) => {
+                                        // Insert clipboard text into input
+                                        for c in text.chars() {
+                                            // Skip control characters except newlines
+                                            if c == '\n' || (!c.is_control()) {
+                                                state.insert_char(c);
+                                            }
+                                        }
+                                        info!(len = text.len(), "Pasted from clipboard");
+                                    }
+                                    Err(e) => {
+                                        warn!("paste: clipboard error: {}", e);
+                                    }
+                                }
                             }
 
                             // Clear selection: Escape
@@ -692,33 +761,54 @@ async fn event_loop(
                 }
             }
 
-            Some(chunk) = state.recv_api_chunk() => {
-                let is_message_complete = matches!(
-                    &chunk,
-                    crate::api::StreamEvent::MessageStop | crate::api::StreamEvent::MessageComplete { .. }
-                );
+            // Receive background events (API chunks or tool results)
+            // Combined into a single branch to avoid borrow checker conflicts
+            Some(event) = state.recv_background_event(), if state.has_background_work() => {
+                match event {
+                    BackgroundEvent::ApiChunk(chunk) => {
+                        let is_message_complete = matches!(
+                            &chunk,
+                            crate::api::StreamEvent::MessageStop | crate::api::StreamEvent::MessageComplete { .. }
+                        );
 
-                // Check if this is a tool_use stop reason BEFORE processing
-                let is_tool_use_complete = matches!(
-                    &chunk,
-                    crate::api::StreamEvent::MessageComplete { stop_reason }
-                    if stop_reason.needs_tool_execution()
-                );
+                        // Check if this is a tool_use stop reason BEFORE processing
+                        let is_tool_use_complete = matches!(
+                            &chunk,
+                            crate::api::StreamEvent::MessageComplete { stop_reason }
+                            if stop_reason.needs_tool_execution()
+                        );
 
-                state.append_chunk(chunk)?;
+                        state.append_chunk(chunk)?;
 
-                // Auto-save after assistant message completes
-                if is_message_complete {
-                    auto_save_session(state, session_manager).await;
-                }
+                        // Auto-save after assistant message completes
+                        if is_message_complete {
+                            auto_save_session(state, session_manager).await;
+                        }
 
-                // Handle tool execution if this was a tool_use stop
-                if is_tool_use_complete {
-                    handle_tool_execution(state, client, session_manager).await?;
+                        // Handle tool execution if this was a tool_use stop
+                        if is_tool_use_complete {
+                            // Start tool execution in background - doesn't block
+                            start_tool_execution(state)?;
+                        }
+                    }
+
+                    BackgroundEvent::ToolResult(tool_id, result) => {
+                        debug!(tool_id = %tool_id, is_error = result.is_error, "Tool result received");
+
+                        // Record the result and update UI
+                        state.record_tool_result(&tool_id, result);
+
+                        // Check if all tools have completed
+                        if state.all_tools_complete() {
+                            debug!("All tools complete, setting up continuation");
+                            state.clear_tool_result_rx();
+                            finish_tool_execution_and_continue(state, client, session_manager).await?;
+                        }
+                    }
                 }
             }
 
-            _ = throbber_interval.tick(), if state.is_loading() => {
+            _ = throbber_interval.tick(), if state.is_loading() || state.has_executing_tools() => {
                 state.tick_throbber();
             }
         }
@@ -730,24 +820,20 @@ async fn event_loop(
     Ok(())
 }
 
-/// Handles one iteration of tool execution after receiving tool_use stop reason.
+/// Starts tool execution in the background (non-blocking).
 ///
 /// This function:
-/// 1. Auto-approves pending tools
-/// 2. Executes the tools
-/// 3. Sets up continuation streaming (returns immediately, doesn't block)
+/// 1. Checks if we're in PendingApproval state
+/// 2. Auto-approves pending tools
+/// 3. Spawns tool execution in background task
 ///
-/// The main event loop continues to receive chunks via `recv_api_chunk()`.
-/// This function is called each time a tool_use stop reason is received,
-/// so the loop continues naturally through the event loop.
-async fn handle_tool_execution(
-    state: &mut AppState,
-    client: &AnthropicClient,
-    session_manager: &SessionManager,
-) -> Result<()> {
-    use crate::api::tools::default_tools;
-    use crate::api::ToolChoice;
-
+/// The event loop continues to process input while tools execute.
+/// Tool results are received via the `recv_tool_result()` channel.
+///
+/// # Errors
+///
+/// Returns an error if tool approval fails.
+fn start_tool_execution(state: &mut AppState) -> Result<()> {
     // Only process if we're in PendingApproval state
     if !matches!(state.tool_loop_state(), ToolLoopState::PendingApproval) {
         debug!("Tool loop not in PendingApproval state, skipping");
@@ -760,17 +846,35 @@ async fn handle_tool_execution(
     // TODO: In Phase 10.5.3, show permission prompt and wait for user response
     state.approve_all_tools()?;
 
-    // Execute the tools
-    debug!("Executing pending tools");
-    let needs_permission = state.execute_pending_tools().await?;
+    // Spawn tool execution in background - returns immediately
+    debug!("Spawning tool execution in background");
+    let _handle = state.spawn_tool_execution();
 
-    // Handle tools that need permission
-    if !needs_permission.is_empty() {
-        warn!("Some tools need permission: {:?}", needs_permission);
-        // Cannot proceed - tools haven't been executed yet
-        // Return early to prevent "Cannot finish execution with unexecuted tools" error
-        return Ok(());
-    }
+    // Mark as loading so throbber animates during tool execution
+    state.set_loading(true);
+
+    Ok(())
+}
+
+/// Completes tool execution and sets up continuation streaming.
+///
+/// Called after all tools have completed execution. This function:
+/// 1. Finishes the tool execution and gets continuation data
+/// 2. Builds messages for conversation continuation
+/// 3. Sets up streaming channel for the API response
+///
+/// The event loop will receive API chunks via `recv_api_chunk()`.
+///
+/// # Errors
+///
+/// Returns an error if finishing tool execution or streaming setup fails.
+async fn finish_tool_execution_and_continue(
+    state: &mut AppState,
+    client: &AnthropicClient,
+    session_manager: &SessionManager,
+) -> Result<()> {
+    use crate::api::tools::default_tools;
+    use crate::api::ToolChoice;
 
     // Finish execution and get continuation data
     let continuation = state.finish_tool_execution()?;
@@ -820,7 +924,7 @@ async fn handle_tool_execution(
     state.tool_loop_mut().start_streaming()?;
 
     // Set up the streaming channel for the main event loop to receive
-    let (tx, rx) = tokio::sync::mpsc::channel(100);
+    let (tx, rx) = tokio::sync::mpsc::channel(STREAMING_CHANNEL_BUFFER);
     state.set_streaming_rx(rx);
 
     // Mark as loading so throbber animates and current_response accumulates
@@ -842,6 +946,24 @@ async fn handle_tool_execution(
 
     // Return immediately - the main event loop will receive chunks via recv_api_chunk()
     // When another tool_use stop is received, this function will be called again
+    Ok(())
+}
+
+/// Handles tool execution for permission prompts (blocking for user interaction).
+///
+/// This is used when a permission prompt is shown and the user approves.
+/// Unlike `start_tool_execution`, this is called from the keyboard handler
+/// where we need to continue execution after user approval.
+async fn handle_tool_execution(
+    state: &mut AppState,
+    _client: &AnthropicClient,
+    _session_manager: &SessionManager,
+) -> Result<()> {
+    // Start tool execution in background
+    start_tool_execution(state)?;
+
+    // Note: Results will be received via the recv_background_event branch
+    // in the main event loop. We don't await here to keep UI responsive.
     Ok(())
 }
 

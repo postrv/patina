@@ -14,8 +14,9 @@ A high-performance terminal client for the Claude API, written in Rust. Designed
 
 - **Sub-millisecond rendering** - Full 100-message redraw in <1ms
 - **Parallel tool execution** - 5x+ speedup on multi-file operations
-- **1,100+ tests** with 85%+ code coverage
-- **Zero unsafe code** - Pure safe Rust (~39,000 LOC)
+- **1,150+ tests** with 85%+ code coverage
+- **Lightweight binary** - Single executable with minimal dependencies
+- **Zero unsafe code** - Pure safe Rust (~51,000 LOC)
 - **Cross-platform** - Linux, macOS, Windows
 - **Security-first** - Defense-in-depth with command filtering, path validation, and session integrity
 - **Patina theme** - Distinctive bronze & verdigris color palette
@@ -150,9 +151,18 @@ patina --list-sessions
 | `Enter` | Send message |
 | `Ctrl+C` / `Ctrl+D` | Quit |
 | `PageUp` / `PageDown` | Scroll conversation |
-| `Cmd+A` / `Ctrl+A` | Select all (macOS/Linux) |
-| `Cmd+C` / `Ctrl+C` | Copy selection |
-| `Cmd+V` / `Ctrl+V` | Paste |
+| `Ctrl+A` | Select all (universal) |
+| `Ctrl+Y` | Copy selection (universal) |
+| `Ctrl+Shift+V` | Paste (universal) |
+
+**Terminal-specific shortcuts:**
+
+| Terminal | Select All | Copy | Paste |
+|----------|------------|------|-------|
+| **iTerm2** | `Cmd+A` | `Cmd+C` | `Cmd+V` |
+| **Kitty/WezTerm** | `Cmd+A` | `Cmd+C` | `Cmd+V` |
+| **JetBrains** | `Option+A` | `Option+C` | `Option+V` |
+| **Other** | `Ctrl+A` | `Ctrl+Y` | `Ctrl+Shift+V` |
 
 **Permission Prompts:**
 
@@ -191,7 +201,6 @@ See [SECURITY.md](SECURITY.md) for security policy and reporting vulnerabilities
 
 Configuration directories:
 - Linux/macOS: `~/.config/patina/`
-- Windows: `%APPDATA%\patina\`
 
 ### Project Context (CLAUDE.md)
 
@@ -324,13 +333,13 @@ cargo tarpaulin --out Html
 
 | Metric | Value |
 |--------|-------|
-| Version | 0.6.0 |
+| Version | 0.6.1 |
 | MSRV | Rust 1.75 |
 | Edition | 2021 |
-| Tests | 1,100+ |
+| Tests | 1,150+ |
 | Coverage | 85%+ |
 | Unsafe | 0 blocks |
-| LOC | ~39,000 |
+| LOC | ~51,000 |
 
 ### Key Dependencies
 
@@ -343,6 +352,58 @@ cargo tarpaulin --out Html
 | secrecy 0.10 | Secret storage |
 | serde 1.0 | Serialization |
 | clap 4.5 | CLI parsing |
+
+## Library API
+
+Patina can be used as a Rust library for building custom AI-powered tools:
+
+```toml
+[dependencies]
+patina = "0.6"
+```
+
+### Available Modules
+
+| Module | Description |
+|--------|-------------|
+| `patina::api` | Anthropic API client with streaming support |
+| `patina::tools` | Tool execution framework with security policies |
+| `patina::mcp` | Model Context Protocol client |
+| `patina::continuous` | Continuous coding plugin infrastructure |
+| `patina::worktree` | Git worktree management and experiments |
+| `patina::narsil` | Code intelligence integration |
+
+### Example: Custom Tool Loop
+
+```rust,ignore
+use patina::api::AnthropicClient;
+use patina::types::{Message, Role, StreamEvent};
+use secrecy::SecretString;
+
+#[tokio::main]
+async fn main() {
+    let client = AnthropicClient::new(
+        SecretString::from("your-api-key"),
+        "claude-sonnet-4-20250514",
+    );
+
+    let (tx, mut rx) = tokio::sync::mpsc::channel(100);
+    let messages = vec![Message {
+        role: Role::User,
+        content: "Hello!".to_string(),
+    }];
+
+    client.stream_message(&messages, tx).await.unwrap();
+
+    while let Some(event) = rx.recv().await {
+        match event {
+            StreamEvent::ContentDelta(text) => print!("{}", text),
+            StreamEvent::MessageStop => break,
+            _ => {}
+        }
+    }
+}
+```
 
 ## Documentation
 
