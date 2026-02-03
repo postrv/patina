@@ -27,10 +27,16 @@
 pub mod orchestrator;
 pub mod parallel;
 
-// Re-export new orchestrator types for convenience
+// Re-export orchestrator types for convenience
 pub use orchestrator::{
     SubagentContext, SubagentExecutionResult, SubagentResultCollector, SubagentRunner,
     SubagentSession, SubagentSpawner,
+};
+
+// Re-export parallel orchestration types
+pub use parallel::{
+    DivisionStrategy, MergeStrategy, OrchestratorStatus, ParallelAgentOrchestrator,
+    ParallelTaskResult,
 };
 
 use anyhow::Result;
