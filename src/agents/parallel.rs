@@ -17,13 +17,23 @@
 use std::fmt;
 use std::path::PathBuf;
 
-// NOTE: Task 2.5.1 (RED) - Tests below document expected behavior
-// Task 2.5.2 (GREEN) will complete the implementation
-
 /// Strategy for dividing work among parallel agents.
 ///
 /// Each strategy determines how tasks are partitioned and assigned
 /// to individual agents working in separate worktrees.
+///
+/// # Example
+///
+/// ```
+/// use patina::agents::parallel::DivisionStrategy;
+/// use std::path::PathBuf;
+///
+/// let strategy = DivisionStrategy::ByModule {
+///     modules: vec![PathBuf::from("src/api"), PathBuf::from("src/tui")],
+/// };
+/// assert_eq!(strategy.name(), "by_module");
+/// assert_eq!(strategy.partition_count(), 2);
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DivisionStrategy {
     /// Divide work by code module or directory.
@@ -53,6 +63,94 @@ pub enum DivisionStrategy {
         /// List of test patterns to divide.
         test_patterns: Vec<String>,
     },
+}
+
+impl DivisionStrategy {
+    /// Returns the strategy name as a snake_case identifier.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use patina::agents::parallel::DivisionStrategy;
+    /// use std::path::PathBuf;
+    ///
+    /// let strategy = DivisionStrategy::ByModule { modules: vec![] };
+    /// assert_eq!(strategy.name(), "by_module");
+    /// ```
+    #[must_use]
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::ByModule { .. } => "by_module",
+            Self::AlternativeApproaches { .. } => "alternative_approaches",
+            Self::ByTestCase { .. } => "by_test_case",
+        }
+    }
+
+    /// Returns the number of partitions (parallel tasks) this strategy creates.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use patina::agents::parallel::DivisionStrategy;
+    ///
+    /// let strategy = DivisionStrategy::AlternativeApproaches {
+    ///     count: 3,
+    ///     problem: "optimize".to_string(),
+    /// };
+    /// assert_eq!(strategy.partition_count(), 3);
+    /// ```
+    #[must_use]
+    pub fn partition_count(&self) -> usize {
+        match self {
+            Self::ByModule { modules } => modules.len(),
+            Self::AlternativeApproaches { count, .. } => *count,
+            Self::ByTestCase { test_patterns } => test_patterns.len(),
+        }
+    }
+
+    /// Returns a human-readable description of the strategy.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use patina::agents::parallel::DivisionStrategy;
+    /// use std::path::PathBuf;
+    ///
+    /// let strategy = DivisionStrategy::ByModule {
+    ///     modules: vec![PathBuf::from("src"), PathBuf::from("tests")],
+    /// };
+    /// assert!(strategy.describe().contains("2 modules"));
+    /// ```
+    #[must_use]
+    pub fn describe(&self) -> String {
+        match self {
+            Self::ByModule { modules } => {
+                format!("Divide work across {} modules", modules.len())
+            }
+            Self::AlternativeApproaches { count, problem } => {
+                format!("Explore {} approaches for: {}", count, problem)
+            }
+            Self::ByTestCase { test_patterns } => {
+                format!("Parallelize {} test patterns", test_patterns.len())
+            }
+        }
+    }
+}
+
+impl fmt::Display for DivisionStrategy {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ByModule { modules } => {
+                write!(f, "By Module ({} modules)", modules.len())
+            }
+            Self::AlternativeApproaches { count, .. } => {
+                write!(f, "Alternative Approaches ({} variants)", count)
+            }
+            Self::ByTestCase { test_patterns } => {
+                write!(f, "By Test Case ({} patterns)", test_patterns.len())
+            }
+        }
+    }
 }
 
 #[cfg(test)]
