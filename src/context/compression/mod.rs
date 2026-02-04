@@ -48,6 +48,7 @@ mod ccg_backend;
 mod fallback_backend;
 mod metrics;
 mod orchestrator;
+mod render;
 mod types;
 
 pub use cache::{CacheKey, CachedResult, ResultCache, DEFAULT_CACHE_TTL, DEFAULT_MAX_ENTRIES};
@@ -58,6 +59,12 @@ pub use fallback_backend::{
 pub use metrics::{CompressionMetrics, MetricsSummary};
 pub use orchestrator::{
     CompressionOrchestrator, DEFAULT_ORCHESTRATOR_MAX_ENTRIES, DEFAULT_ORCHESTRATOR_TTL,
+};
+pub use render::{
+    looks_like_json, parse_ccg_architecture, parse_ccg_manifest, render_architecture_markdown,
+    render_manifest_markdown, render_symbols_markdown, CcgArchitecture, CcgManifest,
+    DependencyEdge, ExportInfo, LanguageInfo, ModuleInfo, ParseError, QualitySummary,
+    SecuritySummary, SymbolDetail, SymbolResults, SymbolSummary,
 };
 pub use types::{estimate_tokens, CompressionLevel, CompressionResult, ContextSource};
 
