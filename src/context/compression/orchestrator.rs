@@ -112,7 +112,11 @@ impl CompressionOrchestrator {
     ///
     /// Returns `None` if no cached result exists or if the cache is invalid
     /// (hash changed or TTL expired).
-    pub fn get_cached(&self, level: CompressionLevel, repo_hash: &str) -> Option<CompressionResult> {
+    pub fn get_cached(
+        &self,
+        level: CompressionLevel,
+        repo_hash: &str,
+    ) -> Option<CompressionResult> {
         let key = CacheKey::global(level);
         if let Some(result) = self.cache.get(&key, repo_hash) {
             self.metrics.record_cache_hit();
@@ -124,7 +128,12 @@ impl CompressionOrchestrator {
     }
 
     /// Stores a result in the cache.
-    pub fn cache_result(&self, level: CompressionLevel, result: &CompressionResult, repo_hash: &str) {
+    pub fn cache_result(
+        &self,
+        level: CompressionLevel,
+        result: &CompressionResult,
+        repo_hash: &str,
+    ) {
         use crate::context::compression::CachedResult;
 
         let key = CacheKey::global(level);
@@ -185,7 +194,12 @@ impl CompressionOrchestrator {
     /// # Returns
     ///
     /// The compression result, either from cache or freshly generated.
-    pub fn get_context<F>(&self, level: CompressionLevel, repo_hash: &str, content_fn: F) -> CompressionResult
+    pub fn get_context<F>(
+        &self,
+        level: CompressionLevel,
+        repo_hash: &str,
+        content_fn: F,
+    ) -> CompressionResult
     where
         F: FnOnce() -> String,
     {
@@ -236,7 +250,8 @@ impl CompressionOrchestrator {
         F2: FnOnce() -> String,
     {
         let manifest = self.get_context(CompressionLevel::Manifest, repo_hash, manifest_fn);
-        let architecture = self.get_context(CompressionLevel::Architecture, repo_hash, architecture_fn);
+        let architecture =
+            self.get_context(CompressionLevel::Architecture, repo_hash, architecture_fn);
 
         // Combine manifest and architecture
         let combined = format!(
@@ -305,12 +320,8 @@ mod tests {
     #[test]
     fn test_orchestrator_with_config() {
         let caps = create_capabilities_without_ccg();
-        let orchestrator = CompressionOrchestrator::with_config(
-            caps,
-            "my-repo",
-            Duration::from_secs(60),
-            50,
-        );
+        let orchestrator =
+            CompressionOrchestrator::with_config(caps, "my-repo", Duration::from_secs(60), 50);
 
         assert_eq!(orchestrator.repo_name(), "my-repo");
         assert!(!orchestrator.should_use_ccg());
@@ -445,20 +456,16 @@ mod tests {
         let orchestrator = CompressionOrchestrator::new(caps, "repo");
 
         // First call - cache miss
-        let result1 = orchestrator.get_context(
-            CompressionLevel::Manifest,
-            "hash123",
-            || "# Manifest\n\nGenerated content".to_string(),
-        );
+        let result1 = orchestrator.get_context(CompressionLevel::Manifest, "hash123", || {
+            "# Manifest\n\nGenerated content".to_string()
+        });
         assert_eq!(orchestrator.metrics().cache_misses(), 1);
         assert_eq!(orchestrator.metrics().cache_hits(), 0);
 
         // Second call - cache hit
-        let result2 = orchestrator.get_context(
-            CompressionLevel::Manifest,
-            "hash123",
-            || panic!("Should not be called on cache hit"),
-        );
+        let result2 = orchestrator.get_context(CompressionLevel::Manifest, "hash123", || {
+            panic!("Should not be called on cache hit")
+        });
         assert_eq!(orchestrator.metrics().cache_hits(), 1);
 
         // Content should be the same
@@ -471,14 +478,10 @@ mod tests {
         let orchestrator = CompressionOrchestrator::new(caps, "repo");
 
         let mut called = false;
-        let _result = orchestrator.get_context(
-            CompressionLevel::Manifest,
-            "hash123",
-            || {
-                called = true;
-                "Generated content".to_string()
-            },
-        );
+        let _result = orchestrator.get_context(CompressionLevel::Manifest, "hash123", || {
+            called = true;
+            "Generated content".to_string()
+        });
 
         assert!(called, "Content function should be called on cache miss");
         assert_eq!(orchestrator.metrics().cache_misses(), 1);
@@ -510,11 +513,7 @@ mod tests {
         let manifest = "# Manifest\n\n".repeat(100); // ~1.3KB
         let architecture = "# Architecture\n\n".repeat(500); // ~6.5KB
 
-        let result = orchestrator.get_default_context(
-            "hash123",
-            || manifest,
-            || architecture,
-        );
+        let result = orchestrator.get_default_context("hash123", || manifest, || architecture);
 
         assert!(
             result.byte_len() < CompressionOrchestrator::default_context_max_bytes(),
@@ -544,11 +543,9 @@ mod tests {
         let orchestrator = CompressionOrchestrator::new(caps, "repo");
 
         // Generate and cache
-        let _result = orchestrator.get_context(
-            CompressionLevel::Manifest,
-            "hash123",
-            || "Generated content".to_string(),
-        );
+        let _result = orchestrator.get_context(CompressionLevel::Manifest, "hash123", || {
+            "Generated content".to_string()
+        });
 
         // Verify it's cached (hit on same hash)
         let cached = orchestrator.get_cached(CompressionLevel::Manifest, "hash123");

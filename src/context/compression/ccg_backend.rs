@@ -147,7 +147,11 @@ LIMIT {}"#,
     /// Creates a manifest compression result from CCG response.
     #[must_use]
     pub fn create_manifest_result(&self, content: String) -> CompressionResult {
-        CompressionResult::new(content, CompressionLevel::Manifest, ContextSource::CcgLayer0)
+        CompressionResult::new(
+            content,
+            CompressionLevel::Manifest,
+            ContextSource::CcgLayer0,
+        )
     }
 
     /// Creates an architecture compression result from CCG response.

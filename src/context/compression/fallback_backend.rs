@@ -118,7 +118,11 @@ impl FallbackBackend {
     /// Creates a manifest compression result from fallback data.
     #[must_use]
     pub fn create_manifest_result(&self, content: String) -> CompressionResult {
-        CompressionResult::new(content, CompressionLevel::Manifest, ContextSource::Constructed)
+        CompressionResult::new(
+            content,
+            CompressionLevel::Manifest,
+            ContextSource::Constructed,
+        )
     }
 
     /// Creates an architecture compression result from fallback data.
@@ -134,7 +138,11 @@ impl FallbackBackend {
     /// Creates a symbol detail compression result from fallback data.
     #[must_use]
     pub fn create_symbol_result(&self, content: String) -> CompressionResult {
-        CompressionResult::new(content, CompressionLevel::SymbolDetail, ContextSource::DirectTool)
+        CompressionResult::new(
+            content,
+            CompressionLevel::SymbolDetail,
+            ContextSource::DirectTool,
+        )
     }
 }
 
@@ -166,15 +174,18 @@ pub fn extract_symbol_counts(response: &serde_json::Value) -> SymbolCounts {
         .map(|arr| arr.len())
         .or_else(|| {
             // Count function symbols
-            response.get("symbols").and_then(|s| s.as_array()).map(|arr| {
-                arr.iter()
-                    .filter(|s| {
-                        s.get("kind")
-                            .and_then(|k| k.as_str())
-                            .is_some_and(|k| k == "function")
-                    })
-                    .count()
-            })
+            response
+                .get("symbols")
+                .and_then(|s| s.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter(|s| {
+                            s.get("kind")
+                                .and_then(|k| k.as_str())
+                                .is_some_and(|k| k == "function")
+                        })
+                        .count()
+                })
         })
         .unwrap_or(0);
 
@@ -183,15 +194,18 @@ pub fn extract_symbol_counts(response: &serde_json::Value) -> SymbolCounts {
         .and_then(|c| c.as_array())
         .map(|arr| arr.len())
         .or_else(|| {
-            response.get("symbols").and_then(|s| s.as_array()).map(|arr| {
-                arr.iter()
-                    .filter(|s| {
-                        s.get("kind")
-                            .and_then(|k| k.as_str())
-                            .is_some_and(|k| k == "class" || k == "struct")
-                    })
-                    .count()
-            })
+            response
+                .get("symbols")
+                .and_then(|s| s.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter(|s| {
+                            s.get("kind")
+                                .and_then(|k| k.as_str())
+                                .is_some_and(|k| k == "class" || k == "struct")
+                        })
+                        .count()
+                })
         })
         .unwrap_or(0);
 
