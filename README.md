@@ -16,7 +16,7 @@ A high-performance terminal client for the Claude API, written in Rust. Designed
 - **Parallel tool execution** - 5x+ speedup on multi-file operations
 - **1,150+ tests** with 85%+ code coverage
 - **Lightweight binary** - Single executable with minimal dependencies
-- **Zero unsafe code** - Pure safe Rust (~51,000 LOC)
+- **Zero unsafe code** - Pure safe Rust (~56,000 LOC)
 - **Cross-platform** - Linux, macOS, Windows
 - **Security-first** - Defense-in-depth with command filtering, path validation, and session integrity
 - **Patina theme** - Distinctive bronze & verdigris color palette
@@ -339,7 +339,7 @@ cargo tarpaulin --out Html
 | Tests | 1,330+ |
 | Coverage | 85%+ |
 | Unsafe | 0 blocks |
-| LOC | ~51,000 |
+| LOC | ~56,000 |
 
 ### Key Dependencies
 
@@ -369,6 +369,7 @@ patina = "0.6"
 | `patina::api` | Anthropic API client with streaming support |
 | `patina::tools` | Tool execution framework with security policies |
 | `patina::mcp` | Model Context Protocol client |
+| `patina::context` | Context management, compression, and token budgeting |
 | `patina::continuous` | Continuous coding plugin infrastructure |
 | `patina::worktree` | Git worktree management and experiments |
 | `patina::narsil` | Code intelligence integration |
