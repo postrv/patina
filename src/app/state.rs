@@ -1,6 +1,7 @@
 //! Application state management
 
 use crate::agents::SubagentSpawner;
+use crate::api::tokens::model_context_limit;
 use crate::api::tools::default_tools;
 use crate::api::{AnthropicClient, StreamEvent, TokenBudget, ToolChoice};
 use crate::app::tool_loop::{ContinuationData, ToolLoop, ToolLoopState};
@@ -24,6 +25,14 @@ use serde_json::Value;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
+
+/// Default threshold for auto-compaction as a fraction of context window.
+///
+/// When conversation tokens exceed this percentage of the model's context limit,
+/// auto-compaction is triggered before the next API call.
+///
+/// Default: 0.8 (80% of context window)
+pub const DEFAULT_COMPACTION_THRESHOLD: f32 = 0.8;
 
 /// Formats tool input JSON into a readable string for display.
 ///
@@ -1096,6 +1105,16 @@ impl AppState {
         // API gets potentially context-augmented message
         let user_msg = ApiMessageV2::user(&api_content);
         self.api_messages.push(user_msg);
+
+        // Auto-compact conversation if approaching context limit
+        let context_limit = model_context_limit(client.model());
+        if self.maybe_compact_graceful(DEFAULT_COMPACTION_THRESHOLD, context_limit) {
+            tracing::info!(
+                threshold = DEFAULT_COMPACTION_THRESHOLD,
+                context_limit,
+                "Conversation compacted before API call"
+            );
+        }
 
         self.loading = true;
         // Start streaming in timeline
@@ -3695,5 +3714,35 @@ mod tests {
 
         assert!(result.is_ok());
         // Whether it actually compacted depends on the compactor behavior
+    }
+
+    // =========================================================================
+    // Auto-Compaction Send Flow Integration Tests (Phase 4.4.3)
+    // =========================================================================
+
+    #[test]
+    fn test_default_compaction_threshold_is_valid() {
+        // Threshold should be between 0 and 1
+        let threshold = DEFAULT_COMPACTION_THRESHOLD;
+        assert!(threshold > 0.0, "Threshold should be positive");
+        assert!(threshold <= 1.0, "Threshold should not exceed 1.0");
+        // Default is 0.8 (80% of context)
+        assert!(
+            (threshold - 0.8).abs() < f32::EPSILON,
+            "Default threshold should be 0.8"
+        );
+    }
+
+    #[test]
+    fn test_model_context_limit_integration() {
+        // Verify model_context_limit function is accessible and works
+        let limit = model_context_limit("claude-sonnet-4-20250514");
+        assert_eq!(limit, 200_000);
+
+        let limit = model_context_limit("claude-opus-4-20250514");
+        assert_eq!(limit, 200_000);
+
+        let limit = model_context_limit("claude-3-haiku-20240307");
+        assert_eq!(limit, 200_000);
     }
 }

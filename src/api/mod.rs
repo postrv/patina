@@ -158,6 +158,14 @@ impl AnthropicClient {
         }
     }
 
+    /// Returns the model identifier used by this client.
+    ///
+    /// This is used for calculating context limits during auto-compaction.
+    #[must_use]
+    pub fn model(&self) -> &str {
+        &self.model
+    }
+
     /// Sends a streaming message request to the Anthropic API.
     ///
     /// # Arguments
