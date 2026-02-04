@@ -185,16 +185,51 @@ impl StreamEvent {
 /// During streaming, tool_use content comes in fragments. This struct
 /// accumulates those fragments and produces a complete `ToolUseBlock`
 /// when the content block is complete.
+///
+/// # Deprecated
+///
+/// Use [`ToolUseBuilder`] typestate API instead for compile-time safety.
+/// The typestate pattern prevents calling methods in wrong order at compile time.
+///
+/// ```rust,ignore
+/// // Old way (deprecated):
+/// let mut acc = ToolUseAccumulator::new();
+/// acc.start(id, name);
+/// acc.append_input(json);
+/// let input = acc.parse_input()?;
+///
+/// // New way (preferred):
+/// let started = ToolUseBuilder::new().start(id, name);
+/// started.append_input(json);
+/// let completed = started.complete()?;
+/// ```
+#[deprecated(
+    since = "0.8.0",
+    note = "Use ToolUseBuilder typestate API instead for compile-time safety"
+)]
 #[derive(Debug, Clone, Default)]
 pub struct ToolUseAccumulator {
     /// The tool use ID (set on ToolUseStart).
+    #[deprecated(
+        since = "0.8.0",
+        note = "Use ToolUseBuilder typestate API instead for compile-time safety"
+    )]
     pub id: Option<String>,
     /// The tool name (set on ToolUseStart).
+    #[deprecated(
+        since = "0.8.0",
+        note = "Use ToolUseBuilder typestate API instead for compile-time safety"
+    )]
     pub name: Option<String>,
     /// Accumulated JSON input string.
+    #[deprecated(
+        since = "0.8.0",
+        note = "Use ToolUseBuilder typestate API instead for compile-time safety"
+    )]
     pub input_json: String,
 }
 
+#[allow(deprecated)]
 impl ToolUseAccumulator {
     /// Creates a new empty accumulator.
     #[must_use]
@@ -467,6 +502,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_tool_use_accumulator_new() {
         let acc = ToolUseAccumulator::new();
         assert!(acc.id.is_none());
@@ -476,6 +512,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_tool_use_accumulator_start() {
         let mut acc = ToolUseAccumulator::new();
         acc.start("toolu_123".to_string(), "bash".to_string());
@@ -486,6 +523,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_tool_use_accumulator_append_input() {
         let mut acc = ToolUseAccumulator::new();
         acc.start("id".to_string(), "bash".to_string());
@@ -496,6 +534,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_tool_use_accumulator_parse_input() {
         let mut acc = ToolUseAccumulator::new();
         acc.start("id".to_string(), "bash".to_string());
@@ -506,6 +545,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_tool_use_accumulator_parse_empty_input() {
         let acc = ToolUseAccumulator::new();
         let value = acc.parse_input().expect("Should parse empty as object");
@@ -513,6 +553,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_tool_use_accumulator_reset() {
         let mut acc = ToolUseAccumulator::new();
         acc.start("id".to_string(), "bash".to_string());
@@ -526,6 +567,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(deprecated)]
     fn test_tool_use_accumulator_default() {
         let acc = ToolUseAccumulator::default();
         assert!(!acc.is_active());

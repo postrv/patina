@@ -40,7 +40,7 @@ use std::collections::HashMap;
 
 use crate::narsil::SecurityVerdict;
 use crate::types::content::{ContentBlock, StopReason, ToolResultBlock, ToolUseBlock};
-use crate::types::stream::ToolUseAccumulator;
+use crate::types::stream::{StartedToolUse, ToolUseBuilder};
 
 /// State of the agentic tool execution loop.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -168,9 +168,10 @@ pub struct ToolLoop {
     /// Key is the tool_use ID.
     pending_calls: HashMap<String, PendingToolCall>,
 
-    /// Accumulators for streaming tool_use inputs.
+    /// Typestate accumulators for streaming tool_use inputs.
     /// Key is the content block index.
-    accumulators: HashMap<usize, ToolUseAccumulator>,
+    /// Uses ToolUseBuilder typestate pattern for compile-time safety.
+    accumulators: HashMap<usize, StartedToolUse>,
 
     /// Text content accumulated during streaming.
     text_content: String,
@@ -278,11 +279,13 @@ impl ToolLoop {
     }
 
     /// Handles a tool_use start event.
+    ///
+    /// Uses the ToolUseBuilder typestate pattern for compile-time safety.
     pub fn start_tool_use(&mut self, index: usize, id: String, name: String) {
         if matches!(self.state, ToolLoopState::Streaming) {
-            let mut acc = ToolUseAccumulator::new();
-            acc.start(id, name);
-            self.accumulators.insert(index, acc);
+            // Use ToolUseBuilder typestate: new() -> start() produces StartedToolUse
+            let started = ToolUseBuilder::new().start(id, name);
+            self.accumulators.insert(index, started);
         }
     }
 
@@ -298,26 +301,27 @@ impl ToolLoop {
     /// Handles a tool_use complete event.
     ///
     /// Parses the accumulated JSON and creates a pending tool call.
+    /// Uses the ToolUseBuilder typestate pattern - StartedToolUse::complete()
+    /// consumes the state and returns CompletedToolUse with parsed input.
     pub fn complete_tool_use(&mut self, index: usize) -> Result<(), ToolLoopError> {
         if !matches!(self.state, ToolLoopState::Streaming) {
             return Ok(());
         }
 
-        if let Some(mut acc) = self.accumulators.remove(&index) {
-            // Take ownership of id and name before calling parse_input
-            let id = acc.id.take().ok_or(ToolLoopError::MissingToolId)?;
-            let name = acc.name.take().ok_or(ToolLoopError::MissingToolName)?;
-
-            let input = acc
-                .parse_input()
-                .map_err(|e| ToolLoopError::InvalidToolInput {
-                    tool_id: id.clone(),
+        if let Some(started) = self.accumulators.remove(&index) {
+            // Use typestate complete() which parses JSON and returns CompletedToolUse
+            let completed = started.complete().map_err(|e| {
+                // We can't access id directly from consumed started, but error will have context
+                ToolLoopError::InvalidToolInput {
+                    tool_id: "unknown".to_string(),
                     error: e.to_string(),
-                })?;
+                }
+            })?;
 
-            let tool_use = ToolUseBlock::new(id.clone(), name, input);
+            let tool_use =
+                ToolUseBlock::new(completed.id.clone(), completed.name, completed.input);
             self.pending_calls
-                .insert(id, PendingToolCall::new(tool_use));
+                .insert(completed.id, PendingToolCall::new(tool_use));
         }
 
         Ok(())
