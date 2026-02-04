@@ -57,6 +57,9 @@ pub enum NarsilCapability {
     TaintAnalysis,
     /// Dependency analysis (get_dependencies, check_dependencies, find_circular_imports)
     DependencyAnalysis,
+    /// CCG (Code Comprehension Graph) access (get_ccg_manifest, export_ccg_architecture, query_ccg)
+    /// Requires narsil-mcp to be started with --graph flag
+    CcgGraph,
 }
 
 impl NarsilCapability {
@@ -79,6 +82,7 @@ impl NarsilCapability {
                 "check_dependencies",
                 "find_circular_imports",
             ],
+            Self::CcgGraph => &["get_ccg_manifest", "export_ccg_architecture", "query_ccg"],
         }
     }
 
@@ -93,6 +97,7 @@ impl NarsilCapability {
             Self::GitHistory,
             Self::TaintAnalysis,
             Self::DependencyAnalysis,
+            Self::CcgGraph,
         ]
     }
 }
@@ -743,11 +748,60 @@ mod tests {
     #[test]
     fn test_capability_all_returns_all_variants() {
         let all = NarsilCapability::all();
-        assert!(all.len() >= 7, "Should have at least 7 capabilities");
+        assert!(all.len() >= 8, "Should have at least 8 capabilities");
         assert!(all.contains(&NarsilCapability::CallGraph));
         assert!(all.contains(&NarsilCapability::SecurityScan));
         assert!(all.contains(&NarsilCapability::CodeSearch));
         assert!(all.contains(&NarsilCapability::SymbolAnalysis));
+        assert!(all.contains(&NarsilCapability::CcgGraph));
+    }
+
+    // =============================================================================
+    // CcgGraph capability tests (Task 3.1.1)
+    // =============================================================================
+
+    #[test]
+    fn test_ccg_graph_capability_detected_when_tools_present() {
+        let tools = vec![
+            "get_ccg_manifest".to_string(),
+            "export_ccg_architecture".to_string(),
+            "query_ccg".to_string(),
+        ];
+        let caps = NarsilCapabilities::from_tools(&tools);
+
+        assert!(caps.has(NarsilCapability::CcgGraph));
+    }
+
+    #[test]
+    fn test_ccg_graph_required_tools_returns_correct_tools() {
+        let tools = NarsilCapability::CcgGraph.required_tools();
+        assert!(tools.contains(&"get_ccg_manifest"));
+        assert!(tools.contains(&"export_ccg_architecture"));
+        assert!(tools.contains(&"query_ccg"));
+    }
+
+    #[test]
+    fn test_all_capabilities_includes_ccg_graph() {
+        let all = NarsilCapability::all();
+        assert!(all.contains(&NarsilCapability::CcgGraph));
+    }
+
+    #[test]
+    fn test_ccg_graph_capability_absent_when_no_graph_flag() {
+        // These are the core tools that work without --graph flag
+        let tools = vec![
+            "find_symbols".to_string(),
+            "get_dependencies".to_string(),
+            "get_export_map".to_string(),
+            "get_incremental_status".to_string(),
+        ];
+        let caps = NarsilCapabilities::from_tools(&tools);
+
+        // Should NOT have CcgGraph without the CCG-specific tools
+        assert!(!caps.has(NarsilCapability::CcgGraph));
+        // But should have other capabilities
+        assert!(caps.has(NarsilCapability::SymbolAnalysis));
+        assert!(caps.has(NarsilCapability::DependencyAnalysis));
     }
 
     // =============================================================================
