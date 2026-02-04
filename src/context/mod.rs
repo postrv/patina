@@ -1,5 +1,7 @@
 //! Project context management (CLAUDE.md support)
 
+pub mod compression;
+
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
