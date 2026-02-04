@@ -333,10 +333,10 @@ cargo tarpaulin --out Html
 
 | Metric | Value |
 |--------|-------|
-| Version | 0.6.1 |
+| Version | 0.7.0 |
 | MSRV | Rust 1.75 |
 | Edition | 2021 |
-| Tests | 1,150+ |
+| Tests | 1,330+ |
 | Coverage | 85%+ |
 | Unsafe | 0 blocks |
 | LOC | ~51,000 |
