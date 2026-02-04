@@ -49,6 +49,7 @@ fn test_compaction_end_to_end() {
         target_tokens: 500,
         preserve_recent: 2,
         summary_style: SummaryStyle::Timeline,
+        ..Default::default()
     };
 
     let result = compactor.compact(&messages, &config).unwrap();
@@ -160,6 +161,7 @@ fn test_compaction_with_tool_use() {
         target_tokens: 500,
         preserve_recent: 4,
         summary_style: SummaryStyle::Timeline,
+        ..Default::default()
     };
 
     let result = compactor.compact(&messages, &config).unwrap();
@@ -204,6 +206,7 @@ fn test_compaction_preserves_tool_pairs_in_recent() {
         target_tokens: 300,
         preserve_recent: 4, // Should preserve the tool use pair
         summary_style: SummaryStyle::Timeline,
+        ..Default::default()
     };
 
     let result = compactor.compact(&messages, &config).unwrap();
@@ -262,6 +265,7 @@ fn test_compaction_summary_quality_timeline() {
         target_tokens: 200,
         preserve_recent: 2,
         summary_style: SummaryStyle::Timeline,
+        ..Default::default()
     };
 
     let result = compactor.compact(&messages, &config).unwrap();
@@ -343,6 +347,7 @@ fn test_summary_styles() {
             target_tokens: 100,
             preserve_recent: 0,
             summary_style: style,
+            ..Default::default()
         };
 
         let result = compactor.compact(&messages, &config);
