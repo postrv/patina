@@ -92,6 +92,172 @@ Keep the summary under 500 words.
 Previous conversation to summarize:
 "#;
 
+// =============================================================================
+// Summarizer Trait
+// =============================================================================
+
+/// Trait for generating conversation summaries.
+///
+/// This trait abstracts the summarization logic, allowing different
+/// implementations for testing (mock) and production (Claude API).
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use patina::api::compaction::{Summarizer, MockSummarizer, CompactionConfig};
+/// use patina::types::ApiMessageV2;
+///
+/// let summarizer = MockSummarizer;
+/// let messages = vec![ApiMessageV2::user("Hello")];
+/// let config = CompactionConfig::default();
+/// let summary = summarizer.summarize(&messages, &config);
+/// ```
+pub trait Summarizer {
+    /// Generate a summary of the given messages.
+    ///
+    /// # Arguments
+    ///
+    /// * `messages` - The messages to summarize
+    /// * `config` - Configuration controlling summary style
+    ///
+    /// # Returns
+    ///
+    /// A string containing the summary
+    fn summarize(&self, messages: &[ApiMessageV2], config: &CompactionConfig) -> String;
+}
+
+/// Mock summarizer for testing.
+///
+/// Generates placeholder summaries without making API calls.
+/// Extracts key content from messages to create a timeline.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct MockSummarizer;
+
+impl Summarizer for MockSummarizer {
+    fn summarize(&self, messages: &[ApiMessageV2], config: &CompactionConfig) -> String {
+        generate_mock_summary(messages, config)
+    }
+}
+
+/// Generates a mock summary for testing.
+///
+/// Extracts key content from messages to create a summary based on the configured style.
+fn generate_mock_summary(messages: &[ApiMessageV2], config: &CompactionConfig) -> String {
+    let mut summary_parts = Vec::new();
+
+    // Check if any input is already a summary (to merge)
+    let has_existing_summary = messages.iter().any(|m| {
+        let text = m.content.to_text().to_lowercase();
+        text.contains("summary") || text.contains("previous conversation")
+    });
+
+    // Header based on style
+    let header = match config.summary_style {
+        SummaryStyle::Timeline => "Previous conversation timeline:",
+        SummaryStyle::BulletPoints => "Previous conversation summary:",
+        SummaryStyle::Narrative => "Summary of earlier conversation:",
+    };
+    summary_parts.push(header.to_string());
+
+    // Extract key actions from messages
+    for (i, msg) in messages.iter().enumerate() {
+        let text = msg.content.to_text();
+
+        // Skip very short messages or existing summaries (if merging)
+        if text.len() < 10 {
+            continue;
+        }
+
+        // For existing summaries, extract and merge their content
+        if has_existing_summary
+            && (text.to_lowercase().contains("summary")
+                || text.to_lowercase().contains("previous conversation"))
+        {
+            // Extract bullet points or timeline items from existing summary
+            for line in text.lines() {
+                let trimmed = line.trim();
+                if trimmed.starts_with('-') || trimmed.starts_with('•') || trimmed.starts_with('*')
+                {
+                    summary_parts.push(trimmed.to_string());
+                }
+            }
+            continue;
+        }
+
+        // Extract key phrases from messages
+        let key_phrases = extract_key_phrases(&text);
+        if !key_phrases.is_empty() {
+            let prefix = match config.summary_style {
+                SummaryStyle::Timeline => format!("{}.", i + 1),
+                SummaryStyle::BulletPoints => "-".to_string(),
+                SummaryStyle::Narrative => "".to_string(),
+            };
+
+            if config.summary_style == SummaryStyle::Narrative {
+                summary_parts.push(key_phrases);
+            } else {
+                summary_parts.push(format!("{} {}", prefix, key_phrases));
+            }
+        }
+    }
+
+    // Ensure we have some content
+    if summary_parts.len() == 1 {
+        summary_parts.push("- Completed various tasks and actions.".to_string());
+    }
+
+    summary_parts.join("\n")
+}
+
+/// Extracts key phrases from a message for summarization.
+fn extract_key_phrases(text: &str) -> String {
+    // Look for action words and key content
+    let text_lower = text.to_lowercase();
+
+    // Prioritize messages with action words
+    let action_indicators = [
+        "created",
+        "added",
+        "implemented",
+        "fixed",
+        "updated",
+        "deployed",
+        "completed",
+        "wrote",
+        "built",
+        "configured",
+        "installed",
+        "removed",
+        "refactored",
+    ];
+
+    for indicator in action_indicators {
+        if text_lower.contains(indicator) {
+            // Return a shortened version of the message
+            let truncated = if text.len() > 100 {
+                format!("{}...", &text[..100])
+            } else {
+                text.to_string()
+            };
+            return truncated;
+        }
+    }
+
+    // For other messages, extract first sentence or truncate
+    if let Some(period_pos) = text.find('.') {
+        if period_pos < 150 {
+            return text[..=period_pos].to_string();
+        }
+    }
+
+    // Fallback: truncate
+    if text.len() > 80 {
+        format!("{}...", &text[..80])
+    } else {
+        text.to_string()
+    }
+}
+
 /// Returns the appropriate summarization prompt for the given style.
 #[must_use]
 pub fn get_summarization_prompt(style: SummaryStyle) -> &'static str {
@@ -179,30 +345,52 @@ pub struct CompactionResult {
 
 /// Context compactor that summarizes old messages.
 ///
-/// Uses Claude to generate summaries of conversation history while
-/// preserving the system message and recent context.
+/// Uses a `Summarizer` implementation to generate summaries of conversation
+/// history while preserving the system message and recent context.
+///
+/// # Type Parameters
+///
+/// * `S` - The summarizer implementation to use
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use patina::api::compaction::{ContextCompactor, MockSummarizer, CompactionConfig};
+///
+/// // Create a mock compactor for testing
+/// let compactor = ContextCompactor::new_mock();
+///
+/// // Or with a custom summarizer
+/// let custom_compactor = ContextCompactor::with_summarizer(MockSummarizer);
+/// ```
 #[derive(Debug)]
-pub struct ContextCompactor {
-    /// Whether this is a mock compactor for testing
-    is_mock: bool,
+pub struct ContextCompactor<S: Summarizer> {
+    /// The summarizer used to generate conversation summaries
+    summarizer: S,
 }
 
-impl ContextCompactor {
-    /// Creates a new context compactor with a Claude client.
-    ///
-    /// The client is used to generate summaries of old messages.
-    #[must_use]
-    pub fn new() -> Self {
-        Self { is_mock: false }
-    }
-
+impl ContextCompactor<MockSummarizer> {
     /// Creates a mock compactor for testing.
     ///
     /// The mock compactor generates placeholder summaries without
     /// making actual API calls.
     #[must_use]
     pub fn new_mock() -> Self {
-        Self { is_mock: true }
+        Self {
+            summarizer: MockSummarizer,
+        }
+    }
+}
+
+impl<S: Summarizer> ContextCompactor<S> {
+    /// Creates a new context compactor with the given summarizer.
+    ///
+    /// # Arguments
+    ///
+    /// * `summarizer` - The summarizer implementation to use
+    #[must_use]
+    pub fn with_summarizer(summarizer: S) -> Self {
+        Self { summarizer }
     }
 
     /// Compacts a conversation to fit within the token budget.
@@ -265,8 +453,8 @@ impl ContextCompactor {
             });
         }
 
-        // Generate summary of middle messages
-        let summary = self.generate_summary(middle_messages, config);
+        // Generate summary of middle messages using the configured summarizer
+        let summary = self.summarizer.summarize(middle_messages, config);
 
         // Build compacted message list
         let mut compacted = Vec::with_capacity(3 + recent_messages.len());
@@ -284,7 +472,7 @@ impl ContextCompactor {
         }
 
         // Ensure role alternation is valid
-        self.fix_role_alternation(&mut compacted);
+        fix_role_alternation(&mut compacted);
 
         let compacted_tokens = estimate_messages_tokens(&compacted);
         let saved_tokens = original_tokens.saturating_sub(compacted_tokens);
@@ -294,179 +482,70 @@ impl ContextCompactor {
             saved_tokens,
         })
     }
+}
 
-    /// Generates a summary of messages.
-    ///
-    /// For mock compactor, generates a placeholder summary.
-    /// For real compactor, would use Claude API.
-    fn generate_summary(&self, messages: &[ApiMessageV2], config: &CompactionConfig) -> String {
-        if self.is_mock {
-            self.generate_mock_summary(messages, config)
-        } else {
-            // Real implementation would call Claude API
-            // For now, use mock summary
-            self.generate_mock_summary(messages, config)
-        }
-    }
-
-    /// Generates a mock summary for testing.
-    ///
-    /// Extracts key content from messages to create a timeline.
-    fn generate_mock_summary(
-        &self,
-        messages: &[ApiMessageV2],
-        config: &CompactionConfig,
-    ) -> String {
-        let mut summary_parts = Vec::new();
-
-        // Check if any input is already a summary (to merge)
-        let has_existing_summary = messages.iter().any(|m| {
-            let text = m.content.to_text().to_lowercase();
-            text.contains("summary") || text.contains("previous conversation")
-        });
-
-        // Header based on style
-        let header = match config.summary_style {
-            SummaryStyle::Timeline => "Previous conversation timeline:",
-            SummaryStyle::BulletPoints => "Previous conversation summary:",
-            SummaryStyle::Narrative => "Summary of earlier conversation:",
-        };
-        summary_parts.push(header.to_string());
-
-        // Extract key actions from messages
-        for (i, msg) in messages.iter().enumerate() {
-            let text = msg.content.to_text();
-
-            // Skip very short messages or existing summaries (if merging)
-            if text.len() < 10 {
-                continue;
-            }
-
-            // For existing summaries, extract and merge their content
-            if has_existing_summary
-                && (text.to_lowercase().contains("summary")
-                    || text.to_lowercase().contains("previous conversation"))
-            {
-                // Extract bullet points or timeline items from existing summary
-                for line in text.lines() {
-                    let trimmed = line.trim();
-                    if trimmed.starts_with('-')
-                        || trimmed.starts_with('•')
-                        || trimmed.starts_with('*')
-                    {
-                        summary_parts.push(trimmed.to_string());
-                    }
-                }
-                continue;
-            }
-
-            // Extract key phrases from messages
-            let key_phrases = self.extract_key_phrases(&text);
-            if !key_phrases.is_empty() {
-                let prefix = match config.summary_style {
-                    SummaryStyle::Timeline => format!("{}.", i + 1),
-                    SummaryStyle::BulletPoints => "-".to_string(),
-                    SummaryStyle::Narrative => "".to_string(),
-                };
-
-                if config.summary_style == SummaryStyle::Narrative {
-                    summary_parts.push(key_phrases);
-                } else {
-                    summary_parts.push(format!("{} {}", prefix, key_phrases));
-                }
-            }
-        }
-
-        // Ensure we have some content
-        if summary_parts.len() == 1 {
-            summary_parts.push("- Completed various tasks and actions.".to_string());
-        }
-
-        summary_parts.join("\n")
-    }
-
-    /// Extracts key phrases from a message for summarization.
-    fn extract_key_phrases(&self, text: &str) -> String {
-        // Look for action words and key content
-        let text_lower = text.to_lowercase();
-
-        // Prioritize messages with action words
-        let action_indicators = [
-            "created",
-            "added",
-            "implemented",
-            "fixed",
-            "updated",
-            "deployed",
-            "completed",
-            "wrote",
-            "built",
-            "configured",
-            "installed",
-            "removed",
-            "refactored",
-        ];
-
-        for indicator in action_indicators {
-            if text_lower.contains(indicator) {
-                // Return a shortened version of the message
-                let truncated = if text.len() > 100 {
-                    format!("{}...", &text[..100])
-                } else {
-                    text.to_string()
-                };
-                return truncated;
-            }
-        }
-
-        // For other messages, extract first sentence or truncate
-        if let Some(period_pos) = text.find('.') {
-            if period_pos < 150 {
-                return text[..=period_pos].to_string();
-            }
-        }
-
-        // Fallback: truncate
-        if text.len() > 80 {
-            format!("{}...", &text[..80])
-        } else {
-            text.to_string()
-        }
-    }
-
-    /// Fixes role alternation in the message list.
-    ///
-    /// Ensures messages alternate between user and assistant roles.
-    fn fix_role_alternation(&self, messages: &mut Vec<ApiMessageV2>) {
-        if messages.len() < 2 {
-            return;
-        }
-
-        let mut i = 1;
-        while i < messages.len() {
-            if messages[i].role == messages[i - 1].role {
-                // Same role as previous - need to insert a placeholder
-                let placeholder = if messages[i].role == Role::User {
-                    ApiMessageV2::assistant("Continuing...")
-                } else {
-                    ApiMessageV2::user("Please continue.")
-                };
-                messages.insert(i, placeholder);
-            }
-            i += 1;
-        }
+impl Default for ContextCompactor<MockSummarizer> {
+    fn default() -> Self {
+        Self::new_mock()
     }
 }
 
-impl Default for ContextCompactor {
-    fn default() -> Self {
-        Self::new()
+/// Fixes role alternation in the message list.
+///
+/// Ensures messages alternate between user and assistant roles.
+fn fix_role_alternation(messages: &mut Vec<ApiMessageV2>) {
+    if messages.len() < 2 {
+        return;
+    }
+
+    let mut i = 1;
+    while i < messages.len() {
+        if messages[i].role == messages[i - 1].role {
+            // Same role as previous - need to insert a placeholder
+            let placeholder = if messages[i].role == Role::User {
+                ApiMessageV2::assistant("Continuing...")
+            } else {
+                ApiMessageV2::user("Please continue.")
+            };
+            messages.insert(i, placeholder);
+        }
+        i += 1;
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_summarizer_trait_exists() {
+        // Verify the Summarizer trait can be implemented
+        struct TestSummarizer;
+
+        impl Summarizer for TestSummarizer {
+            fn summarize(&self, _messages: &[ApiMessageV2], _config: &CompactionConfig) -> String {
+                "Test summary".to_string()
+            }
+        }
+
+        let summarizer = TestSummarizer;
+        let messages = vec![ApiMessageV2::user("Test")];
+        let config = CompactionConfig::default();
+        let result = summarizer.summarize(&messages, &config);
+        assert_eq!(result, "Test summary");
+    }
+
+    #[test]
+    fn test_mock_summarizer_implements_trait() {
+        let summarizer = MockSummarizer;
+        let messages = vec![
+            ApiMessageV2::user("Hello"),
+            ApiMessageV2::assistant("Hi there!"),
+        ];
+        let config = CompactionConfig::default();
+        let result = summarizer.summarize(&messages, &config);
+        assert!(result.contains("Previous conversation"));
+    }
 
     #[test]
     fn test_compaction_config_default() {
@@ -478,8 +557,27 @@ mod tests {
 
     #[test]
     fn test_context_compactor_new_mock() {
+        // Verify mock compactor can be created and used
         let compactor = ContextCompactor::new_mock();
-        assert!(compactor.is_mock);
+        let messages = vec![ApiMessageV2::user("Test")];
+        let config = CompactionConfig::default();
+        // Should not panic
+        let _ = compactor.compact(&messages, &config);
+    }
+
+    #[test]
+    fn test_context_compactor_with_summarizer() {
+        // Verify compactor can be created with custom summarizer
+        struct CustomSummarizer;
+        impl Summarizer for CustomSummarizer {
+            fn summarize(&self, _: &[ApiMessageV2], _: &CompactionConfig) -> String {
+                "Custom summary".to_string()
+            }
+        }
+        let compactor = ContextCompactor::with_summarizer(CustomSummarizer);
+        let messages = vec![ApiMessageV2::user("Test")];
+        let config = CompactionConfig::default();
+        let _ = compactor.compact(&messages, &config);
     }
 
     #[test]
@@ -494,41 +592,37 @@ mod tests {
 
     #[test]
     fn test_extract_key_phrases_with_action() {
-        let compactor = ContextCompactor::new_mock();
         let text = "I created a new file called main.rs with the hello world program.";
-        let result = compactor.extract_key_phrases(text);
+        let result = extract_key_phrases(text);
         assert!(result.contains("created"));
     }
 
     #[test]
     fn test_extract_key_phrases_truncates_long() {
-        let compactor = ContextCompactor::new_mock();
         let text = "a".repeat(200);
-        let result = compactor.extract_key_phrases(&text);
+        let result = extract_key_phrases(&text);
         assert!(result.len() < text.len());
         assert!(result.ends_with("..."));
     }
 
     #[test]
     fn test_fix_role_alternation_already_valid() {
-        let compactor = ContextCompactor::new_mock();
         let mut messages = vec![
             ApiMessageV2::user("Hello"),
             ApiMessageV2::assistant("Hi"),
             ApiMessageV2::user("Bye"),
         ];
-        compactor.fix_role_alternation(&mut messages);
+        fix_role_alternation(&mut messages);
         assert_eq!(messages.len(), 3);
     }
 
     #[test]
     fn test_fix_role_alternation_inserts_placeholder() {
-        let compactor = ContextCompactor::new_mock();
         let mut messages = vec![
             ApiMessageV2::user("Hello"),
             ApiMessageV2::user("Another user message"),
         ];
-        compactor.fix_role_alternation(&mut messages);
+        fix_role_alternation(&mut messages);
         assert_eq!(messages.len(), 3);
         assert_eq!(messages[1].role, Role::Assistant);
     }
