@@ -45,12 +45,16 @@
 
 mod cache;
 mod ccg_backend;
+mod fallback_backend;
 mod metrics;
 mod orchestrator;
 mod types;
 
 pub use cache::{CacheKey, CachedResult, ResultCache, DEFAULT_CACHE_TTL, DEFAULT_MAX_ENTRIES};
 pub use ccg_backend::{has_limit_clause, CcgBackend, DEFAULT_SPARQL_LIMIT};
+pub use fallback_backend::{
+    extract_repo_hash, extract_symbol_counts, FallbackBackend, SymbolCounts, DEFAULT_FALLBACK_LIMIT,
+};
 pub use metrics::{CompressionMetrics, MetricsSummary};
 pub use orchestrator::{
     CompressionOrchestrator, DEFAULT_ORCHESTRATOR_MAX_ENTRIES, DEFAULT_ORCHESTRATOR_TTL,
