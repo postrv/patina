@@ -7,6 +7,40 @@
 
 ---
 
+## Archive Status
+
+**Archived:** 2026-02-04
+**Final Status:** Partially Complete
+
+### Completion Summary
+
+| Phase | Status | Tasks | Notes |
+|-------|--------|-------|-------|
+| R.1 Documentation | ✅ Complete | 5/5 | SPARQL namespaces, tool counts |
+| R.2 Architecture | ✅ Complete | 4/5 | Summarizer trait, ToolUseBuilder typestate |
+| R.3 CCG Integration | 🔶 Partial | 9/12 | Async MCP methods, CCG backend wired; AppState integration deferred |
+| R.4 Auto-Compaction | 🔶 Partial | 3/7 | Threshold config, token budget checker; event loop integration deferred |
+
+### Key Achievements
+
+1. **Summarizer Trait** - Replaced `is_mock` boolean with trait-based pattern (`src/api/compaction.rs`)
+2. **Typestate ToolUseBuilder** - Compile-time state machine for tool use accumulation (`src/types/stream.rs`)
+3. **CCG Async Methods** - Full MCP call chain: Orchestrator → CcgBackend → McpClient
+4. **Auto-Compact Infrastructure** - `needs_compaction()` method, `model_context_limit()`, threshold config
+
+### Deferred Work
+
+- **R.3.3** AppState integration - Core capability complete, full integration deferred
+- **R.4.3** Event loop trigger - Detection logic complete, trigger integration deferred
+- **R.2.3** Bash alias resolution - Optional enhancement
+
+### Test Count
+
+- **Baseline:** 1,330+ tests
+- **Final:** 1,356 tests (+26)
+
+---
+
 ## Executive Summary
 
 This plan addresses 12 issues identified in the Patina + Narsil-MCP + CCG project review. Issues are prioritized by impact and grouped into four phases:
