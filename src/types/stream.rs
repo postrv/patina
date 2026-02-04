@@ -241,6 +241,120 @@ impl ToolUseAccumulator {
     }
 }
 
+// =============================================================================
+// Typestate Tool Use Builder
+// =============================================================================
+
+/// Builder for tool use accumulation with compile-time state enforcement.
+///
+/// This provides a typestate pattern where:
+/// - `ToolUseBuilder` (unstarted): Can only call `start()`
+/// - `StartedToolUse`: Can call `append_input()` and `complete()`
+/// - `CompletedToolUse`: Final state with parsed data
+///
+/// This prevents calling `append_input()` before `start()` at compile time.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use patina::types::stream::ToolUseBuilder;
+///
+/// let builder = ToolUseBuilder::new();
+/// let mut started = builder.start("tool-123".to_string(), "bash".to_string());
+/// started.append_input(r#"{"cmd": "ls"}"#);
+/// let completed = started.complete()?;
+///
+/// println!("Tool: {} with id: {}", completed.name, completed.id);
+/// ```
+#[derive(Debug, Clone, Default)]
+pub struct ToolUseBuilder {
+    _private: (),
+}
+
+impl ToolUseBuilder {
+    /// Creates a new tool use builder.
+    #[must_use]
+    pub fn new() -> Self {
+        Self { _private: () }
+    }
+
+    /// Starts accumulating a tool use.
+    ///
+    /// Consumes self and returns a `StartedToolUse` that can accumulate input.
+    #[must_use]
+    pub fn start(self, id: String, name: String) -> StartedToolUse {
+        StartedToolUse {
+            id,
+            name,
+            input_json: String::new(),
+        }
+    }
+}
+
+/// A tool use that has been started and is accumulating input.
+///
+/// This state guarantees that `id` and `name` have been set.
+/// You can only reach this state by calling `ToolUseBuilder::start()`.
+#[derive(Debug, Clone)]
+pub struct StartedToolUse {
+    id: String,
+    name: String,
+    input_json: String,
+}
+
+impl StartedToolUse {
+    /// Appends a JSON fragment to the input.
+    pub fn append_input(&mut self, partial_json: &str) {
+        self.input_json.push_str(partial_json);
+    }
+
+    /// Returns the tool ID.
+    #[must_use]
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    /// Returns the tool name.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Completes the accumulation and parses the JSON input.
+    ///
+    /// Consumes self and returns a `CompletedToolUse` on success.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the accumulated JSON is invalid.
+    pub fn complete(self) -> Result<CompletedToolUse, serde_json::Error> {
+        let input = if self.input_json.is_empty() {
+            Value::Object(serde_json::Map::new())
+        } else {
+            serde_json::from_str(&self.input_json)?
+        };
+
+        Ok(CompletedToolUse {
+            id: self.id,
+            name: self.name,
+            input,
+        })
+    }
+}
+
+/// A completed tool use with parsed input.
+///
+/// This is the final state, guaranteeing that the JSON has been parsed successfully.
+#[derive(Debug, Clone)]
+pub struct CompletedToolUse {
+    /// The tool use ID.
+    pub id: String,
+    /// The tool name.
+    pub name: String,
+    /// The parsed JSON input.
+    pub input: Value,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -415,5 +529,41 @@ mod tests {
     fn test_tool_use_accumulator_default() {
         let acc = ToolUseAccumulator::default();
         assert!(!acc.is_active());
+    }
+
+    // =========================================================================
+    // Typestate ToolUseBuilder tests
+    // =========================================================================
+
+    #[test]
+    fn test_tool_use_builder_typestate_flow() {
+        // Unstarted -> Started -> Complete flow
+        let builder = ToolUseBuilder::new();
+        let started = builder.start("tool-123".to_string(), "bash".to_string());
+        let completed = started.complete().expect("should parse empty JSON");
+
+        assert_eq!(completed.id, "tool-123");
+        assert_eq!(completed.name, "bash");
+    }
+
+    #[test]
+    fn test_tool_use_builder_append_input() {
+        let builder = ToolUseBuilder::new();
+        let mut started = builder.start("tool-123".to_string(), "bash".to_string());
+        started.append_input(r#"{"cmd": "ls"}"#);
+        let completed = started.complete().expect("should parse JSON");
+
+        assert_eq!(completed.id, "tool-123");
+        assert_eq!(completed.input["cmd"], "ls");
+    }
+
+    #[test]
+    fn test_tool_use_builder_complete_fails_on_invalid_json() {
+        let builder = ToolUseBuilder::new();
+        let mut started = builder.start("tool-123".to_string(), "bash".to_string());
+        started.append_input("invalid json {");
+        let result = started.complete();
+
+        assert!(result.is_err());
     }
 }
