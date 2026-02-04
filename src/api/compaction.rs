@@ -269,10 +269,7 @@ impl Summarizer for ClaudeSummarizer {
                 std::thread::scope(|s| {
                     s.spawn(|| {
                         let rt = tokio::runtime::Runtime::new().ok()?;
-                        let summarizer = ClaudeSummarizer {
-                            client,
-                            model,
-                        };
+                        let summarizer = ClaudeSummarizer { client, model };
                         rt.block_on(summarizer.summarize_async(&messages, &config))
                             .ok()
                     })
@@ -285,9 +282,7 @@ impl Summarizer for ClaudeSummarizer {
         match result {
             Some(summary) => summary,
             None => {
-                warn!(
-                    "Failed to generate Claude summary, falling back to mock summarization"
-                );
+                warn!("Failed to generate Claude summary, falling back to mock summarization");
                 generate_mock_summary(messages, config)
             }
         }
