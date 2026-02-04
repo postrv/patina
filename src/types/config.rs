@@ -5,6 +5,7 @@
 
 use secrecy::SecretString;
 use std::path::PathBuf;
+use std::time::Duration;
 
 /// Controls session resume behavior.
 ///
@@ -82,6 +83,63 @@ pub enum NarsilMode {
     Disabled,
 }
 
+/// Configuration for context compression.
+///
+/// Controls how context is compressed and cached for efficient token usage.
+/// These settings affect the behavior of the [`CompressionOrchestrator`].
+///
+/// # Default Values
+///
+/// - `cache_ttl`: 5 minutes (300 seconds)
+/// - `max_cache_entries`: 100
+/// - `max_context_tokens`: 10,000
+///
+/// # Example
+///
+/// ```
+/// use patina::types::config::CompressionConfig;
+/// use std::time::Duration;
+///
+/// // Use defaults
+/// let config = CompressionConfig::default();
+/// assert_eq!(config.cache_ttl, Duration::from_secs(300));
+///
+/// // Custom configuration
+/// let config = CompressionConfig {
+///     cache_ttl: Duration::from_secs(600),
+///     max_cache_entries: 200,
+///     max_context_tokens: 20000,
+/// };
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompressionConfig {
+    /// Time-to-live for cached compression results.
+    ///
+    /// Results are automatically invalidated after this duration.
+    /// Note: Results are also invalidated when the repository hash changes.
+    pub cache_ttl: Duration,
+
+    /// Maximum number of cache entries to keep.
+    ///
+    /// When this limit is reached, the oldest 10% of entries are evicted.
+    pub max_cache_entries: usize,
+
+    /// Maximum tokens to include in auto-injected context.
+    ///
+    /// When using `build_context_with_budget()`, this is the default budget.
+    pub max_context_tokens: usize,
+}
+
+impl Default for CompressionConfig {
+    fn default() -> Self {
+        Self {
+            cache_ttl: Duration::from_secs(300), // 5 minutes
+            max_cache_entries: 100,
+            max_context_tokens: 10_000,
+        }
+    }
+}
+
 /// Application configuration.
 ///
 /// Contains all settings needed to initialize and run the Patina application.
@@ -94,7 +152,7 @@ pub enum NarsilMode {
 /// # Examples
 ///
 /// ```no_run
-/// use patina::types::config::{Config, NarsilMode, ParallelMode, ResumeMode};
+/// use patina::types::config::{CompressionConfig, Config, NarsilMode, ParallelMode, ResumeMode};
 /// use secrecy::SecretString;
 /// use std::path::PathBuf;
 ///
@@ -115,6 +173,7 @@ pub enum NarsilMode {
 ///     subagents_enabled: false,
 ///     ide_port: None,
 ///     auto_context_enabled: true,
+///     compression: CompressionConfig::default(),
 /// };
 /// ```
 pub struct Config {
@@ -224,6 +283,12 @@ pub struct Config {
     ///
     /// Disable with `--no-auto-context` CLI flag.
     pub auto_context_enabled: bool,
+
+    /// Context compression configuration.
+    ///
+    /// Controls cache TTL, max entries, and token budget for context compression.
+    /// Used when creating the `CompressionOrchestrator`.
+    pub compression: CompressionConfig,
 }
 
 impl Config {
@@ -270,6 +335,7 @@ impl Config {
             subagents_enabled: false,
             ide_port: None,
             auto_context_enabled: true,
+            compression: CompressionConfig::default(),
         }
     }
 
@@ -580,6 +646,7 @@ mod tests {
             subagents_enabled: false,
             ide_port: None,
             auto_context_enabled: true,
+            compression: CompressionConfig::default(),
         };
 
         assert_eq!(config.model(), "claude-opus-4-20250514");
@@ -605,6 +672,7 @@ mod tests {
             subagents_enabled: false,
             ide_port: None,
             auto_context_enabled: true,
+            compression: CompressionConfig::default(),
         };
 
         assert_eq!(config.working_dir(), &path);
@@ -955,5 +1023,44 @@ mod tests {
             .with_auto_context_enabled(true);
 
         assert!(config.auto_context_enabled());
+    }
+
+    // =========================================================================
+    // Phase 3: Compression config tests
+    // =========================================================================
+
+    #[test]
+    fn test_compression_config_default() {
+        let config = CompressionConfig::default();
+
+        assert_eq!(config.cache_ttl, Duration::from_secs(300));
+        assert_eq!(config.max_cache_entries, 100);
+        assert_eq!(config.max_context_tokens, 10_000);
+    }
+
+    #[test]
+    fn test_compression_config_custom() {
+        let config = CompressionConfig {
+            cache_ttl: Duration::from_secs(600),
+            max_cache_entries: 200,
+            max_context_tokens: 20_000,
+        };
+
+        assert_eq!(config.cache_ttl, Duration::from_secs(600));
+        assert_eq!(config.max_cache_entries, 200);
+        assert_eq!(config.max_context_tokens, 20_000);
+    }
+
+    #[test]
+    fn test_config_has_compression_section() {
+        let config = Config::new(
+            SecretString::new("test-key".into()),
+            "test-model",
+            PathBuf::from("/tmp"),
+        );
+
+        // Config should have default compression settings
+        assert_eq!(config.compression.cache_ttl, Duration::from_secs(300));
+        assert_eq!(config.compression.max_cache_entries, 100);
     }
 }
