@@ -35,7 +35,9 @@ use crate::tui;
 use crate::tui::selection::{ContentPosition, FocusArea};
 use crate::tui::widgets::handle_permission_key;
 use crate::tui::widgets::permission_prompt::PermissionPromptState;
-use crate::types::config::ResumeMode;
+use crate::narsil::NarsilIntegration;
+use crate::plugins::narsil::{has_supported_code_files, is_narsil_available};
+use crate::types::config::{NarsilMode, ResumeMode};
 use crate::types::{ApiMessageV2, Message, Role};
 
 // Re-export Config for backward compatibility
@@ -147,6 +149,53 @@ fn handle_copy(state: &AppState) {
     }
 }
 
+/// Initializes the compression orchestrator based on narsil configuration.
+///
+/// This function checks the narsil mode and creates a `CompressionOrchestrator`
+/// if narsil integration should be enabled. The orchestrator is then set on
+/// the `AppState` for CCG context management.
+///
+/// # Arguments
+///
+/// * `state` - Mutable reference to the application state
+/// * `config` - Application configuration containing narsil mode
+///
+/// # Behavior
+///
+/// - `NarsilMode::Auto`: Enables if narsil-mcp is in PATH and project has code files
+/// - `NarsilMode::Enabled`: Always tries to enable (logs warning if unavailable)
+/// - `NarsilMode::Disabled`: Does nothing
+fn initialize_compression_orchestrator(state: &mut AppState, config: &Config) {
+    let should_enable = match config.narsil_mode() {
+        NarsilMode::Disabled => false,
+        NarsilMode::Enabled => {
+            if !is_narsil_available() {
+                warn!("narsil-mcp not found in PATH, compression orchestrator unavailable");
+                false
+            } else {
+                true
+            }
+        }
+        NarsilMode::Auto => {
+            // Auto-detect: enable if narsil is available AND project has supported code files
+            is_narsil_available() && has_supported_code_files(&config.working_dir)
+        }
+    };
+
+    if should_enable {
+        // Create NarsilIntegration with detected tools
+        // Since we're not connected to MCP yet, create with empty tool list
+        // The capabilities will be discovered when MCP tools are registered
+        let integration = NarsilIntegration::new(&config.working_dir);
+        let orchestrator = integration.create_compression_orchestrator();
+        state.set_compression_orchestrator(orchestrator);
+        info!(
+            "Compression orchestrator initialized for {}",
+            config.working_dir.display()
+        );
+    }
+}
+
 pub async fn run(config: Config) -> Result<()> {
     // If print mode is enabled with an initial prompt, run non-interactively
     if config.print_mode {
@@ -186,6 +235,9 @@ pub async fn run(config: Config) -> Result<()> {
         ),
         ResumeMode::Last | ResumeMode::SessionId(_) => load_session_state(&config).await?,
     };
+
+    // Initialize compression orchestrator for CCG context management
+    initialize_compression_orchestrator(&mut state, &config);
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -1234,5 +1286,44 @@ mod tests {
 
         assert!(response.is_none());
         assert!(state.has_pending_permission()); // Still pending
+    }
+
+    // =========================================================================
+    // Compression orchestrator initialization tests
+    // =========================================================================
+
+    #[test]
+    fn test_initialize_compression_orchestrator_disabled_mode() {
+        use secrecy::SecretString;
+
+        let mut state = AppState::new(PathBuf::from("/tmp"), false, ParallelMode::Enabled);
+        let config = Config::new(SecretString::new("test".into()), "model", PathBuf::from("/tmp"))
+            .with_narsil_mode(NarsilMode::Disabled);
+
+        // Disabled mode should never set orchestrator
+        initialize_compression_orchestrator(&mut state, &config);
+        assert!(state.compression_orchestrator().is_none());
+    }
+
+    #[test]
+    fn test_initialize_compression_orchestrator_auto_mode_no_code_files() {
+        use secrecy::SecretString;
+        use tempfile::tempdir;
+
+        // Create a temp dir with no code files
+        let temp = tempdir().unwrap();
+        let mut state = AppState::new(temp.path().to_path_buf(), false, ParallelMode::Enabled);
+        let config = Config::new(
+            SecretString::new("test".into()),
+            "model",
+            temp.path().to_path_buf(),
+        )
+        .with_narsil_mode(NarsilMode::Auto);
+
+        // Auto mode with no code files should not set orchestrator
+        initialize_compression_orchestrator(&mut state, &config);
+        // Result depends on is_narsil_available() AND has_supported_code_files()
+        // Since temp dir has no code files, orchestrator should be None
+        assert!(state.compression_orchestrator().is_none());
     }
 }
