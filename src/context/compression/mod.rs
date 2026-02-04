@@ -43,8 +43,10 @@
 //! println!("Got {} tokens from {}", result.tokens_approx(), result.source());
 //! ```
 
+mod cache;
 mod types;
 
+pub use cache::{CacheKey, CachedResult, ResultCache, DEFAULT_CACHE_TTL, DEFAULT_MAX_ENTRIES};
 pub use types::{estimate_tokens, CompressionLevel, CompressionResult, ContextSource};
 
 #[cfg(test)]
