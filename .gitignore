@@ -53,7 +53,9 @@ tarpaulin-report.html
 PROMPT_*.md
 /patina-strategic-roadmap.md
 /IMPLEMENTATION_PLAN.md
+/REMEDIATION_PLAN.md
 
 # Backup files
 .rct_backups/
 /context_compression_plans/
+/patina-project-review.md
