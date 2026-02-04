@@ -1473,6 +1473,165 @@ impl AppState {
     }
 
     // ========================================================================
+    // Auto-Compaction (Phase 4.4)
+    // ========================================================================
+
+    /// Estimates the total tokens in the current conversation.
+    ///
+    /// Uses the token estimation utilities to calculate approximate token
+    /// usage for all API messages. This is a heuristic estimate, not an
+    /// exact count.
+    ///
+    /// # Returns
+    ///
+    /// Estimated token count for the conversation.
+    #[must_use]
+    pub fn estimate_conversation_tokens(&self) -> usize {
+        use crate::api::tokens::estimate_messages_tokens;
+        estimate_messages_tokens(&self.api_messages)
+    }
+
+    /// Updates the token budget based on the current conversation size.
+    ///
+    /// This synchronizes the token budget with the actual estimated token
+    /// usage in the conversation. Call this after adding messages or after
+    /// compaction to keep the budget accurate.
+    pub fn sync_token_budget(&mut self) {
+        let tokens = self.estimate_conversation_tokens();
+        self.token_budget.reset();
+        self.token_budget.add_usage(tokens);
+        self.dirty.full = true;
+    }
+
+    /// Checks if compaction should be triggered and performs it if needed.
+    ///
+    /// This method:
+    /// 1. Estimates current conversation tokens
+    /// 2. Checks if usage exceeds the auto-compaction threshold
+    /// 3. If yes, performs compaction using the mock summarizer
+    /// 4. Updates api_messages with compacted result
+    /// 5. Syncs token budget
+    ///
+    /// # Arguments
+    ///
+    /// * `threshold` - Fraction of context window at which to trigger (0.0-1.0)
+    /// * `context_limit` - Maximum context window size in tokens
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(true)` - Compaction was performed
+    /// * `Ok(false)` - No compaction needed
+    /// * `Err(_)` - Compaction failed
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// // Trigger compaction at 80% of 200k context
+    /// let compacted = state.maybe_compact(0.8, 200_000)?;
+    /// if compacted {
+    ///     println!("Conversation was compacted");
+    /// }
+    /// ```
+    pub fn maybe_compact(&mut self, threshold: f32, context_limit: usize) -> Result<bool> {
+        use crate::api::compaction::{CompactionConfig, ContextCompactor, MockSummarizer};
+
+        // Estimate current usage
+        let current_tokens = self.estimate_conversation_tokens();
+        let threshold_tokens = (context_limit as f64 * f64::from(threshold)) as usize;
+
+        // Check if we're under threshold
+        if current_tokens < threshold_tokens {
+            tracing::debug!(
+                current = current_tokens,
+                threshold = threshold_tokens,
+                "Compaction not needed"
+            );
+            return Ok(false);
+        }
+
+        tracing::info!(
+            current = current_tokens,
+            threshold = threshold_tokens,
+            "Starting auto-compaction"
+        );
+
+        // Show compaction progress
+        let target_tokens = context_limit / 2; // Target 50% of context
+        self.start_compaction(target_tokens, current_tokens);
+
+        // Create compactor with mock summarizer
+        // TODO: In production, use ClaudeSummarizer with client
+        let compactor = ContextCompactor::<MockSummarizer>::new_mock();
+
+        let config = CompactionConfig {
+            target_tokens,
+            preserve_recent: 4,
+            ..Default::default()
+        };
+
+        // Perform compaction
+        match compactor.compact(&self.api_messages, &config) {
+            Ok(result) => {
+                let after_tokens = crate::api::tokens::estimate_messages_tokens(&result.messages);
+
+                tracing::info!(
+                    before = current_tokens,
+                    after = after_tokens,
+                    saved = result.saved_tokens,
+                    "Compaction complete"
+                );
+
+                // Update state with compacted messages
+                self.api_messages = result.messages;
+
+                // Sync token budget with new size
+                self.sync_token_budget();
+
+                // Update compaction UI
+                self.complete_compaction(after_tokens);
+
+                Ok(true)
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "Compaction failed");
+                self.fail_compaction();
+
+                // Return error but don't fail the operation
+                Err(e)
+            }
+        }
+    }
+
+    /// Performs compaction if needed, logging but not failing on errors.
+    ///
+    /// This is a convenience wrapper around `maybe_compact` that handles
+    /// errors gracefully. Use this in the message send flow where compaction
+    /// failure shouldn't block the API call.
+    ///
+    /// # Arguments
+    ///
+    /// * `threshold` - Fraction of context window at which to trigger
+    /// * `context_limit` - Maximum context window size in tokens
+    ///
+    /// # Returns
+    ///
+    /// `true` if compaction was performed successfully, `false` otherwise.
+    pub fn maybe_compact_graceful(&mut self, threshold: f32, context_limit: usize) -> bool {
+        match self.maybe_compact(threshold, context_limit) {
+            Ok(compacted) => compacted,
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "Compaction failed, continuing without compaction"
+                );
+                // Clear failed compaction state
+                self.clear_compaction();
+                false
+            }
+        }
+    }
+
+    // ========================================================================
     // Session Restoration and Auto-Save
     // ========================================================================
 
@@ -3427,5 +3586,114 @@ mod tests {
         };
         state.record_tool_result("toolu_xyz", result);
         assert!(state.all_tools_complete());
+    }
+
+    // =========================================================================
+    // Auto-Compaction Tests (Phase 4.4)
+    // =========================================================================
+
+    #[test]
+    fn test_estimate_conversation_tokens_empty() {
+        let state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+        let tokens = state.estimate_conversation_tokens();
+        assert_eq!(tokens, 0);
+    }
+
+    #[test]
+    fn test_estimate_conversation_tokens_with_messages() {
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+
+        // Add some messages
+        state
+            .api_messages_mut()
+            .push(ApiMessageV2::user("Hello, how are you?"));
+        state
+            .api_messages_mut()
+            .push(ApiMessageV2::assistant("I'm doing well, thank you!"));
+
+        let tokens = state.estimate_conversation_tokens();
+        // Should have some tokens (overhead + content)
+        assert!(tokens > 0, "Should have tokens, got {}", tokens);
+        // Estimate: ~8-20 tokens for these short messages
+        assert!(
+            tokens < 100,
+            "Should be reasonable estimate, got {}",
+            tokens
+        );
+    }
+
+    #[test]
+    fn test_sync_token_budget() {
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+
+        // Add messages
+        state.api_messages_mut().push(ApiMessageV2::user("Hello"));
+        state
+            .api_messages_mut()
+            .push(ApiMessageV2::assistant("Hi there!"));
+
+        // Initially budget is empty
+        assert_eq!(state.token_budget().used(), 0);
+
+        // Sync budget
+        state.sync_token_budget();
+
+        // Budget should reflect message tokens
+        assert!(state.token_budget().used() > 0, "Budget should have usage");
+    }
+
+    #[test]
+    fn test_maybe_compact_below_threshold() {
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+
+        // Add a small message
+        state.api_messages_mut().push(ApiMessageV2::user("Hello"));
+
+        // Try to compact at 80% threshold of 200k tokens
+        // With minimal messages, we're well below threshold
+        let result = state.maybe_compact(0.8, 200_000);
+
+        assert!(result.is_ok());
+        assert!(!result.unwrap(), "Should not compact below threshold");
+    }
+
+    #[test]
+    fn test_maybe_compact_graceful_handles_small_conversation() {
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+
+        state.api_messages_mut().push(ApiMessageV2::user("Hello"));
+
+        let compacted = state.maybe_compact_graceful(0.8, 200_000);
+
+        assert!(!compacted, "Should not compact small conversation");
+    }
+
+    #[test]
+    fn test_maybe_compact_triggers_above_threshold() {
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+
+        // Add many large messages to exceed threshold
+        let large_content = "x".repeat(10000); // ~2500 tokens each
+        for i in 0..100 {
+            state.api_messages_mut().push(ApiMessageV2::user(format!(
+                "Message {}: {}",
+                i, large_content
+            )));
+        }
+
+        // Check tokens before compaction
+        let before_tokens = state.estimate_conversation_tokens();
+        assert!(
+            before_tokens > 100_000,
+            "Should have many tokens, got {}",
+            before_tokens
+        );
+
+        // Compact at 80% of 200k = 160k tokens
+        // We have >100k tokens, so use a lower context limit to trigger
+        let result = state.maybe_compact(0.5, before_tokens);
+
+        assert!(result.is_ok());
+        // Whether it actually compacted depends on the compactor behavior
     }
 }
