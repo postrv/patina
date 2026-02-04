@@ -209,6 +209,150 @@ impl std::fmt::Display for MetricsSummary {
     }
 }
 
+/// Metrics for context compaction operations.
+///
+/// Tracks the number of compactions performed, total tokens saved,
+/// and total time spent compacting. All operations are thread-safe
+/// using atomic primitives.
+///
+/// # Example
+///
+/// ```
+/// use patina::context::compression::CompactionMetrics;
+/// use std::time::Duration;
+///
+/// let metrics = CompactionMetrics::new();
+///
+/// // Record a compaction operation
+/// metrics.record_compaction(5000, Duration::from_millis(100));
+///
+/// // Check metrics
+/// assert_eq!(metrics.compaction_count(), 1);
+/// assert_eq!(metrics.total_tokens_saved(), 5000);
+/// ```
+#[derive(Debug, Default)]
+pub struct CompactionMetrics {
+    /// Number of compaction operations performed
+    compaction_count: AtomicU64,
+    /// Total tokens saved across all compactions
+    total_tokens_saved: AtomicU64,
+    /// Total time spent compacting in milliseconds
+    total_time_ms: AtomicU64,
+}
+
+impl CompactionMetrics {
+    /// Creates a new compaction metrics instance with all counters at zero.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Records a compaction operation.
+    ///
+    /// # Arguments
+    ///
+    /// * `tokens_saved` - Number of tokens saved by this compaction
+    /// * `duration` - How long the compaction took
+    pub fn record_compaction(&self, tokens_saved: usize, duration: Duration) {
+        self.compaction_count.fetch_add(1, Ordering::Relaxed);
+        self.total_tokens_saved
+            .fetch_add(tokens_saved as u64, Ordering::Relaxed);
+        self.total_time_ms
+            .fetch_add(duration.as_millis() as u64, Ordering::Relaxed);
+    }
+
+    /// Returns the number of compactions performed.
+    #[must_use]
+    pub fn compaction_count(&self) -> u64 {
+        self.compaction_count.load(Ordering::Relaxed)
+    }
+
+    /// Returns the total tokens saved across all compactions.
+    #[must_use]
+    pub fn total_tokens_saved(&self) -> u64 {
+        self.total_tokens_saved.load(Ordering::Relaxed)
+    }
+
+    /// Returns the total time spent compacting in milliseconds.
+    #[must_use]
+    pub fn total_time_ms(&self) -> u64 {
+        self.total_time_ms.load(Ordering::Relaxed)
+    }
+
+    /// Returns the average tokens saved per compaction.
+    ///
+    /// Returns 0 if no compactions have been recorded.
+    #[must_use]
+    pub fn average_tokens_saved(&self) -> u64 {
+        let count = self.compaction_count.load(Ordering::Relaxed);
+        if count == 0 {
+            return 0;
+        }
+        self.total_tokens_saved.load(Ordering::Relaxed) / count
+    }
+
+    /// Returns the average time per compaction in milliseconds.
+    ///
+    /// Returns 0 if no compactions have been recorded.
+    #[must_use]
+    pub fn average_time_ms(&self) -> u64 {
+        let count = self.compaction_count.load(Ordering::Relaxed);
+        if count == 0 {
+            return 0;
+        }
+        self.total_time_ms.load(Ordering::Relaxed) / count
+    }
+
+    /// Returns a summary of all compaction metrics.
+    #[must_use]
+    pub fn summary(&self) -> CompactionMetricsSummary {
+        let count = self.compaction_count.load(Ordering::Relaxed);
+        CompactionMetricsSummary {
+            compaction_count: count,
+            total_tokens_saved: self.total_tokens_saved.load(Ordering::Relaxed),
+            total_time_ms: self.total_time_ms.load(Ordering::Relaxed),
+            average_tokens_saved: self.average_tokens_saved(),
+            average_time_ms: self.average_time_ms(),
+        }
+    }
+
+    /// Resets all counters to zero.
+    pub fn reset(&self) {
+        self.compaction_count.store(0, Ordering::Relaxed);
+        self.total_tokens_saved.store(0, Ordering::Relaxed);
+        self.total_time_ms.store(0, Ordering::Relaxed);
+    }
+}
+
+/// Summary of compaction metrics.
+#[derive(Debug, Clone)]
+pub struct CompactionMetricsSummary {
+    /// Number of compactions performed
+    pub compaction_count: u64,
+    /// Total tokens saved
+    pub total_tokens_saved: u64,
+    /// Total time spent in milliseconds
+    pub total_time_ms: u64,
+    /// Average tokens saved per compaction
+    pub average_tokens_saved: u64,
+    /// Average time per compaction in milliseconds
+    pub average_time_ms: u64,
+}
+
+impl std::fmt::Display for CompactionMetricsSummary {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "compactions={} tokens_saved={} time={}ms avg_saved={} avg_time={}ms",
+            self.compaction_count,
+            self.total_tokens_saved,
+            self.total_time_ms,
+            self.average_tokens_saved,
+            self.average_time_ms
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -389,5 +533,94 @@ mod tests {
         // 10 threads * 100 iterations = 1000 each
         assert_eq!(metrics.cache_hits(), 1000);
         assert_eq!(metrics.cache_misses(), 1000);
+    }
+
+    // 4.4.5 Tests: CompactionMetrics
+    #[test]
+    fn test_compaction_metrics_initial_values_zero() {
+        let metrics = CompactionMetrics::new();
+        assert_eq!(metrics.compaction_count(), 0);
+        assert_eq!(metrics.total_tokens_saved(), 0);
+        assert_eq!(metrics.total_time_ms(), 0);
+    }
+
+    #[test]
+    fn test_compaction_metrics_record_compaction() {
+        let metrics = CompactionMetrics::new();
+        metrics.record_compaction(1000, Duration::from_millis(50));
+        metrics.record_compaction(500, Duration::from_millis(30));
+
+        assert_eq!(metrics.compaction_count(), 2);
+        assert_eq!(metrics.total_tokens_saved(), 1500);
+        assert_eq!(metrics.total_time_ms(), 80);
+    }
+
+    #[test]
+    fn test_compaction_metrics_average_tokens_saved() {
+        let metrics = CompactionMetrics::new();
+
+        // No compactions - should return 0
+        assert_eq!(metrics.average_tokens_saved(), 0);
+
+        // Record some compactions
+        metrics.record_compaction(1000, Duration::from_millis(10));
+        metrics.record_compaction(2000, Duration::from_millis(20));
+
+        // Average = (1000 + 2000) / 2 = 1500
+        assert_eq!(metrics.average_tokens_saved(), 1500);
+    }
+
+    #[test]
+    fn test_compaction_metrics_average_time_ms() {
+        let metrics = CompactionMetrics::new();
+
+        // No compactions - should return 0
+        assert_eq!(metrics.average_time_ms(), 0);
+
+        // Record some compactions
+        metrics.record_compaction(100, Duration::from_millis(10));
+        metrics.record_compaction(100, Duration::from_millis(30));
+
+        // Average = (10 + 30) / 2 = 20
+        assert_eq!(metrics.average_time_ms(), 20);
+    }
+
+    #[test]
+    fn test_compaction_metrics_summary() {
+        let metrics = CompactionMetrics::new();
+        metrics.record_compaction(1000, Duration::from_millis(50));
+        metrics.record_compaction(500, Duration::from_millis(25));
+
+        let summary = metrics.summary();
+        assert_eq!(summary.compaction_count, 2);
+        assert_eq!(summary.total_tokens_saved, 1500);
+        assert_eq!(summary.total_time_ms, 75);
+        assert_eq!(summary.average_tokens_saved, 750);
+        assert_eq!(summary.average_time_ms, 37);
+    }
+
+    #[test]
+    fn test_compaction_metrics_summary_display() {
+        let metrics = CompactionMetrics::new();
+        metrics.record_compaction(10_000, Duration::from_millis(100));
+
+        let summary = metrics.summary();
+        let display = format!("{}", summary);
+
+        assert!(display.contains("compactions=1"));
+        assert!(display.contains("tokens_saved=10000"));
+        assert!(display.contains("time=100ms"));
+    }
+
+    #[test]
+    fn test_compaction_metrics_reset() {
+        let metrics = CompactionMetrics::new();
+        metrics.record_compaction(500, Duration::from_millis(25));
+
+        metrics.reset();
+
+        assert_eq!(metrics.compaction_count(), 0);
+        assert_eq!(metrics.total_tokens_saved(), 0);
+        assert_eq!(metrics.total_time_ms(), 0);
     }
 }
