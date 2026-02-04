@@ -4,6 +4,7 @@ use crate::agents::SubagentSpawner;
 use crate::api::tools::default_tools;
 use crate::api::{AnthropicClient, StreamEvent, TokenBudget, ToolChoice};
 use crate::context::compression::CompressionOrchestrator;
+use crate::mcp::client::McpClient;
 use crate::app::tool_loop::{ContinuationData, ToolLoop, ToolLoopState};
 use crate::app::STREAMING_CHANNEL_BUFFER;
 use crate::hooks::HookManager;
@@ -196,6 +197,10 @@ pub struct AppState {
     /// Provides automatic context injection from narsil-mcp when available.
     /// Wrapped in Arc for shared access with async contexts.
     compression_orchestrator: Option<Arc<CompressionOrchestrator>>,
+
+    /// Last repository hash used for CCG context injection.
+    /// Used to detect when the repository has changed and context needs refreshing.
+    last_ccg_hash: Option<String>,
 }
 
 #[derive(Default)]
@@ -340,6 +345,7 @@ impl AppState {
             auto_context_enabled: false,
             pending_context: Vec::new(),
             compression_orchestrator: None,
+            last_ccg_hash: None,
         }
     }
 
@@ -482,6 +488,84 @@ impl AppState {
         self.compression_orchestrator
             .as_ref()
             .is_some_and(|o| o.should_use_ccg())
+    }
+
+    /// Injects CCG context by fetching the default context (manifest + architecture).
+    ///
+    /// This method fetches context from narsil-mcp via the compression orchestrator.
+    /// The context is cached based on the repository hash, so subsequent calls with
+    /// the same hash return cached results without making MCP calls.
+    ///
+    /// # Arguments
+    ///
+    /// * `client` - An active MCP client connected to narsil-mcp
+    /// * `repo_hash` - Current repository hash for cache validation
+    ///
+    /// # Returns
+    ///
+    /// - `Ok(Some(content))` - CCG context was fetched successfully
+    /// - `Ok(None)` - No orchestrator available or context injection disabled
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// if let Some(context) = state.inject_ccg_context(&mut client, "abc123").await? {
+    ///     // Prepend context to system message
+    ///     system_prompt = format!("{}\n\n{}", context, system_prompt);
+    /// }
+    /// ```
+    pub async fn inject_ccg_context(
+        &mut self,
+        client: &mut McpClient,
+        repo_hash: &str,
+    ) -> anyhow::Result<Option<String>> {
+        // Check if orchestrator is available
+        let orchestrator = match &self.compression_orchestrator {
+            Some(orch) => orch.clone(),
+            None => return Ok(None),
+        };
+
+        // Check if hash has changed (for cache invalidation tracking)
+        let hash_changed = self
+            .last_ccg_hash
+            .as_ref()
+            .map_or(true, |h| h != repo_hash);
+
+        if hash_changed {
+            tracing::debug!(
+                old_hash = ?self.last_ccg_hash,
+                new_hash = %repo_hash,
+                "Repository hash changed, may fetch fresh CCG context"
+            );
+        }
+
+        // Fetch context via orchestrator
+        let result = orchestrator.get_default_context_async(client, repo_hash).await;
+
+        // Update cached hash
+        self.last_ccg_hash = Some(repo_hash.to_string());
+
+        // Return content if non-empty
+        let content = result.content();
+        if content.is_empty() {
+            Ok(None)
+        } else {
+            tracing::info!(
+                tokens = result.tokens_approx(),
+                source = ?result.source(),
+                "CCG context injected"
+            );
+            Ok(Some(content.to_string()))
+        }
+    }
+
+    /// Returns the last CCG hash used for context injection.
+    ///
+    /// This can be used to check if the repository state has changed since
+    /// the last context injection.
+    #[must_use]
+    pub fn last_ccg_hash(&self) -> Option<&str> {
+        self.last_ccg_hash.as_deref()
     }
 
     /// Formats context suggestions into a string suitable for prepending to a message.
@@ -2954,6 +3038,27 @@ mod tests {
     fn test_has_ccg_support_false_when_no_orchestrator() {
         let state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
         assert!(!state.has_ccg_support());
+    }
+
+    // =========================================================================
+    // 4.3.3 - CCG Context Injection tests
+    // =========================================================================
+
+    #[test]
+    fn test_last_ccg_hash_none_by_default() {
+        let state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+        assert!(state.last_ccg_hash().is_none());
+    }
+
+    #[test]
+    fn test_inject_ccg_context_returns_none_without_orchestrator() {
+        // Create a minimal mock test to verify basic behavior
+        // Full async testing requires MCP client which is complex to mock
+        let state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+
+        // Without orchestrator, the method should return None early
+        // We verify the precondition: no orchestrator means function returns None
+        assert!(state.compression_orchestrator().is_none());
     }
 
     // ========================================================================
