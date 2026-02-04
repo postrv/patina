@@ -20,8 +20,10 @@
 //! ```
 
 use crate::context::compression::{
-    CacheKey, CompressionLevel, CompressionMetrics, CompressionResult, ContextSource, ResultCache,
+    CacheKey, CcgBackend, CcgFetchError, CompressionLevel, CompressionMetrics, CompressionResult,
+    ContextSource, ResultCache,
 };
+use crate::mcp::client::McpClient;
 use crate::narsil::{NarsilCapabilities, NarsilCapability};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -533,6 +535,210 @@ impl CompressionOrchestrator {
         };
 
         CompressionResult::with_tokens(truncated, result.level(), result.source(), token_budget)
+    }
+
+    // =========================================================================
+    // Async MCP methods (R.3.1)
+    // =========================================================================
+
+    /// Creates a CCG backend for this orchestrator.
+    fn ccg_backend(&self) -> CcgBackend {
+        CcgBackend::new(&self.repo_name)
+    }
+
+    /// Fetches the manifest asynchronously via MCP.
+    ///
+    /// When CCG capability is available, calls `get_ccg_manifest` tool.
+    /// Otherwise, returns a degraded result indicating CCG is unavailable.
+    ///
+    /// # Arguments
+    ///
+    /// * `client` - An active MCP client connected to narsil-mcp
+    /// * `repo_hash` - Current repository hash for cache validation
+    ///
+    /// # Returns
+    ///
+    /// A `CompressionResult` containing the manifest, or a degraded result on failure.
+    ///
+    /// # Cache Behavior
+    ///
+    /// Results are cached and subsequent calls with the same `repo_hash` return
+    /// the cached result without making an MCP call.
+    pub async fn get_manifest_async(
+        &self,
+        client: &mut McpClient,
+        repo_hash: &str,
+    ) -> CompressionResult {
+        // Try cache first
+        if let Some(cached) = self.get_cached(CompressionLevel::Manifest, repo_hash) {
+            return cached;
+        }
+
+        // Check if CCG is available
+        if !self.should_use_ccg() {
+            warn!(
+                repo = %self.repo_name,
+                "CCG capability not available, returning degraded manifest"
+            );
+            return self.create_degraded_result(CompressionLevel::Manifest);
+        }
+
+        // Fetch via CCG backend
+        let backend = self.ccg_backend();
+        match backend.fetch_manifest(client).await {
+            Ok(result) => {
+                self.metrics.record_ccg_call();
+                self.cache_result(CompressionLevel::Manifest, &result, repo_hash);
+                self.exit_degraded_mode();
+                result
+            }
+            Err(err) => {
+                warn!(
+                    repo = %self.repo_name,
+                    error = %err,
+                    "CCG manifest fetch failed, entering degraded mode"
+                );
+                self.enter_degraded_mode();
+                self.create_degraded_result(CompressionLevel::Manifest)
+            }
+        }
+    }
+
+    /// Fetches the architecture asynchronously via MCP.
+    ///
+    /// When CCG capability is available, calls `export_ccg_architecture` tool.
+    /// Otherwise, returns a degraded result indicating CCG is unavailable.
+    ///
+    /// # Arguments
+    ///
+    /// * `client` - An active MCP client connected to narsil-mcp
+    /// * `repo_hash` - Current repository hash for cache validation
+    ///
+    /// # Returns
+    ///
+    /// A `CompressionResult` containing the architecture, or a degraded result on failure.
+    pub async fn get_architecture_async(
+        &self,
+        client: &mut McpClient,
+        repo_hash: &str,
+    ) -> CompressionResult {
+        // Try cache first
+        if let Some(cached) = self.get_cached(CompressionLevel::Architecture, repo_hash) {
+            return cached;
+        }
+
+        // Check if CCG is available
+        if !self.should_use_ccg() {
+            warn!(
+                repo = %self.repo_name,
+                "CCG capability not available, returning degraded architecture"
+            );
+            return self.create_degraded_result(CompressionLevel::Architecture);
+        }
+
+        // Fetch via CCG backend
+        let backend = self.ccg_backend();
+        match backend.fetch_architecture(client).await {
+            Ok(result) => {
+                self.metrics.record_ccg_call();
+                self.cache_result(CompressionLevel::Architecture, &result, repo_hash);
+                self.exit_degraded_mode();
+                result
+            }
+            Err(err) => {
+                warn!(
+                    repo = %self.repo_name,
+                    error = %err,
+                    "CCG architecture fetch failed, entering degraded mode"
+                );
+                self.enter_degraded_mode();
+                self.create_degraded_result(CompressionLevel::Architecture)
+            }
+        }
+    }
+
+    /// Executes a SPARQL query asynchronously via MCP.
+    ///
+    /// Calls the `query_ccg` tool with the provided SPARQL query.
+    /// Requires CCG capability to be available.
+    ///
+    /// # Arguments
+    ///
+    /// * `client` - An active MCP client connected to narsil-mcp
+    /// * `sparql` - The SPARQL query (must include LIMIT clause)
+    ///
+    /// # Returns
+    ///
+    /// `Ok(CompressionResult)` on success, or `Err(CcgFetchError)` on failure.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - CCG capability is not available
+    /// - The SPARQL query lacks a LIMIT clause
+    /// - The MCP call fails
+    pub async fn query_async(
+        &self,
+        client: &mut McpClient,
+        sparql: &str,
+    ) -> Result<CompressionResult, CcgFetchError> {
+        // Check if CCG is available
+        if !self.should_use_ccg() {
+            return Err(CcgFetchError::mcp_error(anyhow::anyhow!(
+                "CCG capability not available"
+            )));
+        }
+
+        let backend = self.ccg_backend();
+        let result = backend.execute_query(client, sparql).await?;
+
+        self.metrics.record_ccg_call();
+        self.exit_degraded_mode();
+
+        Ok(result)
+    }
+
+    /// Gets the default context (manifest + architecture) asynchronously.
+    ///
+    /// Fetches both manifest and architecture via MCP calls when CCG is available.
+    /// Uses caching to avoid redundant calls.
+    ///
+    /// # Arguments
+    ///
+    /// * `client` - An active MCP client connected to narsil-mcp
+    /// * `repo_hash` - Current repository hash for cache validation
+    ///
+    /// # Returns
+    ///
+    /// A combined compression result with manifest and architecture.
+    pub async fn get_default_context_async(
+        &self,
+        client: &mut McpClient,
+        repo_hash: &str,
+    ) -> CompressionResult {
+        let manifest = self.get_manifest_async(client, repo_hash).await;
+        let architecture = self.get_architecture_async(client, repo_hash).await;
+
+        // Combine manifest and architecture
+        let combined = format!(
+            "{}\n\n---\n\n{}",
+            manifest.content(),
+            architecture.content()
+        );
+
+        // Use the more detailed source for combined result
+        let source = if self.should_use_ccg() && !self.is_degraded() {
+            ContextSource::CcgLayer1
+        } else {
+            ContextSource::Constructed
+        };
+
+        CompressionResult::with_tokens(
+            combined,
+            CompressionLevel::Architecture,
+            source,
+            manifest.tokens_approx() + architecture.tokens_approx(),
+        )
     }
 }
 
