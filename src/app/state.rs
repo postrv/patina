@@ -3,6 +3,7 @@
 use crate::agents::SubagentSpawner;
 use crate::api::tools::default_tools;
 use crate::api::{AnthropicClient, StreamEvent, TokenBudget, ToolChoice};
+use crate::context::compression::CompressionOrchestrator;
 use crate::app::tool_loop::{ContinuationData, ToolLoop, ToolLoopState};
 use crate::app::STREAMING_CHANNEL_BUFFER;
 use crate::hooks::HookManager;
@@ -190,6 +191,10 @@ pub struct AppState {
     /// Pending context suggestions to be injected into the next message.
     /// Set by external code when narsil context is available.
     pending_context: Vec<ContextSuggestion>,
+
+    /// Optional compression orchestrator for CCG context management.
+    /// Provides automatic context injection from narsil-mcp when available.
+    compression_orchestrator: Option<CompressionOrchestrator>,
 }
 
 #[derive(Default)]
@@ -333,6 +338,7 @@ impl AppState {
             subagent_spawner,
             auto_context_enabled: false,
             pending_context: Vec::new(),
+            compression_orchestrator: None,
         }
     }
 
@@ -442,6 +448,45 @@ impl AppState {
     /// Clears the pending context suggestions without returning them.
     pub fn clear_pending_context(&mut self) {
         self.pending_context.clear();
+    }
+
+    // =========================================================================
+    // Compression Orchestrator Methods (Phase 4.3)
+    // =========================================================================
+
+    /// Sets the compression orchestrator for CCG context management.
+    ///
+    /// The orchestrator is typically created from `NarsilIntegration::create_compression_orchestrator()`
+    /// when narsil-mcp is available.
+    ///
+    /// # Arguments
+    ///
+    /// * `orchestrator` - The compression orchestrator to use
+    pub fn set_compression_orchestrator(&mut self, orchestrator: CompressionOrchestrator) {
+        self.compression_orchestrator = Some(orchestrator);
+    }
+
+    /// Returns a reference to the compression orchestrator if available.
+    #[must_use]
+    pub fn compression_orchestrator(&self) -> Option<&CompressionOrchestrator> {
+        self.compression_orchestrator.as_ref()
+    }
+
+    /// Returns a mutable reference to the compression orchestrator if available.
+    #[must_use]
+    pub fn compression_orchestrator_mut(&mut self) -> Option<&mut CompressionOrchestrator> {
+        self.compression_orchestrator.as_mut()
+    }
+
+    /// Returns true if the compression orchestrator supports CCG (Code Context Graph).
+    ///
+    /// CCG support enables advanced context compression features like manifest
+    /// and architecture extraction. Returns false if no orchestrator is set.
+    #[must_use]
+    pub fn has_ccg_support(&self) -> bool {
+        self.compression_orchestrator
+            .as_ref()
+            .is_some_and(|o| o.should_use_ccg())
     }
 
     /// Formats context suggestions into a string suitable for prepending to a message.
@@ -2897,6 +2942,23 @@ mod tests {
 
         state.clear_pending_context();
         assert!(!state.has_pending_context());
+    }
+
+    // =========================================================================
+    // 4.3.1 - CompressionOrchestrator tests
+    // =========================================================================
+
+    #[test]
+    fn test_compression_orchestrator_none_by_default() {
+        let state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+        assert!(state.compression_orchestrator().is_none());
+        assert!(!state.has_ccg_support());
+    }
+
+    #[test]
+    fn test_has_ccg_support_false_when_no_orchestrator() {
+        let state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+        assert!(!state.has_ccg_support());
     }
 
     // ========================================================================
