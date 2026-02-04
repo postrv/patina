@@ -90,6 +90,10 @@ harness = false
 name = "parallel_tools"
 harness = false
 
+[[bench]]
+name = "compression"
+harness = false
+
 [profile.release]
 lto = "thin"
 codegen-units = 1
