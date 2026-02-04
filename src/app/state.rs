@@ -201,6 +201,10 @@ pub struct AppState {
     /// Last repository hash used for CCG context injection.
     /// Used to detect when the repository has changed and context needs refreshing.
     last_ccg_hash: Option<String>,
+
+    /// Cached CCG context content for injection into messages.
+    /// Set by `inject_ccg_context()` and consumed by `take_ccg_context()`.
+    cached_ccg_context: Option<String>,
 }
 
 #[derive(Default)]
@@ -346,6 +350,7 @@ impl AppState {
             pending_context: Vec::new(),
             compression_orchestrator: None,
             last_ccg_hash: None,
+            cached_ccg_context: None,
         }
     }
 
@@ -545,17 +550,20 @@ impl AppState {
         // Update cached hash
         self.last_ccg_hash = Some(repo_hash.to_string());
 
-        // Return content if non-empty
+        // Return content if non-empty, also cache it
         let content = result.content();
         if content.is_empty() {
+            self.cached_ccg_context = None;
             Ok(None)
         } else {
             tracing::info!(
                 tokens = result.tokens_approx(),
                 source = ?result.source(),
-                "CCG context injected"
+                "CCG context fetched and cached"
             );
-            Ok(Some(content.to_string()))
+            let content_string = content.to_string();
+            self.cached_ccg_context = Some(content_string.clone());
+            Ok(Some(content_string))
         }
     }
 
@@ -566,6 +574,43 @@ impl AppState {
     #[must_use]
     pub fn last_ccg_hash(&self) -> Option<&str> {
         self.last_ccg_hash.as_deref()
+    }
+
+    /// Returns whether there is cached CCG context available for injection.
+    #[must_use]
+    pub fn has_cached_ccg_context(&self) -> bool {
+        self.cached_ccg_context.is_some()
+    }
+
+    /// Takes the cached CCG context, returning it and clearing the cache.
+    ///
+    /// This is typically called in the message send flow to inject context
+    /// into the first user message.
+    ///
+    /// # Returns
+    ///
+    /// The cached CCG context if available, `None` otherwise.
+    pub fn take_cached_ccg_context(&mut self) -> Option<String> {
+        self.cached_ccg_context.take()
+    }
+
+    /// Returns the context to inject before sending a message.
+    ///
+    /// This method checks if auto-context is enabled and returns the
+    /// CCG context if available. The context is NOT consumed (use
+    /// `take_cached_ccg_context` to consume it).
+    ///
+    /// # Returns
+    ///
+    /// A reference to the CCG context if auto-context is enabled and context
+    /// is available, `None` otherwise.
+    #[must_use]
+    pub fn context_for_injection(&self) -> Option<&str> {
+        if self.auto_context_enabled {
+            self.cached_ccg_context.as_deref()
+        } else {
+            None
+        }
     }
 
     /// Formats context suggestions into a string suitable for prepending to a message.
@@ -1031,9 +1076,29 @@ impl AppState {
         client: &AnthropicClient,
         content: String,
     ) -> Result<()> {
-        // Add to both timeline and API messages
-        let user_msg = ApiMessageV2::user(&content);
+        // Build the API message content, optionally with CCG context
+        let api_content = if self.auto_context_enabled {
+            if let Some(context) = self.cached_ccg_context.take() {
+                tracing::info!(
+                    context_len = context.len(),
+                    "Injecting CCG context into user message"
+                );
+                // Prepend context to user message for API
+                format!(
+                    "<context>\n{}\n</context>\n\n{}",
+                    context, content
+                )
+            } else {
+                content.clone()
+            }
+        } else {
+            content.clone()
+        };
+
+        // Timeline shows original user input (cleaner UI)
         self.timeline.push_user_message(&content);
+        // API gets potentially context-augmented message
+        let user_msg = ApiMessageV2::user(&api_content);
         self.api_messages.push(user_msg);
 
         self.loading = true;
@@ -3059,6 +3124,54 @@ mod tests {
         // Without orchestrator, the method should return None early
         // We verify the precondition: no orchestrator means function returns None
         assert!(state.compression_orchestrator().is_none());
+    }
+
+    // =========================================================================
+    // 4.3.4 - CCG Context Injection in Send Flow tests
+    // =========================================================================
+
+    #[test]
+    fn test_cached_ccg_context_none_by_default() {
+        let state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+        assert!(!state.has_cached_ccg_context());
+    }
+
+    #[test]
+    fn test_take_cached_ccg_context_consumes() {
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+
+        // Set cached context directly for testing
+        state.cached_ccg_context = Some("test context".to_string());
+        assert!(state.has_cached_ccg_context());
+
+        // Take should return and clear
+        let taken = state.take_cached_ccg_context();
+        assert_eq!(taken, Some("test context".to_string()));
+        assert!(!state.has_cached_ccg_context());
+    }
+
+    #[test]
+    fn test_context_for_injection_requires_auto_context_enabled() {
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+
+        // Set cached context
+        state.cached_ccg_context = Some("test context".to_string());
+
+        // Auto-context disabled - should return None
+        assert!(state.context_for_injection().is_none());
+
+        // Enable auto-context
+        state.set_auto_context_enabled(true);
+        assert_eq!(state.context_for_injection(), Some("test context"));
+    }
+
+    #[test]
+    fn test_context_for_injection_returns_none_without_cached_context() {
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+
+        // Enable auto-context but no cached context
+        state.set_auto_context_enabled(true);
+        assert!(state.context_for_injection().is_none());
     }
 
     // ========================================================================
