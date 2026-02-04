@@ -280,6 +280,124 @@ impl CompressionOrchestrator {
     pub const fn default_context_max_bytes() -> usize {
         52 * 1024 // 52KB
     }
+
+    /// Builds context progressively within a token budget.
+    ///
+    /// This method loads context in order of compression level, stopping
+    /// when the token budget is exhausted:
+    /// 1. Manifest (always included if budget allows)
+    /// 2. Architecture (included if budget allows)
+    /// 3. Symbol details (optional, fills remaining budget)
+    ///
+    /// # Arguments
+    ///
+    /// * `token_budget` - Maximum tokens to include
+    /// * `repo_hash` - Current repository hash for cache validation
+    /// * `manifest_fn` - Function to generate manifest content
+    /// * `architecture_fn` - Function to generate architecture content
+    /// * `symbol_fn` - Optional function to generate symbol details
+    ///
+    /// # Returns
+    ///
+    /// A compression result containing as much context as fits in the budget.
+    pub fn build_context_with_budget<F1, F2, F3>(
+        &self,
+        token_budget: usize,
+        repo_hash: &str,
+        manifest_fn: F1,
+        architecture_fn: F2,
+        symbol_fn: Option<F3>,
+    ) -> CompressionResult
+    where
+        F1: FnOnce() -> String,
+        F2: FnOnce() -> String,
+        F3: FnOnce() -> String,
+    {
+        let mut parts: Vec<String> = Vec::new();
+        let mut total_tokens: usize;
+        let mut highest_level = CompressionLevel::Manifest;
+
+        // 1. Always try to include manifest first
+        let manifest = self.get_context(CompressionLevel::Manifest, repo_hash, manifest_fn);
+        let manifest_tokens = manifest.tokens_approx();
+
+        if manifest_tokens <= token_budget {
+            parts.push(manifest.content().to_string());
+            total_tokens = manifest_tokens;
+        } else {
+            // Can't even fit manifest - return truncated
+            return self.truncate_to_budget(&manifest, token_budget);
+        }
+
+        // 2. Include architecture if budget allows
+        let remaining = token_budget.saturating_sub(total_tokens);
+        if remaining > 0 {
+            let architecture =
+                self.get_context(CompressionLevel::Architecture, repo_hash, architecture_fn);
+            let arch_tokens = architecture.tokens_approx();
+
+            if arch_tokens <= remaining {
+                parts.push(architecture.content().to_string());
+                total_tokens += arch_tokens;
+                highest_level = CompressionLevel::Architecture;
+            }
+        }
+
+        // 3. Include symbol details if budget allows and function provided
+        if let Some(symbol_fn) = symbol_fn {
+            let remaining = token_budget.saturating_sub(total_tokens);
+            if remaining > 0 {
+                let symbols =
+                    self.get_context(CompressionLevel::SymbolDetail, repo_hash, symbol_fn);
+                let symbol_tokens = symbols.tokens_approx();
+
+                if symbol_tokens <= remaining {
+                    parts.push(symbols.content().to_string());
+                    total_tokens += symbol_tokens;
+                    highest_level = CompressionLevel::SymbolDetail;
+                }
+            }
+        }
+
+        // Combine all parts
+        let combined = parts.join("\n\n---\n\n");
+        let source = if self.should_use_ccg() {
+            match highest_level {
+                CompressionLevel::Manifest => ContextSource::CcgLayer0,
+                CompressionLevel::Architecture => ContextSource::CcgLayer1,
+                _ => ContextSource::CcgSparql,
+            }
+        } else {
+            ContextSource::Constructed
+        };
+
+        CompressionResult::with_tokens(combined, highest_level, source, total_tokens)
+    }
+
+    /// Truncates content to fit within a token budget.
+    fn truncate_to_budget(&self, result: &CompressionResult, token_budget: usize) -> CompressionResult {
+        let content = result.content();
+        // Approximate chars per token (~4)
+        let char_budget = token_budget * 4;
+
+        let truncated = if content.len() > char_budget {
+            let mut end = char_budget;
+            // Find a safe UTF-8 boundary
+            while end > 0 && !content.is_char_boundary(end) {
+                end -= 1;
+            }
+            format!("{}...", &content[..end])
+        } else {
+            content.to_string()
+        };
+
+        CompressionResult::with_tokens(
+            truncated,
+            result.level(),
+            result.source(),
+            token_budget,
+        )
+    }
 }
 
 #[cfg(test)]
@@ -558,5 +676,177 @@ mod tests {
             CompressionOrchestrator::default_context_max_bytes(),
             52 * 1024
         );
+    }
+
+    // =============================================================================
+    // Token budget tests (Task 3.3.5)
+    // =============================================================================
+
+    #[test]
+    fn test_context_building_respects_token_budget() {
+        let caps = create_capabilities_with_ccg();
+        let orchestrator = CompressionOrchestrator::new(caps, "repo");
+
+        // Small budget that won't fit architecture
+        let result = orchestrator.build_context_with_budget(
+            50, // Very small budget
+            "hash123",
+            || "# Manifest\n\nSmall content".to_string(),
+            || "# Architecture\n\n".repeat(100), // Large content
+            None::<fn() -> String>,
+        );
+
+        // Should only include manifest, not architecture
+        assert!(result.content().contains("Manifest"));
+        assert!(!result.content().contains("Architecture"));
+        assert!(result.tokens_approx() <= 50);
+    }
+
+    #[test]
+    fn test_context_includes_manifest_always() {
+        let caps = create_capabilities_without_ccg();
+        let orchestrator = CompressionOrchestrator::new(caps, "repo");
+
+        // Reasonable budget
+        let result = orchestrator.build_context_with_budget(
+            1000,
+            "hash123",
+            || "# Manifest\n\nContent".to_string(),
+            || "# Architecture\n\nContent".to_string(),
+            None::<fn() -> String>,
+        );
+
+        // Should always include manifest
+        assert!(result.content().contains("Manifest"));
+    }
+
+    #[test]
+    fn test_context_includes_architecture_if_budget_allows() {
+        let caps = create_capabilities_with_ccg();
+        let orchestrator = CompressionOrchestrator::new(caps, "repo");
+
+        // Large budget
+        let result = orchestrator.build_context_with_budget(
+            10000, // Large budget
+            "hash123",
+            || "# Manifest".to_string(),
+            || "# Architecture".to_string(),
+            None::<fn() -> String>,
+        );
+
+        // Should include both
+        assert!(result.content().contains("Manifest"));
+        assert!(result.content().contains("Architecture"));
+        assert!(result.content().contains("---")); // Separator
+    }
+
+    #[test]
+    fn test_context_includes_symbols_if_budget_allows() {
+        let caps = create_capabilities_with_ccg();
+        let orchestrator = CompressionOrchestrator::new(caps, "repo");
+
+        let result = orchestrator.build_context_with_budget(
+            10000,
+            "hash123",
+            || "# Manifest".to_string(),
+            || "# Architecture".to_string(),
+            Some(|| "# Symbols".to_string()),
+        );
+
+        // Should include all three
+        assert!(result.content().contains("Manifest"));
+        assert!(result.content().contains("Architecture"));
+        assert!(result.content().contains("Symbols"));
+    }
+
+    #[test]
+    fn test_context_progressive_loading_order() {
+        let caps = create_capabilities_with_ccg();
+        let orchestrator = CompressionOrchestrator::new(caps, "repo");
+
+        // Budget that fits manifest and architecture but not symbols
+        let manifest_content = "A".repeat(100); // ~25 tokens
+        let arch_content = "B".repeat(100); // ~25 tokens
+        let symbols_content = "C".repeat(1000); // ~250 tokens
+
+        let result = orchestrator.build_context_with_budget(
+            100, // Budget for ~400 chars
+            "hash123",
+            || manifest_content,
+            || arch_content,
+            Some(|| symbols_content),
+        );
+
+        // Should include manifest and architecture, but not symbols
+        assert!(result.content().contains("AAA"));
+        assert!(result.content().contains("BBB"));
+        assert!(!result.content().contains("CCC"));
+    }
+
+    #[test]
+    fn test_truncate_to_budget_handles_utf8() {
+        let caps = create_capabilities_with_ccg();
+        let orchestrator = CompressionOrchestrator::new(caps, "repo");
+
+        // Test with emoji content that has multi-byte chars
+        let result = orchestrator.build_context_with_budget(
+            5, // Very small budget
+            "hash123",
+            || "Hello 👋 World".to_string(), // Contains multi-byte emoji
+            || "Architecture".to_string(),
+            None::<fn() -> String>,
+        );
+
+        // Should not panic on UTF-8 boundary issues
+        let content = result.content();
+        assert!(content.len() <= 25); // 5 tokens * 4 chars + "..."
+    }
+
+    #[test]
+    fn test_build_context_tracks_highest_level() {
+        let caps = create_capabilities_with_ccg();
+        let orchestrator = CompressionOrchestrator::new(caps, "repo");
+
+        let result = orchestrator.build_context_with_budget(
+            10000,
+            "hash123",
+            || "Manifest".to_string(),
+            || "Architecture".to_string(),
+            Some(|| "Symbols".to_string()),
+        );
+
+        // Highest level should be SymbolDetail when all included
+        assert_eq!(result.level(), CompressionLevel::SymbolDetail);
+    }
+
+    #[test]
+    fn test_build_context_uses_correct_source() {
+        let caps_ccg = create_capabilities_with_ccg();
+        let orch_ccg = CompressionOrchestrator::new(caps_ccg, "repo");
+
+        let result_ccg = orch_ccg.build_context_with_budget(
+            10000,
+            "hash123",
+            || "Manifest".to_string(),
+            || "Architecture".to_string(),
+            None::<fn() -> String>,
+        );
+
+        // CCG path should use CcgLayer1 for architecture level
+        assert_eq!(result_ccg.source(), ContextSource::CcgLayer1);
+
+        let caps_fallback = create_capabilities_without_ccg();
+        let orch_fallback = CompressionOrchestrator::new(caps_fallback, "repo");
+
+        let result_fallback = orch_fallback.build_context_with_budget(
+            10000,
+            "hash123",
+            || "Manifest".to_string(),
+            || "Architecture".to_string(),
+            None::<fn() -> String>,
+        );
+
+        // Fallback path should use Constructed
+        assert_eq!(result_fallback.source(), ContextSource::Constructed);
     }
 }
