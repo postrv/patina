@@ -34,11 +34,14 @@
 //! }
 //! ```
 
+use crate::context::compression::CompressionOrchestrator;
 use crate::mcp::client::McpClient;
 use crate::narsil::context::{CodeReference, ContextKind, ContextSuggestion};
 use anyhow::Result;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::Duration;
 
 /// Individual narsil-mcp capabilities that can be detected.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -373,6 +376,67 @@ impl NarsilIntegration {
     /// should not be used for further operations.
     pub fn disconnect(&mut self) {
         self.connected = false;
+    }
+
+    /// Creates a compression orchestrator for context management.
+    ///
+    /// The orchestrator automatically selects the appropriate backend:
+    /// - CCG backend if `CcgGraph` capability is available
+    /// - Fallback backend using core narsil tools otherwise
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use patina::narsil::NarsilIntegration;
+    /// use patina::context::compression::CompressionLevel;
+    ///
+    /// let integration = NarsilIntegration::from_tool_names(&tools, &path);
+    /// let orchestrator = integration.create_compression_orchestrator();
+    ///
+    /// // Use orchestrator for context compression
+    /// let result = orchestrator.get_context(CompressionLevel::Manifest, "abc123", || {
+    ///     // Fetch content if not cached...
+    ///     "# Manifest content".to_string()
+    /// });
+    /// ```
+    #[must_use]
+    pub fn create_compression_orchestrator(&self) -> Arc<CompressionOrchestrator> {
+        Arc::new(CompressionOrchestrator::new(
+            self.capabilities.clone(),
+            &self.repo_name,
+        ))
+    }
+
+    /// Creates a compression orchestrator with custom configuration.
+    ///
+    /// # Arguments
+    ///
+    /// * `cache_ttl` - Cache time-to-live
+    /// * `max_cache_entries` - Maximum number of cached results
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use std::time::Duration;
+    ///
+    /// // Create orchestrator with 10-minute cache TTL and 200 max entries
+    /// let orchestrator = integration.create_compression_orchestrator_with_config(
+    ///     Duration::from_secs(600),
+    ///     200,
+    /// );
+    /// ```
+    #[must_use]
+    pub fn create_compression_orchestrator_with_config(
+        &self,
+        cache_ttl: Duration,
+        max_cache_entries: usize,
+    ) -> Arc<CompressionOrchestrator> {
+        Arc::new(CompressionOrchestrator::with_config(
+            self.capabilities.clone(),
+            &self.repo_name,
+            cache_ttl,
+            max_cache_entries,
+        ))
     }
 
     /// Suggests relevant context for the given code references.
@@ -1272,5 +1336,75 @@ mod tests {
         ];
         let verdict = security_verdict_from_findings(&findings);
         assert!(verdict.blocks_execution());
+    }
+
+    // =============================================================================
+    // Task 3.3.4 - Compression orchestrator integration tests
+    // =============================================================================
+
+    #[test]
+    fn test_create_compression_orchestrator_from_integration() {
+        let tools = vec!["find_symbols".to_string(), "get_dependencies".to_string()];
+        let path = PathBuf::from("/tmp/test-repo");
+        let integration = NarsilIntegration::from_tool_names(&tools, &path);
+
+        let orchestrator = integration.create_compression_orchestrator();
+
+        // Orchestrator should be created successfully
+        assert_eq!(orchestrator.repo_name(), "test-repo");
+        // Should NOT use CCG (no CCG tools provided)
+        assert!(!orchestrator.should_use_ccg());
+        assert!(orchestrator.should_use_fallback());
+    }
+
+    #[test]
+    fn test_create_compression_orchestrator_with_ccg() {
+        let tools = vec![
+            "get_ccg_manifest".to_string(),
+            "export_ccg_architecture".to_string(),
+            "query_ccg".to_string(),
+        ];
+        let path = PathBuf::from("/my/project");
+        let integration = NarsilIntegration::from_tool_names(&tools, &path);
+
+        let orchestrator = integration.create_compression_orchestrator();
+
+        // Should use CCG
+        assert!(orchestrator.should_use_ccg());
+        assert!(!orchestrator.should_use_fallback());
+        assert_eq!(orchestrator.repo_name(), "project");
+    }
+
+    #[test]
+    fn test_create_compression_orchestrator_with_config() {
+        let tools = vec!["find_symbols".to_string()];
+        let path = PathBuf::from("/tmp/test-repo");
+        let integration = NarsilIntegration::from_tool_names(&tools, &path);
+
+        let orchestrator =
+            integration.create_compression_orchestrator_with_config(Duration::from_secs(600), 200);
+
+        // Verify config is applied (indirectly through the orchestrator)
+        assert_eq!(orchestrator.repo_name(), "test-repo");
+    }
+
+    #[test]
+    fn test_context_building_uses_compression_when_available() {
+        use crate::context::compression::CompressionLevel;
+
+        let tools = vec!["find_symbols".to_string(), "get_dependencies".to_string()];
+        let path = PathBuf::from("/tmp/test-repo");
+        let integration = NarsilIntegration::from_tool_names(&tools, &path);
+
+        // Create orchestrator
+        let orchestrator = integration.create_compression_orchestrator();
+
+        // Use get_context (should work with fallback path)
+        let result = orchestrator.get_context(CompressionLevel::Manifest, "test-hash", || {
+            "# Test Manifest\n\nFallback content".to_string()
+        });
+
+        assert!(!result.content().is_empty());
+        assert_eq!(result.level(), CompressionLevel::Manifest);
     }
 }
