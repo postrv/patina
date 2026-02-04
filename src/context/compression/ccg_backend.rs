@@ -15,6 +15,11 @@ use crate::context::compression::{CompressionLevel, CompressionResult, ContextSo
 /// Default SPARQL result limit to prevent context flooding.
 pub const DEFAULT_SPARQL_LIMIT: usize = 100;
 
+/// CCG namespace URI as defined in CCG Spec v0.2 Section 3.
+///
+/// This is the canonical namespace for Code Context Graph ontology terms.
+pub const CCG_NAMESPACE: &str = "https://codecontextgraph.com/ontology/v1#";
+
 /// CCG backend for accessing Code Comprehension Graph data.
 ///
 /// Wraps CCG-specific MCP tool calls and ensures SPARQL safety.
@@ -94,7 +99,7 @@ impl CcgBackend {
     #[must_use]
     pub fn build_scope_query(&self, scope: &str) -> String {
         format!(
-            r#"PREFIX ccg: <http://example.org/ccg#>
+            r#"PREFIX ccg: <{CCG_NAMESPACE}>
 SELECT ?symbol ?kind ?file ?line
 WHERE {{
     ?symbol ccg:inScope "{scope}" ;
@@ -113,7 +118,7 @@ LIMIT {}"#,
     #[must_use]
     pub fn build_callers_query(&self, symbol: &str) -> String {
         format!(
-            r#"PREFIX ccg: <http://example.org/ccg#>
+            r#"PREFIX ccg: <{CCG_NAMESPACE}>
 SELECT ?caller ?file ?line
 WHERE {{
     ?caller ccg:calls <{symbol}> ;
@@ -129,7 +134,7 @@ LIMIT {}"#,
     #[must_use]
     pub fn build_security_query(&self, min_severity: &str) -> String {
         format!(
-            r#"PREFIX ccg: <http://example.org/ccg#>
+            r#"PREFIX ccg: <{CCG_NAMESPACE}>
 SELECT ?finding ?severity ?rule ?file ?line
 WHERE {{
     ?finding a ccg:SecurityFinding ;
@@ -336,5 +341,67 @@ mod tests {
 
         let callers = backend.build_callers_query("func");
         assert!(callers.contains("LIMIT 25"));
+    }
+
+    #[test]
+    fn test_sparql_uses_spec_namespace() {
+        // CCG Spec v0.2 Section 3 defines the canonical namespace URI
+        const SPEC_NAMESPACE: &str = "https://codecontextgraph.com/ontology/v1#";
+
+        let backend = CcgBackend::new("repo");
+
+        let scope_query = backend.build_scope_query("test");
+        assert!(
+            scope_query.contains(SPEC_NAMESPACE),
+            "Scope query should use CCG spec namespace. Got:\n{}",
+            scope_query
+        );
+
+        let callers_query = backend.build_callers_query("func");
+        assert!(
+            callers_query.contains(SPEC_NAMESPACE),
+            "Callers query should use CCG spec namespace. Got:\n{}",
+            callers_query
+        );
+
+        let security_query = backend.build_security_query("HIGH");
+        assert!(
+            security_query.contains(SPEC_NAMESPACE),
+            "Security query should use CCG spec namespace. Got:\n{}",
+            security_query
+        );
+    }
+
+    #[test]
+    fn test_sparql_queries_do_not_use_placeholder_namespace() {
+        // Ensure we don't use the example.org placeholder
+        let backend = CcgBackend::new("repo");
+
+        let scope_query = backend.build_scope_query("test");
+        assert!(
+            !scope_query.contains("example.org"),
+            "Scope query should not use placeholder namespace"
+        );
+
+        let callers_query = backend.build_callers_query("func");
+        assert!(
+            !callers_query.contains("example.org"),
+            "Callers query should not use placeholder namespace"
+        );
+
+        let security_query = backend.build_security_query("HIGH");
+        assert!(
+            !security_query.contains("example.org"),
+            "Security query should not use placeholder namespace"
+        );
+    }
+
+    #[test]
+    fn test_ccg_namespace_constant_matches_spec() {
+        // Verify CCG namespace constant matches CCG Spec v0.2 Section 3
+        assert_eq!(
+            CCG_NAMESPACE, "https://codecontextgraph.com/ontology/v1#",
+            "CCG namespace should match spec"
+        );
     }
 }
