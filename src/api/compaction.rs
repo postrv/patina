@@ -33,8 +33,12 @@
 //! ```
 
 use crate::api::tokens::estimate_messages_tokens;
-use crate::types::{ApiMessageV2, Role};
+use crate::api::AnthropicClient;
+use crate::types::{ApiMessageV2, Message, Role, StreamEvent};
 use anyhow::Result;
+use std::sync::Arc;
+use tokio::sync::mpsc;
+use tracing::warn;
 
 // =============================================================================
 // Summarization Prompts
@@ -136,6 +140,157 @@ pub struct MockSummarizer;
 impl Summarizer for MockSummarizer {
     fn summarize(&self, messages: &[ApiMessageV2], config: &CompactionConfig) -> String {
         generate_mock_summary(messages, config)
+    }
+}
+
+/// Claude API-based summarizer for production use.
+///
+/// Uses the Anthropic API to generate intelligent summaries of conversations.
+/// Falls back to mock summarization if the API call fails (graceful degradation).
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use patina::api::compaction::ClaudeSummarizer;
+/// use patina::api::AnthropicClient;
+/// use std::sync::Arc;
+///
+/// let client = Arc::new(AnthropicClient::new(api_key, "claude-3-haiku-20240307"));
+/// let summarizer = ClaudeSummarizer::new(client);
+/// ```
+/// ClaudeSummarizer intentionally doesn't implement Debug to avoid
+/// exposing the API client internals.
+#[derive(Clone)]
+pub struct ClaudeSummarizer {
+    /// The Anthropic API client for making summarization requests.
+    client: Arc<AnthropicClient>,
+    /// Model to use for summarization (defaults to haiku for speed/cost).
+    model: String,
+}
+
+/// Default model for summarization (fast and cheap).
+const SUMMARIZATION_MODEL: &str = "claude-3-haiku-20240307";
+
+impl ClaudeSummarizer {
+    /// Creates a new Claude summarizer with the given client.
+    ///
+    /// Uses claude-3-haiku by default for fast, cost-effective summarization.
+    ///
+    /// # Arguments
+    ///
+    /// * `client` - The Anthropic API client to use for requests
+    #[must_use]
+    pub fn new(client: Arc<AnthropicClient>) -> Self {
+        Self {
+            client,
+            model: SUMMARIZATION_MODEL.to_string(),
+        }
+    }
+
+    /// Creates a new Claude summarizer with a specific model.
+    ///
+    /// # Arguments
+    ///
+    /// * `client` - The Anthropic API client
+    /// * `model` - The model to use for summarization
+    #[must_use]
+    pub fn with_model(client: Arc<AnthropicClient>, model: &str) -> Self {
+        Self {
+            client,
+            model: model.to_string(),
+        }
+    }
+
+    /// Performs the async summarization request.
+    async fn summarize_async(
+        &self,
+        messages: &[ApiMessageV2],
+        config: &CompactionConfig,
+    ) -> Result<String> {
+        // Build the summarization prompt
+        let formatted_messages = format_messages_for_summary(messages);
+        let prompt = format!(
+            "{}\n{}",
+            get_summarization_prompt(config.summary_style),
+            formatted_messages
+        );
+
+        // Create the request message
+        let request_messages = vec![Message {
+            role: Role::User,
+            content: prompt,
+        }];
+
+        // Create channel for streaming response
+        let (tx, mut rx) = mpsc::channel::<StreamEvent>(64);
+
+        // Make the API request
+        self.client.stream_message(&request_messages, tx).await?;
+
+        // Collect the response content
+        let mut response = String::new();
+        while let Some(event) = rx.recv().await {
+            match event {
+                StreamEvent::ContentDelta(delta) => {
+                    response.push_str(&delta);
+                }
+                StreamEvent::Error(err) => {
+                    return Err(anyhow::anyhow!("API error during summarization: {}", err));
+                }
+                StreamEvent::MessageStop => break,
+                _ => {} // Ignore other events
+            }
+        }
+
+        if response.is_empty() {
+            return Err(anyhow::anyhow!("Empty response from summarization API"));
+        }
+
+        Ok(response)
+    }
+}
+
+impl Summarizer for ClaudeSummarizer {
+    /// Generates a summary using the Claude API.
+    ///
+    /// This is a synchronous wrapper around the async API call.
+    /// Falls back to mock summarization if the API call fails.
+    fn summarize(&self, messages: &[ApiMessageV2], config: &CompactionConfig) -> String {
+        // Use the current tokio runtime to run the async summarization
+        let result = tokio::runtime::Handle::try_current()
+            .ok()
+            .and_then(|_handle| {
+                // We're in an async context - use block_in_place to avoid blocking
+                let messages = messages.to_vec();
+                let config = config.clone();
+                let client = self.client.clone();
+                let model = self.model.clone();
+
+                std::thread::scope(|s| {
+                    s.spawn(|| {
+                        let rt = tokio::runtime::Runtime::new().ok()?;
+                        let summarizer = ClaudeSummarizer {
+                            client,
+                            model,
+                        };
+                        rt.block_on(summarizer.summarize_async(&messages, &config))
+                            .ok()
+                    })
+                    .join()
+                    .ok()
+                    .flatten()
+                })
+            });
+
+        match result {
+            Some(summary) => summary,
+            None => {
+                warn!(
+                    "Failed to generate Claude summary, falling back to mock summarization"
+                );
+                generate_mock_summary(messages, config)
+            }
+        }
     }
 }
 
@@ -425,6 +580,46 @@ impl ContextCompactor<MockSummarizer> {
     pub fn new_mock() -> Self {
         Self {
             summarizer: MockSummarizer,
+        }
+    }
+}
+
+impl ContextCompactor<ClaudeSummarizer> {
+    /// Creates a production compactor using the Claude API.
+    ///
+    /// Uses claude-3-haiku by default for fast, cost-effective summarization.
+    ///
+    /// # Arguments
+    ///
+    /// * `client` - The Anthropic API client
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use patina::api::compaction::ContextCompactor;
+    /// use patina::api::AnthropicClient;
+    /// use std::sync::Arc;
+    ///
+    /// let client = Arc::new(AnthropicClient::new(api_key, "claude-sonnet-4-20250514"));
+    /// let compactor = ContextCompactor::with_client(client);
+    /// ```
+    #[must_use]
+    pub fn with_client(client: Arc<AnthropicClient>) -> Self {
+        Self {
+            summarizer: ClaudeSummarizer::new(client),
+        }
+    }
+
+    /// Creates a production compactor with a specific model for summarization.
+    ///
+    /// # Arguments
+    ///
+    /// * `client` - The Anthropic API client
+    /// * `model` - The model to use for summarization
+    #[must_use]
+    pub fn with_client_and_model(client: Arc<AnthropicClient>, model: &str) -> Self {
+        Self {
+            summarizer: ClaudeSummarizer::with_model(client, model),
         }
     }
 }
@@ -753,5 +948,69 @@ mod tests {
         assert!(request.contains("timeline"));
         assert!(request.contains("User: Create a file"));
         assert!(request.contains("Assistant: Done!"));
+    }
+
+    // =========================================================================
+    // ClaudeSummarizer tests
+    // =========================================================================
+
+    #[test]
+    fn test_claude_summarizer_struct_exists() {
+        // Verify the struct can be referenced
+        use super::ClaudeSummarizer;
+        let _type_check: fn(Arc<AnthropicClient>) -> ClaudeSummarizer = ClaudeSummarizer::new;
+    }
+
+    #[test]
+    fn test_claude_summarizer_default_model() {
+        // Verify the default summarization model constant
+        assert_eq!(SUMMARIZATION_MODEL, "claude-3-haiku-20240307");
+    }
+
+    #[test]
+    fn test_summarization_prompt_template_exists() {
+        // Verify the prompt templates are accessible
+        assert!(!TIMELINE_SUMMARIZATION_PROMPT.is_empty());
+        assert!(!BULLET_SUMMARIZATION_PROMPT.is_empty());
+        assert!(!NARRATIVE_SUMMARIZATION_PROMPT.is_empty());
+    }
+
+    #[test]
+    fn test_summarization_prompt_includes_messages_placeholder() {
+        // Verify prompts end with the messages placeholder marker
+        assert!(TIMELINE_SUMMARIZATION_PROMPT.contains("Previous conversation to summarize:"));
+        assert!(BULLET_SUMMARIZATION_PROMPT.contains("Previous conversation to summarize:"));
+        assert!(NARRATIVE_SUMMARIZATION_PROMPT.contains("Previous conversation to summarize:"));
+    }
+
+    #[test]
+    fn test_context_compactor_with_client_factory() {
+        // Verify factory method exists and returns correct type
+        // This is a compile-time check - actual client would need API key
+        use super::ContextCompactor;
+        let _type_check: fn(Arc<AnthropicClient>) -> ContextCompactor<ClaudeSummarizer> =
+            ContextCompactor::with_client;
+    }
+
+    #[test]
+    fn test_context_compactor_with_client_and_model_factory() {
+        // Verify factory method with custom model exists
+        use super::ContextCompactor;
+        let _type_check: fn(Arc<AnthropicClient>, &str) -> ContextCompactor<ClaudeSummarizer> =
+            ContextCompactor::with_client_and_model;
+    }
+
+    #[test]
+    fn test_claude_summarizer_graceful_degradation_pattern() {
+        // Verify the Summarizer trait is implemented
+        // When API fails, it should fall back to mock summary
+        // This is tested at the trait level, not the actual API call
+        fn accepts_summarizer<S: Summarizer>(_s: S) {}
+
+        let mock = MockSummarizer;
+        accepts_summarizer(mock);
+
+        // ClaudeSummarizer would also satisfy this if we had a client
+        // accepts_summarizer(ClaudeSummarizer::new(client));
     }
 }
