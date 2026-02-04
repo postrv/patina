@@ -14,7 +14,7 @@ A high-performance terminal client for the Claude API, written in Rust. Designed
 
 - **Sub-millisecond rendering** - Full 100-message redraw in <1ms
 - **Parallel tool execution** - 5x+ speedup on multi-file operations
-- **1,150+ tests** with 85%+ code coverage
+- **2,500+ tests** with 85%+ code coverage
 - **Lightweight binary** - Single executable with minimal dependencies
 - **Zero unsafe code** - Pure safe Rust (~56,000 LOC)
 - **Cross-platform** - Linux, macOS, Windows
@@ -336,7 +336,7 @@ cargo tarpaulin --out Html
 | Version | 0.7.0 |
 | MSRV | Rust 1.75 |
 | Edition | 2021 |
-| Tests | 1,350+ |
+| Tests | 2,500+ |
 | Coverage | 85%+ |
 | Unsafe | 0 blocks |
 | LOC | ~56,000 |
@@ -432,3 +432,5 @@ Copyright (c) 2026 Laurence Avent
 ## Author
 
 **Laurence Avent** ([@postrv](https://github.com/postrv))
+
+<!-- METRICS:tests=2500,loc=56000 -->
