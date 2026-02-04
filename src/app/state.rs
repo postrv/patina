@@ -3,11 +3,11 @@
 use crate::agents::SubagentSpawner;
 use crate::api::tools::default_tools;
 use crate::api::{AnthropicClient, StreamEvent, TokenBudget, ToolChoice};
-use crate::context::compression::CompressionOrchestrator;
-use crate::mcp::client::McpClient;
 use crate::app::tool_loop::{ContinuationData, ToolLoop, ToolLoopState};
 use crate::app::STREAMING_CHANNEL_BUFFER;
+use crate::context::compression::CompressionOrchestrator;
 use crate::hooks::HookManager;
+use crate::mcp::client::McpClient;
 use crate::narsil::context::ContextSuggestion;
 use crate::permissions::{PermissionManager, PermissionRequest, PermissionResponse};
 use crate::plugins::PluginRegistry;
@@ -531,10 +531,7 @@ impl AppState {
         };
 
         // Check if hash has changed (for cache invalidation tracking)
-        let hash_changed = self
-            .last_ccg_hash
-            .as_ref()
-            .map_or(true, |h| h != repo_hash);
+        let hash_changed = self.last_ccg_hash.as_ref().map_or(true, |h| h != repo_hash);
 
         if hash_changed {
             tracing::debug!(
@@ -545,7 +542,9 @@ impl AppState {
         }
 
         // Fetch context via orchestrator
-        let result = orchestrator.get_default_context_async(client, repo_hash).await;
+        let result = orchestrator
+            .get_default_context_async(client, repo_hash)
+            .await;
 
         // Update cached hash
         self.last_ccg_hash = Some(repo_hash.to_string());
@@ -1084,10 +1083,7 @@ impl AppState {
                     "Injecting CCG context into user message"
                 );
                 // Prepend context to user message for API
-                format!(
-                    "<context>\n{}\n</context>\n\n{}",
-                    context, content
-                )
+                format!("<context>\n{}\n</context>\n\n{}", context, content)
             } else {
                 content.clone()
             }

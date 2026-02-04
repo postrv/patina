@@ -318,8 +318,7 @@ impl ToolLoop {
                 }
             })?;
 
-            let tool_use =
-                ToolUseBlock::new(completed.id.clone(), completed.name, completed.input);
+            let tool_use = ToolUseBlock::new(completed.id.clone(), completed.name, completed.input);
             self.pending_calls
                 .insert(completed.id, PendingToolCall::new(tool_use));
         }

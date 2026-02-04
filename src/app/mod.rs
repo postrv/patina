@@ -28,15 +28,15 @@ use tool_loop::ToolLoopState;
 
 use crate::api::AnthropicClient;
 use crate::ide::controller::IdeController;
+use crate::narsil::NarsilIntegration;
 use crate::permissions::PermissionResponse;
+use crate::plugins::narsil::{has_supported_code_files, is_narsil_available};
 use crate::session::{default_sessions_dir, SessionManager};
 use crate::terminal;
 use crate::tui;
 use crate::tui::selection::{ContentPosition, FocusArea};
 use crate::tui::widgets::handle_permission_key;
 use crate::tui::widgets::permission_prompt::PermissionPromptState;
-use crate::narsil::NarsilIntegration;
-use crate::plugins::narsil::{has_supported_code_files, is_narsil_available};
 use crate::types::config::{NarsilMode, ResumeMode};
 use crate::types::{ApiMessageV2, Message, Role};
 
@@ -1297,8 +1297,12 @@ mod tests {
         use secrecy::SecretString;
 
         let mut state = AppState::new(PathBuf::from("/tmp"), false, ParallelMode::Enabled);
-        let config = Config::new(SecretString::new("test".into()), "model", PathBuf::from("/tmp"))
-            .with_narsil_mode(NarsilMode::Disabled);
+        let config = Config::new(
+            SecretString::new("test".into()),
+            "model",
+            PathBuf::from("/tmp"),
+        )
+        .with_narsil_mode(NarsilMode::Disabled);
 
         // Disabled mode should never set orchestrator
         initialize_compression_orchestrator(&mut state, &config);
