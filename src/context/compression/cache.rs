@@ -423,7 +423,12 @@ mod tests {
 
         cache.set(
             key1,
-            CachedResult::new("a".to_string(), 1, "h".to_string(), CompressionLevel::Manifest),
+            CachedResult::new(
+                "a".to_string(),
+                1,
+                "h".to_string(),
+                CompressionLevel::Manifest,
+            ),
         );
         cache.set(
             key2,
@@ -516,7 +521,12 @@ mod tests {
 
         cache.set(
             key1,
-            CachedResult::new("a".to_string(), 1, "h".to_string(), CompressionLevel::Manifest),
+            CachedResult::new(
+                "a".to_string(),
+                1,
+                "h".to_string(),
+                CompressionLevel::Manifest,
+            ),
         );
         cache.set(
             key2,
