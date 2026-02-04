@@ -66,7 +66,7 @@ A high-performance terminal client for the Claude API, written in Rust. Designed
 | **Project Context** | Automatic CLAUDE.md discovery for project instructions |
 | **Git Worktrees** | Parallel AI-assisted development with isolation |
 | **IDE Integration** | TCP server for VS Code and JetBrains extensions |
-| **narsil-mcp** | Optional code intelligence with 76 analysis tools |
+| **narsil-mcp** | Optional code intelligence with 90 analysis tools |
 
 ## Installation
 
