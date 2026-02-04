@@ -18,7 +18,9 @@ pub use context::{
 };
 
 // Re-export compaction types for convenience
-pub use compaction::{CompactionConfig, CompactionResult, ContextCompactor, SummaryStyle};
+pub use compaction::{
+    CompactionConfig, CompactionResult, ContextCompactor, MockSummarizer, Summarizer, SummaryStyle,
+};
 
 use std::time::Duration;
 
