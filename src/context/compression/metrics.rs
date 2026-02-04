@@ -40,6 +40,8 @@ pub struct CompressionMetrics {
     total_latency_us: AtomicU64,
     /// Number of latency samples
     latency_samples: AtomicU64,
+    /// Number of times degradation occurred
+    degradations: AtomicU64,
 }
 
 impl CompressionMetrics {
@@ -74,6 +76,17 @@ impl CompressionMetrics {
         let us = duration.as_micros() as u64;
         self.total_latency_us.fetch_add(us, Ordering::Relaxed);
         self.latency_samples.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Records a degradation event.
+    pub fn record_degradation(&self) {
+        self.degradations.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Returns the number of degradation events.
+    #[must_use]
+    pub fn degradations(&self) -> u64 {
+        self.degradations.load(Ordering::Relaxed)
     }
 
     /// Returns the number of cache hits.
@@ -139,6 +152,7 @@ impl CompressionMetrics {
             cache_misses: self.cache_misses.load(Ordering::Relaxed),
             ccg_calls: self.ccg_calls.load(Ordering::Relaxed),
             fallback_calls: self.fallback_calls.load(Ordering::Relaxed),
+            degradations: self.degradations.load(Ordering::Relaxed),
             hit_rate: self.hit_rate(),
             average_latency: self.average_latency(),
         }
@@ -152,6 +166,7 @@ impl CompressionMetrics {
         self.fallback_calls.store(0, Ordering::Relaxed);
         self.total_latency_us.store(0, Ordering::Relaxed);
         self.latency_samples.store(0, Ordering::Relaxed);
+        self.degradations.store(0, Ordering::Relaxed);
     }
 }
 
@@ -166,6 +181,8 @@ pub struct MetricsSummary {
     pub ccg_calls: u64,
     /// Number of fallback backend calls
     pub fallback_calls: u64,
+    /// Number of degradation events
+    pub degradations: u64,
     /// Cache hit rate (0.0 to 1.0)
     pub hit_rate: f64,
     /// Average latency (if any samples recorded)
