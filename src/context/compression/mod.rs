@@ -45,10 +45,14 @@
 
 mod cache;
 mod metrics;
+mod orchestrator;
 mod types;
 
 pub use cache::{CacheKey, CachedResult, ResultCache, DEFAULT_CACHE_TTL, DEFAULT_MAX_ENTRIES};
 pub use metrics::{CompressionMetrics, MetricsSummary};
+pub use orchestrator::{
+    CompressionOrchestrator, DEFAULT_ORCHESTRATOR_MAX_ENTRIES, DEFAULT_ORCHESTRATOR_TTL,
+};
 pub use types::{estimate_tokens, CompressionLevel, CompressionResult, ContextSource};
 
 #[cfg(test)]
