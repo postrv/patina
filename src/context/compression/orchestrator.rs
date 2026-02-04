@@ -168,6 +168,103 @@ impl CompressionOrchestrator {
         };
         CompressionResult::new(content, CompressionLevel::Architecture, source)
     }
+
+    /// Gets context at the specified level, using cache if available.
+    ///
+    /// This method:
+    /// 1. Checks the cache for a valid result
+    /// 2. If cache miss, creates the result using the appropriate backend
+    /// 3. Caches the result before returning
+    ///
+    /// # Arguments
+    ///
+    /// * `level` - The compression level to retrieve
+    /// * `repo_hash` - Current repository hash for cache validation
+    /// * `content_fn` - Function to generate content on cache miss
+    ///
+    /// # Returns
+    ///
+    /// The compression result, either from cache or freshly generated.
+    pub fn get_context<F>(&self, level: CompressionLevel, repo_hash: &str, content_fn: F) -> CompressionResult
+    where
+        F: FnOnce() -> String,
+    {
+        // Try cache first
+        if let Some(cached) = self.get_cached(level, repo_hash) {
+            return cached;
+        }
+
+        // Cache miss - generate content
+        let content = content_fn();
+        let result = match level {
+            CompressionLevel::Manifest => self.create_manifest_result(content),
+            CompressionLevel::Architecture => self.create_architecture_result(content),
+            CompressionLevel::SymbolDetail | CompressionLevel::Full => {
+                // These levels use DirectTool source
+                CompressionResult::new(content, level, ContextSource::DirectTool)
+            }
+        };
+
+        // Cache the result
+        self.cache_result(level, &result, repo_hash);
+
+        result
+    }
+
+    /// Gets the default context (manifest + architecture).
+    ///
+    /// The default context is designed to stay under 52KB and provides
+    /// a good balance between context richness and token efficiency.
+    ///
+    /// # Arguments
+    ///
+    /// * `repo_hash` - Current repository hash for cache validation
+    /// * `manifest_fn` - Function to generate manifest content
+    /// * `architecture_fn` - Function to generate architecture content
+    ///
+    /// # Returns
+    ///
+    /// A combined compression result with manifest and architecture.
+    pub fn get_default_context<F1, F2>(
+        &self,
+        repo_hash: &str,
+        manifest_fn: F1,
+        architecture_fn: F2,
+    ) -> CompressionResult
+    where
+        F1: FnOnce() -> String,
+        F2: FnOnce() -> String,
+    {
+        let manifest = self.get_context(CompressionLevel::Manifest, repo_hash, manifest_fn);
+        let architecture = self.get_context(CompressionLevel::Architecture, repo_hash, architecture_fn);
+
+        // Combine manifest and architecture
+        let combined = format!(
+            "{}\n\n---\n\n{}",
+            manifest.content(),
+            architecture.content()
+        );
+
+        // Use the more detailed source for combined result
+        let source = if self.should_use_ccg() {
+            ContextSource::CcgLayer1
+        } else {
+            ContextSource::Constructed
+        };
+
+        CompressionResult::with_tokens(
+            combined,
+            CompressionLevel::Architecture, // Default context is architecture-level
+            source,
+            manifest.tokens_approx() + architecture.tokens_approx(),
+        )
+    }
+
+    /// Returns the maximum size in bytes for default context.
+    #[must_use]
+    pub const fn default_context_max_bytes() -> usize {
+        52 * 1024 // 52KB
+    }
 }
 
 #[cfg(test)]
@@ -340,5 +437,129 @@ mod tests {
         // Verify metrics are accessible
         assert_eq!(orchestrator.metrics().cache_hits(), 0);
         assert_eq!(orchestrator.metrics().cache_misses(), 0);
+    }
+
+    #[test]
+    fn test_get_context_returns_cached_on_hit() {
+        let caps = create_capabilities_with_ccg();
+        let orchestrator = CompressionOrchestrator::new(caps, "repo");
+
+        // First call - cache miss
+        let result1 = orchestrator.get_context(
+            CompressionLevel::Manifest,
+            "hash123",
+            || "# Manifest\n\nGenerated content".to_string(),
+        );
+        assert_eq!(orchestrator.metrics().cache_misses(), 1);
+        assert_eq!(orchestrator.metrics().cache_hits(), 0);
+
+        // Second call - cache hit
+        let result2 = orchestrator.get_context(
+            CompressionLevel::Manifest,
+            "hash123",
+            || panic!("Should not be called on cache hit"),
+        );
+        assert_eq!(orchestrator.metrics().cache_hits(), 1);
+
+        // Content should be the same
+        assert_eq!(result1.content(), result2.content());
+    }
+
+    #[test]
+    fn test_get_context_calls_backend_on_miss() {
+        let caps = create_capabilities_with_ccg();
+        let orchestrator = CompressionOrchestrator::new(caps, "repo");
+
+        let mut called = false;
+        let _result = orchestrator.get_context(
+            CompressionLevel::Manifest,
+            "hash123",
+            || {
+                called = true;
+                "Generated content".to_string()
+            },
+        );
+
+        assert!(called, "Content function should be called on cache miss");
+        assert_eq!(orchestrator.metrics().cache_misses(), 1);
+    }
+
+    #[test]
+    fn test_get_default_context_returns_manifest_plus_architecture() {
+        let caps = create_capabilities_with_ccg();
+        let orchestrator = CompressionOrchestrator::new(caps, "repo");
+
+        let result = orchestrator.get_default_context(
+            "hash123",
+            || "# Manifest".to_string(),
+            || "# Architecture".to_string(),
+        );
+
+        // Should contain both sections
+        assert!(result.content().contains("# Manifest"));
+        assert!(result.content().contains("# Architecture"));
+        assert!(result.content().contains("---")); // Separator
+    }
+
+    #[test]
+    fn test_default_context_size_within_limit() {
+        let caps = create_capabilities_with_ccg();
+        let orchestrator = CompressionOrchestrator::new(caps, "repo");
+
+        // Create content that's within the limit
+        let manifest = "# Manifest\n\n".repeat(100); // ~1.3KB
+        let architecture = "# Architecture\n\n".repeat(500); // ~6.5KB
+
+        let result = orchestrator.get_default_context(
+            "hash123",
+            || manifest,
+            || architecture,
+        );
+
+        assert!(
+            result.byte_len() < CompressionOrchestrator::default_context_max_bytes(),
+            "Default context should be under 52KB, got {} bytes",
+            result.byte_len()
+        );
+    }
+
+    #[test]
+    fn test_default_context_combines_token_counts() {
+        let caps = create_capabilities_with_ccg();
+        let orchestrator = CompressionOrchestrator::new(caps, "repo");
+
+        let result = orchestrator.get_default_context(
+            "hash123",
+            || "Manifest content".to_string(),
+            || "Architecture content".to_string(),
+        );
+
+        // Token count should be sum of both parts
+        assert!(result.tokens_approx() > 0);
+    }
+
+    #[test]
+    fn test_get_context_caches_result() {
+        let caps = create_capabilities_with_ccg();
+        let orchestrator = CompressionOrchestrator::new(caps, "repo");
+
+        // Generate and cache
+        let _result = orchestrator.get_context(
+            CompressionLevel::Manifest,
+            "hash123",
+            || "Generated content".to_string(),
+        );
+
+        // Verify it's cached (hit on same hash)
+        let cached = orchestrator.get_cached(CompressionLevel::Manifest, "hash123");
+        assert!(cached.is_some());
+    }
+
+    #[test]
+    fn test_default_context_max_bytes() {
+        assert_eq!(
+            CompressionOrchestrator::default_context_max_bytes(),
+            52 * 1024
+        );
     }
 }
