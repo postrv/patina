@@ -12,7 +12,6 @@ on:
       - '.claude/**'
       - '../../.archive/IMPLEMENTATION_PLAN.md'
       - 'Formula/**'
-      - 'scripts/**'
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -64,6 +63,35 @@ jobs:
 
       - name: Run clippy
         run: cargo clippy --all-targets -- -D warnings
+
+  # Metrics validation - ensures README claims match reality
+  metrics:
+    name: Validate Metrics
+    runs-on: ubuntu-latest
+    if: >-
+      !contains(github.event.head_commit.message, '[skip ci]') &&
+      !contains(github.event.head_commit.message, '[ci skip]')
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Compute and validate metrics
+        run: ./scripts/validate_metrics.sh
 
   # Run tests - full matrix only on PRs or manual dispatch
   test:
