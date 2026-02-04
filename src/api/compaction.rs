@@ -310,6 +310,11 @@ pub struct CompactionConfig {
     pub preserve_recent: usize,
     /// Style of summary generation.
     pub summary_style: SummaryStyle,
+    /// Threshold for auto-compaction (fraction of context window).
+    ///
+    /// When token usage exceeds `auto_compact_threshold * context_limit`,
+    /// compaction is automatically triggered. Default is 0.8 (80%).
+    pub auto_compact_threshold: f32,
 }
 
 impl Default for CompactionConfig {
@@ -318,7 +323,49 @@ impl Default for CompactionConfig {
             target_tokens: 50_000,
             preserve_recent: 4,
             summary_style: SummaryStyle::Timeline,
+            auto_compact_threshold: 0.8, // Trigger compaction at 80% of context
         }
+    }
+}
+
+impl CompactionConfig {
+    /// Creates a new CompactionConfig with default values.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Sets the auto-compaction threshold.
+    ///
+    /// # Arguments
+    ///
+    /// * `threshold` - Fraction of context window at which to trigger compaction (0.0-1.0)
+    ///
+    /// # Panics
+    ///
+    /// Panics if threshold is not in the range 0.0 to 1.0.
+    #[must_use]
+    pub fn with_auto_compact_threshold(mut self, threshold: f32) -> Self {
+        assert!(
+            (0.0..=1.0).contains(&threshold),
+            "Auto-compact threshold must be between 0.0 and 1.0"
+        );
+        self.auto_compact_threshold = threshold;
+        self
+    }
+
+    /// Returns the token threshold at which compaction should trigger.
+    ///
+    /// # Arguments
+    ///
+    /// * `context_limit` - The maximum context window size in tokens
+    ///
+    /// # Returns
+    ///
+    /// The token count at which compaction should be triggered.
+    #[must_use]
+    pub fn compaction_threshold(&self, context_limit: usize) -> usize {
+        (context_limit as f64 * f64::from(self.auto_compact_threshold)) as usize
     }
 }
 

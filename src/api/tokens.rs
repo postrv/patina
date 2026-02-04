@@ -489,6 +489,85 @@ impl TokenBudget {
     pub fn reset(&mut self) {
         self.used = 0;
     }
+
+    /// Returns true if compaction should be triggered.
+    ///
+    /// Compaction is needed when the current usage exceeds the compaction
+    /// threshold (a fraction of the context limit).
+    ///
+    /// # Arguments
+    ///
+    /// * `threshold` - Fraction of context window at which to trigger (0.0-1.0)
+    ///
+    /// # Returns
+    ///
+    /// `true` if current usage exceeds `threshold * limit`
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use patina::api::tokens::TokenBudget;
+    ///
+    /// let mut budget = TokenBudget::new(100_000);
+    /// budget.add_usage(75_000);
+    ///
+    /// // At 75% usage, 0.8 threshold returns false
+    /// assert!(!budget.needs_compaction(0.8));
+    ///
+    /// budget.add_usage(10_000); // Now at 85%
+    /// assert!(budget.needs_compaction(0.8)); // Exceeds 80% threshold
+    /// ```
+    #[must_use]
+    pub fn needs_compaction(&self, threshold: f32) -> bool {
+        let threshold_tokens = (self.limit as f64 * f64::from(threshold)) as usize;
+        self.used >= threshold_tokens
+    }
+}
+
+/// Context window limits for Claude models (in tokens).
+///
+/// These are the maximum context sizes supported by each model family.
+/// Use these values when setting up `TokenBudget` to track usage against limits.
+///
+/// # Model Limits (as of 2024)
+///
+/// | Model Family | Context Window |
+/// |--------------|----------------|
+/// | Claude 3.5 Sonnet | 200,000 |
+/// | Claude 3.5 Haiku | 200,000 |
+/// | Claude 3 Opus | 200,000 |
+/// | Claude Sonnet 4 | 200,000 |
+/// | Claude Opus 4.5 | 200,000 |
+///
+/// # Example
+///
+/// ```rust
+/// use patina::api::tokens::{model_context_limit, TokenBudget};
+///
+/// let limit = model_context_limit("claude-sonnet-4-20250514");
+/// let budget = TokenBudget::new(limit);
+/// ```
+#[must_use]
+pub fn model_context_limit(model: &str) -> usize {
+    // Extract the model family from the full model name
+    let model_lower = model.to_lowercase();
+
+    // All current Claude 3.x and 4.x models have 200k context
+    if model_lower.contains("claude-3")
+        || model_lower.contains("claude-sonnet-4")
+        || model_lower.contains("claude-opus-4")
+        || model_lower.contains("claude-haiku")
+    {
+        return 200_000;
+    }
+
+    // Legacy Claude 2.x models (if ever needed)
+    if model_lower.contains("claude-2") {
+        return 100_000;
+    }
+
+    // Default to 200k for unknown models (conservative for modern usage)
+    200_000
 }
 
 impl std::fmt::Display for TokenBudget {
@@ -1003,5 +1082,96 @@ mod tests {
             display.contains("100,000") || display.contains("100000"),
             "Display should show limit"
         );
+    }
+
+    // =========================================================================
+    // R.4.2.1 - needs_compaction tests
+    // =========================================================================
+
+    #[test]
+    fn test_needs_compaction_below_threshold() {
+        let mut budget = TokenBudget::new(100_000);
+        budget.add_usage(75_000);
+        // At 75%, should not trigger 80% threshold
+        assert!(!budget.needs_compaction(0.8));
+    }
+
+    #[test]
+    fn test_needs_compaction_at_threshold() {
+        let mut budget = TokenBudget::new(100_000);
+        budget.add_usage(80_000);
+        // At exactly 80%, should trigger 80% threshold
+        assert!(budget.needs_compaction(0.8));
+    }
+
+    #[test]
+    fn test_needs_compaction_above_threshold() {
+        let mut budget = TokenBudget::new(100_000);
+        budget.add_usage(90_000);
+        // At 90%, should trigger 80% threshold
+        assert!(budget.needs_compaction(0.8));
+    }
+
+    #[test]
+    fn test_needs_compaction_custom_threshold() {
+        let mut budget = TokenBudget::new(100_000);
+        budget.add_usage(70_000);
+        // At 70%, should trigger 70% threshold but not 80%
+        assert!(budget.needs_compaction(0.7));
+        assert!(!budget.needs_compaction(0.8));
+    }
+
+    #[test]
+    fn test_needs_compaction_empty_budget() {
+        let budget = TokenBudget::new(100_000);
+        assert!(!budget.needs_compaction(0.8));
+    }
+
+    // =========================================================================
+    // R.4.1.2 - model_context_limit tests
+    // =========================================================================
+
+    #[test]
+    fn test_model_context_limit_claude_sonnet_4() {
+        let limit = super::model_context_limit("claude-sonnet-4-20250514");
+        assert_eq!(limit, 200_000);
+    }
+
+    #[test]
+    fn test_model_context_limit_claude_opus_45() {
+        let limit = super::model_context_limit("claude-opus-4-5-20251101");
+        assert_eq!(limit, 200_000);
+    }
+
+    #[test]
+    fn test_model_context_limit_claude_3_5_sonnet() {
+        let limit = super::model_context_limit("claude-3-5-sonnet-20241022");
+        assert_eq!(limit, 200_000);
+    }
+
+    #[test]
+    fn test_model_context_limit_claude_3_haiku() {
+        let limit = super::model_context_limit("claude-3-haiku-20240307");
+        assert_eq!(limit, 200_000);
+    }
+
+    #[test]
+    fn test_model_context_limit_claude_2() {
+        let limit = super::model_context_limit("claude-2.1");
+        assert_eq!(limit, 100_000);
+    }
+
+    #[test]
+    fn test_model_context_limit_unknown_model() {
+        // Unknown models should default to 200k
+        let limit = super::model_context_limit("unknown-model");
+        assert_eq!(limit, 200_000);
+    }
+
+    #[test]
+    fn test_model_context_limit_case_insensitive() {
+        let limit1 = super::model_context_limit("CLAUDE-SONNET-4-20250514");
+        let limit2 = super::model_context_limit("Claude-Sonnet-4-20250514");
+        assert_eq!(limit1, limit2);
     }
 }
