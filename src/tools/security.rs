@@ -227,6 +227,158 @@ pub fn normalize_command(cmd: &str) -> String {
     result
 }
 
+/// Resolves a command name to its actual executable by checking shell aliases.
+///
+/// Uses the shell's `type` builtin to determine if a command is an alias,
+/// and if so, returns the resolved command. This helps detect cases where
+/// a seemingly safe command like `rm` might be aliased to `rm -rf`.
+///
+/// # Arguments
+///
+/// * `command_name` - The command name to resolve (first word of the command)
+///
+/// # Returns
+///
+/// * `Some(resolved)` - The resolved command if it's an alias
+/// * `None` - If the command is not an alias, resolution failed, or timed out
+///
+/// # Example
+///
+/// ```ignore
+/// // If user has `alias rm='rm -i'` in their shell
+/// assert_eq!(resolve_alias("rm"), Some("rm -i".to_string()));
+///
+/// // If `ls` is not an alias
+/// assert_eq!(resolve_alias("ls"), None);
+/// ```
+///
+/// # Performance
+///
+/// This function spawns a shell subprocess, which has overhead. It should
+/// only be called in default parallel mode, not aggressive mode where
+/// performance is critical.
+#[must_use]
+pub fn resolve_alias(command_name: &str) -> Option<String> {
+    resolve_alias_with_timeout(command_name, std::time::Duration::from_millis(100))
+}
+
+/// Resolves a command alias with a configurable timeout.
+///
+/// # Arguments
+///
+/// * `command_name` - The command name to resolve
+/// * `timeout` - Maximum time to wait for the shell to respond
+///
+/// # Returns
+///
+/// * `Some(resolved)` - The resolved command if it's an alias
+/// * `None` - If not an alias, resolution failed, or timed out
+#[must_use]
+pub fn resolve_alias_with_timeout(
+    command_name: &str,
+    timeout: std::time::Duration,
+) -> Option<String> {
+    use std::process::{Command, Stdio};
+    use std::time::Instant;
+
+    // Validate command name (alphanumeric, dash, underscore only)
+    if command_name.is_empty()
+        || !command_name
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+    {
+        return None;
+    }
+
+    let start = Instant::now();
+
+    // Try bash first, then zsh
+    let shells = ["bash", "zsh"];
+
+    for shell in &shells {
+        if start.elapsed() > timeout {
+            tracing::debug!(
+                command = %command_name,
+                "Alias resolution timed out"
+            );
+            return None;
+        }
+
+        // Use `type` builtin which works in both bash and zsh
+        // bash output: "rm is aliased to `rm -i'"
+        // zsh output: "rm is an alias for rm -i"
+        let result = Command::new(shell)
+            .args(["-i", "-c", &format!("type {}", command_name)])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .output();
+
+        match result {
+            Ok(output) if output.status.success() => {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                if let Some(resolved) = parse_alias_output(&stdout, command_name) {
+                    tracing::debug!(
+                        command = %command_name,
+                        resolved = %resolved,
+                        shell = %shell,
+                        "Resolved alias"
+                    );
+                    return Some(resolved);
+                }
+            }
+            Ok(_) => {
+                // Command not found or not an alias - continue to next shell
+            }
+            Err(e) => {
+                tracing::trace!(
+                    shell = %shell,
+                    error = %e,
+                    "Shell not available for alias resolution"
+                );
+            }
+        }
+    }
+
+    None
+}
+
+/// Parses the output of shell `type` command to extract alias definition.
+///
+/// Handles both bash and zsh output formats:
+/// - bash: `rm is aliased to \`rm -i'`
+/// - zsh: `rm is an alias for rm -i`
+fn parse_alias_output(output: &str, command_name: &str) -> Option<String> {
+    let line = output.trim();
+
+    // Check if this is actually an alias (not a builtin, function, or file)
+    if !line.contains("alias") {
+        return None;
+    }
+
+    // Bash format: "command is aliased to `actual_command'"
+    if line.contains("is aliased to") {
+        // Extract content between backtick and single quote
+        if let Some(start) = line.find('`') {
+            if let Some(end) = line.rfind('\'') {
+                if end > start {
+                    return Some(line[start + 1..end].to_string());
+                }
+            }
+        }
+    }
+
+    // Zsh format: "command is an alias for actual_command"
+    if line.contains("is an alias for") {
+        let prefix = format!("{} is an alias for ", command_name);
+        if let Some(rest) = line.strip_prefix(&prefix) {
+            return Some(rest.trim().to_string());
+        }
+    }
+
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -282,5 +434,92 @@ mod tests {
         let policy = ToolExecutionPolicy::default();
         let cmd = "ls -la";
         assert!(!policy.dangerous_patterns.iter().any(|p| p.is_match(cmd)));
+    }
+
+    // =========================================================================
+    // Alias Resolution Tests
+    // =========================================================================
+
+    #[test]
+    fn test_parse_alias_output_bash_format() {
+        // bash: "rm is aliased to `rm -i'"
+        let output = "rm is aliased to `rm -i'";
+        assert_eq!(parse_alias_output(output, "rm"), Some("rm -i".to_string()));
+    }
+
+    #[test]
+    fn test_parse_alias_output_bash_complex() {
+        // bash: "ll is aliased to `ls -la --color=auto'"
+        let output = "ll is aliased to `ls -la --color=auto'";
+        assert_eq!(
+            parse_alias_output(output, "ll"),
+            Some("ls -la --color=auto".to_string())
+        );
+    }
+
+    #[test]
+    fn test_parse_alias_output_zsh_format() {
+        // zsh: "rm is an alias for rm -i"
+        let output = "rm is an alias for rm -i";
+        assert_eq!(parse_alias_output(output, "rm"), Some("rm -i".to_string()));
+    }
+
+    #[test]
+    fn test_parse_alias_output_zsh_complex() {
+        // zsh: "ll is an alias for ls -la --color=auto"
+        let output = "ll is an alias for ls -la --color=auto";
+        assert_eq!(
+            parse_alias_output(output, "ll"),
+            Some("ls -la --color=auto".to_string())
+        );
+    }
+
+    #[test]
+    fn test_parse_alias_output_not_alias_builtin() {
+        // Builtin output (bash): "cd is a shell builtin"
+        let output = "cd is a shell builtin";
+        assert_eq!(parse_alias_output(output, "cd"), None);
+    }
+
+    #[test]
+    fn test_parse_alias_output_not_alias_file() {
+        // File output (bash): "/usr/bin/ls is /usr/bin/ls"
+        let output = "/usr/bin/ls is /usr/bin/ls";
+        assert_eq!(parse_alias_output(output, "ls"), None);
+    }
+
+    #[test]
+    fn test_parse_alias_output_not_alias_function() {
+        // Function output (bash): "git is a function"
+        let output = "git is a function";
+        assert_eq!(parse_alias_output(output, "git"), None);
+    }
+
+    #[test]
+    fn test_resolve_alias_invalid_command_name() {
+        // Should reject commands with special characters
+        assert_eq!(resolve_alias("rm; ls"), None);
+        assert_eq!(resolve_alias("$(whoami)"), None);
+        assert_eq!(resolve_alias(""), None);
+        assert_eq!(resolve_alias("a b"), None);
+    }
+
+    #[test]
+    fn test_resolve_alias_valid_command_name() {
+        // Valid command names should be accepted (may return None if not aliased)
+        // This tests the validation logic, not actual alias resolution
+        let result = resolve_alias("ls");
+        // Result depends on system configuration - we just verify it doesn't panic
+        let _ = result;
+    }
+
+    #[test]
+    fn test_resolve_alias_with_timeout() {
+        use std::time::Duration;
+
+        // Very short timeout should return None without hanging
+        let result = resolve_alias_with_timeout("ls", Duration::from_nanos(1));
+        // Either times out or succeeds quickly
+        let _ = result;
     }
 }

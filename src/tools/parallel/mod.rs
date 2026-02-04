@@ -16,7 +16,8 @@ mod classification;
 
 // Re-export classification types
 pub use classification::{
-    classify_bash_command, classify_tool, ToolSafetyClass, SAFE_BASH_COMMANDS,
+    classify_bash_command, classify_bash_command_with_alias_resolution, classify_tool,
+    ToolSafetyClass, SAFE_BASH_COMMANDS,
 };
 
 // =============================================================================
@@ -269,11 +270,18 @@ impl ParallelExecutor {
     }
 
     /// Classifies a tool for execution, considering bash command content.
+    ///
+    /// In default mode, this also checks for shell aliases to detect cases
+    /// where a seemingly safe command might be aliased to something dangerous.
+    /// In aggressive mode, alias resolution is skipped for performance.
     fn classify_for_execution(&self, name: &str, input: &serde_json::Value) -> ToolSafetyClass {
         // For bash commands, we need to look at the actual command
         if name == "bash" {
             if let Some(command) = input.get("command").and_then(|v| v.as_str()) {
-                return classify_bash_command(command);
+                // In aggressive mode, skip alias resolution for performance
+                // In default mode, resolve aliases to catch dangerous aliased commands
+                let resolve_aliases = !self.config.aggressive;
+                return classify_bash_command_with_alias_resolution(command, resolve_aliases);
             }
             return ToolSafetyClass::Unknown;
         }
