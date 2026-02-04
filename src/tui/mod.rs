@@ -393,7 +393,7 @@ pub fn render(frame: &mut Frame, state: &mut AppState) {
 
     // Render compaction progress overlay if compaction is active
     if let Some(compaction_state) = state.compaction_state() {
-        render_compaction_overlay(frame, compaction_state);
+        render_compaction_overlay(frame, compaction_state, state.throbber_char());
     }
 
     // Render permission modal overlay if there's a pending permission request
@@ -411,7 +411,12 @@ pub fn render(frame: &mut Frame, state: &mut AppState) {
 ///
 /// * `frame` - The ratatui frame to render into
 /// * `compaction_state` - The compaction progress state to display
-pub fn render_compaction_overlay(frame: &mut Frame, compaction_state: &CompactionProgressState) {
+/// * `throbber` - The current throbber animation character
+pub fn render_compaction_overlay(
+    frame: &mut Frame,
+    compaction_state: &CompactionProgressState,
+    throbber: char,
+) {
     let area = frame.area();
 
     // Calculate modal area - centered, 50 chars wide, 8 lines tall
@@ -422,8 +427,8 @@ pub fn render_compaction_overlay(frame: &mut Frame, compaction_state: &Compactio
 
     let modal_area = Rect::new(modal_x, modal_y, modal_width, modal_height);
 
-    // Render the compaction progress widget
-    let widget = CompactionProgressWidget::new(compaction_state);
+    // Render the compaction progress widget with animated throbber
+    let widget = CompactionProgressWidget::new(compaction_state).with_throbber(throbber);
     frame.render_widget(widget, modal_area);
 }
 

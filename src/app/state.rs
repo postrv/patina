@@ -1452,8 +1452,18 @@ impl AppState {
     /// Starts a compaction operation with the given target and before tokens.
     ///
     /// This will display the compaction progress overlay in the UI.
-    pub fn start_compaction(&mut self, target_tokens: usize, before_tokens: usize) {
-        let mut state = CompactionProgressState::new(target_tokens, before_tokens);
+    ///
+    /// # Arguments
+    ///
+    /// * `target_tokens` - Target token count after compaction
+    /// * `before_tokens` - Current token count before compaction
+    /// * `is_auto` - Whether this is auto-triggered compaction (vs manual)
+    pub fn start_compaction(&mut self, target_tokens: usize, before_tokens: usize, is_auto: bool) {
+        let mut state = if is_auto {
+            CompactionProgressState::new_auto(target_tokens, before_tokens)
+        } else {
+            CompactionProgressState::new(target_tokens, before_tokens)
+        };
         state.set_status(crate::tui::widgets::CompactionStatus::Compacting);
         self.compaction_state = Some(state);
         self.dirty.full = true;
@@ -1574,9 +1584,9 @@ impl AppState {
             "Starting auto-compaction"
         );
 
-        // Show compaction progress
+        // Show compaction progress (auto-triggered)
         let target_tokens = context_limit / 2; // Target 50% of context
-        self.start_compaction(target_tokens, current_tokens);
+        self.start_compaction(target_tokens, current_tokens, true);
 
         // Create compactor with mock summarizer
         // TODO: In production, use ClaudeSummarizer with client

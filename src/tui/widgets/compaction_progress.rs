@@ -71,10 +71,12 @@ pub struct CompactionProgressState {
     progress: f64,
     /// Current status of the compaction.
     status: CompactionStatus,
+    /// Whether this is an auto-triggered compaction (vs manual).
+    is_auto: bool,
 }
 
 impl CompactionProgressState {
-    /// Creates a new compaction progress state.
+    /// Creates a new compaction progress state for manual compaction.
     ///
     /// # Arguments
     ///
@@ -88,6 +90,28 @@ impl CompactionProgressState {
             after_tokens: None,
             progress: 0.0,
             status: CompactionStatus::Idle,
+            is_auto: false,
+        }
+    }
+
+    /// Creates a new compaction progress state for auto-triggered compaction.
+    ///
+    /// This is used when compaction is automatically triggered due to
+    /// context limit approaching, rather than manually requested.
+    ///
+    /// # Arguments
+    ///
+    /// * `target_tokens` - Target token count after compaction
+    /// * `before_tokens` - Token count before compaction
+    #[must_use]
+    pub fn new_auto(target_tokens: usize, before_tokens: usize) -> Self {
+        Self {
+            target_tokens,
+            before_tokens,
+            after_tokens: None,
+            progress: 0.0,
+            status: CompactionStatus::Idle,
+            is_auto: true,
         }
     }
 
@@ -146,12 +170,28 @@ impl CompactionProgressState {
     pub fn set_status(&mut self, status: CompactionStatus) {
         self.status = status;
     }
+
+    /// Returns whether this is an auto-triggered compaction.
+    ///
+    /// Auto compaction is triggered when the context approaches the limit,
+    /// as opposed to manual compaction requested by the user.
+    #[must_use]
+    pub fn is_auto(&self) -> bool {
+        self.is_auto
+    }
+
+    /// Sets whether this is an auto-triggered compaction.
+    pub fn set_auto(&mut self, is_auto: bool) {
+        self.is_auto = is_auto;
+    }
 }
 
 /// Widget for displaying compaction progress.
 pub struct CompactionProgressWidget<'a> {
     /// The progress state to render.
     state: &'a CompactionProgressState,
+    /// Optional throbber character for animation during compaction.
+    throbber: Option<char>,
 }
 
 impl<'a> CompactionProgressWidget<'a> {
@@ -162,7 +202,21 @@ impl<'a> CompactionProgressWidget<'a> {
     /// * `state` - The progress state to display
     #[must_use]
     pub fn new(state: &'a CompactionProgressState) -> Self {
-        Self { state }
+        Self {
+            state,
+            throbber: None,
+        }
+    }
+
+    /// Sets the throbber character for animated display.
+    ///
+    /// The throbber is shown during the `Compacting` status to indicate
+    /// that work is in progress. Use characters like `['⠋', '⠙', '⠹', '⠸']`
+    /// and cycle through them for animation.
+    #[must_use]
+    pub fn with_throbber(mut self, throbber: char) -> Self {
+        self.throbber = Some(throbber);
+        self
     }
 
     /// Formats a token count for display.
@@ -179,18 +233,36 @@ impl<'a> CompactionProgressWidget<'a> {
     }
 
     /// Renders the status line with icon and text.
-    fn render_status_line(&self) -> Line<'static> {
+    pub fn render_status_line(&self) -> Line<'static> {
         let (icon, status_text, style) = match self.state.status {
-            CompactionStatus::Idle => ("○", "Idle", Style::default().fg(PatinaTheme::MUTED)),
-            CompactionStatus::Compacting => (
-                "◐",
-                "Compacting...",
-                Style::default().fg(PatinaTheme::WARNING),
+            CompactionStatus::Idle => (
+                "○".to_string(),
+                "Idle",
+                Style::default().fg(PatinaTheme::MUTED),
             ),
-            CompactionStatus::Complete => {
-                ("✓", "Complete", Style::default().fg(PatinaTheme::SUCCESS))
+            CompactionStatus::Compacting => {
+                // Use throbber if available, otherwise default icon
+                let icon = self
+                    .throbber
+                    .map_or_else(|| "◐".to_string(), |c| c.to_string());
+                // Show "Auto-compacting..." for auto-triggered compaction
+                let text = if self.state.is_auto {
+                    "Auto-compacting context..."
+                } else {
+                    "Compacting..."
+                };
+                (icon, text, Style::default().fg(PatinaTheme::WARNING))
             }
-            CompactionStatus::Failed => ("✗", "Failed", Style::default().fg(PatinaTheme::ERROR)),
+            CompactionStatus::Complete => (
+                "✓".to_string(),
+                "Complete",
+                Style::default().fg(PatinaTheme::SUCCESS),
+            ),
+            CompactionStatus::Failed => (
+                "✗".to_string(),
+                "Failed",
+                Style::default().fg(PatinaTheme::ERROR),
+            ),
         };
 
         Line::from(vec![
@@ -391,5 +463,104 @@ mod tests {
     fn test_format_tokens_millions() {
         assert_eq!(CompactionProgressWidget::format_tokens(1_000_000), "1M");
         assert_eq!(CompactionProgressWidget::format_tokens(10_000_000), "10M");
+    }
+
+    // 4.4.4.1 Tests: is_auto field to distinguish manual vs auto compaction
+    #[test]
+    fn test_state_defaults_to_manual_compaction() {
+        let state = CompactionProgressState::new(10_000, 50_000);
+        assert!(
+            !state.is_auto(),
+            "New state should default to manual (not auto)"
+        );
+    }
+
+    #[test]
+    fn test_state_auto_compaction_can_be_set() {
+        let mut state = CompactionProgressState::new(10_000, 50_000);
+        state.set_auto(true);
+        assert!(state.is_auto(), "State should be auto after set_auto(true)");
+    }
+
+    #[test]
+    fn test_new_auto_constructor() {
+        let state = CompactionProgressState::new_auto(10_000, 50_000);
+        assert!(
+            state.is_auto(),
+            "new_auto should create auto-compaction state"
+        );
+    }
+
+    // 4.4.4.2 Tests: Auto-compacting context message
+    #[test]
+    fn test_status_text_manual() {
+        let mut state = CompactionProgressState::new(10_000, 50_000);
+        state.set_status(CompactionStatus::Compacting);
+        let widget = CompactionProgressWidget::new(&state).with_throbber('⠋');
+        let line = widget.render_status_line();
+        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(
+            text.contains("Compacting..."),
+            "Manual compaction should show 'Compacting...'"
+        );
+        assert!(
+            !text.contains("Auto-"),
+            "Manual compaction should not show 'Auto-'"
+        );
+    }
+
+    #[test]
+    fn test_status_text_auto() {
+        let mut state = CompactionProgressState::new_auto(10_000, 50_000);
+        state.set_status(CompactionStatus::Compacting);
+        let widget = CompactionProgressWidget::new(&state).with_throbber('⠋');
+        let line = widget.render_status_line();
+        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(
+            text.contains("Auto-compacting"),
+            "Auto compaction should show 'Auto-compacting'"
+        );
+    }
+
+    // 4.4.4.3 Tests: Throbber animation
+    #[test]
+    fn test_throbber_animation_renders() {
+        let mut state = CompactionProgressState::new(10_000, 50_000);
+        state.set_status(CompactionStatus::Compacting);
+        let widget = CompactionProgressWidget::new(&state).with_throbber('⠙');
+        let line = widget.render_status_line();
+        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(
+            text.contains('⠙'),
+            "Compacting status should show throbber character"
+        );
+    }
+
+    #[test]
+    fn test_throbber_different_frames() {
+        let mut state = CompactionProgressState::new(10_000, 50_000);
+        state.set_status(CompactionStatus::Compacting);
+
+        for throbber_char in ['⠋', '⠙', '⠹', '⠸'] {
+            let widget = CompactionProgressWidget::new(&state).with_throbber(throbber_char);
+            let line = widget.render_status_line();
+            let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+            assert!(
+                text.contains(throbber_char),
+                "Throbber char '{}' should be visible",
+                throbber_char
+            );
+        }
+    }
+
+    #[test]
+    fn test_idle_no_throbber() {
+        let state = CompactionProgressState::new(10_000, 50_000);
+        let widget = CompactionProgressWidget::new(&state).with_throbber('⠋');
+        let line = widget.render_status_line();
+        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        // Idle status should show circle, not throbber
+        assert!(text.contains('○'), "Idle should show ○ icon");
+        assert!(!text.contains('⠋'), "Idle should not show throbber");
     }
 }
