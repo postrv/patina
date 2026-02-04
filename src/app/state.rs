@@ -194,7 +194,8 @@ pub struct AppState {
 
     /// Optional compression orchestrator for CCG context management.
     /// Provides automatic context injection from narsil-mcp when available.
-    compression_orchestrator: Option<CompressionOrchestrator>,
+    /// Wrapped in Arc for shared access with async contexts.
+    compression_orchestrator: Option<Arc<CompressionOrchestrator>>,
 }
 
 #[derive(Default)]
@@ -461,21 +462,15 @@ impl AppState {
     ///
     /// # Arguments
     ///
-    /// * `orchestrator` - The compression orchestrator to use
-    pub fn set_compression_orchestrator(&mut self, orchestrator: CompressionOrchestrator) {
+    /// * `orchestrator` - The compression orchestrator (wrapped in Arc)
+    pub fn set_compression_orchestrator(&mut self, orchestrator: Arc<CompressionOrchestrator>) {
         self.compression_orchestrator = Some(orchestrator);
     }
 
     /// Returns a reference to the compression orchestrator if available.
     #[must_use]
-    pub fn compression_orchestrator(&self) -> Option<&CompressionOrchestrator> {
+    pub fn compression_orchestrator(&self) -> Option<&Arc<CompressionOrchestrator>> {
         self.compression_orchestrator.as_ref()
-    }
-
-    /// Returns a mutable reference to the compression orchestrator if available.
-    #[must_use]
-    pub fn compression_orchestrator_mut(&mut self) -> Option<&mut CompressionOrchestrator> {
-        self.compression_orchestrator.as_mut()
     }
 
     /// Returns true if the compression orchestrator supports CCG (Code Context Graph).
