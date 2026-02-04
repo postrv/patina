@@ -1081,7 +1081,7 @@ mod tests {
         orchestrator.enter_degraded_mode();
 
         // Cache should still be accessible via get_context_graceful
-        let cached =
+        let _degraded_result =
             orchestrator.get_context_graceful(CompressionLevel::Manifest, "hash123", || {
                 panic!("Should use cache")
             });
