@@ -56,3 +56,4 @@ PROMPT_*.md
 
 # Backup files
 .rct_backups/
+/context_compression_plans/
