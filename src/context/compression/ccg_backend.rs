@@ -11,9 +11,98 @@
 //! The CCG tools require narsil-mcp to be started with `--graph` flag.
 
 use crate::context::compression::{CompressionLevel, CompressionResult, ContextSource};
+use crate::mcp::client::McpClient;
+use std::fmt;
 
 /// Default SPARQL result limit to prevent context flooding.
 pub const DEFAULT_SPARQL_LIMIT: usize = 100;
+
+/// Error type for CCG response parsing failures.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CcgResponseError {
+    /// Response is missing the `content` field.
+    MissingContent,
+    /// Response has an empty `content` array.
+    EmptyContent,
+    /// Response content has an invalid format.
+    InvalidFormat(String),
+}
+
+impl CcgResponseError {
+    /// Creates a MissingContent error.
+    #[must_use]
+    pub fn missing_content() -> Self {
+        Self::MissingContent
+    }
+
+    /// Creates an EmptyContent error.
+    #[must_use]
+    pub fn empty_content() -> Self {
+        Self::EmptyContent
+    }
+
+    /// Creates an InvalidFormat error with details.
+    #[must_use]
+    pub fn invalid_format(details: String) -> Self {
+        Self::InvalidFormat(details)
+    }
+}
+
+impl fmt::Display for CcgResponseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MissingContent => write!(f, "MCP response missing 'content' field"),
+            Self::EmptyContent => write!(f, "MCP response has empty 'content' array"),
+            Self::InvalidFormat(details) => write!(f, "Invalid MCP response format: {}", details),
+        }
+    }
+}
+
+impl std::error::Error for CcgResponseError {}
+
+/// Parses an MCP tool response and extracts the text content.
+///
+/// MCP tool responses have a standard structure:
+/// ```json
+/// {
+///   "content": [
+///     { "type": "text", "text": "..." }
+///   ]
+/// }
+/// ```
+///
+/// This function extracts the text from the first content block.
+///
+/// # Errors
+///
+/// Returns `CcgResponseError` if:
+/// - The `content` field is missing
+/// - The `content` array is empty
+/// - The content block doesn't have a `text` field
+pub fn parse_mcp_tool_response(response: &serde_json::Value) -> Result<String, CcgResponseError> {
+    let content = response
+        .get("content")
+        .ok_or(CcgResponseError::MissingContent)?;
+
+    let content_array = content
+        .as_array()
+        .ok_or_else(|| CcgResponseError::InvalidFormat("content is not an array".to_string()))?;
+
+    if content_array.is_empty() {
+        return Err(CcgResponseError::EmptyContent);
+    }
+
+    // Extract text from the first content block
+    let first_block = &content_array[0];
+
+    first_block
+        .get("text")
+        .and_then(|t| t.as_str())
+        .map(|s| s.to_string())
+        .ok_or_else(|| {
+            CcgResponseError::InvalidFormat("content block missing 'text' field".to_string())
+        })
+}
 
 /// CCG namespace URI as defined in CCG Spec v0.2 Section 3.
 ///
@@ -177,6 +266,174 @@ LIMIT {}"#,
             CompressionLevel::SymbolDetail,
             ContextSource::CcgSparql,
         )
+    }
+
+    // =========================================================================
+    // Async MCP fetch methods (R.3.2)
+    // =========================================================================
+
+    /// Fetches the CCG manifest from narsil-mcp.
+    ///
+    /// Calls the `get_ccg_manifest` tool and parses the response.
+    ///
+    /// # Arguments
+    ///
+    /// * `client` - An active MCP client connected to narsil-mcp
+    ///
+    /// # Returns
+    ///
+    /// A `CompressionResult` containing the manifest JSON-LD content.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the MCP call fails or the response cannot be parsed.
+    pub async fn fetch_manifest(
+        &self,
+        client: &mut McpClient,
+    ) -> Result<CompressionResult, CcgFetchError> {
+        let args = self.manifest_args();
+        let response = client
+            .call_tool("get_ccg_manifest", args)
+            .await
+            .map_err(CcgFetchError::mcp_error)?;
+
+        let content =
+            parse_mcp_tool_response(&response).map_err(CcgFetchError::from_response_error)?;
+
+        Ok(self.create_manifest_result(content))
+    }
+
+    /// Fetches the CCG architecture from narsil-mcp.
+    ///
+    /// Calls the `export_ccg_architecture` tool and parses the response.
+    ///
+    /// # Arguments
+    ///
+    /// * `client` - An active MCP client connected to narsil-mcp
+    ///
+    /// # Returns
+    ///
+    /// A `CompressionResult` containing the architecture JSON-LD content.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the MCP call fails or the response cannot be parsed.
+    pub async fn fetch_architecture(
+        &self,
+        client: &mut McpClient,
+    ) -> Result<CompressionResult, CcgFetchError> {
+        let args = self.architecture_args();
+        let response = client
+            .call_tool("export_ccg_architecture", args)
+            .await
+            .map_err(CcgFetchError::mcp_error)?;
+
+        let content =
+            parse_mcp_tool_response(&response).map_err(CcgFetchError::from_response_error)?;
+
+        Ok(self.create_architecture_result(content))
+    }
+
+    /// Executes a SPARQL query against the CCG.
+    ///
+    /// Calls the `query_ccg` tool with the provided SPARQL query.
+    ///
+    /// # Arguments
+    ///
+    /// * `client` - An active MCP client connected to narsil-mcp
+    /// * `sparql` - The SPARQL query to execute (should include LIMIT clause)
+    ///
+    /// # Returns
+    ///
+    /// A `CompressionResult` containing the query results.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The SPARQL query lacks a LIMIT clause
+    /// - The MCP call fails
+    /// - The response cannot be parsed
+    pub async fn execute_query(
+        &self,
+        client: &mut McpClient,
+        sparql: &str,
+    ) -> Result<CompressionResult, CcgFetchError> {
+        // Safety: ensure LIMIT clause is present
+        if !has_limit_clause(sparql) {
+            return Err(CcgFetchError::missing_limit());
+        }
+
+        let args = self.query_args(sparql);
+        let response = client
+            .call_tool("query_ccg", args)
+            .await
+            .map_err(CcgFetchError::mcp_error)?;
+
+        let content =
+            parse_mcp_tool_response(&response).map_err(CcgFetchError::from_response_error)?;
+
+        Ok(self.create_symbol_result(content))
+    }
+}
+
+/// Error type for CCG fetch operations.
+#[derive(Debug)]
+pub enum CcgFetchError {
+    /// MCP tool call failed.
+    McpError(anyhow::Error),
+    /// MCP response could not be parsed.
+    ResponseError(CcgResponseError),
+    /// SPARQL query missing LIMIT clause.
+    MissingLimit,
+}
+
+impl CcgFetchError {
+    /// Creates an error from an MCP call failure.
+    pub fn mcp_error(err: anyhow::Error) -> Self {
+        Self::McpError(err)
+    }
+
+    /// Creates an error from a response parsing failure.
+    pub fn from_response_error(err: CcgResponseError) -> Self {
+        Self::ResponseError(err)
+    }
+
+    /// Creates a missing LIMIT clause error.
+    #[must_use]
+    pub fn missing_limit() -> Self {
+        Self::MissingLimit
+    }
+
+    /// Returns true if this is an MCP connection/call error.
+    #[must_use]
+    pub fn is_mcp_error(&self) -> bool {
+        matches!(self, Self::McpError(_))
+    }
+
+    /// Returns true if this is a response parsing error.
+    #[must_use]
+    pub fn is_response_error(&self) -> bool {
+        matches!(self, Self::ResponseError(_))
+    }
+}
+
+impl fmt::Display for CcgFetchError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::McpError(e) => write!(f, "MCP tool call failed: {}", e),
+            Self::ResponseError(e) => write!(f, "Failed to parse CCG response: {}", e),
+            Self::MissingLimit => write!(f, "SPARQL query must include a LIMIT clause"),
+        }
+    }
+}
+
+impl std::error::Error for CcgFetchError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::McpError(e) => Some(e.as_ref()),
+            Self::ResponseError(e) => Some(e),
+            Self::MissingLimit => None,
+        }
     }
 }
 
@@ -403,5 +660,97 @@ mod tests {
             CCG_NAMESPACE, "https://codecontextgraph.com/ontology/v1#",
             "CCG namespace should match spec"
         );
+    }
+
+    // =============================================================================
+    // R.3.2 - Async MCP fetch method tests (TDD RED phase)
+    // =============================================================================
+
+    #[test]
+    fn test_parse_manifest_response_valid_json() {
+        let response = serde_json::json!({
+            "content": [{
+                "type": "text",
+                "text": r#"{"@context": "https://codecontextgraph.com/ontology/v1#", "repository": "test-repo", "languages": ["Rust"]}"#
+            }]
+        });
+
+        let result = parse_mcp_tool_response(&response);
+        assert!(result.is_ok(), "Should parse valid MCP response");
+        assert!(result.unwrap().contains("test-repo"));
+    }
+
+    #[test]
+    fn test_parse_manifest_response_missing_content() {
+        let response = serde_json::json!({});
+
+        let result = parse_mcp_tool_response(&response);
+        assert!(result.is_err(), "Should fail on missing content field");
+    }
+
+    #[test]
+    fn test_parse_manifest_response_empty_content() {
+        let response = serde_json::json!({
+            "content": []
+        });
+
+        let result = parse_mcp_tool_response(&response);
+        assert!(result.is_err(), "Should fail on empty content array");
+    }
+
+    #[test]
+    fn test_ccg_response_error_contains_details() {
+        let err = CcgResponseError::missing_content();
+        assert!(err.to_string().contains("missing"));
+
+        let err = CcgResponseError::empty_content();
+        assert!(err.to_string().contains("empty"));
+
+        let err = CcgResponseError::invalid_format("expected text".to_string());
+        assert!(err.to_string().contains("expected text"));
+    }
+
+    #[test]
+    fn test_ccg_fetch_error_types() {
+        let mcp_err = CcgFetchError::mcp_error(anyhow::anyhow!("connection failed"));
+        assert!(mcp_err.is_mcp_error());
+        assert!(!mcp_err.is_response_error());
+        assert!(mcp_err.to_string().contains("connection failed"));
+
+        let response_err = CcgFetchError::from_response_error(CcgResponseError::missing_content());
+        assert!(!response_err.is_mcp_error());
+        assert!(response_err.is_response_error());
+
+        let limit_err = CcgFetchError::missing_limit();
+        assert!(!limit_err.is_mcp_error());
+        assert!(!limit_err.is_response_error());
+        assert!(limit_err.to_string().contains("LIMIT"));
+    }
+
+    #[test]
+    fn test_parse_response_extracts_text_from_array() {
+        let response = serde_json::json!({
+            "content": [
+                {"type": "text", "text": "first content"},
+                {"type": "text", "text": "second content"}
+            ]
+        });
+
+        let result = parse_mcp_tool_response(&response);
+        assert!(result.is_ok());
+        // Should extract the first text block
+        assert_eq!(result.unwrap(), "first content");
+    }
+
+    #[test]
+    fn test_parse_response_handles_non_array_content() {
+        let response = serde_json::json!({
+            "content": "not an array"
+        });
+
+        let result = parse_mcp_tool_response(&response);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, CcgResponseError::InvalidFormat(_)));
     }
 }

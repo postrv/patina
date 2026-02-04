@@ -52,7 +52,10 @@ mod render;
 mod types;
 
 pub use cache::{CacheKey, CachedResult, ResultCache, DEFAULT_CACHE_TTL, DEFAULT_MAX_ENTRIES};
-pub use ccg_backend::{has_limit_clause, CcgBackend, DEFAULT_SPARQL_LIMIT};
+pub use ccg_backend::{
+    has_limit_clause, parse_mcp_tool_response, CcgBackend, CcgFetchError, CcgResponseError,
+    DEFAULT_SPARQL_LIMIT,
+};
 pub use fallback_backend::{
     extract_repo_hash, extract_symbol_counts, FallbackBackend, SymbolCounts, DEFAULT_FALLBACK_LIMIT,
 };
