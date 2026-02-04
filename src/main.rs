@@ -9,7 +9,7 @@ use patina::app;
 use patina::auth::{flow::OAuthFlow, storage as auth_storage};
 use patina::plugins::registry::{PluginInstaller, PluginSource};
 use patina::session::{default_sessions_dir, format_session_list, SessionManager};
-use patina::types::config::{NarsilMode, ParallelMode, ResumeMode};
+use patina::types::config::{CompressionConfig, NarsilMode, ParallelMode, ResumeMode};
 use patina::util::get_cache_dir;
 
 #[derive(Parser, Debug)]
@@ -317,6 +317,7 @@ async fn main() -> Result<()> {
         subagents_enabled: args.enable_subagents,
         ide_port: args.ide_port,
         auto_context_enabled: !args.no_auto_context,
+        compression: CompressionConfig::default(),
     })
     .await
 }
