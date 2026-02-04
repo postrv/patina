@@ -453,23 +453,23 @@ pub struct CompressionConfig {
 
 **TDD Tasks:**
 
-- [ ] R.4.1.1 Add `auto_compact_threshold` to CompressionConfig
-  - Path: `src/types/config.rs` or `src/api/compaction.rs`
+- [x] R.4.1.1 Add `auto_compact_threshold` to CompressionConfig
+  - Path: `src/api/compaction.rs`
   - Default: 0.8 (80% of context window)
-  - Test: Config deserializes with new field
+  - Added: `with_auto_compact_threshold()` builder, `compaction_threshold()` method
 
-- [ ] R.4.1.2 Add model context limits lookup
+- [x] R.4.1.2 Add model context limits lookup
   - Path: `src/api/tokens.rs`
   - Function: `fn model_context_limit(model: &str) -> usize`
-  - Test: Returns 200_000 for claude-sonnet-4, etc.
+  - Returns 200,000 for Claude 3.x/4.x, 100,000 for Claude 2.x
 
-**Acceptance:** Config has threshold; model limits are known.
+**Acceptance:** ✅ Config has threshold; model limits are known.
 
 ---
 
 ### R.4.2 Implement Token Budget Checker
 
-**Location:** `src/app/state.rs`
+**Location:** `src/api/tokens.rs`
 
 **Current State:**
 - `token_budget: TokenBudget` exists (line 172)
@@ -481,16 +481,17 @@ pub struct CompressionConfig {
 
 **TDD Tasks:**
 
-- [ ] R.4.2.1 Add `needs_compaction()` method to TokenBudget
-  - Path: `src/api/tokens.rs` or `src/app/state.rs`
-  - Signature: `fn needs_compaction(&self, threshold: f32, limit: usize) -> bool`
-  - Test: `test_needs_compaction_at_threshold`
+- [x] R.4.2.1 Add `needs_compaction()` method to TokenBudget
+  - Path: `src/api/tokens.rs`
+  - Signature: `fn needs_compaction(&self, threshold: f32) -> bool`
+  - Tests: 5 tests for threshold behavior
 
 - [ ] R.4.2.2 Add `estimate_conversation_tokens()` to AppState
   - Uses `estimate_messages_tokens(&self.api_messages)`
-  - Test: `test_estimate_tokens_for_conversation`
+  - Note: `estimate_messages_tokens` already exists and can be used directly
+  - DEFERRED: AppState integration to be done with R.4.3
 
-**Acceptance:** Can detect when conversation exceeds threshold.
+**Acceptance:** ✅ Can detect when conversation exceeds threshold (via TokenBudget.needs_compaction).
 
 ---
 
