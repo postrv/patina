@@ -59,7 +59,9 @@ pub use ccg_backend::{
 pub use fallback_backend::{
     extract_repo_hash, extract_symbol_counts, FallbackBackend, SymbolCounts, DEFAULT_FALLBACK_LIMIT,
 };
-pub use metrics::{CompressionMetrics, MetricsSummary};
+pub use metrics::{
+    CompactionMetrics, CompactionMetricsSummary, CompressionMetrics, MetricsSummary,
+};
 pub use orchestrator::{
     CompressionOrchestrator, DEFAULT_ORCHESTRATOR_MAX_ENTRIES, DEFAULT_ORCHESTRATOR_TTL,
 };

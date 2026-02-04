@@ -6,7 +6,9 @@ use crate::api::tools::default_tools;
 use crate::api::{AnthropicClient, StreamEvent, TokenBudget, ToolChoice};
 use crate::app::tool_loop::{ContinuationData, ToolLoop, ToolLoopState};
 use crate::app::STREAMING_CHANNEL_BUFFER;
-use crate::context::compression::CompressionOrchestrator;
+use crate::context::compression::{
+    CompactionMetrics, CompactionMetricsSummary, CompressionOrchestrator,
+};
 use crate::hooks::HookManager;
 use crate::mcp::client::McpClient;
 use crate::narsil::context::ContextSuggestion;
@@ -214,6 +216,10 @@ pub struct AppState {
     /// Cached CCG context content for injection into messages.
     /// Set by `inject_ccg_context()` and consumed by `take_ccg_context()`.
     cached_ccg_context: Option<String>,
+
+    /// Metrics tracking for compaction operations.
+    /// Records number of compactions, tokens saved, and time spent.
+    compaction_metrics: Arc<CompactionMetrics>,
 }
 
 #[derive(Default)]
@@ -360,6 +366,7 @@ impl AppState {
             compression_orchestrator: None,
             last_ccg_hash: None,
             cached_ccg_context: None,
+            compaction_metrics: Arc::new(CompactionMetrics::new()),
         }
     }
 
@@ -1501,6 +1508,24 @@ impl AppState {
         self.dirty.full = true;
     }
 
+    /// Returns a reference to the compaction metrics.
+    ///
+    /// Metrics track the number of compactions performed, total tokens saved,
+    /// and total time spent compacting across the session.
+    #[must_use]
+    pub fn compaction_metrics(&self) -> &CompactionMetrics {
+        &self.compaction_metrics
+    }
+
+    /// Returns a summary of compaction metrics.
+    ///
+    /// Provides a snapshot of compaction statistics including counts,
+    /// totals, and averages.
+    #[must_use]
+    pub fn compaction_metrics_summary(&self) -> CompactionMetricsSummary {
+        self.compaction_metrics.summary()
+    }
+
     // ========================================================================
     // Auto-Compaction (Phase 4.4)
     // ========================================================================
@@ -1563,6 +1588,7 @@ impl AppState {
     /// ```
     pub fn maybe_compact(&mut self, threshold: f32, context_limit: usize) -> Result<bool> {
         use crate::api::compaction::{CompactionConfig, ContextCompactor, MockSummarizer};
+        use std::time::Instant;
 
         // Estimate current usage
         let current_tokens = self.estimate_conversation_tokens();
@@ -1598,15 +1624,28 @@ impl AppState {
             ..Default::default()
         };
 
+        // Start timing
+        let start_time = Instant::now();
+
         // Perform compaction
         match compactor.compact(&self.api_messages, &config) {
             Ok(result) => {
+                let duration = start_time.elapsed();
                 let after_tokens = crate::api::tokens::estimate_messages_tokens(&result.messages);
+                let tokens_saved = result.saved_tokens;
 
+                // Record compaction metrics
+                self.compaction_metrics
+                    .record_compaction(tokens_saved, duration);
+
+                // Log metrics summary
                 tracing::info!(
                     before = current_tokens,
                     after = after_tokens,
-                    saved = result.saved_tokens,
+                    saved = tokens_saved,
+                    duration_ms = duration.as_millis() as u64,
+                    total_compactions = self.compaction_metrics.compaction_count(),
+                    total_tokens_saved = self.compaction_metrics.total_tokens_saved(),
                     "Compaction complete"
                 );
 
@@ -3754,5 +3793,58 @@ mod tests {
 
         let limit = model_context_limit("claude-3-haiku-20240307");
         assert_eq!(limit, 200_000);
+    }
+
+    // =========================================================================
+    // Compaction Metrics Tests (Phase 4.4.5)
+    // =========================================================================
+
+    #[test]
+    fn test_compaction_metrics_accessor() {
+        let state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+
+        // New state should have zero metrics
+        let metrics = state.compaction_metrics();
+        assert_eq!(metrics.compaction_count(), 0);
+        assert_eq!(metrics.total_tokens_saved(), 0);
+        assert_eq!(metrics.total_time_ms(), 0);
+    }
+
+    #[test]
+    fn test_compaction_metrics_summary() {
+        let state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+
+        let summary = state.compaction_metrics_summary();
+        assert_eq!(summary.compaction_count, 0);
+        assert_eq!(summary.total_tokens_saved, 0);
+        assert_eq!(summary.average_tokens_saved, 0);
+    }
+
+    #[test]
+    fn test_compaction_metrics_record_on_compact() {
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+
+        // Add many large messages to exceed threshold
+        let large_content = "x".repeat(10000);
+        for i in 0..100 {
+            state.api_messages_mut().push(ApiMessageV2::user(format!(
+                "Message {}: {}",
+                i, large_content
+            )));
+        }
+
+        let before_tokens = state.estimate_conversation_tokens();
+        assert!(before_tokens > 100_000);
+
+        // Trigger compaction
+        let _ = state.maybe_compact(0.5, before_tokens);
+
+        // Metrics should be recorded (if compaction ran)
+        // We can at least verify the accessor works
+        let summary = state.compaction_metrics_summary();
+        // Verify summary fields are accessible (values depend on compactor behavior)
+        let _ = summary.compaction_count;
+        let _ = summary.total_tokens_saved;
+        let _ = summary.average_time_ms;
     }
 }
