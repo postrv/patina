@@ -349,6 +349,80 @@ pub fn classify_bash_command(command: &str) -> ToolSafetyClass {
     ToolSafetyClass::ReadOnly
 }
 
+/// Classifies a bash command with optional alias resolution.
+///
+/// This variant first checks if the command is an alias for something else,
+/// and if so, classifies based on the resolved command. This catches cases
+/// where a seemingly safe command like `rm` might be aliased to `rm -rf`.
+///
+/// # Arguments
+///
+/// * `command` - The full bash command string to classify
+/// * `resolve_aliases` - Whether to attempt alias resolution (slower, spawns shell)
+///
+/// # Returns
+///
+/// The safety classification for parallel execution.
+///
+/// # Performance
+///
+/// When `resolve_aliases` is true, this function may spawn a shell subprocess
+/// to resolve aliases. This adds latency (~100ms) and should only be used
+/// in default parallel mode, not aggressive mode where performance is critical.
+///
+/// # Examples
+///
+/// ```
+/// use patina::tools::parallel::{classify_bash_command_with_alias_resolution, ToolSafetyClass};
+///
+/// // Without alias resolution - fast but may miss aliased commands
+/// assert_eq!(
+///     classify_bash_command_with_alias_resolution("ls -la", false),
+///     ToolSafetyClass::ReadOnly
+/// );
+/// ```
+#[must_use]
+pub fn classify_bash_command_with_alias_resolution(
+    command: &str,
+    resolve_aliases: bool,
+) -> ToolSafetyClass {
+    let trimmed = command.trim();
+
+    if trimmed.is_empty() {
+        return ToolSafetyClass::Unknown;
+    }
+
+    // Extract the first word (command name) for alias resolution
+    let first_word = trimmed.split_whitespace().next().unwrap_or("");
+
+    // If alias resolution is enabled, check if the command is an alias
+    if resolve_aliases && !first_word.is_empty() {
+        if let Some(resolved) = crate::tools::resolve_alias(first_word) {
+            // The alias resolved to something else - classify that instead
+            tracing::debug!(
+                original = %first_word,
+                resolved = %resolved,
+                "Command is an alias, classifying resolved command"
+            );
+
+            // Replace the command name with the resolved alias and classify
+            // For example: "rm foo" with alias rm='rm -rf' becomes "rm -rf foo"
+            let resolved_command = if trimmed.len() > first_word.len() {
+                // There are arguments after the command - append them to resolved alias
+                format!("{}{}", resolved, &trimmed[first_word.len()..])
+            } else {
+                resolved
+            };
+
+            // Classify the resolved command (without further alias resolution to avoid loops)
+            return classify_bash_command(&resolved_command);
+        }
+    }
+
+    // No alias found or resolution disabled - use standard classification
+    classify_bash_command(command)
+}
+
 /// Checks if a command contains shell operators that could chain to mutating operations.
 fn contains_shell_operators(command: &str) -> bool {
     // Check for pipes, redirections, command substitution, etc.
@@ -762,5 +836,48 @@ mod tests {
     fn test_classify_bash_empty() {
         assert_eq!(classify_bash_command(""), ToolSafetyClass::Unknown);
         assert_eq!(classify_bash_command("   "), ToolSafetyClass::Unknown);
+    }
+
+    // =========================================================================
+    // Tests for classify_bash_command_with_alias_resolution function
+    // =========================================================================
+
+    #[test]
+    fn test_classify_bash_with_alias_disabled() {
+        // Without alias resolution, behaves like classify_bash_command
+        assert_eq!(
+            classify_bash_command_with_alias_resolution("ls -la", false),
+            ToolSafetyClass::ReadOnly
+        );
+        assert_eq!(
+            classify_bash_command_with_alias_resolution("cat file.txt", false),
+            ToolSafetyClass::ReadOnly
+        );
+    }
+
+    #[test]
+    fn test_classify_bash_with_alias_enabled_safe_command() {
+        // With alias resolution enabled, safe commands should still be safe
+        // (unless they're actually aliased on the system)
+        let result = classify_bash_command_with_alias_resolution("ls -la", true);
+        // Result depends on system configuration - just verify it doesn't panic
+        // and returns a valid classification
+        assert!(matches!(
+            result,
+            ToolSafetyClass::ReadOnly | ToolSafetyClass::Unknown | ToolSafetyClass::Mutating
+        ));
+    }
+
+    #[test]
+    fn test_classify_bash_with_alias_empty_command() {
+        // Empty command should return Unknown regardless of alias resolution
+        assert_eq!(
+            classify_bash_command_with_alias_resolution("", false),
+            ToolSafetyClass::Unknown
+        );
+        assert_eq!(
+            classify_bash_command_with_alias_resolution("", true),
+            ToolSafetyClass::Unknown
+        );
     }
 }
