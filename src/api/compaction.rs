@@ -383,13 +383,8 @@ fn extract_key_phrases(text: &str) -> String {
 
     for indicator in action_indicators {
         if text_lower.contains(indicator) {
-            // Return a shortened version of the message
-            let truncated = if text.len() > 100 {
-                format!("{}...", &text[..100])
-            } else {
-                text.to_string()
-            };
-            return truncated;
+            // Return a shortened version of the message (UTF-8 safe)
+            return crate::util::truncate_string_bytes(text, 100, "...");
         }
     }
 
@@ -400,12 +395,8 @@ fn extract_key_phrases(text: &str) -> String {
         }
     }
 
-    // Fallback: truncate
-    if text.len() > 80 {
-        format!("{}...", &text[..80])
-    } else {
-        text.to_string()
-    }
+    // Fallback: truncate (UTF-8 safe)
+    crate::util::truncate_string_bytes(text, 80, "...")
 }
 
 /// Returns the appropriate summarization prompt for the given style.

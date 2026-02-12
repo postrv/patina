@@ -18,7 +18,7 @@ skills = true
 
 [mcp]
 command = "narsil-mcp"
-args = ["--repo", "."]
+args = ["--repo", ".", "--graph"]
 auto_start = true
 
 # Configuration options exposed to users
