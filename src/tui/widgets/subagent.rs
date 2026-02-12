@@ -347,13 +347,9 @@ impl<'a> SubagentPanelWidget<'a> {
     }
 }
 
-/// Truncates an activity string to the specified length.
+/// Truncates an activity string to the specified length (UTF-8 safe).
 fn truncate_activity(s: &str, max_len: usize) -> String {
-    if s.len() <= max_len {
-        s.to_string()
-    } else {
-        format!("{}...", &s[..max_len.saturating_sub(3)])
-    }
+    crate::util::truncate_string_bytes(s, max_len, "...")
 }
 
 impl Widget for SubagentPanelWidget<'_> {

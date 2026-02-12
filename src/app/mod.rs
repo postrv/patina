@@ -1030,9 +1030,9 @@ fn format_tool_results_for_display(user_msg: &ApiMessageV2) -> String {
             let mut parts = Vec::new();
             for block in blocks {
                 if let Some(result) = block.as_tool_result() {
-                    // Truncate long results for display
+                    // Truncate long results for display (UTF-8 safe)
                     let content = if result.content.len() > 500 {
-                        format!("{}... (truncated)", &result.content[..500])
+                        crate::util::truncate_string_bytes(&result.content, 500, "... (truncated)")
                     } else {
                         result.content.clone()
                     };
