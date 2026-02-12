@@ -1,0 +1,81 @@
+digraph PatinCallGraph {
+    rankdir=TB;
+    node [shape=box, style=filled, fillcolor=lightblue];
+    edge [color=darkblue];
+
+    // Entry points
+    main [fillcolor=lightgreen, label="main()"];
+    
+    // Core application functions
+    app_run [fillcolor=orange, label="app::run()"];
+    event_loop [fillcolor=red, label="event_loop()\n(HIGH COMPLEXITY)"];
+    run_print_mode [fillcolor=yellow, label="run_print_mode()"];
+    
+    // State management
+    load_session [label="load_session_state()"];
+    init_compression [label="initialize_compression_orchestrator()"];
+    auto_save [label="auto_save_session()"];
+    
+    // Tool execution pipeline  
+    start_tools [fillcolor=pink, label="start_tool_execution()"];
+    finish_tools [fillcolor=pink, label="finish_tool_execution_and_continue()"];
+    handle_tools [label="handle_tool_execution()"];
+    
+    // UI and interaction
+    handle_copy [label="handle_copy()"];
+    handle_permission [label="handle_permission_key_event()"];
+    tui_render [label="tui::render()"];
+    
+    // External systems
+    anthropic_client [fillcolor=lightcyan, label="AnthropicClient::new()"];
+    session_manager [fillcolor=lightcyan, label="SessionManager::new()"];
+    ide_controller [fillcolor=lightcyan, label="IdeController::new()"];
+    
+    // Terminal setup
+    terminal_setup [fillcolor=lightyellow, label="Terminal Setup\n(enable_raw_mode, etc.)"];
+    
+    // Main flow
+    main -> app_run;
+    app_run -> run_print_mode [label="if print_mode"];
+    app_run -> load_session [label="if resuming"];
+    app_run -> init_compression;
+    app_run -> terminal_setup;
+    app_run -> anthropic_client;
+    app_run -> session_manager;
+    app_run -> ide_controller [label="if ide_port"];
+    app_run -> event_loop;
+    
+    // Event loop coordination (HIGH CONNECTIVITY - HOTSPOT)
+    event_loop -> tui_render [color=red, style=bold];
+    event_loop -> handle_permission [color=red, style=bold];
+    event_loop -> handle_copy [color=red, style=bold];
+    event_loop -> start_tools [color=red, style=bold];
+    event_loop -> finish_tools [color=red, style=bold];
+    event_loop -> auto_save [color=red, style=bold];
+    
+    // Tool execution flow
+    start_tools -> handle_tools;
+    handle_tools -> start_tools [label="callback"];
+    
+    // Background events
+    event_loop -> start_tools [label="tool_use_complete", style=dashed];
+    event_loop -> finish_tools [label="all_tools_complete", style=dashed];
+    
+    // Legend
+    subgraph cluster_legend {
+        label="Legend";
+        style=filled;
+        fillcolor=white;
+        
+        legend_entry [fillcolor=lightgreen, label="Entry Point"];
+        legend_core [fillcolor=orange, label="Core Functions"];  
+        legend_hotspot [fillcolor=red, label="High Complexity/Connectivity"];
+        legend_tools [fillcolor=pink, label="Tool Execution"];
+        legend_external [fillcolor=lightcyan, label="External Systems"];
+        
+        legend_entry -> legend_core [style=invis];
+        legend_core -> legend_hotspot [style=invis];
+        legend_hotspot -> legend_tools [style=invis];
+        legend_tools -> legend_external [style=invis];
+    }
+}
