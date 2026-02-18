@@ -20,6 +20,7 @@ use tokio::time::interval;
 use tracing::{debug, info, warn};
 
 pub mod commands;
+pub mod events;
 pub mod state;
 pub mod tool_loop;
 
