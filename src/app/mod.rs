@@ -151,6 +151,10 @@ fn initialize_compression_orchestrator(state: &mut AppState, config: &Config) {
             config.working_dir.display()
         );
     }
+
+    // Wire auto-context settings from config into state
+    state.set_auto_context_enabled(config.auto_context_enabled());
+    state.set_context_token_budget(config.compression.max_context_tokens);
 }
 
 pub async fn run(config: Config) -> Result<()> {

@@ -364,9 +364,9 @@ Before marking ANY task `[x]`:
 **Description**: Wire `build_context()` into the API message preparation path so compressed context is automatically included before each API call.
 
 **TDD Cycle**:
-- [ ] RED: Write tests verifying context injection — system message includes compressed context, context updates on file changes, context omitted when narsil unavailable
-- [ ] GREEN: Call `build_context()` in `submit_message()` / continuation path, prepend to system message or first user message
-- [ ] REFACTOR: Add config toggle for context injection (`auto_context_enabled`), add context size to token budget display in status bar
+- [x] RED: Write tests verifying context injection — system message includes compressed context, context updates on file changes, context omitted when narsil unavailable
+- [x] GREEN: Call `build_context()` in `submit_message()` / continuation path, prepend to system message or first user message
+- [x] REFACTOR: Add config toggle for context injection (`auto_context_enabled`), add context size to token budget display in status bar
 - Files: `src/app/state.rs`, `src/app/handlers/stream.rs`
 - Acceptance: API calls include fresh compressed context, visible in token budget display
 
