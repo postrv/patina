@@ -59,20 +59,14 @@ fn test_windows_path_handling() {
 #[test]
 fn test_macos_clipboard_via_pbcopy() {
     // On macOS, clipboard should not be headless (pasteboard always available)
-    assert!(
-        !is_headless(),
-        "macOS should never report as headless"
-    );
+    assert!(!is_headless(), "macOS should never report as headless");
 }
 
 #[cfg(target_os = "macos")]
 #[test]
 fn test_macos_wayland_false() {
     // macOS does not use Wayland
-    assert!(
-        !is_wayland(),
-        "macOS should not detect Wayland"
-    );
+    assert!(!is_wayland(), "macOS should not detect Wayland");
 }
 
 // ============================================================================
@@ -134,10 +128,7 @@ fn test_ssh_env_triggers_remote_mode() {
 
     let env_result = detect_terminal_environment();
     assert_eq!(env_result, TerminalEnvironment::SSH);
-    assert!(
-        env_result.is_remote(),
-        "SSH should be identified as remote"
-    );
+    assert!(env_result.is_remote(), "SSH should be identified as remote");
     assert!(
         !env_result.is_multiplexer(),
         "SSH alone should not be a multiplexer"

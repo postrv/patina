@@ -136,9 +136,7 @@ pub fn copy_to_clipboard(text: &str) -> Result<()> {
 
     // Wayland without wl-copy: arboard may hang or fail
     if is_wayland() && !has_wl_copy() {
-        tracing::debug!(
-            "Wayland without wl-copy detected — falling back to OSC 52"
-        );
+        tracing::debug!("Wayland without wl-copy detected — falling back to OSC 52");
         copy_via_osc52(text)?;
         return Ok(());
     }
