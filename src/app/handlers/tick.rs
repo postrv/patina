@@ -276,7 +276,10 @@ mod tests {
         let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
 
         // Tick event should be consumed.
-        let result = dispatcher.dispatch(&AppEvent::Tick, &mut ctx).await.unwrap();
+        let result = dispatcher
+            .dispatch(&AppEvent::Tick, &mut ctx)
+            .await
+            .unwrap();
         assert_eq!(result, Handled::CONSUMED);
 
         // Key event should pass through.
