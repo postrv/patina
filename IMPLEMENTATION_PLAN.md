@@ -89,9 +89,9 @@ Before marking ANY task `[x]`:
 **Description**: Create `recv_event()` on `AppContext` that merges all event sources (crossterm, background channels, tick timer) into a single `AppEvent` stream. This replaces the `tokio::select!` branching with a single receive point. Pure addition — the old `tokio::select!` remains untouched.
 
 **TDD Cycle**:
-- [ ] RED: Write tests for `recv_event()` — returns `Key` events from crossterm, `ApiChunk` from streaming channel, `Tick` when loading, `Quit` on Ctrl+C
-- [ ] GREEN: Implement `recv_event()` using internal `tokio::select!` that maps each source to `AppEvent` variants. Keep `biased` for keyboard priority
-- [ ] REFACTOR: Ensure guard conditions match existing ones (`if state.has_background_work()`, `if state.is_loading()`)
+- [x] RED: Write tests for `recv_event()` — returns `Key` events from crossterm, `ApiChunk` from streaming channel, `Tick` when loading, `Quit` on Ctrl+C
+- [x] GREEN: Implement `recv_event()` using internal `tokio::select!` that maps each source to `AppEvent` variants. Keep `biased` for keyboard priority
+- [x] REFACTOR: Ensure guard conditions match existing ones (`if state.has_background_work()`, `if state.is_loading()`)
 - Files: `src/app/context.rs`
 - Acceptance: `recv_event()` produces correct `AppEvent` for each source, tests cover all branches
 
