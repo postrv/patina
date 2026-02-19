@@ -770,6 +770,16 @@ fn render_status_bar(frame: &mut Frame, area: Rect, state: &AppState) {
         ));
     }
 
+    // Context tokens indicator (shows injected context size)
+    let ctx_tokens = state.context_tokens_injected();
+    if ctx_tokens > 0 {
+        spans.push(Span::raw(" "));
+        spans.push(Span::styled(
+            format!("CTX:{}k", ctx_tokens / 1000),
+            Style::default().fg(PatinaTheme::VERDIGRIS),
+        ));
+    }
+
     // Scroll indicator (right side)
     let scroll = state.scroll_state();
     let mode_char = match scroll.mode() {

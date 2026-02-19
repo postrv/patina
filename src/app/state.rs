@@ -102,6 +102,36 @@ fn compact_json(value: &Value) -> &str {
     }
 }
 
+/// Returns the current git HEAD commit hash for the given working directory.
+///
+/// Uses `git rev-parse HEAD` to obtain the hash. Returns `None` if the
+/// directory is not a git repository or the command fails.
+///
+/// # Arguments
+///
+/// * `working_dir` - Path to the directory to query
+///
+/// # Returns
+///
+/// The 40-character hex SHA-1 hash, or `None` on failure.
+#[must_use]
+pub fn get_git_head_hash(working_dir: &std::path::Path) -> Option<String> {
+    std::process::Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(working_dir)
+        .output()
+        .ok()
+        .and_then(|output| {
+            if output.status.success() {
+                String::from_utf8(output.stdout)
+                    .ok()
+                    .map(|s| s.trim().to_string())
+            } else {
+                None
+            }
+        })
+}
+
 /// Events received from background tasks (API streaming or tool execution).
 ///
 /// Used by `recv_background_event()` to return events from multiple channels
@@ -224,6 +254,18 @@ pub struct AppState {
     /// Cached CCG context content for injection into messages.
     /// Set by `inject_ccg_context()` and consumed by `take_ccg_context()`.
     cached_ccg_context: Option<String>,
+
+    /// Optional narsil MCP client for CCG context fetching.
+    /// Lazily connected on first context injection attempt.
+    narsil_client: Option<McpClient>,
+
+    /// Maximum tokens to include in auto-injected context.
+    /// Sourced from `CompressionConfig.max_context_tokens`.
+    context_token_budget: usize,
+
+    /// Tokens actually injected in the most recent context injection.
+    /// Used for token budget display in the status bar.
+    context_tokens_injected: usize,
 
     /// Metrics tracking for compaction operations.
     /// Records number of compactions, tokens saved, and time spent.
@@ -376,6 +418,9 @@ impl AppState {
             compression_orchestrator: None,
             last_ccg_hash: None,
             cached_ccg_context: None,
+            narsil_client: None,
+            context_token_budget: 10_000,
+            context_tokens_injected: 0,
             compaction_metrics: Arc::new(CompactionMetrics::new()),
         }
     }
@@ -635,6 +680,111 @@ impl AppState {
             self.cached_ccg_context.as_deref()
         } else {
             None
+        }
+    }
+
+    /// Returns whether a narsil MCP client is available.
+    #[must_use]
+    pub fn has_narsil_client(&self) -> bool {
+        self.narsil_client.is_some()
+    }
+
+    /// Sets the narsil MCP client for context fetching.
+    pub fn set_narsil_client(&mut self, client: McpClient) {
+        self.narsil_client = Some(client);
+    }
+
+    /// Returns the maximum token budget for auto-injected context.
+    #[must_use]
+    pub fn context_token_budget(&self) -> usize {
+        self.context_token_budget
+    }
+
+    /// Sets the maximum token budget for auto-injected context.
+    pub fn set_context_token_budget(&mut self, budget: usize) {
+        self.context_token_budget = budget;
+    }
+
+    /// Returns the number of tokens injected in the most recent context injection.
+    #[must_use]
+    pub fn context_tokens_injected(&self) -> usize {
+        self.context_tokens_injected
+    }
+
+    /// Refreshes the cached CCG context by calling `build_context()`.
+    ///
+    /// This method lazily connects a narsil MCP client, fetches context
+    /// from the compression orchestrator using the full 3-layer approach
+    /// (manifest + architecture + symbols), and caches the result for
+    /// injection into the next API message.
+    ///
+    /// Returns `None` if auto-context is disabled, no orchestrator is
+    /// configured, or the narsil MCP client fails to connect.
+    ///
+    /// # Returns
+    ///
+    /// The context string if successfully fetched, `None` otherwise.
+    pub async fn refresh_build_context(&mut self) -> Option<String> {
+        if !self.auto_context_enabled {
+            return None;
+        }
+
+        let orchestrator = match &self.compression_orchestrator {
+            Some(orch) => orch.clone(),
+            None => return None,
+        };
+
+        // Lazily initialize narsil client
+        if self.narsil_client.is_none() {
+            let working_dir = self.working_dir.to_string_lossy().to_string();
+            let mut client =
+                McpClient::new("narsil-mcp", "narsil-mcp", vec!["--repos", &working_dir]);
+            match client.start().await {
+                Ok(()) => {
+                    tracing::info!("Narsil MCP client connected for context injection");
+                    self.narsil_client = Some(client);
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to connect narsil-mcp for context: {}", e);
+                    return None;
+                }
+            }
+        }
+
+        // Take client to avoid borrow conflict with self
+        let mut client = self.narsil_client.take()?;
+
+        let repo_hash =
+            get_git_head_hash(&self.working_dir).unwrap_or_else(|| "unknown".to_string());
+
+        let result = orchestrator
+            .build_context(
+                &mut client,
+                &repo_hash,
+                &[], // active_files: empty = project-wide symbols
+                self.context_token_budget,
+            )
+            .await;
+
+        // Put client back
+        self.narsil_client = Some(client);
+
+        let content = result.result().content().to_string();
+        if content.is_empty() {
+            self.cached_ccg_context = None;
+            self.context_tokens_injected = 0;
+            None
+        } else {
+            tracing::info!(
+                tokens = result.total_tokens(),
+                manifest = result.manifest_tokens(),
+                architecture = result.architecture_tokens(),
+                symbols = result.symbol_tokens(),
+                "Build context refreshed for injection"
+            );
+            self.context_tokens_injected = result.total_tokens();
+            self.cached_ccg_context = Some(content.clone());
+            Some(content)
         }
     }
 
@@ -1116,6 +1266,10 @@ impl AppState {
         client: &std::sync::Arc<dyn LlmProvider>,
         content: String,
     ) -> Result<()> {
+        // Refresh context from build_context() if auto-context is enabled.
+        // This populates cached_ccg_context which is consumed below.
+        self.refresh_build_context().await;
+
         // Build the API message content, optionally with CCG context
         let api_content = if self.auto_context_enabled {
             if let Some(context) = self.cached_ccg_context.take() {
@@ -3431,6 +3585,139 @@ mod tests {
         // Enable auto-context but no cached context
         state.set_auto_context_enabled(true);
         assert!(state.context_for_injection().is_none());
+    }
+
+    // =========================================================================
+    // Phase 3.5 - Build Context Injection into Message-Sending Path
+    // =========================================================================
+
+    #[test]
+    fn test_narsil_client_none_by_default() {
+        let state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+        assert!(!state.has_narsil_client());
+    }
+
+    #[test]
+    fn test_context_token_budget_default() {
+        let state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+        assert_eq!(state.context_token_budget(), 10_000);
+    }
+
+    #[test]
+    fn test_set_context_token_budget() {
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+        state.set_context_token_budget(5_000);
+        assert_eq!(state.context_token_budget(), 5_000);
+    }
+
+    #[test]
+    fn test_context_tokens_injected_zero_by_default() {
+        let state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+        assert_eq!(state.context_tokens_injected(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_refresh_build_context_returns_early_when_disabled() {
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+        // auto_context is disabled by default
+        assert!(!state.auto_context_enabled());
+
+        // Should return None immediately
+        let result = state.refresh_build_context().await;
+        assert!(result.is_none());
+        assert!(!state.has_cached_ccg_context());
+        assert_eq!(state.context_tokens_injected(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_refresh_build_context_returns_early_without_orchestrator() {
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+        state.set_auto_context_enabled(true);
+
+        // No orchestrator set
+        assert!(state.compression_orchestrator().is_none());
+
+        // Should return None immediately
+        let result = state.refresh_build_context().await;
+        assert!(result.is_none());
+        assert!(!state.has_cached_ccg_context());
+        assert_eq!(state.context_tokens_injected(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_submit_message_with_cached_context_prepends() {
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+        state.set_auto_context_enabled(true);
+
+        // Pre-populate cached context
+        state.cached_ccg_context = Some("## Project Structure\nRust project".to_string());
+
+        // Create a mock provider
+        let client: Arc<dyn crate::api::LlmProvider> = Arc::new(crate::api::AnthropicClient::new(
+            secrecy::SecretString::from("test-key"),
+            "claude-sonnet-4-20250514",
+        ));
+
+        // Submit message - should inject context
+        let _ = state
+            .submit_message(&client, "Hello world".to_string())
+            .await;
+
+        // Cached context should be consumed
+        assert!(!state.has_cached_ccg_context());
+
+        // The API message should contain the context wrapper
+        assert!(!state.api_messages().is_empty());
+        let last_user_msg = state
+            .api_messages()
+            .iter()
+            .find(|m| m.role == crate::types::Role::User);
+        assert!(last_user_msg.is_some());
+        let content = last_user_msg.unwrap().content.as_text().unwrap_or_default();
+        assert!(content.contains("<context>"));
+        assert!(content.contains("Project Structure"));
+        assert!(content.contains("Hello world"));
+    }
+
+    #[tokio::test]
+    async fn test_submit_message_without_context_sends_plain() {
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+        // auto_context disabled (default), no cached context
+
+        let client: Arc<dyn crate::api::LlmProvider> = Arc::new(crate::api::AnthropicClient::new(
+            secrecy::SecretString::from("test-key"),
+            "claude-sonnet-4-20250514",
+        ));
+
+        let _ = state
+            .submit_message(&client, "Hello plain".to_string())
+            .await;
+
+        let last_user_msg = state
+            .api_messages()
+            .iter()
+            .find(|m| m.role == crate::types::Role::User);
+        assert!(last_user_msg.is_some());
+        let content = last_user_msg.unwrap().content.as_text().unwrap_or_default();
+        assert!(!content.contains("<context>"));
+        assert!(content.contains("Hello plain"));
+    }
+
+    #[test]
+    fn test_get_git_head_hash_returns_some_in_git_repo() {
+        // We're running inside a git repo (rct), so this should succeed
+        let hash = get_git_head_hash(std::path::Path::new("."));
+        assert!(hash.is_some());
+        let hash_str = hash.unwrap();
+        // Git hashes are 40 hex characters
+        assert_eq!(hash_str.len(), 40);
+        assert!(hash_str.chars().all(|c: char| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn test_get_git_head_hash_returns_none_for_non_repo() {
+        let hash = get_git_head_hash(std::path::Path::new("/tmp"));
+        assert!(hash.is_none());
     }
 
     // ========================================================================
