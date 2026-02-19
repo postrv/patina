@@ -312,9 +312,9 @@ Before marking ANY task `[x]`:
 **Description**: Replace the closure-based manifest fetch with actual `McpClient::call_tool("get_project_structure", ...)` call. Add git hash cache invalidation.
 
 **TDD Cycle**:
-- [ ] RED: Write tests for `fetch_manifest()` — calls MCP with correct tool name and args, parses response, caches result keyed by commit hash, returns cached on hash match, re-fetches on hash change
-- [ ] GREEN: Implement `fetch_manifest()` in `CompressionOrchestrator` using `McpClient::call_tool()`, parse response into `CcgManifest`, cache with git commit hash
-- [ ] REFACTOR: Add error handling for MCP connection failure (graceful degradation — return empty context, log warning)
+- [x] RED: Write tests for `fetch_manifest()` — calls MCP with correct tool name and args, parses response, caches result keyed by commit hash, returns cached on hash match, re-fetches on hash change
+- [x] GREEN: Implement `fetch_manifest()` in `CompressionOrchestrator` using `McpClient::call_tool()`, parse response into `CcgManifest`, cache with git commit hash
+- [x] REFACTOR: Add error handling for MCP connection failure (graceful degradation — return empty context, log warning)
 - Files: `src/context/compression/orchestrator.rs`
 - Acceptance: Live MCP call works with running narsil instance, cache invalidation triggers on new commits
 

@@ -20,6 +20,7 @@
 //! ```
 
 use crate::context::compression::{
+    parse_mcp_tool_response, parse_project_structure_to_manifest, render_manifest_markdown,
     CacheKey, CcgBackend, CcgFetchError, CompressionLevel, CompressionMetrics, CompressionResult,
     ContextSource, ResultCache,
 };
@@ -698,6 +699,103 @@ impl CompressionOrchestrator {
         Ok(result)
     }
 
+    /// Fetches the manifest via live MCP call to `get_project_structure`.
+    ///
+    /// This is the unified entry point for manifest retrieval. It:
+    /// 1. Checks the cache (keyed by git commit hash)
+    /// 2. On cache miss, calls `get_project_structure` via MCP
+    /// 3. Parses the response into a [`CcgManifest`] and renders as Markdown
+    /// 4. Caches the result for future calls with the same commit hash
+    ///
+    /// Unlike [`get_manifest_async`], this method works without the CCG `--graph`
+    /// flag since `get_project_structure` is always available in narsil.
+    ///
+    /// # Arguments
+    ///
+    /// * `client` - An active MCP client connected to narsil-mcp
+    /// * `repo_hash` - Current git commit hash for cache invalidation
+    ///
+    /// # Returns
+    ///
+    /// A `CompressionResult` containing the rendered manifest Markdown,
+    /// or a degraded result on MCP failure.
+    ///
+    /// # Cache Behavior
+    ///
+    /// Results are cached keyed by `repo_hash`. Subsequent calls with the
+    /// same hash return the cached result. A new commit hash triggers a
+    /// fresh MCP call.
+    pub async fn fetch_manifest(
+        &self,
+        client: &mut McpClient,
+        repo_hash: &str,
+    ) -> CompressionResult {
+        // 1. Check cache
+        if let Some(cached) = self.get_cached(CompressionLevel::Manifest, repo_hash) {
+            return cached;
+        }
+
+        // 2. Fetch via MCP
+        let args = serde_json::json!({
+            "repo": self.repo_name
+        });
+
+        match client.call_tool("get_project_structure", args).await {
+            Ok(response) => self.process_manifest_response(&response, repo_hash),
+            Err(err) => {
+                warn!(
+                    repo = %self.repo_name,
+                    error = %err,
+                    "Manifest fetch via get_project_structure failed, entering degraded mode"
+                );
+                self.enter_degraded_mode();
+                self.create_degraded_result(CompressionLevel::Manifest)
+            }
+        }
+    }
+
+    /// Processes an MCP tool response into a manifest [`CompressionResult`].
+    ///
+    /// Separated from [`fetch_manifest`] for testability. Parses the MCP
+    /// response, extracts project structure, builds a `CcgManifest`, renders
+    /// it as Markdown, and caches the result.
+    ///
+    /// # Arguments
+    ///
+    /// * `response` - The raw MCP tool response JSON
+    /// * `repo_hash` - Git commit hash for cache keying
+    ///
+    /// # Returns
+    ///
+    /// A `CompressionResult` on success, or a degraded result if the
+    /// response cannot be parsed.
+    pub fn process_manifest_response(
+        &self,
+        response: &serde_json::Value,
+        repo_hash: &str,
+    ) -> CompressionResult {
+        match parse_mcp_tool_response(response) {
+            Ok(content) => {
+                let manifest =
+                    parse_project_structure_to_manifest(&content, &self.repo_name, repo_hash);
+                let markdown = render_manifest_markdown(&manifest);
+                let result = self.create_manifest_result(markdown);
+                self.cache_result(CompressionLevel::Manifest, &result, repo_hash);
+                self.exit_degraded_mode();
+                result
+            }
+            Err(err) => {
+                warn!(
+                    repo = %self.repo_name,
+                    error = %err,
+                    "Failed to parse manifest MCP response, entering degraded mode"
+                );
+                self.enter_degraded_mode();
+                self.create_degraded_result(CompressionLevel::Manifest)
+            }
+        }
+    }
+
     /// Gets the default context (manifest + architecture) asynchronously.
     ///
     /// Fetches both manifest and architecture via MCP calls when CCG is available.
@@ -1318,6 +1416,177 @@ mod tests {
                 panic!("Not called")
             });
         assert!(arch.content().contains("Architecture"));
+    }
+
+    // =============================================================================
+    // process_manifest_response tests (Task 3.1)
+    // =============================================================================
+
+    #[test]
+    fn test_process_manifest_response_parses_valid_response() {
+        let caps = create_capabilities_without_ccg();
+        let orchestrator = CompressionOrchestrator::new(caps, "test-repo");
+
+        let response = serde_json::json!({
+            "content": [{
+                "type": "text",
+                "text": "# Project Structure: test-repo\n\n```\n📁 test-repo/\n  🦀 main.rs (21.5KB)\n```"
+            }]
+        });
+
+        let result = orchestrator.process_manifest_response(&response, "abc123");
+
+        assert_eq!(result.level(), CompressionLevel::Manifest);
+        assert!(
+            result.content().contains("Repository Manifest"),
+            "Should render manifest markdown, got: {}",
+            result.content()
+        );
+        assert!(
+            result.content().contains("test-repo"),
+            "Should include repo name in rendered output"
+        );
+    }
+
+    #[test]
+    fn test_process_manifest_response_caches_result() {
+        let caps = create_capabilities_without_ccg();
+        let orchestrator = CompressionOrchestrator::new(caps, "test-repo");
+
+        let response = serde_json::json!({
+            "content": [{
+                "type": "text",
+                "text": "📁 repo/\n  🦀 main.rs (1.0KB)"
+            }]
+        });
+
+        let _result = orchestrator.process_manifest_response(&response, "hash123");
+
+        let cached = orchestrator.get_cached(CompressionLevel::Manifest, "hash123");
+        assert!(cached.is_some(), "Result should be cached after processing");
+    }
+
+    #[test]
+    fn test_process_manifest_response_enters_degraded_on_invalid_response() {
+        let caps = create_capabilities_without_ccg();
+        let orchestrator = CompressionOrchestrator::new(caps, "test-repo");
+
+        let response = serde_json::json!({}); // Invalid - missing content
+
+        let result = orchestrator.process_manifest_response(&response, "hash123");
+
+        assert!(
+            orchestrator.is_degraded(),
+            "Should enter degraded mode on parse failure"
+        );
+        assert!(result.content().contains("Degraded Mode"));
+    }
+
+    #[test]
+    fn test_process_manifest_response_exits_degraded_on_success() {
+        let caps = create_capabilities_without_ccg();
+        let orchestrator = CompressionOrchestrator::new(caps, "test-repo");
+
+        // Enter degraded mode first
+        orchestrator.enter_degraded_mode();
+        assert!(orchestrator.is_degraded());
+
+        let response = serde_json::json!({
+            "content": [{
+                "type": "text",
+                "text": "📁 repo/\n  🦀 main.rs (1.0KB)"
+            }]
+        });
+
+        let _result = orchestrator.process_manifest_response(&response, "hash123");
+
+        assert!(
+            !orchestrator.is_degraded(),
+            "Should exit degraded mode on successful parse"
+        );
+    }
+
+    #[test]
+    fn test_process_manifest_response_cache_invalidation_on_hash_change() {
+        let caps = create_capabilities_without_ccg();
+        let orchestrator = CompressionOrchestrator::new(caps, "test-repo");
+
+        let response = serde_json::json!({
+            "content": [{
+                "type": "text",
+                "text": "📁 repo/\n  🦀 main.rs (1.0KB)"
+            }]
+        });
+
+        // Cache with first hash
+        let _result = orchestrator.process_manifest_response(&response, "old_hash");
+
+        // Different hash should miss cache
+        let cached = orchestrator.get_cached(CompressionLevel::Manifest, "new_hash");
+        assert!(
+            cached.is_none(),
+            "Different commit hash should not hit cache"
+        );
+    }
+
+    #[test]
+    fn test_process_manifest_response_uses_correct_source_for_ccg() {
+        let caps = create_capabilities_with_ccg();
+        let orchestrator = CompressionOrchestrator::new(caps, "test-repo");
+
+        let response = serde_json::json!({
+            "content": [{
+                "type": "text",
+                "text": "📁 repo/\n  🦀 main.rs (1.0KB)"
+            }]
+        });
+
+        let result = orchestrator.process_manifest_response(&response, "hash");
+        assert_eq!(
+            result.source(),
+            ContextSource::CcgLayer0,
+            "CCG-capable orchestrator should mark source as CcgLayer0"
+        );
+    }
+
+    #[test]
+    fn test_process_manifest_response_uses_correct_source_for_fallback() {
+        let caps = create_capabilities_without_ccg();
+        let orchestrator = CompressionOrchestrator::new(caps, "test-repo");
+
+        let response = serde_json::json!({
+            "content": [{
+                "type": "text",
+                "text": "📁 repo/\n  🦀 main.rs (1.0KB)"
+            }]
+        });
+
+        let result = orchestrator.process_manifest_response(&response, "hash");
+        assert_eq!(
+            result.source(),
+            ContextSource::Constructed,
+            "Fallback orchestrator should mark source as Constructed"
+        );
+    }
+
+    #[test]
+    fn test_process_manifest_response_includes_language_info() {
+        let caps = create_capabilities_without_ccg();
+        let orchestrator = CompressionOrchestrator::new(caps, "test-repo");
+
+        let response = serde_json::json!({
+            "content": [{
+                "type": "text",
+                "text": "📁 repo/\n  🦀 main.rs (10.0KB)\n  🦀 lib.rs (5.0KB)\n  📝 README.md (2.0KB)"
+            }]
+        });
+
+        let result = orchestrator.process_manifest_response(&response, "hash");
+
+        assert!(
+            result.content().contains("Rust"),
+            "Rendered manifest should mention Rust language"
+        );
     }
 
     #[test]

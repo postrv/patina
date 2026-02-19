@@ -425,6 +425,169 @@ pub fn render_symbols_markdown(results: &SymbolResults) -> String {
     output
 }
 
+/// Parses a `get_project_structure` response into a [`CcgManifest`].
+///
+/// Extracts language, file count, and size information from the
+/// narsil project structure tree output. Lines are estimated from
+/// file sizes using ~40 bytes per line.
+///
+/// # Arguments
+///
+/// * `content` - The text output from narsil's `get_project_structure` tool
+/// * `repo_name` - Repository name to set in the manifest
+/// * `commit_hash` - Git commit hash for cache invalidation
+///
+/// # Returns
+///
+/// A `CcgManifest` populated with repository metadata extracted from the tree.
+///
+/// # Examples
+///
+/// ```ignore
+/// let manifest = parse_project_structure_to_manifest(
+///     "📁 repo/\n  🦀 main.rs (10.0KB)",
+///     "my-repo",
+///     "abc123",
+/// );
+/// assert_eq!(manifest.repo_name, "my-repo");
+/// ```
+#[must_use]
+pub fn parse_project_structure_to_manifest(
+    content: &str,
+    repo_name: &str,
+    commit_hash: &str,
+) -> CcgManifest {
+    let mut lang_counts: std::collections::HashMap<String, (usize, usize)> =
+        std::collections::HashMap::new();
+
+    for line in content.lines() {
+        if let Some((ext, size_bytes)) = extract_file_info_from_tree_line(line) {
+            let lang_name = language_name_from_extension(&ext);
+            let entry = lang_counts.entry(lang_name).or_insert((0, 0));
+            entry.0 += 1;
+            entry.1 += size_bytes;
+        }
+    }
+
+    let mut languages: Vec<LanguageInfo> = lang_counts
+        .into_iter()
+        .map(|(name, (files, total_size))| {
+            let estimated_lines = if total_size > 0 { total_size / 40 } else { 0 };
+            LanguageInfo {
+                name,
+                lines: estimated_lines,
+                files,
+            }
+        })
+        .collect();
+
+    languages.sort_by(|a, b| b.files.cmp(&a.files));
+
+    let total_files: usize = languages.iter().map(|l| l.files).sum();
+
+    CcgManifest {
+        repo_name: repo_name.to_string(),
+        commit: commit_hash.to_string(),
+        languages,
+        symbols: SymbolSummary {
+            total: total_files,
+            ..Default::default()
+        },
+        ..Default::default()
+    }
+}
+
+/// Extracts file extension and size from a narsil project structure tree line.
+///
+/// Lines have the format: `  🦀 main.rs (21.5KB)` or `  📝 README.md (12.5KB)`
+///
+/// Returns `None` for directory lines, headers, and non-file entries.
+fn extract_file_info_from_tree_line(line: &str) -> Option<(String, usize)> {
+    let trimmed = line.trim();
+
+    // Skip directory entries, headers, code fences, and empty lines
+    if trimmed.is_empty()
+        || trimmed.starts_with("📁")
+        || trimmed.starts_with('#')
+        || trimmed.starts_with("```")
+    {
+        return None;
+    }
+
+    // Find file name: skip emoji prefix, look for filename with extension
+    let after_emoji = skip_emoji_prefix(trimmed)?;
+
+    // Extract filename (everything before the opening paren)
+    let paren_pos = after_emoji.find('(')?;
+    let filename = after_emoji[..paren_pos].trim();
+
+    // Extract extension
+    let dot_pos = filename.rfind('.')?;
+    let ext = filename[dot_pos + 1..].to_lowercase();
+
+    // Extract size from parentheses
+    let close_paren = after_emoji[paren_pos..].find(')')?;
+    let size_str = &after_emoji[paren_pos + 1..paren_pos + close_paren];
+    let size_bytes = parse_size_str(size_str)?;
+
+    Some((ext, size_bytes))
+}
+
+/// Skips emoji prefix characters to reach the filename.
+///
+/// Narsil uses various emoji prefixes: 🦀, 📝, 📋, ⚙️, 📄, 🌐, etc.
+fn skip_emoji_prefix(s: &str) -> Option<&str> {
+    // Find the first ASCII alphanumeric, dot, or underscore character
+    let first_ascii = s.find(|c: char| c.is_ascii_alphanumeric() || c == '.' || c == '_')?;
+    Some(&s[first_ascii..])
+}
+
+/// Parses a human-readable size string into bytes.
+///
+/// Supports formats: "21.5KB", "1.3MB", "911B"
+fn parse_size_str(s: &str) -> Option<usize> {
+    let s = s.trim();
+    if let Some(num_str) = s.strip_suffix("KB") {
+        let num: f64 = num_str.trim().parse().ok()?;
+        Some((num * 1024.0) as usize)
+    } else if let Some(num_str) = s.strip_suffix("MB") {
+        let num: f64 = num_str.trim().parse().ok()?;
+        Some((num * 1024.0 * 1024.0) as usize)
+    } else if let Some(num_str) = s.strip_suffix('B') {
+        let num: f64 = num_str.trim().parse().ok()?;
+        Some(num as usize)
+    } else {
+        None
+    }
+}
+
+/// Maps a file extension to a human-readable language name.
+fn language_name_from_extension(ext: &str) -> String {
+    match ext {
+        "rs" => "Rust".to_string(),
+        "toml" => "TOML".to_string(),
+        "md" => "Markdown".to_string(),
+        "json" => "JSON".to_string(),
+        "sh" => "Shell".to_string(),
+        "html" => "HTML".to_string(),
+        "css" => "CSS".to_string(),
+        "js" => "JavaScript".to_string(),
+        "ts" => "TypeScript".to_string(),
+        "tsx" => "TypeScript".to_string(),
+        "jsx" => "JavaScript".to_string(),
+        "py" => "Python".to_string(),
+        "yml" | "yaml" => "YAML".to_string(),
+        "rb" => "Ruby".to_string(),
+        "go" => "Go".to_string(),
+        "java" => "Java".to_string(),
+        "c" | "h" => "C".to_string(),
+        "cpp" | "cc" | "cxx" | "hpp" => "C++".to_string(),
+        "lock" => "Lock".to_string(),
+        "dot" => "Graphviz".to_string(),
+        _ => ext.to_uppercase(),
+    }
+}
+
 /// Checks if content appears to be raw JSON rather than Markdown.
 #[must_use]
 pub fn looks_like_json(content: &str) -> bool {
@@ -846,6 +1009,213 @@ mod tests {
             low: 4,
         };
         assert_eq!(summary.total(), 10);
+    }
+
+    // =============================================================================
+    // ParseError tests
+    // =============================================================================
+
+    // =============================================================================
+    // parse_project_structure_to_manifest tests (Task 3.1)
+    // =============================================================================
+
+    #[test]
+    fn test_parse_project_structure_sets_repo_name() {
+        let manifest = parse_project_structure_to_manifest("", "my-repo", "abc123");
+        assert_eq!(manifest.repo_name, "my-repo");
+    }
+
+    #[test]
+    fn test_parse_project_structure_sets_commit_hash() {
+        let manifest = parse_project_structure_to_manifest("", "repo", "abc123def456");
+        assert_eq!(manifest.commit, "abc123def456");
+    }
+
+    #[test]
+    fn test_parse_project_structure_handles_empty_content() {
+        let manifest = parse_project_structure_to_manifest("", "repo", "hash");
+        assert_eq!(manifest.repo_name, "repo");
+        assert_eq!(manifest.commit, "hash");
+        assert!(manifest.languages.is_empty());
+    }
+
+    #[test]
+    fn test_parse_project_structure_extracts_rust_files() {
+        let content = "# Project Structure: test-repo\n\n\
+            ```\n\
+            📁 test-repo/\n\
+              📁 src/\n\
+                🦀 main.rs (21.5KB)\n\
+                🦀 lib.rs (911B)\n\
+              ⚙️ Cargo.toml (2.0KB)\n\
+            ```";
+        let manifest = parse_project_structure_to_manifest(content, "test-repo", "abc123");
+
+        let rust = manifest.languages.iter().find(|l| l.name == "Rust");
+        assert!(rust.is_some(), "Should detect Rust language");
+        assert_eq!(rust.unwrap().files, 2);
+    }
+
+    #[test]
+    fn test_parse_project_structure_extracts_multiple_languages() {
+        let content = "📁 test-repo/\n\
+            🦀 main.rs (10.0KB)\n\
+            📝 README.md (5.0KB)\n\
+            📋 config.json (1.0KB)";
+        let manifest = parse_project_structure_to_manifest(content, "test-repo", "abc123");
+        assert!(
+            manifest.languages.len() >= 3,
+            "Should detect at least 3 languages, got {}",
+            manifest.languages.len()
+        );
+    }
+
+    #[test]
+    fn test_parse_project_structure_estimates_lines_from_size() {
+        let content = "📁 repo/\n  🦀 big_file.rs (40.0KB)";
+        let manifest = parse_project_structure_to_manifest(content, "repo", "hash");
+
+        let rust = manifest.languages.iter().find(|l| l.name == "Rust");
+        assert!(rust.is_some());
+        // 40KB at ~40 bytes/line ≈ 1024 lines
+        let lines = rust.unwrap().lines;
+        assert!(
+            lines > 500,
+            "Should estimate lines from file size, got {lines}"
+        );
+    }
+
+    #[test]
+    fn test_parse_project_structure_sorts_languages_by_file_count() {
+        let content = "📁 repo/\n\
+            🦀 a.rs (1.0KB)\n\
+            🦀 b.rs (1.0KB)\n\
+            🦀 c.rs (1.0KB)\n\
+            📝 README.md (1.0KB)";
+        let manifest = parse_project_structure_to_manifest(content, "repo", "hash");
+
+        assert!(!manifest.languages.is_empty());
+        assert_eq!(
+            manifest.languages[0].name, "Rust",
+            "Rust (3 files) should be first"
+        );
+    }
+
+    #[test]
+    fn test_parse_project_structure_sets_total_file_count() {
+        let content = "📁 repo/\n\
+            🦀 a.rs (1.0KB)\n\
+            🦀 b.rs (1.0KB)\n\
+            📝 README.md (1.0KB)";
+        let manifest = parse_project_structure_to_manifest(content, "repo", "hash");
+        assert_eq!(manifest.symbols.total, 3, "Total should count all files");
+    }
+
+    #[test]
+    fn test_parse_project_structure_skips_directories() {
+        let content = "📁 repo/\n  📁 src/\n  📁 tests/";
+        let manifest = parse_project_structure_to_manifest(content, "repo", "hash");
+        assert!(
+            manifest.languages.is_empty(),
+            "Directories should not be counted as files"
+        );
+    }
+
+    // =============================================================================
+    // Helper function tests (Task 3.1)
+    // =============================================================================
+
+    #[test]
+    fn test_extract_file_info_from_rust_file() {
+        let result = extract_file_info_from_tree_line("    🦀 main.rs (21.5KB)");
+        assert!(result.is_some());
+        let (ext, size) = result.unwrap();
+        assert_eq!(ext, "rs");
+        // 21.5 * 1024 = 22016
+        assert!(
+            size > 20000 && size < 23000,
+            "Size should be ~22016, got {size}"
+        );
+    }
+
+    #[test]
+    fn test_extract_file_info_from_markdown_file() {
+        let result = extract_file_info_from_tree_line("  📝 README.md (12.5KB)");
+        assert!(result.is_some());
+        let (ext, _) = result.unwrap();
+        assert_eq!(ext, "md");
+    }
+
+    #[test]
+    fn test_extract_file_info_from_byte_size() {
+        let result = extract_file_info_from_tree_line("  🦀 lib.rs (911B)");
+        assert!(result.is_some());
+        let (ext, size) = result.unwrap();
+        assert_eq!(ext, "rs");
+        assert_eq!(size, 911);
+    }
+
+    #[test]
+    fn test_extract_file_info_from_megabyte_size() {
+        let result = extract_file_info_from_tree_line("  🌐 report.html (1.5MB)");
+        assert!(result.is_some());
+        let (ext, size) = result.unwrap();
+        assert_eq!(ext, "html");
+        // 1.5 * 1024 * 1024 = 1572864
+        assert!(size > 1500000 && size < 1600000);
+    }
+
+    #[test]
+    fn test_extract_file_info_skips_directory() {
+        assert!(extract_file_info_from_tree_line("  📁 src/").is_none());
+    }
+
+    #[test]
+    fn test_extract_file_info_skips_header() {
+        assert!(extract_file_info_from_tree_line("# Project Structure: repo").is_none());
+    }
+
+    #[test]
+    fn test_extract_file_info_skips_empty() {
+        assert!(extract_file_info_from_tree_line("").is_none());
+    }
+
+    #[test]
+    fn test_extract_file_info_skips_code_fence() {
+        assert!(extract_file_info_from_tree_line("```").is_none());
+    }
+
+    #[test]
+    fn test_parse_size_str_kilobytes() {
+        assert_eq!(parse_size_str("21.5KB"), Some(22016));
+        assert_eq!(parse_size_str("1.0KB"), Some(1024));
+    }
+
+    #[test]
+    fn test_parse_size_str_bytes() {
+        assert_eq!(parse_size_str("911B"), Some(911));
+    }
+
+    #[test]
+    fn test_parse_size_str_megabytes() {
+        let size = parse_size_str("1.0MB").unwrap();
+        assert_eq!(size, 1048576);
+    }
+
+    #[test]
+    fn test_parse_size_str_invalid() {
+        assert!(parse_size_str("abc").is_none());
+        assert!(parse_size_str("").is_none());
+    }
+
+    #[test]
+    fn test_language_name_from_extension() {
+        assert_eq!(language_name_from_extension("rs"), "Rust");
+        assert_eq!(language_name_from_extension("py"), "Python");
+        assert_eq!(language_name_from_extension("ts"), "TypeScript");
+        assert_eq!(language_name_from_extension("md"), "Markdown");
+        assert_eq!(language_name_from_extension("toml"), "TOML");
+        assert_eq!(language_name_from_extension("xyz"), "XYZ");
     }
 
     // =============================================================================
