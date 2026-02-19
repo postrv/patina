@@ -123,6 +123,11 @@ pub trait EventHandler: Send {
 /// [`Handled::CONSUMED`] wins; remaining handlers are not called.
 /// If no handler consumes the event, [`Handled::IGNORED`] is returned.
 ///
+/// **Observers** are a separate set of handlers that always run after
+/// normal dispatch, regardless of whether the event was consumed. Use
+/// observers for cross-cutting concerns like session persistence that
+/// must react to every event.
+///
 /// # Examples
 ///
 /// ```rust,ignore
@@ -132,10 +137,13 @@ pub trait EventHandler: Send {
 ///     Box::new(permission_handler),
 ///     Box::new(keyboard_handler),
 ///     Box::new(stream_handler),
+/// ]).with_observers(vec![
+///     Box::new(session_handler), // always runs
 /// ]);
 /// ```
 pub struct EventDispatcher {
     handlers: Vec<Box<dyn EventHandler>>,
+    observers: Vec<Box<dyn EventHandler>>,
 }
 
 impl EventDispatcher {
@@ -145,37 +153,72 @@ impl EventDispatcher {
     /// higher priority and can consume events before later handlers see them.
     #[must_use]
     pub fn new(handlers: Vec<Box<dyn EventHandler>>) -> Self {
-        Self { handlers }
+        Self {
+            handlers,
+            observers: vec![],
+        }
     }
 
-    /// Returns the number of registered handlers.
+    /// Adds observer handlers that run unconditionally after normal dispatch.
+    ///
+    /// Observers always run regardless of whether a handler consumed the
+    /// event. They are intended for cross-cutting concerns like session
+    /// persistence. Observer return values do not affect the dispatch result.
+    #[must_use]
+    pub fn with_observers(mut self, observers: Vec<Box<dyn EventHandler>>) -> Self {
+        self.observers = observers;
+        self
+    }
+
+    /// Returns the number of registered handlers (excludes observers).
     #[must_use]
     pub fn handler_count(&self) -> usize {
         self.handlers.len()
     }
 
-    /// Dispatches an event to handlers in order until one consumes it.
+    /// Returns the number of registered observers.
+    #[must_use]
+    pub fn observer_count(&self) -> usize {
+        self.observers.len()
+    }
+
+    /// Dispatches an event to handlers in order until one consumes it,
+    /// then unconditionally runs all observers.
     ///
     /// Returns [`Handled::CONSUMED`] if any handler consumed the event,
-    /// or [`Handled::IGNORED`] if no handler processed it.
+    /// or [`Handled::IGNORED`] if no handler processed it. Observer
+    /// return values do not affect the result.
     ///
     /// # Errors
     ///
-    /// Propagates any error returned by a handler.
+    /// Propagates any error returned by a handler or observer.
     pub async fn dispatch(
         &mut self,
         event: &AppEvent,
         ctx: &mut AppContext<'_>,
     ) -> Result<Handled> {
+        let mut consumed = Handled::IGNORED;
+
         for handler in &mut self.handlers {
             let result = handler.handle(event, ctx).await?;
             if result.is_consumed() {
                 trace!(handler = handler.name(), %event, "event consumed");
-                return Ok(Handled::CONSUMED);
+                consumed = Handled::CONSUMED;
+                break;
             }
         }
-        trace!(%event, "event unhandled");
-        Ok(Handled::IGNORED)
+
+        // Observers always run regardless of consumption.
+        for observer in &mut self.observers {
+            observer.handle(event, ctx).await?;
+            trace!(observer = observer.name(), %event, "observer executed");
+        }
+
+        if consumed.is_ignored() {
+            trace!(%event, "event unhandled");
+        }
+
+        Ok(consumed)
     }
 }
 
@@ -599,6 +642,110 @@ mod tests {
         }
 
         assert_eq!(count.load(Ordering::SeqCst), 3);
+    }
+
+    // =========================================================================
+    // Observer tests
+    // =========================================================================
+
+    #[test]
+    fn dispatcher_observer_count_default_zero() {
+        let dispatcher = EventDispatcher::new(vec![]);
+        assert_eq!(dispatcher.observer_count(), 0);
+    }
+
+    #[test]
+    fn dispatcher_with_observers_sets_count() {
+        let (obs, _) = MockHandler::new("obs", Handled::IGNORED);
+        let dispatcher =
+            EventDispatcher::new(vec![]).with_observers(vec![Box::new(obs)]);
+        assert_eq!(dispatcher.observer_count(), 1);
+        assert_eq!(dispatcher.handler_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn observer_runs_even_when_handler_consumes() {
+        // Handler consumes the event — observer must still run.
+        let (handler, h_count) = MockHandler::new("handler", Handled::CONSUMED);
+        let (obs, o_count) = MockHandler::new("observer", Handled::IGNORED);
+        let mut dispatcher =
+            EventDispatcher::new(vec![Box::new(handler)]).with_observers(vec![Box::new(obs)]);
+        let mut terminal = test_terminal();
+        let client = test_client();
+        let mut state = test_state();
+        let (session_mgr, _dir) = test_session_manager();
+        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+
+        let event = tick_event();
+        let result = dispatcher.dispatch(&event, &mut ctx).await.unwrap();
+
+        assert_eq!(result, Handled::CONSUMED);
+        assert_eq!(h_count.load(Ordering::SeqCst), 1, "handler should be called");
+        assert_eq!(
+            o_count.load(Ordering::SeqCst),
+            1,
+            "observer must run even when handler consumed the event"
+        );
+    }
+
+    #[tokio::test]
+    async fn observer_runs_when_no_handler_consumes() {
+        let (handler, h_count) = MockHandler::new("handler", Handled::IGNORED);
+        let (obs, o_count) = MockHandler::new("observer", Handled::IGNORED);
+        let mut dispatcher =
+            EventDispatcher::new(vec![Box::new(handler)]).with_observers(vec![Box::new(obs)]);
+        let mut terminal = test_terminal();
+        let client = test_client();
+        let mut state = test_state();
+        let (session_mgr, _dir) = test_session_manager();
+        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+
+        let event = tick_event();
+        let result = dispatcher.dispatch(&event, &mut ctx).await.unwrap();
+
+        assert_eq!(result, Handled::IGNORED);
+        assert_eq!(h_count.load(Ordering::SeqCst), 1);
+        assert_eq!(o_count.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn observer_result_does_not_affect_dispatch_result() {
+        // No handlers — event is unhandled. Observer runs but its result
+        // does not change the dispatch result to CONSUMED.
+        let (obs, _) = MockHandler::new("observer", Handled::CONSUMED);
+        let mut dispatcher =
+            EventDispatcher::new(vec![]).with_observers(vec![Box::new(obs)]);
+        let mut terminal = test_terminal();
+        let client = test_client();
+        let mut state = test_state();
+        let (session_mgr, _dir) = test_session_manager();
+        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+
+        let event = tick_event();
+        let result = dispatcher.dispatch(&event, &mut ctx).await.unwrap();
+
+        assert_eq!(
+            result,
+            Handled::IGNORED,
+            "Observer returning CONSUMED must NOT change the dispatch result"
+        );
+    }
+
+    #[tokio::test]
+    async fn observer_error_propagates() {
+        let (obs, _) = ErrorHandler::new("failing_observer");
+        let mut dispatcher =
+            EventDispatcher::new(vec![]).with_observers(vec![Box::new(obs)]);
+        let mut terminal = test_terminal();
+        let client = test_client();
+        let mut state = test_state();
+        let (session_mgr, _dir) = test_session_manager();
+        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+
+        let event = tick_event();
+        let result = dispatcher.dispatch(&event, &mut ctx).await;
+
+        assert!(result.is_err(), "Observer errors must propagate");
     }
 
     // =========================================================================
