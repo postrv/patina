@@ -593,6 +593,173 @@ impl WorktreeAgentManager {
     pub fn worktree_manager(&self) -> &WorktreeManager {
         &self.worktree_manager
     }
+
+    /// Checks for conflicts between all running agents.
+    ///
+    /// For each running agent, queries its worktree for modified files using
+    /// `git diff --name-only HEAD`. If an MCP client is provided, also queries
+    /// for modified symbols using `find_references` to detect symbol-level
+    /// conflicts.
+    ///
+    /// Returns a [`ConflictReport`] describing any detected conflicts.
+    ///
+    /// # Arguments
+    ///
+    /// * `mcp_client` — Optional MCP client for symbol-level analysis.
+    ///   If `None`, only file-level conflicts are detected.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if git commands fail in any agent worktree.
+    pub async fn check_conflicts(
+        &self,
+        mcp_client: Option<&mut crate::mcp::client::McpClient>,
+    ) -> Result<super::conflict::ConflictReport> {
+        use super::conflict::{AgentFileChanges, ConflictDetector};
+
+        let mut detector = ConflictDetector::new();
+
+        // Collect agent info first to avoid borrow issues.
+        let running_agents: Vec<(String, PathBuf)> = self
+            .agents
+            .iter()
+            .filter(|(_, h)| h.status == WorktreeAgentStatus::Running)
+            .map(|(name, handle)| (name.clone(), handle.worktree_path.clone()))
+            .collect();
+
+        // Gather modified files for each agent (git-only, no MCP needed).
+        let mut all_changes: Vec<(String, Vec<String>, PathBuf)> = Vec::new();
+        for (name, worktree_path) in &running_agents {
+            let modified_files = Self::get_modified_files_in_worktree(worktree_path)?;
+            all_changes.push((name.clone(), modified_files, worktree_path.clone()));
+        }
+
+        // If MCP is available, enrich with symbol-level information.
+        if let Some(client) = mcp_client {
+            for (name, modified_files, worktree_path) in &all_changes {
+                let mut modified_symbols = Vec::new();
+                for file in modified_files {
+                    let symbols = Self::get_modified_symbols(client, worktree_path, file).await;
+                    for sym in symbols {
+                        modified_symbols.push((file.clone(), sym));
+                    }
+                }
+                detector.add_agent_changes(AgentFileChanges {
+                    agent_name: name.clone(),
+                    modified_files: modified_files.clone(),
+                    modified_symbols,
+                });
+            }
+        } else {
+            // No MCP: file-level conflict detection only.
+            for (name, modified_files, _) in all_changes {
+                detector.add_agent_changes(AgentFileChanges {
+                    agent_name: name,
+                    modified_files,
+                    modified_symbols: Vec::new(),
+                });
+            }
+        }
+
+        Ok(detector.detect())
+    }
+
+    /// Gets the list of modified files in a worktree by running `git diff --name-only HEAD`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the git command fails.
+    fn get_modified_files_in_worktree(worktree_path: &Path) -> Result<Vec<String>> {
+        let output = std::process::Command::new("git")
+            .args(["diff", "--name-only", "HEAD"])
+            .current_dir(worktree_path)
+            .output()
+            .map_err(|e| anyhow::anyhow!("Failed to run git diff in worktree: {}", e))?;
+
+        if !output.status.success() {
+            // If the worktree has no commits yet, diff against empty tree
+            let output = std::process::Command::new("git")
+                .args([
+                    "diff",
+                    "--name-only",
+                    "--cached",
+                    "4b825dc642cb6eb9a060e54bf899d15f3f540110",
+                ])
+                .current_dir(worktree_path)
+                .output()
+                .map_err(|e| {
+                    anyhow::anyhow!("Failed to run git diff (empty tree) in worktree: {}", e)
+                })?;
+
+            return Ok(String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .filter(|l| !l.is_empty())
+                .map(String::from)
+                .collect());
+        }
+
+        Ok(String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter(|l| !l.is_empty())
+            .map(String::from)
+            .collect())
+    }
+
+    /// Queries MCP for symbols modified in a file.
+    ///
+    /// Uses `find_symbols` to get all symbols defined in the file,
+    /// then uses `git diff` to determine which ones were actually modified.
+    /// Falls back to an empty list if MCP calls fail.
+    async fn get_modified_symbols(
+        client: &mut crate::mcp::client::McpClient,
+        worktree_path: &Path,
+        file: &str,
+    ) -> Vec<String> {
+        // Query narsil for symbols in this file
+        let result = client
+            .call_tool(
+                "find_symbols",
+                serde_json::json!({
+                    "repo": worktree_path.to_string_lossy(),
+                    "file_pattern": file,
+                }),
+            )
+            .await;
+
+        match result {
+            Ok(response) => Self::parse_symbols_response(&response),
+            Err(e) => {
+                debug!("MCP find_symbols failed for {}: {}", file, e);
+                Vec::new()
+            }
+        }
+    }
+
+    /// Parses the symbols response from narsil `find_symbols`.
+    fn parse_symbols_response(response: &serde_json::Value) -> Vec<String> {
+        // narsil returns symbols with name, type, file, line fields
+        let Some(symbols) = response.get("symbols").and_then(|s| s.as_array()) else {
+            // Try content[0].text pattern (MCP standard)
+            if let Some(text) = response
+                .get("content")
+                .and_then(|c| c.as_array())
+                .and_then(|a| a.first())
+                .and_then(|b| b.get("text"))
+                .and_then(|t| t.as_str())
+            {
+                // Try parsing the text as JSON
+                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(text) {
+                    return Self::parse_symbols_response(&parsed);
+                }
+            }
+            return Vec::new();
+        };
+
+        symbols
+            .iter()
+            .filter_map(|sym| sym.get("name").and_then(|n| n.as_str()).map(String::from))
+            .collect()
+    }
 }
 
 impl fmt::Debug for WorktreeAgentManager {
@@ -1363,6 +1530,192 @@ mod tests {
         let debug = format!("{:?}", manager);
         assert!(debug.contains("WorktreeAgentManager"));
         assert!(debug.contains("agent_count"));
+    }
+
+    // =========================================================================
+    // check_conflicts tests (require git repo with worktrees)
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_check_conflicts_no_agents_no_conflicts() {
+        let (_tmp, path) = create_test_repo();
+        let manager = WorktreeAgentManager::new(&path).unwrap();
+
+        let report = manager.check_conflicts(None).await.unwrap();
+        assert!(!report.has_conflicts());
+    }
+
+    #[tokio::test]
+    async fn test_check_conflicts_single_agent_no_conflicts() {
+        let (_tmp, path) = create_test_repo();
+        let mut manager = WorktreeAgentManager::new(&path).unwrap();
+
+        manager.spawn("solo", "Work alone").unwrap();
+
+        let report = manager.check_conflicts(None).await.unwrap();
+        assert!(!report.has_conflicts());
+    }
+
+    #[tokio::test]
+    async fn test_check_conflicts_agents_no_changes_no_conflicts() {
+        let (_tmp, path) = create_test_repo();
+        let mut manager = WorktreeAgentManager::new(&path).unwrap();
+
+        manager.spawn("agent-a", "Task A").unwrap();
+        manager.spawn("agent-b", "Task B").unwrap();
+
+        // Neither agent has modified any files yet.
+        let report = manager.check_conflicts(None).await.unwrap();
+        assert!(!report.has_conflicts());
+    }
+
+    #[tokio::test]
+    async fn test_check_conflicts_detects_same_file_modification() {
+        let (_tmp, path) = create_test_repo();
+        let mut manager = WorktreeAgentManager::new(&path).unwrap();
+
+        let handle_a = manager.spawn("agent-a", "Task A").unwrap();
+        let wt_a = handle_a.worktree_path().to_path_buf();
+
+        let handle_b = manager.spawn("agent-b", "Task B").unwrap();
+        let wt_b = handle_b.worktree_path().to_path_buf();
+
+        // Both agents modify README.md in their respective worktrees.
+        std::fs::write(wt_a.join("README.md"), "# Changed by A").unwrap();
+        std::fs::write(wt_b.join("README.md"), "# Changed by B").unwrap();
+
+        let report = manager.check_conflicts(None).await.unwrap();
+        assert!(
+            report.has_conflicts(),
+            "Should detect conflict when both agents modify README.md"
+        );
+        assert!(report.has_warnings_only());
+        assert_eq!(report.warning_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_check_conflicts_no_conflict_for_different_files() {
+        let (_tmp, path) = create_test_repo();
+
+        // Create additional files in the main repo first.
+        std::fs::write(path.join("file_a.txt"), "original a").unwrap();
+        std::fs::write(path.join("file_b.txt"), "original b").unwrap();
+        std::process::Command::new("git")
+            .args(["add", "file_a.txt", "file_b.txt"])
+            .current_dir(&path)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["commit", "-m", "Add test files"])
+            .current_dir(&path)
+            .output()
+            .unwrap();
+
+        let mut manager = WorktreeAgentManager::new(&path).unwrap();
+
+        let handle_a = manager.spawn("agent-a", "Task A").unwrap();
+        let wt_a = handle_a.worktree_path().to_path_buf();
+
+        let handle_b = manager.spawn("agent-b", "Task B").unwrap();
+        let wt_b = handle_b.worktree_path().to_path_buf();
+
+        // Agent A modifies file_a, agent B modifies file_b (no overlap).
+        std::fs::write(wt_a.join("file_a.txt"), "changed by A").unwrap();
+        std::fs::write(wt_b.join("file_b.txt"), "changed by B").unwrap();
+
+        let report = manager.check_conflicts(None).await.unwrap();
+        assert!(
+            !report.has_conflicts(),
+            "Different files should not conflict"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_check_conflicts_skips_completed_agents() {
+        let (_tmp, path) = create_test_repo();
+        let mut manager = WorktreeAgentManager::new(&path).unwrap();
+
+        let handle_a = manager.spawn("agent-a", "Task A").unwrap();
+        let wt_a = handle_a.worktree_path().to_path_buf();
+
+        let handle_b = manager.spawn("agent-b", "Task B").unwrap();
+        let wt_b = handle_b.worktree_path().to_path_buf();
+
+        // Both modify README.md.
+        std::fs::write(wt_a.join("README.md"), "# A").unwrap();
+        std::fs::write(wt_b.join("README.md"), "# B").unwrap();
+
+        // Mark agent-a as completed — it should be excluded from conflict check.
+        manager.mark_completed("agent-a").unwrap();
+
+        let report = manager.check_conflicts(None).await.unwrap();
+        assert!(
+            !report.has_conflicts(),
+            "Completed agents should be excluded from conflict detection"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_check_conflicts_report_summary() {
+        let (_tmp, path) = create_test_repo();
+        let mut manager = WorktreeAgentManager::new(&path).unwrap();
+
+        let handle_a = manager.spawn("agent-a", "Task A").unwrap();
+        let wt_a = handle_a.worktree_path().to_path_buf();
+
+        let handle_b = manager.spawn("agent-b", "Task B").unwrap();
+        let wt_b = handle_b.worktree_path().to_path_buf();
+
+        std::fs::write(wt_a.join("README.md"), "# A").unwrap();
+        std::fs::write(wt_b.join("README.md"), "# B").unwrap();
+
+        let report = manager.check_conflicts(None).await.unwrap();
+        let summary = report.summary();
+        assert!(summary.contains("warning"), "Summary: {}", summary);
+    }
+
+    // =========================================================================
+    // parse_symbols_response tests
+    // =========================================================================
+
+    #[test]
+    fn test_parse_symbols_response_direct() {
+        let response = serde_json::json!({
+            "symbols": [
+                {"name": "foo", "type": "function", "file": "a.rs", "line": 10},
+                {"name": "Bar", "type": "struct", "file": "a.rs", "line": 20},
+            ]
+        });
+        let symbols = WorktreeAgentManager::parse_symbols_response(&response);
+        assert_eq!(symbols, vec!["foo", "Bar"]);
+    }
+
+    #[test]
+    fn test_parse_symbols_response_mcp_wrapped() {
+        let inner = serde_json::json!({
+            "symbols": [
+                {"name": "baz", "type": "function"}
+            ]
+        });
+        let response = serde_json::json!({
+            "content": [{"type": "text", "text": inner.to_string()}]
+        });
+        let symbols = WorktreeAgentManager::parse_symbols_response(&response);
+        assert_eq!(symbols, vec!["baz"]);
+    }
+
+    #[test]
+    fn test_parse_symbols_response_empty() {
+        let response = serde_json::json!({});
+        let symbols = WorktreeAgentManager::parse_symbols_response(&response);
+        assert!(symbols.is_empty());
+    }
+
+    #[test]
+    fn test_parse_symbols_response_empty_array() {
+        let response = serde_json::json!({"symbols": []});
+        let symbols = WorktreeAgentManager::parse_symbols_response(&response);
+        assert!(symbols.is_empty());
     }
 
     // =========================================================================

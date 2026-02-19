@@ -24,6 +24,7 @@
 //! assert!(!orchestrator.is_tool_allowed(id, "bash"));
 //! ```
 
+pub mod conflict;
 pub mod orchestrator;
 pub mod parallel;
 pub mod worktree_agent;
@@ -38,6 +39,11 @@ pub use orchestrator::{
 pub use parallel::{
     DivisionStrategy, MergeStrategy, OrchestratorStatus, ParallelAgentOrchestrator,
     ParallelTaskResult,
+};
+
+// Re-export conflict detection types
+pub use conflict::{
+    AgentFileChanges, Conflict, ConflictDetector, ConflictReport, ConflictSeverity,
 };
 
 // Re-export worktree agent types
