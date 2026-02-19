@@ -933,6 +933,77 @@ mod tests {
     }
 
     // =========================================================================
+    // Status bar context token display tests (7.1.2.3)
+    // =========================================================================
+
+    #[test]
+    fn test_status_bar_shows_context_tokens() {
+        use crate::types::config::ParallelMode;
+
+        let mut terminal = test_terminal(120, 24);
+        let mut state = AppState::new(
+            std::path::PathBuf::from("/test"),
+            false,
+            ParallelMode::Enabled,
+        );
+
+        // Simulate context injection of ~5,000 tokens
+        state.set_context_tokens_injected(5_000);
+
+        terminal
+            .draw(|frame| {
+                let area = Rect::new(0, 0, 120, 1);
+                render_status_bar(frame, area, &state);
+            })
+            .expect("Failed to draw status bar");
+
+        let buffer = terminal.backend().buffer();
+        let content: String = buffer
+            .content()
+            .iter()
+            .map(|c| c.symbol().chars().next().unwrap_or(' '))
+            .collect();
+
+        assert!(
+            content.contains("CTX:5k"),
+            "Status bar should show 'CTX:5k' when 5000 context tokens injected, got: {}",
+            content.trim()
+        );
+    }
+
+    #[test]
+    fn test_status_bar_hides_context_tokens_when_zero() {
+        use crate::types::config::ParallelMode;
+
+        let mut terminal = test_terminal(120, 24);
+        let state = AppState::new(
+            std::path::PathBuf::from("/test"),
+            false,
+            ParallelMode::Enabled,
+        );
+
+        terminal
+            .draw(|frame| {
+                let area = Rect::new(0, 0, 120, 1);
+                render_status_bar(frame, area, &state);
+            })
+            .expect("Failed to draw status bar");
+
+        let buffer = terminal.backend().buffer();
+        let content: String = buffer
+            .content()
+            .iter()
+            .map(|c| c.symbol().chars().next().unwrap_or(' '))
+            .collect();
+
+        assert!(
+            !content.contains("CTX:"),
+            "Status bar should NOT show CTX indicator when no context tokens, got: {}",
+            content.trim()
+        );
+    }
+
+    // =========================================================================
     // Permission modal rendering tests
     // =========================================================================
 
