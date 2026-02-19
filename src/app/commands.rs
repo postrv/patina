@@ -22,6 +22,8 @@
 //! }
 //! ```
 
+use crate::agents::worktree_agent::{AgentInfo, WorktreeAgentManager, WorktreeAgentStatus};
+use crate::commands::agent::{parse_agent_command, AgentCommand};
 use crate::commands::worktree::{parse_worktree_command, WorktreeCommand};
 use crate::worktree::{WorktreeInfo, WorktreeManager};
 use std::path::PathBuf;
@@ -121,6 +123,7 @@ impl SlashCommandHandler {
 
         // Dispatch to the appropriate handler
         match command_name {
+            "agent" => self.handle_agent(&args),
             "worktree" => self.handle_worktree(&args),
             "help" => self.handle_help(if args.is_empty() { None } else { Some(&args) }),
             "plugins" => self.handle_plugins(),
@@ -164,6 +167,139 @@ impl SlashCommandHandler {
         }
 
         CommandResult::Executed(output)
+    }
+
+    /// Handles the `/agent` command.
+    fn handle_agent(&self, args: &str) -> CommandResult {
+        let agent_cmd = match parse_agent_command(args) {
+            Ok(cmd) => cmd,
+            Err(e) => return CommandResult::Error(e.to_string()),
+        };
+
+        let mut manager = match WorktreeAgentManager::new(&self.working_dir) {
+            Ok(m) => m,
+            Err(e) => {
+                return CommandResult::Error(format!("Failed to initialize agent manager: {}", e))
+            }
+        };
+
+        match agent_cmd {
+            AgentCommand::New { name, task } => match manager.spawn(&name, &task) {
+                Ok(handle) => CommandResult::Executed(format!(
+                    "Spawned agent '{}'\n  Branch: {}\n  Worktree: {}\n  Task: {}",
+                    handle.name(),
+                    handle.branch(),
+                    handle.worktree_path().display(),
+                    handle.task(),
+                )),
+                Err(e) => CommandResult::Error(format!("Failed to spawn agent: {}", e)),
+            },
+
+            AgentCommand::List => {
+                let agents = manager.list();
+                if agents.is_empty() {
+                    return CommandResult::Executed("No agents found.".to_string());
+                }
+
+                let mut output = String::from("Agents:\n");
+                for agent in &agents {
+                    output.push_str(&Self::format_agent_row(agent));
+                    output.push('\n');
+                }
+                CommandResult::Executed(output.trim_end().to_string())
+            }
+
+            AgentCommand::Status { name } => match manager.status(&name) {
+                Ok(info) => CommandResult::Executed(Self::format_agent_detail(&info)),
+                Err(e) => CommandResult::Error(format!("Failed to get agent status: {}", e)),
+            },
+
+            AgentCommand::Merge { name } => {
+                // First check the agent exists and is completed
+                let info = match manager.status(&name) {
+                    Ok(info) => info,
+                    Err(e) => {
+                        return CommandResult::Error(format!("Failed to get agent status: {}", e))
+                    }
+                };
+
+                if !info.status.is_terminal() {
+                    return CommandResult::Error(format!(
+                        "Agent '{}' is still running. Stop it first with /agent stop {}",
+                        name, name,
+                    ));
+                }
+
+                if matches!(info.status, WorktreeAgentStatus::Failed(_)) {
+                    return CommandResult::Error(format!(
+                        "Agent '{}' failed. Review its output before merging.",
+                        name,
+                    ));
+                }
+
+                // Attempt git merge
+                let branch = info.branch.clone();
+                match std::process::Command::new("git")
+                    .args(["merge", &branch, "--no-edit"])
+                    .current_dir(&self.working_dir)
+                    .output()
+                {
+                    Ok(output) => {
+                        if output.status.success() {
+                            // Clean up after successful merge
+                            let _ = manager.cleanup(&name);
+                            CommandResult::Executed(format!(
+                                "Merged agent '{}' (branch: {}) into current branch.\nAgent cleaned up.",
+                                name, branch,
+                            ))
+                        } else {
+                            let stderr = String::from_utf8_lossy(&output.stderr);
+                            CommandResult::Error(format!(
+                                "Merge failed for agent '{}': {}",
+                                name, stderr,
+                            ))
+                        }
+                    }
+                    Err(e) => CommandResult::Error(format!("Failed to run git merge: {}", e)),
+                }
+            }
+
+            AgentCommand::Stop { name } => match manager.mark_stopped(&name) {
+                Ok(()) => CommandResult::Executed(format!("Stopped agent '{}'.", name)),
+                Err(e) => CommandResult::Error(format!("Failed to stop agent: {}", e)),
+            },
+        }
+    }
+
+    /// Formats an agent row for the list display.
+    fn format_agent_row(agent: &AgentInfo) -> String {
+        let status = match &agent.status {
+            WorktreeAgentStatus::Running => "running",
+            WorktreeAgentStatus::Completed => "completed",
+            WorktreeAgentStatus::Failed(_) => "failed",
+            WorktreeAgentStatus::Stopped => "stopped",
+        };
+
+        // Truncate task to 40 chars for table display
+        let task_display = if agent.task.len() > 40 {
+            format!("{}...", &agent.task[..37])
+        } else {
+            agent.task.clone()
+        };
+
+        format!("  {} ({}) - {}", agent.name, status, task_display)
+    }
+
+    /// Formats detailed agent information for the status command.
+    fn format_agent_detail(agent: &AgentInfo) -> String {
+        format!(
+            "Agent: {}\n  Status: {}\n  Branch: {}\n  Worktree: {}\n  Task: {}",
+            agent.name,
+            agent.status,
+            agent.branch,
+            agent.worktree_path.display(),
+            agent.task,
+        )
     }
 
     /// Formats a worktree entry for display.
@@ -293,6 +429,9 @@ impl SlashCommandHandler {
                 // General help listing all commands
                 let help_text = r#"Available Commands:
 
+  /agent <subcommand>     - Manage worktree agents
+    Subcommands: new, list, status, merge, stop
+
   /worktree <subcommand>  - Manage git worktrees
     Subcommands: new, list, switch, remove, clean, status
 
@@ -303,6 +442,28 @@ impl SlashCommandHandler {
   /help [command]         - Show help for a command
 
 Type /help <command> for detailed help on a specific command."#;
+                CommandResult::Executed(help_text.to_string())
+            }
+
+            Some("agent") => {
+                let help_text = r#"/agent - Manage worktree agents
+
+Subcommands:
+  new <name> <task>  Spawn a new agent to work on a task
+  list               List all agents and their status
+  status <name>      Show detailed status of an agent
+  merge <name>       Merge a completed agent's changes
+  stop <name>        Stop a running agent
+
+Each agent runs in an isolated git worktree on its own branch
+(agent/<name>), enabling parallel work without file conflicts.
+
+Examples:
+  /agent new auth-fix Fix the authentication bug
+  /agent list
+  /agent status auth-fix
+  /agent merge auth-fix
+  /agent stop auth-fix"#;
                 CommandResult::Executed(help_text.to_string())
             }
 
@@ -472,7 +633,7 @@ Other terminals:
     /// Returns available command names for tab completion.
     #[must_use]
     pub fn available_commands(&self) -> Vec<&'static str> {
-        vec!["worktree", "help", "plugins", "terminal-setup"]
+        vec!["agent", "worktree", "help", "plugins", "terminal-setup"]
     }
 
     /// Creates plugin info from a plugin registry.
@@ -994,6 +1155,305 @@ mod tests {
         assert!(
             commands.contains(&"terminal-setup"),
             "Available commands should include 'terminal-setup'"
+        );
+    }
+
+    // =========================================================================
+    // Agent command tests
+    // =========================================================================
+
+    #[test]
+    fn test_handle_agent_no_subcommand() {
+        let (handler, _temp) = create_handler_in_temp();
+
+        let result = handler.handle("/agent");
+
+        match result {
+            CommandResult::Error(msg) => {
+                assert!(
+                    msg.contains("no subcommand"),
+                    "Should report missing subcommand: {}",
+                    msg
+                );
+            }
+            other => panic!("Expected error: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_handle_agent_unknown_subcommand() {
+        let (handler, _temp) = create_handler_in_temp();
+
+        let result = handler.handle("/agent foobar");
+
+        match result {
+            CommandResult::Error(msg) => {
+                assert!(
+                    msg.contains("unknown subcommand") || msg.contains("foobar"),
+                    "Should report unknown subcommand: {}",
+                    msg
+                );
+            }
+            other => panic!("Expected error: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_handle_agent_new_missing_args() {
+        let (handler, _temp) = create_handler_in_temp();
+
+        let result = handler.handle("/agent new");
+
+        match result {
+            CommandResult::Error(msg) => {
+                assert!(
+                    msg.contains("missing") || msg.contains("argument"),
+                    "Should report missing argument: {}",
+                    msg
+                );
+            }
+            other => panic!("Expected error for missing args: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_handle_agent_new_missing_task() {
+        let (handler, _temp) = create_handler_in_temp();
+
+        let result = handler.handle("/agent new my-agent");
+
+        match result {
+            CommandResult::Error(msg) => {
+                assert!(
+                    msg.contains("missing") || msg.contains("task"),
+                    "Should report missing task: {}",
+                    msg
+                );
+            }
+            other => panic!("Expected error for missing task: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_handle_agent_new_in_non_git_dir() {
+        let (handler, _temp) = create_handler_in_temp();
+
+        let result = handler.handle("/agent new test-agent Fix the bug");
+
+        match result {
+            CommandResult::Error(msg) => {
+                // Expected: fails because temp_dir is not a git repo
+                assert!(
+                    msg.contains("Failed to spawn agent")
+                        || msg.contains("Failed to initialize")
+                        || msg.contains("not a git repository")
+                        || msg.contains("worktree error"),
+                    "Should report failure: {}",
+                    msg
+                );
+            }
+            CommandResult::Executed(_) => {
+                // Would succeed in a real git repo
+            }
+            other => panic!("Unexpected result: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_handle_agent_list_in_non_git_dir() {
+        let (handler, _temp) = create_handler_in_temp();
+
+        let result = handler.handle("/agent list");
+
+        match result {
+            CommandResult::Error(msg) => {
+                assert!(
+                    msg.contains("Failed to initialize")
+                        || msg.contains("not a git repository")
+                        || msg.contains("worktree error"),
+                    "Should report init failure: {}",
+                    msg
+                );
+            }
+            CommandResult::Executed(output) => {
+                // If it happens to work, should show no agents
+                assert!(
+                    output.contains("No agents") || output.contains("Agents:"),
+                    "Should show agent info: {}",
+                    output
+                );
+            }
+            other => panic!("Unexpected result: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_handle_agent_status_missing_name() {
+        let (handler, _temp) = create_handler_in_temp();
+
+        let result = handler.handle("/agent status");
+
+        match result {
+            CommandResult::Error(msg) => {
+                assert!(
+                    msg.contains("missing") || msg.contains("name"),
+                    "Should report missing name: {}",
+                    msg
+                );
+            }
+            other => panic!("Expected error: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_handle_agent_merge_missing_name() {
+        let (handler, _temp) = create_handler_in_temp();
+
+        let result = handler.handle("/agent merge");
+
+        match result {
+            CommandResult::Error(msg) => {
+                assert!(
+                    msg.contains("missing") || msg.contains("name"),
+                    "Should report missing name: {}",
+                    msg
+                );
+            }
+            other => panic!("Expected error: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_handle_agent_stop_missing_name() {
+        let (handler, _temp) = create_handler_in_temp();
+
+        let result = handler.handle("/agent stop");
+
+        match result {
+            CommandResult::Error(msg) => {
+                assert!(
+                    msg.contains("missing") || msg.contains("name"),
+                    "Should report missing name: {}",
+                    msg
+                );
+            }
+            other => panic!("Expected error: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_help_includes_agent_command() {
+        let (handler, _temp) = create_handler_in_temp();
+
+        let result = handler.handle("/help");
+
+        match result {
+            CommandResult::Executed(output) => {
+                assert!(
+                    output.contains("agent"),
+                    "Help should mention agent command: {}",
+                    output
+                );
+            }
+            other => panic!("Expected help output: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_help_agent_shows_detailed_help() {
+        let (handler, _temp) = create_handler_in_temp();
+
+        let result = handler.handle("/help agent");
+
+        match result {
+            CommandResult::Executed(output) => {
+                assert!(output.contains("/agent"), "Should describe agent command");
+                assert!(output.contains("new"), "Should list new subcommand");
+                assert!(output.contains("list"), "Should list list subcommand");
+                assert!(output.contains("status"), "Should list status subcommand");
+                assert!(output.contains("merge"), "Should list merge subcommand");
+                assert!(output.contains("stop"), "Should list stop subcommand");
+            }
+            other => panic!("Expected agent help: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_available_commands_includes_agent() {
+        let (handler, _temp) = create_handler_in_temp();
+
+        let commands = handler.available_commands();
+
+        assert!(
+            commands.contains(&"agent"),
+            "Available commands should include 'agent'"
+        );
+    }
+
+    #[test]
+    fn test_format_agent_row() {
+        let agent = AgentInfo {
+            name: "test-agent".to_string(),
+            task: "Fix the login bug".to_string(),
+            worktree_path: PathBuf::from("/tmp/test"),
+            branch: "agent/test-agent".to_string(),
+            status: WorktreeAgentStatus::Running,
+        };
+
+        let row = SlashCommandHandler::format_agent_row(&agent);
+        assert!(row.contains("test-agent"), "Should contain name");
+        assert!(row.contains("running"), "Should contain status");
+        assert!(row.contains("Fix the login bug"), "Should contain task");
+    }
+
+    #[test]
+    fn test_format_agent_row_truncates_long_task() {
+        let agent = AgentInfo {
+            name: "test-agent".to_string(),
+            task: "This is a very long task description that exceeds forty characters easily"
+                .to_string(),
+            worktree_path: PathBuf::from("/tmp/test"),
+            branch: "agent/test-agent".to_string(),
+            status: WorktreeAgentStatus::Completed,
+        };
+
+        let row = SlashCommandHandler::format_agent_row(&agent);
+        assert!(row.contains("..."), "Should truncate long tasks");
+        assert!(row.contains("completed"), "Should contain status");
+    }
+
+    #[test]
+    fn test_format_agent_detail() {
+        let agent = AgentInfo {
+            name: "my-agent".to_string(),
+            task: "Implement feature X".to_string(),
+            worktree_path: PathBuf::from("/repo/.agent-worktrees/my-agent"),
+            branch: "agent/my-agent".to_string(),
+            status: WorktreeAgentStatus::Running,
+        };
+
+        let detail = SlashCommandHandler::format_agent_detail(&agent);
+        assert!(detail.contains("Agent: my-agent"), "Should show name");
+        assert!(detail.contains("running"), "Should show status");
+        assert!(detail.contains("agent/my-agent"), "Should show branch");
+        assert!(detail.contains("Implement feature X"), "Should show task");
+    }
+
+    #[test]
+    fn test_format_agent_detail_failed_status() {
+        let agent = AgentInfo {
+            name: "failed-agent".to_string(),
+            task: "Some task".to_string(),
+            worktree_path: PathBuf::from("/tmp/test"),
+            branch: "agent/failed-agent".to_string(),
+            status: WorktreeAgentStatus::Failed("out of memory".to_string()),
+        };
+
+        let detail = SlashCommandHandler::format_agent_detail(&agent);
+        assert!(
+            detail.contains("failed: out of memory"),
+            "Should show failure reason: {}",
+            detail
         );
     }
 }
