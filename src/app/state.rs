@@ -1054,6 +1054,11 @@ impl AppState {
         self.context_tokens_injected
     }
 
+    /// Sets the number of tokens injected (used by tests and status bar display).
+    pub fn set_context_tokens_injected(&mut self, tokens: usize) {
+        self.context_tokens_injected = tokens;
+    }
+
     /// Refreshes the cached CCG context by calling `build_context()`.
     ///
     /// This method lazily connects a narsil MCP client, fetches context

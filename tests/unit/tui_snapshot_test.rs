@@ -588,3 +588,41 @@ fn test_status_bar_clean_worktree() {
         output
     );
 }
+
+/// Tests that the status bar displays context token count when context is injected.
+#[serial]
+#[test]
+fn test_status_bar_shows_context_tokens() {
+    let mut state = new_state();
+
+    // Simulate 5000 tokens of context injected
+    state.set_context_tokens_injected(5000);
+
+    let output = render_to_string(&mut state, 80, 20);
+
+    // Should show the context token indicator
+    assert!(
+        output.contains("CTX:5k"),
+        "Status bar should show context token count. Output:\n{}",
+        output
+    );
+}
+
+/// Tests that the status bar hides context tokens when none injected.
+#[serial]
+#[test]
+fn test_status_bar_hides_context_tokens_when_zero() {
+    let mut state = new_state();
+
+    // No context injected (default)
+    assert_eq!(state.context_tokens_injected(), 0);
+
+    let output = render_to_string(&mut state, 80, 20);
+
+    // Should NOT show the context token indicator
+    assert!(
+        !output.contains("CTX:"),
+        "Status bar should not show CTX when no context injected. Output:\n{}",
+        output
+    );
+}
