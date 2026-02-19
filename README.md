@@ -369,7 +369,7 @@ cargo tarpaulin --out Html
 
 | Metric | Value |
 |--------|-------|
-| Version | 0.9.0 |
+| Version | 1.0.0 |
 | MSRV | Rust 1.75 |
 | Edition | 2021 |
 | Tests | 3,500+ |

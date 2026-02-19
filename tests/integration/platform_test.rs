@@ -6,6 +6,11 @@
 use patina::terminal::{detect_terminal_environment, TerminalEnvironment};
 use patina::tui::clipboard::{has_wl_copy, is_headless, is_wayland};
 use std::env;
+use std::sync::Mutex;
+
+/// Guards env-var-mutating tests to prevent race conditions.
+/// `env::set_var` and `env::remove_var` are not thread-safe.
+static ENV_MUTEX: Mutex<()> = Mutex::new(());
 
 // ============================================================================
 // Helpers
@@ -75,6 +80,7 @@ fn test_macos_wayland_false() {
 
 #[test]
 fn test_tmux_env_triggers_degraded_mode() {
+    let _guard = ENV_MUTEX.lock().unwrap();
     let orig_tmux = env::var("TMUX").ok();
 
     env::set_var("TMUX", "/tmp/tmux-test/default,99999,0");
@@ -95,6 +101,7 @@ fn test_tmux_env_triggers_degraded_mode() {
 
 #[test]
 fn test_screen_env_triggers_degraded_mode() {
+    let _guard = ENV_MUTEX.lock().unwrap();
     let orig_tmux = env::var("TMUX").ok();
     let orig_sty = env::var("STY").ok();
 
@@ -118,6 +125,7 @@ fn test_screen_env_triggers_degraded_mode() {
 
 #[test]
 fn test_ssh_env_triggers_remote_mode() {
+    let _guard = ENV_MUTEX.lock().unwrap();
     let orig_tmux = env::var("TMUX").ok();
     let orig_sty = env::var("STY").ok();
     let orig_ssh_client = env::var("SSH_CLIENT").ok();
@@ -141,6 +149,7 @@ fn test_ssh_env_triggers_remote_mode() {
 
 #[test]
 fn test_ssh_tty_also_detects_ssh() {
+    let _guard = ENV_MUTEX.lock().unwrap();
     let orig_tmux = env::var("TMUX").ok();
     let orig_sty = env::var("STY").ok();
     let orig_ssh_client = env::var("SSH_CLIENT").ok();
@@ -168,6 +177,7 @@ fn test_wl_copy_detection_returns_bool() {
 
 #[test]
 fn test_native_when_clean_env() {
+    let _guard = ENV_MUTEX.lock().unwrap();
     let orig_tmux = env::var("TMUX").ok();
     let orig_sty = env::var("STY").ok();
     let orig_ssh_client = env::var("SSH_CLIENT").ok();

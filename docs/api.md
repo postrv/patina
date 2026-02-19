@@ -700,4 +700,4 @@ For specific error types, modules may define their own error enums that implemen
 
 ---
 
-*Patina v0.9.0*
+*Patina v1.0.0*
