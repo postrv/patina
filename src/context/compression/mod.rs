@@ -66,10 +66,11 @@ pub use orchestrator::{
     CompressionOrchestrator, DEFAULT_ORCHESTRATOR_MAX_ENTRIES, DEFAULT_ORCHESTRATOR_TTL,
 };
 pub use render::{
-    looks_like_json, parse_ccg_architecture, parse_ccg_manifest, render_architecture_markdown,
-    render_manifest_markdown, render_symbols_markdown, CcgArchitecture, CcgManifest,
-    DependencyEdge, ExportInfo, LanguageInfo, ModuleInfo, ParseError, QualitySummary,
-    SecuritySummary, SymbolDetail, SymbolResults, SymbolSummary,
+    looks_like_json, parse_ccg_architecture, parse_ccg_manifest,
+    parse_project_structure_to_manifest, render_architecture_markdown, render_manifest_markdown,
+    render_symbols_markdown, CcgArchitecture, CcgManifest, DependencyEdge, ExportInfo,
+    LanguageInfo, ModuleInfo, ParseError, QualitySummary, SecuritySummary, SymbolDetail,
+    SymbolResults, SymbolSummary,
 };
 pub use types::{estimate_tokens, CompressionLevel, CompressionResult, ContextSource};
 
