@@ -207,9 +207,9 @@ Before marking ANY task `[x]`:
 **Description**: Define the provider abstraction trait. Supports streaming messages with tools, model info, and provider identity.
 
 **TDD Cycle**:
-- [ ] RED: Write tests for trait contract — mock provider implements `stream_message()`, returns expected `StreamEvent`s via channel, `name()` and `model()` return correct values
-- [ ] GREEN: Define `LlmProvider` trait in `src/api/provider.rs` with `stream_message()`, `name()`, `model()` methods
-- [ ] REFACTOR: Add associated types or generics if needed for tool choice, ensure `Send + Sync + 'static` bounds, doc comments with usage examples
+- [x] RED: Write tests for trait contract — mock provider implements `stream_message()`, returns expected `StreamEvent`s via channel, `name()` and `model()` return correct values
+- [x] GREEN: Define `LlmProvider` trait in `src/api/provider.rs` with `stream_message()`, `name()`, `model()` methods
+- [x] REFACTOR: Add associated types or generics if needed for tool choice, ensure `Send + Sync + 'static` bounds, doc comments with usage examples
 - Files: `src/api/provider.rs` (new), `src/api/mod.rs` (add `mod provider`)
 - Acceptance: Trait compiles, mock provider passes contract tests
 
