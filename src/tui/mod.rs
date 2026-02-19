@@ -15,9 +15,11 @@ use ratatui::{
 };
 
 use crate::app::state::AppState;
+use crate::app::state::ContinuousLoopStatus;
 use crate::permissions::PermissionRequest;
 use crate::tui::theme::PatinaTheme;
 use crate::tui::widgets::compaction_progress::{CompactionProgressState, CompactionProgressWidget};
+use crate::tui::widgets::continuous_progress::ContinuousProgressWidget;
 use crate::tui::widgets::permission_prompt::{PermissionPromptState, PermissionPromptWidget};
 use crate::types::{ConversationEntry, Timeline};
 
@@ -391,6 +393,11 @@ pub fn render(frame: &mut Frame, state: &mut AppState) {
     render_status_bar(frame, chunks[1], state);
     render_input(frame, chunks[2], state);
 
+    // Render continuous loop status in status bar area if active
+    if *state.continuous_status() != ContinuousLoopStatus::Inactive {
+        render_continuous_overlay(frame, state);
+    }
+
     // Render compaction progress overlay if compaction is active
     if let Some(compaction_state) = state.compaction_state() {
         render_compaction_overlay(frame, compaction_state, state.throbber_char());
@@ -430,6 +437,42 @@ pub fn render_compaction_overlay(
     // Render the compaction progress widget with animated throbber
     let widget = CompactionProgressWidget::new(compaction_state).with_throbber(throbber);
     frame.render_widget(widget, modal_area);
+}
+
+/// Renders the continuous loop progress overlay.
+///
+/// This function displays a panel showing the progress of the continuous
+/// coding loop, including iteration count, gate status, and warnings.
+///
+/// The panel is rendered in the top-right corner of the terminal.
+///
+/// # Arguments
+///
+/// * `frame` - The ratatui frame to render into
+/// * `state` - Application state containing continuous loop data
+pub fn render_continuous_overlay(frame: &mut Frame, state: &AppState) {
+    let area = frame.area();
+
+    // Calculate panel area - top-right corner, 40 chars wide
+    let gate_count = state.continuous_gate_results().len()
+        + usize::from(state.continuous_checking_gate().is_some());
+    // 2 borders + status + iteration + gate results (min 4 total height)
+    let panel_height = (4 + gate_count).max(4).min(area.height as usize) as u16;
+    let panel_width = 45u16.min(area.width.saturating_sub(2));
+    let panel_x = area.x + area.width.saturating_sub(panel_width).saturating_sub(1);
+    let panel_y = area.y + 1;
+
+    let panel_area = Rect::new(panel_x, panel_y, panel_width, panel_height);
+
+    let widget = ContinuousProgressWidget::new(
+        state.continuous_status(),
+        state.continuous_iterations_completed(),
+        state.continuous_gate_results(),
+    )
+    .with_checking_gate(state.continuous_checking_gate())
+    .with_last_duration(state.continuous_last_duration_ms());
+
+    frame.render_widget(widget, panel_area);
 }
 
 /// Renders the permission prompt modal as an overlay.

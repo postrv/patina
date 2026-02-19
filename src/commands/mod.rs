@@ -1,6 +1,7 @@
 //! Slash commands - user-triggered workflows
 
 pub mod agent;
+pub mod continuous;
 pub mod worktree;
 
 use serde::Deserialize;

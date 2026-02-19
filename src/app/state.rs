@@ -801,6 +801,18 @@ impl AppState {
         self.dirty.full = true;
     }
 
+    /// Resets all continuous loop state to inactive.
+    ///
+    /// Call this when stopping the continuous loop to clear the TUI display.
+    pub fn reset_continuous(&mut self) {
+        self.continuous_status = ContinuousLoopStatus::Inactive;
+        self.continuous_iterations_completed = 0;
+        self.continuous_last_duration_ms = None;
+        self.continuous_checking_gate = None;
+        self.continuous_gate_results.clear();
+        self.dirty.full = true;
+    }
+
     // =========================================================================
     // Auto-context methods (Task 2.2.4)
     // =========================================================================
@@ -4495,5 +4507,107 @@ mod tests {
         let _ = summary.compaction_count;
         let _ = summary.total_tokens_saved;
         let _ = summary.average_time_ms;
+    }
+
+    // =========================================================================
+    // Continuous loop state tests
+    // =========================================================================
+
+    #[test]
+    fn test_continuous_defaults_to_inactive() {
+        let state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Disabled);
+        assert_eq!(
+            state.continuous_status(),
+            &ContinuousLoopStatus::Inactive,
+            "New state should have inactive continuous status"
+        );
+        assert_eq!(state.continuous_iterations_completed(), 0);
+        assert_eq!(state.continuous_last_duration_ms(), None);
+        assert_eq!(state.continuous_checking_gate(), None);
+        assert!(state.continuous_gate_results().is_empty());
+    }
+
+    #[test]
+    fn test_update_continuous_iteration() {
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Disabled);
+        state.update_continuous_iteration(3);
+        assert_eq!(
+            state.continuous_status(),
+            &ContinuousLoopStatus::Running { iteration: 3 }
+        );
+    }
+
+    #[test]
+    fn test_complete_continuous_iteration() {
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Disabled);
+        state.update_continuous_iteration(1);
+        state.complete_continuous_iteration(1, 5000);
+        assert_eq!(state.continuous_iterations_completed(), 1);
+        assert_eq!(state.continuous_last_duration_ms(), Some(5000));
+    }
+
+    #[test]
+    fn test_reset_continuous_clears_all_state() {
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Disabled);
+
+        // Set up some continuous state
+        state.update_continuous_iteration(3);
+        state.complete_continuous_iteration(3, 12_000);
+        state.record_continuous_gate_result("tests", true, Some("all passed"));
+        state.set_continuous_gate_checking("clippy");
+
+        // Reset
+        state.reset_continuous();
+
+        assert_eq!(
+            state.continuous_status(),
+            &ContinuousLoopStatus::Inactive,
+            "Status should be Inactive after reset"
+        );
+        assert_eq!(
+            state.continuous_iterations_completed(),
+            0,
+            "Iterations should be 0 after reset"
+        );
+        assert_eq!(
+            state.continuous_last_duration_ms(),
+            None,
+            "Duration should be None after reset"
+        );
+        assert_eq!(
+            state.continuous_checking_gate(),
+            None,
+            "Checking gate should be None after reset"
+        );
+        assert!(
+            state.continuous_gate_results().is_empty(),
+            "Gate results should be empty after reset"
+        );
+    }
+
+    #[test]
+    fn test_reset_continuous_from_stagnated() {
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Disabled);
+        state.set_continuous_stagnation(5, 3);
+        assert!(matches!(
+            state.continuous_status(),
+            ContinuousLoopStatus::Stagnated { .. }
+        ));
+
+        state.reset_continuous();
+        assert_eq!(state.continuous_status(), &ContinuousLoopStatus::Inactive);
+    }
+
+    #[test]
+    fn test_reset_continuous_from_human_required() {
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Disabled);
+        state.set_continuous_human_checkpoint("build broken");
+        assert!(matches!(
+            state.continuous_status(),
+            ContinuousLoopStatus::HumanRequired { .. }
+        ));
+
+        state.reset_continuous();
+        assert_eq!(state.continuous_status(), &ContinuousLoopStatus::Inactive);
     }
 }
