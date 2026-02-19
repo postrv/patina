@@ -41,6 +41,7 @@
 
 pub mod events;
 pub mod plugin;
+pub mod stagnation;
 
 pub use events::ContinuousEvent;
 pub use plugin::{ContinuousCodingPlugin, QualityGate};
