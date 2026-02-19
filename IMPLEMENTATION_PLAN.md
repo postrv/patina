@@ -524,9 +524,9 @@ Before marking ANY task `[x]`:
 **Description**: Implement `QualityGateRunner` that executes configured gates (tests, clippy, security scan) and reports pass/fail.
 
 **TDD Cycle**:
-- [ ] RED: Write tests for gate execution — `TestsPass` gate runs `cargo test`, `ClippyClean` runs `cargo clippy`, `Custom` runs arbitrary command, results collected, partial failures reported
-- [ ] GREEN: Implement `QualityGateRunner` in `src/continuous/gates.rs` using `ToolExecutor::execute_bash()`
-- [ ] REFACTOR: Add gate timeout, output capture for failure diagnostics, parallel gate execution where independent
+- [x] RED: Write tests for gate execution — `TestsPass` gate runs `cargo test`, `ClippyClean` runs `cargo clippy`, `Custom` runs arbitrary command, results collected, partial failures reported
+- [x] GREEN: Implement `QualityGateRunner` in `src/continuous/gates.rs` using `ToolExecutor::execute_bash()`
+- [x] REFACTOR: Add gate timeout, output capture for failure diagnostics, parallel gate execution where independent
 - Files: `src/continuous/gates.rs` (new)
 - Acceptance: All quality gates execute correctly, failures include diagnostic output
 
