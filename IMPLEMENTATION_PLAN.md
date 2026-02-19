@@ -417,9 +417,9 @@ Before marking ANY task `[x]`:
 **Description**: Use narsil to detect when multiple agents modify the same symbols or files.
 
 **TDD Cycle**:
-- [ ] RED: Write tests for conflict detection — two agents modifying same file detected, same symbol detected, non-overlapping changes no conflict, stale worktree handled
-- [ ] GREEN: Implement `check_conflicts()` using `McpClient::call_tool("get_modified_files", ...)` and `find_references` to identify overlapping changes
-- [ ] REFACTOR: Add conflict severity levels (warning for same file, error for same function), merge preview
+- [x] RED: Write tests for conflict detection — two agents modifying same file detected, same symbol detected, non-overlapping changes no conflict, stale worktree handled
+- [x] GREEN: Implement `check_conflicts()` using `McpClient::call_tool("get_modified_files", ...)` and `find_references` to identify overlapping changes
+- [x] REFACTOR: Add conflict severity levels (warning for same file, error for same function), merge preview
 - Files: `src/agents/worktree_agent.rs`
 - Acceptance: Conflicts detected accurately for test scenarios with overlapping edits
 
