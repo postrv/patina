@@ -259,9 +259,9 @@ Before marking ANY task `[x]`:
 **Description**: Full `LlmProvider` implementation for OpenRouter. Handles HTTPS request building, SSE streaming with OpenAI format, and translation to Patina's `StreamEvent`.
 
 **TDD Cycle**:
-- [ ] RED: Write integration tests with mock HTTP server — sends OpenAI-format request, receives OpenAI-format SSE stream, produces correct `StreamEvent` sequence via channel
-- [ ] GREEN: Implement `OpenRouterProvider` with `stream_message()` that translates messages, makes HTTP request, parses OpenAI SSE format, translates back to `StreamEvent`
-- [ ] REFACTOR: Add OpenRouter-specific headers (`HTTP-Referer`, `X-Title`), error handling for rate limits, model validation
+- [x] RED: Write integration tests with mock HTTP server — sends OpenAI-format request, receives OpenAI-format SSE stream, produces correct `StreamEvent` sequence via channel
+- [x] GREEN: Implement `OpenRouterProvider` with `stream_message()` that translates messages, makes HTTP request, parses OpenAI SSE format, translates back to `StreamEvent`
+- [x] REFACTOR: Add OpenRouter-specific headers (`HTTP-Referer`, `X-Title`), error handling for rate limits, model validation
 - Files: `src/api/providers/openrouter.rs`
 - Acceptance: Mock integration tests pass, provider produces identical `StreamEvent` sequence as `AnthropicProvider` for equivalent responses
 
