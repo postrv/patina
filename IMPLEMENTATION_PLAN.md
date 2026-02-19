@@ -76,9 +76,9 @@ Before marking ANY task `[x]`:
 **Description**: Create the `EventHandler` trait and `EventDispatcher` that will orchestrate handler execution. Handlers return `Handled(bool)` to indicate consumption. Pure addition.
 
 **TDD Cycle**:
-- [ ] RED: Write tests for `EventDispatcher` — dispatching to multiple handlers, first-handler-wins semantics, empty dispatcher, handler ordering
-- [ ] GREEN: Implement `EventHandler` trait with `async fn handle(&mut self, event: &AppEvent, ctx: &mut AppContext) -> Result<Handled>` and `EventDispatcher` struct with `dispatch()` method
-- [ ] REFACTOR: Add `EventDispatcher::new(handlers)` builder, ensure handler vec is ordered, add `#[must_use]` on `Handled`
+- [x] RED: Write tests for `EventDispatcher` — dispatching to multiple handlers, first-handler-wins semantics, empty dispatcher, handler ordering
+- [x] GREEN: Implement `EventHandler` trait with `async fn handle(&mut self, event: &AppEvent, ctx: &mut AppContext) -> Result<Handled>` and `EventDispatcher` struct with `dispatch()` method
+- [x] REFACTOR: Add `EventDispatcher::new(handlers)` builder, ensure handler vec is ordered, add `#[must_use]` on `Handled`
 - Files: `src/app/dispatch.rs` (new), `src/app/mod.rs` (add `mod dispatch`)
 - Acceptance: `EventDispatcher` can be constructed with mock handlers, dispatch calls handlers in order, stops on first `Handled(true)`
 
@@ -647,4 +647,4 @@ Sprint 1 (Event Loop) ──┬──> Sprint 2 (OpenRouter)
                               Sprint 2 + Sprint 3
 ```
 
-<!-- Ralph: do NOT add ALL_TASKS_COMPLETE markers. Work continues across sprints. -->
+<!-- Ralph: work continues across sprints. Never signal plan completion. -->
