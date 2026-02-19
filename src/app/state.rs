@@ -254,6 +254,27 @@ pub struct CompressionState {
     pub(crate) token_budget: TokenBudget,
 }
 
+/// Continuous coding loop state extracted from AppState.
+///
+/// Groups all fields related to the continuous (Ralph-style) coding loop:
+/// status, iteration tracking, timing, and quality gate results.
+pub struct ContinuousLoopState {
+    /// Current status of the continuous coding loop.
+    pub(crate) status: ContinuousLoopStatus,
+
+    /// Number of completed iterations in the current continuous session.
+    pub(crate) iterations_completed: u32,
+
+    /// Duration of the last completed iteration in milliseconds.
+    pub(crate) last_duration_ms: Option<u64>,
+
+    /// Name of the quality gate currently being checked (if any).
+    pub(crate) checking_gate: Option<String>,
+
+    /// Accumulated quality gate results for the current iteration.
+    pub(crate) gate_results: Vec<GateResult>,
+}
+
 /// Tool execution state extracted from AppState.
 ///
 /// Groups all tool-related fields: the tool loop state machine, executor,
@@ -365,20 +386,8 @@ pub struct AppState {
     /// Consumed by the TUI to display conflict alerts.
     pending_conflict_reports: Vec<ConflictReport>,
 
-    /// Current status of the continuous coding loop.
-    continuous_status: ContinuousLoopStatus,
-
-    /// Number of completed iterations in the current continuous session.
-    continuous_iterations_completed: u32,
-
-    /// Duration of the last completed iteration in milliseconds.
-    continuous_last_duration_ms: Option<u64>,
-
-    /// Name of the quality gate currently being checked (if any).
-    continuous_checking_gate: Option<String>,
-
-    /// Accumulated quality gate results for the current iteration.
-    continuous_gate_results: Vec<GateResult>,
+    /// All continuous coding loop state grouped together.
+    continuous: ContinuousLoopState,
 
     /// Cached terminal height for scroll calculations.
     /// Updated on resize events; defaults to 24 for headless/test environments.
@@ -573,11 +582,13 @@ impl AppState {
             subagent_spawner,
             agent_panel_entries: Vec::new(),
             pending_conflict_reports: Vec::new(),
-            continuous_status: ContinuousLoopStatus::Inactive,
-            continuous_iterations_completed: 0,
-            continuous_last_duration_ms: None,
-            continuous_checking_gate: None,
-            continuous_gate_results: Vec::new(),
+            continuous: ContinuousLoopState {
+                status: ContinuousLoopStatus::Inactive,
+                iterations_completed: 0,
+                last_duration_ms: None,
+                checking_gate: None,
+                gate_results: Vec::new(),
+            },
             terminal_height: 24,
         }
     }
@@ -743,53 +754,53 @@ impl AppState {
     /// Returns the current status of the continuous coding loop.
     #[must_use]
     pub fn continuous_status(&self) -> &ContinuousLoopStatus {
-        &self.continuous_status
+        &self.continuous.status
     }
 
     /// Returns the number of completed iterations in the current session.
     #[must_use]
     pub fn continuous_iterations_completed(&self) -> u32 {
-        self.continuous_iterations_completed
+        self.continuous.iterations_completed
     }
 
     /// Returns the duration of the last completed iteration in milliseconds.
     #[must_use]
     pub fn continuous_last_duration_ms(&self) -> Option<u64> {
-        self.continuous_last_duration_ms
+        self.continuous.last_duration_ms
     }
 
     /// Returns the name of the quality gate currently being checked.
     #[must_use]
     pub fn continuous_checking_gate(&self) -> Option<&str> {
-        self.continuous_checking_gate.as_deref()
+        self.continuous.checking_gate.as_deref()
     }
 
     /// Returns accumulated quality gate results for the current iteration.
     #[must_use]
     pub fn continuous_gate_results(&self) -> &[GateResult] {
-        &self.continuous_gate_results
+        &self.continuous.gate_results
     }
 
     /// Updates state for a new continuous iteration starting.
     ///
     /// Clears gate results from the previous iteration and sets status to Running.
     pub fn update_continuous_iteration(&mut self, iteration: u32) {
-        self.continuous_status = ContinuousLoopStatus::Running { iteration };
-        self.continuous_checking_gate = None;
-        self.continuous_gate_results.clear();
+        self.continuous.status = ContinuousLoopStatus::Running { iteration };
+        self.continuous.checking_gate = None;
+        self.continuous.gate_results.clear();
         self.dirty.full = true;
     }
 
     /// Records the completion of a continuous iteration.
     pub fn complete_continuous_iteration(&mut self, _iteration: u32, duration_ms: u64) {
-        self.continuous_iterations_completed += 1;
-        self.continuous_last_duration_ms = Some(duration_ms);
+        self.continuous.iterations_completed += 1;
+        self.continuous.last_duration_ms = Some(duration_ms);
         self.dirty.full = true;
     }
 
     /// Records that a quality gate check is starting.
     pub fn set_continuous_gate_checking(&mut self, gate: &str) {
-        self.continuous_checking_gate = Some(gate.to_string());
+        self.continuous.checking_gate = Some(gate.to_string());
         self.dirty.full = true;
     }
 
@@ -800,8 +811,8 @@ impl AppState {
         passed: bool,
         message: Option<&str>,
     ) {
-        self.continuous_checking_gate = None;
-        self.continuous_gate_results.push(GateResult {
+        self.continuous.checking_gate = None;
+        self.continuous.gate_results.push(GateResult {
             gate: gate.to_string(),
             passed,
             message: message.map(String::from),
@@ -811,7 +822,7 @@ impl AppState {
 
     /// Records that stagnation was detected.
     pub fn set_continuous_stagnation(&mut self, iterations_without_progress: u32, threshold: u32) {
-        self.continuous_status = ContinuousLoopStatus::Stagnated {
+        self.continuous.status = ContinuousLoopStatus::Stagnated {
             iterations_without_progress,
             threshold,
         };
@@ -820,7 +831,7 @@ impl AppState {
 
     /// Records that human intervention is required.
     pub fn set_continuous_human_checkpoint(&mut self, reason: &str) {
-        self.continuous_status = ContinuousLoopStatus::HumanRequired {
+        self.continuous.status = ContinuousLoopStatus::HumanRequired {
             reason: reason.to_string(),
         };
         self.dirty.full = true;
@@ -830,11 +841,11 @@ impl AppState {
     ///
     /// Call this when stopping the continuous loop to clear the TUI display.
     pub fn reset_continuous(&mut self) {
-        self.continuous_status = ContinuousLoopStatus::Inactive;
-        self.continuous_iterations_completed = 0;
-        self.continuous_last_duration_ms = None;
-        self.continuous_checking_gate = None;
-        self.continuous_gate_results.clear();
+        self.continuous.status = ContinuousLoopStatus::Inactive;
+        self.continuous.iterations_completed = 0;
+        self.continuous.last_duration_ms = None;
+        self.continuous.checking_gate = None;
+        self.continuous.gate_results.clear();
         self.dirty.full = true;
     }
 
@@ -5274,5 +5285,21 @@ mod tests {
         assert_eq!(state.token_budget().used(), 0);
         state.token_budget_mut().add_usage(500);
         assert!(state.token_budget().used() > 0);
+    }
+
+    // ========================================================================
+    // Phase 8.3: ContinuousLoopState extraction tests
+    // ========================================================================
+
+    /// Verifies that ContinuousLoopState is correctly initialized inside AppState.
+    #[test]
+    fn test_continuous_loop_state_construction() {
+        let state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+
+        assert_eq!(state.continuous_status(), &ContinuousLoopStatus::Inactive);
+        assert_eq!(state.continuous_iterations_completed(), 0);
+        assert_eq!(state.continuous_last_duration_ms(), None);
+        assert_eq!(state.continuous_checking_gate(), None);
+        assert!(state.continuous_gate_results().is_empty());
     }
 }
