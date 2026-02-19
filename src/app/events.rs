@@ -10,6 +10,7 @@ use crossterm::event::{KeyEvent, MouseEvent};
 
 use crate::agents::AgentEvent;
 use crate::api::StreamEvent;
+use crate::continuous::ContinuousEvent;
 use crate::permissions::PermissionResponse;
 use crate::types::ToolResultBlock;
 
@@ -67,6 +68,9 @@ pub enum AppEvent {
 
     /// An event from a background agent (progress, completion, conflict).
     Agent(AgentEvent),
+
+    /// An event from the continuous coding loop (progress, gates, stagnation).
+    Continuous(ContinuousEvent),
 }
 
 impl AppEvent {
@@ -81,7 +85,7 @@ impl AppEvent {
     pub fn is_background(&self) -> bool {
         matches!(
             self,
-            Self::ApiChunk(_) | Self::ToolResult { .. } | Self::Agent(_)
+            Self::ApiChunk(_) | Self::ToolResult { .. } | Self::Agent(_) | Self::Continuous(_)
         )
     }
 
@@ -104,6 +108,7 @@ impl std::fmt::Display for AppEvent {
             Self::Quit => write!(f, "Quit"),
             Self::PermissionResponse(resp) => write!(f, "PermissionResponse({resp:?})"),
             Self::Agent(agent_event) => write!(f, "Agent({agent_event:?})"),
+            Self::Continuous(event) => write!(f, "Continuous({})", event.event_type()),
         }
     }
 }
@@ -139,10 +144,17 @@ impl From<AgentEvent> for AppEvent {
     }
 }
 
+impl From<ContinuousEvent> for AppEvent {
+    fn from(event: ContinuousEvent) -> Self {
+        Self::Continuous(event)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::agents::AgentProgress;
+    use crate::continuous::ContinuousEvent;
     use crossterm::event::{
         KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers, MouseButton, MouseEventKind,
     };
@@ -517,6 +529,53 @@ mod tests {
     }
 
     // =========================================================================
+    // Continuous event construction and classification
+    // =========================================================================
+
+    #[test]
+    fn continuous_event_construction() {
+        let event = AppEvent::Continuous(ContinuousEvent::IterationStart { iteration: 1 });
+        assert!(matches!(event, AppEvent::Continuous(_)));
+    }
+
+    #[test]
+    fn continuous_event_is_background() {
+        let event = AppEvent::Continuous(ContinuousEvent::IterationStart { iteration: 1 });
+        assert!(event.is_background());
+        assert!(!event.is_input());
+        assert!(!event.is_quit());
+    }
+
+    #[test]
+    fn continuous_stagnation_event_is_background() {
+        let event = AppEvent::Continuous(ContinuousEvent::StagnationDetected {
+            iterations_without_progress: 5,
+            threshold: 3,
+        });
+        assert!(event.is_background());
+    }
+
+    #[test]
+    fn display_continuous_event() {
+        let event = AppEvent::Continuous(ContinuousEvent::IterationStart { iteration: 2 });
+        let s = format!("{event}");
+        assert!(s.contains("Continuous("));
+        assert!(s.contains("iteration_start"));
+    }
+
+    #[test]
+    fn from_continuous_event() {
+        let cont_evt = ContinuousEvent::QualityGateCheck {
+            gate: "tests".to_string(),
+        };
+        let app_event = AppEvent::from(cont_evt);
+        assert!(matches!(
+            app_event,
+            AppEvent::Continuous(ContinuousEvent::QualityGateCheck { .. })
+        ));
+    }
+
+    // =========================================================================
     // Send + Sync assertions
     // =========================================================================
 
@@ -575,6 +634,7 @@ mod tests {
                     max: 10,
                 },
             }),
+            AppEvent::Continuous(ContinuousEvent::IterationStart { iteration: 1 }),
         ];
 
         // Every variant should match exactly one arm
@@ -589,6 +649,7 @@ mod tests {
                 AppEvent::Quit => "quit",
                 AppEvent::PermissionResponse(_) => "permission",
                 AppEvent::Agent(_) => "agent",
+                AppEvent::Continuous(_) => "continuous",
             };
             assert!(!matched.is_empty());
         }
