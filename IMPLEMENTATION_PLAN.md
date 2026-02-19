@@ -154,9 +154,9 @@ Before marking ANY task `[x]`:
 **Description**: Extract all keyboard and mouse input handling into `KeyboardHandler`. This is the largest extraction (lines 520-813) and covers: text input, submit, scroll, copy/paste, selection, slash commands.
 
 **TDD Cycle**:
-- [ ] RED: Write tests for `KeyboardHandler` — Ctrl+C/D quits, Enter submits message, character input calls `insert_char`, scroll keys delegate to scroll methods, Cmd+C copies, Cmd+V pastes, mouse click/drag/scroll handled, Escape clears selection
-- [ ] GREEN: Implement `KeyboardHandler` by moving the keyboard/mouse match arms from `event_loop`
-- [ ] REFACTOR: Group related key handlers into private helper methods: `handle_submit()`, `handle_scroll()`, `handle_copy()`, `handle_paste()`, `handle_selection()`, `handle_mouse()`
+- [x] RED: Write tests for `KeyboardHandler` — Ctrl+C/D quits, Enter submits message, character input calls `insert_char`, scroll keys delegate to scroll methods, Cmd+C copies, Cmd+V pastes, mouse click/drag/scroll handled, Escape clears selection
+- [x] GREEN: Implement `KeyboardHandler` by moving the keyboard/mouse match arms from `event_loop`
+- [x] REFACTOR: Group related key handlers into private helper methods: `handle_submit()`, `handle_scroll()`, `handle_copy()`, `handle_paste()`, `handle_selection()`, `handle_mouse()`
 - Files: `src/app/handlers/keyboard.rs` (new)
 - Acceptance: All keyboard/mouse interaction identical, all existing tests pass including TUI snapshot tests
 
