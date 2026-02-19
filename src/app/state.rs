@@ -141,6 +141,10 @@ pub struct AppState {
     // Session tracking for auto-save
     session_id: Option<String>,
 
+    /// Whether the session needs to be saved.
+    /// Set by handlers/code that modify conversation state; cleared by `SessionHandler`.
+    session_dirty: bool,
+
     // Tool execution state
     tool_loop: ToolLoop,
     tool_executor: Arc<HookedToolExecutor>,
@@ -345,6 +349,7 @@ impl AppState {
             worktree_ahead: 0,
             worktree_behind: 0,
             session_id: None,
+            session_dirty: false,
             tool_loop: ToolLoop::new(),
             tool_executor,
             permission_manager,
@@ -1717,6 +1722,22 @@ impl AppState {
     /// This is called after saving a session or when restoring from one.
     pub fn set_session_id(&mut self, id: String) {
         self.session_id = Some(id);
+    }
+
+    /// Marks the session as needing to be saved.
+    ///
+    /// Called by handlers or event-processing code after modifying conversation
+    /// state (e.g., message submission, message completion, tool results).
+    /// The `SessionHandler` checks this flag and performs the actual save.
+    pub fn mark_session_dirty(&mut self) {
+        self.session_dirty = true;
+    }
+
+    /// Returns `true` and clears the dirty flag if the session needs saving.
+    ///
+    /// This is an atomic check-and-clear to prevent double saves.
+    pub fn take_session_dirty(&mut self) -> bool {
+        std::mem::take(&mut self.session_dirty)
     }
 
     /// Creates a `Session` from the current application state.
