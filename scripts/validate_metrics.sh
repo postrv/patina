@@ -145,20 +145,45 @@ echo ""
 
 # Documentation version consistency check
 echo "=== Docs Version Consistency ==="
-CARGO_VERSION_MAJOR_MINOR=$(echo "$CARGO_VERSION" | sed 's/\([0-9]*\.[0-9]*\).*/\1/')
-# Pattern matches versions that should have been updated (0.5.x through 0.8.x)
-# Excludes 0.1.x-0.4.x which may be legitimate min-version requirements
-STALE_PATTERN='0\.[5-8]\.[0-9]'
+# Build stale pattern dynamically from Cargo.toml version
+# Extract minor version number (e.g., 9 from 0.9.0) and flag anything older
+CARGO_MAJOR=$(echo "$CARGO_VERSION" | cut -d. -f1)
+CARGO_MINOR=$(echo "$CARGO_VERSION" | cut -d. -f2)
+if [ "$CARGO_MAJOR" -ge 1 ] 2>/dev/null; then
+    # Post-1.0: any 0.x.y reference is stale
+    STALE_PATTERN='0\.[5-9]\.[0-9]'
+elif [ "$CARGO_MINOR" -gt 5 ] 2>/dev/null; then
+    # Pre-1.0: flag versions from 0.5 up to (current minor - 1)
+    STALE_MAX=$((CARGO_MINOR - 1))
+    STALE_PATTERN="0\.[5-${STALE_MAX}]\.[0-9]"
+else
+    # Very early versions — nothing to check
+    STALE_PATTERN='^$'
+fi
 
 STALE_REFS=$(grep -rn "$STALE_PATTERN" docs/ --include='*.md' --exclude-dir=archive 2>/dev/null || true)
 if [ -n "$STALE_REFS" ]; then
-    echo "WARNING: Stale version references found in docs:"
+    echo "FAIL: Stale version references found in docs:"
     echo "$STALE_REFS" | head -20
     echo ""
     echo "  Cargo.toml version: $CARGO_VERSION"
     echo "  Fix these references to match the current version."
+    EXIT_CODE=1
 else
     echo "OK: No stale version references in docs/"
+fi
+echo ""
+
+# Naming consistency check (rct → patina)
+echo "=== Naming Consistency ==="
+RCT_REFS=$(grep -rn '\.rct/\|min_rct_version\|rct-plugin' docs/ --include='*.md' --include='*.toml' --exclude-dir=archive 2>/dev/null || true)
+if [ -n "$RCT_REFS" ]; then
+    echo "WARNING: Legacy 'rct' naming remnants found in docs:"
+    echo "$RCT_REFS" | head -20
+    echo ""
+    echo "  Rename these to use 'patina' (e.g., .patina/, min_patina_version, patina-plugin)"
+else
+    echo "OK: No 'rct' naming remnants in docs/"
 fi
 echo ""
 
