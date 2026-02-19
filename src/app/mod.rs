@@ -21,6 +21,7 @@ use tracing::{debug, info, warn};
 
 pub mod commands;
 pub mod context;
+pub mod dispatch;
 pub mod events;
 pub mod state;
 pub mod tool_loop;
