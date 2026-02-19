@@ -63,9 +63,9 @@ Before marking ANY task `[x]`:
 **Description**: Extract shared context from `event_loop()` parameters into an `AppContext` struct. This bundles `terminal`, `client`, `state`, `session_manager` into a single borrow-friendly structure. Pure addition.
 
 **TDD Cycle**:
-- [ ] RED: Write tests for `AppContext` construction, accessor methods, `needs_render()` delegation, `mark_rendered()` delegation
-- [ ] GREEN: Implement `AppContext` struct in `src/app/context.rs` wrapping terminal, client, state, session_manager references
-- [ ] REFACTOR: Add convenience methods that delegate to `state` — `needs_render()`, `is_loading()`, `has_background_work()`, `has_pending_permission()`
+- [x] RED: Write tests for `AppContext` construction, accessor methods, `needs_render()` delegation, `mark_rendered()` delegation
+- [x] GREEN: Implement `AppContext` struct in `src/app/context.rs` wrapping terminal, client, state, session_manager references
+- [x] REFACTOR: Add convenience methods that delegate to `state` — `needs_render()`, `is_loading()`, `has_background_work()`, `has_pending_permission()`
 - Files: `src/app/context.rs` (new), `src/app/mod.rs` (add `mod context`)
 - Acceptance: `cargo test` passes, `AppContext` is constructible from existing `event_loop` parameters
 
