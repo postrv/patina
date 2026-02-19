@@ -246,9 +246,9 @@ Before marking ANY task `[x]`:
 **Description**: Implement bidirectional translation between Anthropic message format and OpenAI message format. This is the core complexity of OpenRouter support.
 
 **TDD Cycle**:
-- [ ] RED: Write tests for `translate_to_openai()` — user messages, assistant messages, multi-turn conversations, tool_use blocks become function_call, tool_result blocks become function responses, system prompt handling, image content handling
-- [ ] GREEN: Implement `translate_to_openai()` and `translate_tool_use()` in `src/api/providers/openrouter.rs`
-- [ ] REFACTOR: Write tests for `translate_stream_event()` — OpenAI SSE chunks mapped to `StreamEvent` variants (text delta, tool call delta, stop reason). Implement and verify
+- [x] RED: Write tests for `translate_to_openai()` — user messages, assistant messages, multi-turn conversations, tool_use blocks become function_call, tool_result blocks become function responses, system prompt handling, image content handling
+- [x] GREEN: Implement `translate_to_openai()` and `translate_tool_use()` in `src/api/providers/openrouter.rs`
+- [x] REFACTOR: Write tests for `translate_stream_event()` — OpenAI SSE chunks mapped to `StreamEvent` variants (text delta, tool call delta, stop reason). Implement and verify
 - Files: `src/api/providers/openrouter.rs` (new)
 - Acceptance: Bidirectional translation produces correct format, all edge cases tested (empty content, multiple tool calls, streaming partial JSON)
 
