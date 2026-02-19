@@ -438,6 +438,7 @@ async fn main() -> Result<()> {
         auto_context_enabled: !args.no_auto_context,
         compression: CompressionConfig::default(),
         provider: provider_config,
+        performance: patina::types::config::PerformanceConfig::default(),
     })
     .await
 }

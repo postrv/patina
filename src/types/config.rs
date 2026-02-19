@@ -425,6 +425,189 @@ impl ProviderConfig {
     }
 }
 
+/// Unified performance and parallelism configuration.
+///
+/// Controls how tools and agents are parallelized, and the maximum concurrency
+/// for each. This struct consolidates tool parallelism settings (used by
+/// [`ParallelExecutor`]) and agent concurrency limits (used by
+/// [`WorktreeAgentManager`]) into a single configuration point.
+///
+/// # Default Values
+///
+/// - `parallel_mode`: [`ParallelMode::Enabled`] (conservative parallelism)
+/// - `max_parallel_tools`: 8
+/// - `max_parallel_agents`: 4
+///
+/// # Example
+///
+/// ```
+/// use patina::types::config::{ParallelMode, PerformanceConfig};
+///
+/// // Default configuration
+/// let config = PerformanceConfig::default();
+/// assert_eq!(config.parallel_mode, ParallelMode::Enabled);
+/// assert_eq!(config.max_parallel_tools, 8);
+/// assert_eq!(config.max_parallel_agents, 4);
+///
+/// // Aggressive mode with higher concurrency
+/// let config = PerformanceConfig {
+///     parallel_mode: ParallelMode::Aggressive,
+///     max_parallel_tools: 16,
+///     max_parallel_agents: 8,
+/// };
+/// assert!(config.validate().is_ok());
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PerformanceConfig {
+    /// Controls the parallelism policy for tool execution.
+    ///
+    /// - `Enabled` (default): Only read-only tools run in parallel.
+    /// - `Disabled`: All tools run sequentially.
+    /// - `Aggressive`: Also parallelizes tools with unknown side effects.
+    pub parallel_mode: ParallelMode,
+
+    /// Maximum number of tools that can execute concurrently.
+    ///
+    /// Must be at least 1. Only effective when `parallel_mode` is not `Disabled`.
+    /// Default is 8.
+    pub max_parallel_tools: usize,
+
+    /// Maximum number of concurrent worktree agents.
+    ///
+    /// Must be at least 1. Controls the concurrency limit for the
+    /// [`WorktreeAgentManager`] and [`SubagentOrchestrator`].
+    /// Default is 4.
+    pub max_parallel_agents: usize,
+}
+
+impl Default for PerformanceConfig {
+    fn default() -> Self {
+        Self {
+            parallel_mode: ParallelMode::Enabled,
+            max_parallel_tools: 8,
+            max_parallel_agents: 4,
+        }
+    }
+}
+
+impl PerformanceConfig {
+    /// Creates a sequential configuration where no parallelism is used.
+    ///
+    /// Tools run one at a time and only one agent can be active.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use patina::types::config::{ParallelMode, PerformanceConfig};
+    ///
+    /// let config = PerformanceConfig::sequential();
+    /// assert_eq!(config.parallel_mode, ParallelMode::Disabled);
+    /// assert_eq!(config.max_parallel_tools, 1);
+    /// assert_eq!(config.max_parallel_agents, 1);
+    /// ```
+    #[must_use]
+    pub fn sequential() -> Self {
+        Self {
+            parallel_mode: ParallelMode::Disabled,
+            max_parallel_tools: 1,
+            max_parallel_agents: 1,
+        }
+    }
+
+    /// Creates an aggressive configuration with high concurrency.
+    ///
+    /// Parallelizes all tools (including those with unknown side effects)
+    /// and allows up to 8 concurrent agents with 16 parallel tools.
+    ///
+    /// # Safety
+    ///
+    /// Aggressive mode can cause race conditions with external tools.
+    /// Only use when you understand the risks.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use patina::types::config::{ParallelMode, PerformanceConfig};
+    ///
+    /// let config = PerformanceConfig::aggressive();
+    /// assert_eq!(config.parallel_mode, ParallelMode::Aggressive);
+    /// assert_eq!(config.max_parallel_tools, 16);
+    /// assert_eq!(config.max_parallel_agents, 8);
+    /// ```
+    #[must_use]
+    pub fn aggressive() -> Self {
+        Self {
+            parallel_mode: ParallelMode::Aggressive,
+            max_parallel_tools: 16,
+            max_parallel_agents: 8,
+        }
+    }
+
+    /// Validates the performance configuration.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - `max_parallel_tools` is 0
+    /// - `max_parallel_agents` is 0
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use patina::types::config::PerformanceConfig;
+    ///
+    /// let config = PerformanceConfig::default();
+    /// assert!(config.validate().is_ok());
+    /// ```
+    pub fn validate(&self) -> Result<(), String> {
+        if self.max_parallel_tools == 0 {
+            return Err("max_parallel_tools must be at least 1".to_string());
+        }
+        if self.max_parallel_agents == 0 {
+            return Err("max_parallel_agents must be at least 1".to_string());
+        }
+        Ok(())
+    }
+
+    /// Converts this performance config to a [`ParallelConfig`] for tool execution.
+    ///
+    /// Maps the `parallel_mode` and `max_parallel_tools` into the format
+    /// expected by [`ParallelExecutor`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use patina::types::config::PerformanceConfig;
+    /// use patina::tools::parallel::ParallelConfig;
+    ///
+    /// let perf = PerformanceConfig::default();
+    /// let parallel = perf.to_parallel_config();
+    /// assert!(parallel.enabled);
+    /// assert_eq!(parallel.max_concurrency, 8);
+    /// assert!(!parallel.aggressive);
+    /// ```
+    #[must_use]
+    pub fn to_parallel_config(&self) -> crate::tools::parallel::ParallelConfig {
+        match self.parallel_mode {
+            ParallelMode::Enabled => crate::tools::parallel::ParallelConfig {
+                enabled: true,
+                max_concurrency: self.max_parallel_tools,
+                aggressive: false,
+            },
+            ParallelMode::Disabled => crate::tools::parallel::ParallelConfig {
+                enabled: false,
+                max_concurrency: self.max_parallel_tools,
+                aggressive: false,
+            },
+            ParallelMode::Aggressive => crate::tools::parallel::ParallelConfig {
+                enabled: true,
+                max_concurrency: self.max_parallel_tools,
+                aggressive: true,
+            },
+        }
+    }
+}
+
 /// Application configuration.
 ///
 /// Contains all settings needed to initialize and run the Patina application.
@@ -437,7 +620,7 @@ impl ProviderConfig {
 /// # Examples
 ///
 /// ```no_run
-/// use patina::types::config::{CompressionConfig, Config, NarsilMode, ParallelMode, ProviderConfig, ResumeMode};
+/// use patina::types::config::{CompressionConfig, Config, NarsilMode, ParallelMode, PerformanceConfig, ProviderConfig, ResumeMode};
 /// use secrecy::SecretString;
 /// use std::path::PathBuf;
 ///
@@ -460,6 +643,7 @@ impl ProviderConfig {
 ///     auto_context_enabled: true,
 ///     compression: CompressionConfig::default(),
 ///     provider: ProviderConfig::default(),
+///     performance: PerformanceConfig::default(),
 /// };
 /// ```
 pub struct Config {
@@ -581,6 +765,13 @@ pub struct Config {
     /// Controls which provider is used (Anthropic, OpenRouter) and
     /// provider-specific settings like API keys and model identifiers.
     pub provider: ProviderConfig,
+
+    /// Performance and parallelism configuration.
+    ///
+    /// Controls tool parallelism policy, max concurrent tools, and max
+    /// concurrent agents. Used when creating [`ParallelExecutor`] and
+    /// [`WorktreeAgentManager`] instances.
+    pub performance: PerformanceConfig,
 }
 
 impl Config {
@@ -629,6 +820,7 @@ impl Config {
             auto_context_enabled: true,
             compression: CompressionConfig::default(),
             provider: ProviderConfig::default(),
+            performance: PerformanceConfig::default(),
         }
     }
 
@@ -902,6 +1094,37 @@ impl Config {
         self.auto_context_enabled
     }
 
+    /// Sets the performance configuration.
+    ///
+    /// # Arguments
+    ///
+    /// * `performance` - The performance configuration
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use patina::types::config::{Config, PerformanceConfig};
+    /// use secrecy::SecretString;
+    /// use std::path::PathBuf;
+    ///
+    /// let config = Config::new(
+    ///     SecretString::new("sk-ant-api...".into()),
+    ///     "claude-sonnet-4",
+    ///     PathBuf::from("."),
+    /// ).with_performance(PerformanceConfig::aggressive());
+    /// ```
+    #[must_use]
+    pub fn with_performance(mut self, performance: PerformanceConfig) -> Self {
+        self.performance = performance;
+        self
+    }
+
+    /// Returns a reference to the performance configuration.
+    #[must_use]
+    pub fn performance(&self) -> &PerformanceConfig {
+        &self.performance
+    }
+
     /// Sets the LLM provider configuration.
     ///
     /// # Arguments
@@ -969,6 +1192,7 @@ mod tests {
             auto_context_enabled: true,
             compression: CompressionConfig::default(),
             provider: ProviderConfig::default(),
+            performance: PerformanceConfig::default(),
         };
 
         assert_eq!(config.model(), "claude-opus-4-20250514");
@@ -996,6 +1220,7 @@ mod tests {
             auto_context_enabled: true,
             compression: CompressionConfig::default(),
             provider: ProviderConfig::default(),
+            performance: PerformanceConfig::default(),
         };
 
         assert_eq!(config.working_dir(), &path);
@@ -1596,5 +1821,159 @@ mod tests {
         .with_provider(ProviderConfig::fallback(vec![ProviderConfig::anthropic()]));
 
         assert_eq!(config.provider.kind, ProviderKind::Fallback);
+    }
+
+    // =========================================================================
+    // Phase 5.3: PerformanceConfig tests
+    // =========================================================================
+
+    #[test]
+    fn test_performance_config_default() {
+        let config = PerformanceConfig::default();
+        assert_eq!(config.parallel_mode, ParallelMode::Enabled);
+        assert_eq!(config.max_parallel_tools, 8);
+        assert_eq!(config.max_parallel_agents, 4);
+    }
+
+    #[test]
+    fn test_performance_config_sequential() {
+        let config = PerformanceConfig::sequential();
+        assert_eq!(config.parallel_mode, ParallelMode::Disabled);
+        assert_eq!(config.max_parallel_tools, 1);
+        assert_eq!(config.max_parallel_agents, 1);
+    }
+
+    #[test]
+    fn test_performance_config_aggressive() {
+        let config = PerformanceConfig::aggressive();
+        assert_eq!(config.parallel_mode, ParallelMode::Aggressive);
+        assert_eq!(config.max_parallel_tools, 16);
+        assert_eq!(config.max_parallel_agents, 8);
+    }
+
+    #[test]
+    fn test_performance_config_validate_ok() {
+        assert!(PerformanceConfig::default().validate().is_ok());
+        assert!(PerformanceConfig::sequential().validate().is_ok());
+        assert!(PerformanceConfig::aggressive().validate().is_ok());
+    }
+
+    #[test]
+    fn test_performance_config_validate_zero_tools() {
+        let config = PerformanceConfig {
+            parallel_mode: ParallelMode::Enabled,
+            max_parallel_tools: 0,
+            max_parallel_agents: 4,
+        };
+        let err = config.validate().unwrap_err();
+        assert!(err.contains("max_parallel_tools"));
+    }
+
+    #[test]
+    fn test_performance_config_validate_zero_agents() {
+        let config = PerformanceConfig {
+            parallel_mode: ParallelMode::Enabled,
+            max_parallel_tools: 8,
+            max_parallel_agents: 0,
+        };
+        let err = config.validate().unwrap_err();
+        assert!(err.contains("max_parallel_agents"));
+    }
+
+    #[test]
+    fn test_performance_config_to_parallel_config_enabled() {
+        let perf = PerformanceConfig::default();
+        let parallel = perf.to_parallel_config();
+        assert!(parallel.enabled);
+        assert_eq!(parallel.max_concurrency, 8);
+        assert!(!parallel.aggressive);
+    }
+
+    #[test]
+    fn test_performance_config_to_parallel_config_disabled() {
+        let perf = PerformanceConfig::sequential();
+        let parallel = perf.to_parallel_config();
+        assert!(!parallel.enabled);
+        assert_eq!(parallel.max_concurrency, 1);
+        assert!(!parallel.aggressive);
+    }
+
+    #[test]
+    fn test_performance_config_to_parallel_config_aggressive() {
+        let perf = PerformanceConfig::aggressive();
+        let parallel = perf.to_parallel_config();
+        assert!(parallel.enabled);
+        assert_eq!(parallel.max_concurrency, 16);
+        assert!(parallel.aggressive);
+    }
+
+    #[test]
+    fn test_performance_config_to_parallel_config_custom_concurrency() {
+        let perf = PerformanceConfig {
+            parallel_mode: ParallelMode::Enabled,
+            max_parallel_tools: 32,
+            max_parallel_agents: 2,
+        };
+        let parallel = perf.to_parallel_config();
+        assert!(parallel.enabled);
+        assert_eq!(parallel.max_concurrency, 32);
+        assert!(!parallel.aggressive);
+    }
+
+    #[test]
+    fn test_performance_config_clone_eq() {
+        let config = PerformanceConfig::default();
+        let cloned = config.clone();
+        assert_eq!(config, cloned);
+    }
+
+    #[test]
+    fn test_performance_config_debug() {
+        let config = PerformanceConfig::default();
+        let debug = format!("{:?}", config);
+        assert!(debug.contains("PerformanceConfig"));
+        assert!(debug.contains("max_parallel_tools"));
+        assert!(debug.contains("max_parallel_agents"));
+    }
+
+    #[test]
+    fn test_config_default_performance() {
+        let config = Config::new(
+            SecretString::new("test-key".into()),
+            "test-model",
+            PathBuf::from("/tmp"),
+        );
+
+        assert_eq!(config.performance().parallel_mode, ParallelMode::Enabled);
+        assert_eq!(config.performance().max_parallel_tools, 8);
+        assert_eq!(config.performance().max_parallel_agents, 4);
+    }
+
+    #[test]
+    fn test_config_with_performance() {
+        let config = Config::new(
+            SecretString::new("test-key".into()),
+            "test-model",
+            PathBuf::from("/tmp"),
+        )
+        .with_performance(PerformanceConfig::aggressive());
+
+        assert_eq!(config.performance().parallel_mode, ParallelMode::Aggressive);
+        assert_eq!(config.performance().max_parallel_tools, 16);
+        assert_eq!(config.performance().max_parallel_agents, 8);
+    }
+
+    #[test]
+    fn test_config_with_performance_sequential() {
+        let config = Config::new(
+            SecretString::new("test-key".into()),
+            "test-model",
+            PathBuf::from("/tmp"),
+        )
+        .with_performance(PerformanceConfig::sequential());
+
+        assert_eq!(config.performance().parallel_mode, ParallelMode::Disabled);
+        assert_eq!(config.performance().max_parallel_tools, 1);
+        assert_eq!(config.performance().max_parallel_agents, 1);
     }
 }

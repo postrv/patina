@@ -187,10 +187,10 @@ pub async fn run(config: Config) -> Result<()> {
 
     // Check for session resume before initializing terminal
     let mut state = match &config.resume_mode {
-        ResumeMode::None => AppState::with_options(
+        ResumeMode::None => AppState::with_performance_config(
             config.working_dir.clone(),
             config.skip_permissions,
-            config.parallel_mode,
+            &config.performance,
             config.plugins_enabled,
             config.subagents_enabled,
         ),
@@ -309,10 +309,10 @@ async fn load_session_state(config: &Config) -> Result<AppState> {
         .context(format!("Failed to load session '{}'", session_id))?;
 
     // Create AppState from the loaded session
-    let mut state = AppState::with_options(
+    let mut state = AppState::with_performance_config(
         session.working_dir().clone(),
         config.skip_permissions,
-        config.parallel_mode,
+        &config.performance,
         config.plugins_enabled,
         config.subagents_enabled,
     );
@@ -337,10 +337,10 @@ async fn run_print_mode(config: &Config, prompt: &str) -> Result<()> {
 
     let client: std::sync::Arc<dyn LlmProvider> =
         std::sync::Arc::from(crate::api::provider::create_provider(config));
-    let mut state = AppState::with_options(
+    let mut state = AppState::with_performance_config(
         config.working_dir.clone(),
         config.skip_permissions,
-        config.parallel_mode,
+        &config.performance,
         config.plugins_enabled,
         config.subagents_enabled,
     );
