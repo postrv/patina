@@ -4955,4 +4955,179 @@ mod tests {
         state.reset_continuous();
         assert_eq!(state.continuous_status(), &ContinuousLoopStatus::Inactive);
     }
+
+    // ========================================================================
+    // Phase 8.1.1: Tool state characterization tests (baseline before extraction)
+    // ========================================================================
+
+    /// Documents the initial state of all 7 tool-related fields in AppState.
+    /// This is a characterization test — it captures current behavior so we
+    /// can verify zero behavior change after extracting ToolExecutionState.
+    #[test]
+    fn test_tool_state_field_access_baseline() {
+        let state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+
+        // 1. tool_loop: starts Idle (Idle counts as "needs user action")
+        assert_eq!(state.tool_loop_state(), &ToolLoopState::Idle);
+        assert!(!state.tool_loop_is_active());
+        assert!(state.tool_loop_needs_user_action());
+
+        // 2. tool_executor: exists (Arc<HookedToolExecutor>)
+        // Accessed via tool_loop.execute_pending() — not directly exposed.
+        // We verify it was constructed by checking tool_loop operates correctly.
+
+        // 3. permission_manager: exists (Arc<Mutex<PermissionManager>>)
+        // Not directly exposed — accessed only in handle_permission_response().
+        // Verified indirectly via pending_permission workflow.
+
+        // 4. pending_permission: starts None
+        assert!(!state.has_pending_permission());
+        assert!(state.pending_permission().is_none());
+
+        // 5. tool_blocks: starts empty
+        assert!(!state.has_tool_blocks());
+        assert!(state.tool_blocks().is_empty());
+
+        // 6. tool_result_rx: starts None (no background channel)
+        assert!(!state.has_tool_result_rx());
+
+        // 7. executing_tool_ids: starts empty
+        assert!(!state.has_executing_tools());
+        assert!(state.all_tools_complete());
+    }
+
+    /// Documents tool_loop mutation patterns through the public API.
+    #[test]
+    fn test_tool_state_tool_loop_mutations() {
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+
+        // Reset resets to Idle
+        state.reset_tool_loop();
+        assert_eq!(state.tool_loop_state(), &ToolLoopState::Idle);
+        assert!(!state.tool_loop_is_active());
+    }
+
+    /// Documents pending_permission lifecycle through the public API.
+    #[test]
+    fn test_tool_state_pending_permission_lifecycle() {
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+
+        // Initially no permission
+        assert!(!state.has_pending_permission());
+
+        // Set a permission request
+        let request = PermissionRequest {
+            tool_name: "bash".to_string(),
+            tool_input: Some("ls -la".to_string()),
+            description: "Run shell command".to_string(),
+        };
+        state.set_pending_permission(request);
+        assert!(state.has_pending_permission());
+        assert_eq!(state.pending_permission().unwrap().tool_name, "bash");
+
+        // Clear permission
+        state.clear_pending_permission();
+        assert!(!state.has_pending_permission());
+    }
+
+    /// Documents tool_blocks lifecycle through the public API.
+    #[test]
+    fn test_tool_state_tool_blocks_lifecycle() {
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+
+        // Start a tool block
+        let idx = state.start_tool_block("bash", r#"{"command": "ls"}"#);
+        assert_eq!(idx, 0);
+        assert!(state.has_tool_blocks());
+        assert_eq!(state.tool_blocks().len(), 1);
+
+        // Complete the block with a result
+        state.complete_tool_block(idx, "file1.txt\nfile2.txt", false);
+        assert_eq!(
+            state.tool_blocks()[0].result(),
+            Some("file1.txt\nfile2.txt")
+        );
+
+        // Add a second block with an error
+        let idx2 = state.start_tool_block("read_file", r#"{"path": "/missing"}"#);
+        assert_eq!(idx2, 1);
+        state.complete_tool_block(idx2, "File not found", true);
+        assert!(state.tool_blocks()[1].is_error());
+
+        // Clear all blocks
+        state.clear_tool_blocks();
+        assert!(!state.has_tool_blocks());
+        assert!(state.tool_blocks().is_empty());
+    }
+
+    /// Documents executing_tool_ids tracking through the public API.
+    #[test]
+    fn test_tool_state_executing_tool_ids_tracking() {
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+
+        // Initially empty
+        assert!(!state.has_executing_tools());
+
+        // Mark a tool as executing
+        state.mark_tool_executing("tool_001");
+        assert!(state.has_executing_tools());
+        assert!(!state.all_tools_complete());
+
+        // Mark another
+        state.mark_tool_executing("tool_002");
+        assert!(state.has_executing_tools());
+
+        // Record result for first tool — remove from executing set
+        let result = crate::types::ToolResultBlock {
+            tool_use_id: "tool_001".to_string(),
+            content: "output".to_string(),
+            is_error: false,
+        };
+        state.record_tool_result("tool_001", result);
+        // Still has tool_002 executing
+        assert!(state.has_executing_tools());
+
+        // Record result for second tool
+        let result2 = crate::types::ToolResultBlock {
+            tool_use_id: "tool_002".to_string(),
+            content: "done".to_string(),
+            is_error: false,
+        };
+        state.record_tool_result("tool_002", result2);
+        assert!(!state.has_executing_tools());
+    }
+
+    /// Documents tool_result_rx channel lifecycle through the public API.
+    #[test]
+    fn test_tool_state_result_channel_lifecycle() {
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+
+        // Initially no channel
+        assert!(!state.has_tool_result_rx());
+        assert!(state.try_recv_tool_result().is_none());
+
+        // Set a channel
+        let (tx, rx) = mpsc::unbounded_channel();
+        state.set_tool_result_rx(rx);
+        assert!(state.has_tool_result_rx());
+
+        // Send a result through the channel
+        let result = crate::types::ToolResultBlock {
+            tool_use_id: "t1".to_string(),
+            content: "ok".to_string(),
+            is_error: false,
+        };
+        tx.send(("t1".to_string(), result)).unwrap();
+
+        // Receive it
+        let received = state.try_recv_tool_result();
+        assert!(received.is_some());
+        let (id, block) = received.unwrap();
+        assert_eq!(id, "t1");
+        assert_eq!(block.content, "ok");
+
+        // Clear channel
+        state.clear_tool_result_rx();
+        assert!(!state.has_tool_result_rx());
+    }
 }
