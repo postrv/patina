@@ -11,6 +11,7 @@ use std::future::Future;
 use std::pin::Pin;
 
 use anyhow::Result;
+use tracing::trace;
 
 use crate::app::context::AppContext;
 use crate::app::events::AppEvent;
@@ -33,6 +34,7 @@ use crate::app::events::AppEvent;
 /// assert!(!ignored.0);
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[must_use]
 pub struct Handled(pub bool);
 
 impl Handled {
@@ -41,6 +43,18 @@ impl Handled {
 
     /// The event was not processed by the handler.
     pub const IGNORED: Self = Self(false);
+
+    /// Returns `true` if the event was consumed.
+    #[must_use]
+    pub fn is_consumed(self) -> bool {
+        self.0
+    }
+
+    /// Returns `true` if the event was not consumed.
+    #[must_use]
+    pub fn is_ignored(self) -> bool {
+        !self.0
+    }
 }
 
 /// Trait for event handlers in the dispatched event loop architecture.
@@ -129,6 +143,7 @@ impl EventDispatcher {
     ///
     /// Handlers are called in the order provided. Earlier handlers have
     /// higher priority and can consume events before later handlers see them.
+    #[must_use]
     pub fn new(handlers: Vec<Box<dyn EventHandler>>) -> Self {
         Self { handlers }
     }
@@ -154,10 +169,12 @@ impl EventDispatcher {
     ) -> Result<Handled> {
         for handler in &mut self.handlers {
             let result = handler.handle(event, ctx).await?;
-            if result == Handled::CONSUMED {
+            if result.is_consumed() {
+                trace!(handler = handler.name(), %event, "event consumed");
                 return Ok(Handled::CONSUMED);
             }
         }
+        trace!(%event, "event unhandled");
         Ok(Handled::IGNORED)
     }
 }
@@ -290,14 +307,16 @@ mod tests {
 
     #[test]
     fn handled_consumed_is_true() {
-        assert!(Handled::CONSUMED.0);
-        assert_eq!(Handled::CONSUMED, Handled(true));
+        let consumed = Handled::CONSUMED;
+        assert!(consumed.0);
+        assert_eq!(consumed, Handled(true));
     }
 
     #[test]
     fn handled_ignored_is_false() {
-        assert!(!Handled::IGNORED.0);
-        assert_eq!(Handled::IGNORED, Handled(false));
+        let ignored = Handled::IGNORED;
+        assert!(!ignored.0);
+        assert_eq!(ignored, Handled(false));
     }
 
     #[test]
@@ -312,6 +331,18 @@ mod tests {
         let s = format!("{:?}", Handled::CONSUMED);
         assert!(s.contains("Handled"));
         assert!(s.contains("true"));
+    }
+
+    #[test]
+    fn handled_is_consumed_method() {
+        assert!(Handled::CONSUMED.is_consumed());
+        assert!(!Handled::IGNORED.is_consumed());
+    }
+
+    #[test]
+    fn handled_is_ignored_method() {
+        assert!(Handled::IGNORED.is_ignored());
+        assert!(!Handled::CONSUMED.is_ignored());
     }
 
     // =========================================================================
@@ -564,7 +595,7 @@ mod tests {
         // Dispatch three events
         for _ in 0..3 {
             let event = tick_event();
-            dispatcher.dispatch(&event, &mut ctx).await.unwrap();
+            let _result = dispatcher.dispatch(&event, &mut ctx).await.unwrap();
         }
 
         assert_eq!(count.load(Ordering::SeqCst), 3);
