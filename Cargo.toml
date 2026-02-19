@@ -55,16 +55,20 @@ unicode-width = "0.2"
 textwrap = "0.16"
 walkdir = "2.5"
 
-# OAuth authentication
-keyring = "3"
-webbrowser = "1.0"
-tiny_http = "0.12"
+# OAuth authentication (optional — enable with `oauth` feature)
+keyring = { version = "3", optional = true }
+webbrowser = { version = "1.0", optional = true }
+tiny_http = { version = "0.12", optional = true }
+rand = { version = "0.8", optional = true }
 base64 = "0.22"
-rand = "0.8"
 
 # Clipboard support for copy/paste
 arboard = "3"
 urlencoding = "2.1"
+
+[features]
+default = []
+oauth = ["dep:keyring", "dep:webbrowser", "dep:tiny_http", "dep:rand"]
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports", "async_tokio"] }

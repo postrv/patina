@@ -6,6 +6,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 // Use the library crate
 use patina::app;
+#[cfg(feature = "oauth")]
 use patina::auth::{flow::OAuthFlow, storage as auth_storage};
 use patina::plugins::registry::{PluginInstaller, PluginSource};
 use patina::session::{default_sessions_dir, format_session_list, SessionManager};
@@ -226,11 +227,13 @@ async fn main() -> Result<()> {
     }
 
     // Handle --oauth-logout before other initialization
+    #[cfg(feature = "oauth")]
     if args.oauth_logout {
         return oauth_logout().await;
     }
 
     // Handle --oauth-login before other initialization
+    #[cfg(feature = "oauth")]
     if args.oauth_login {
         return oauth_login().await;
     }
@@ -456,6 +459,7 @@ async fn list_sessions() -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "oauth")]
 /// Runs the OAuth login flow and stores credentials.
 ///
 /// Note: OAuth is currently disabled pending client_id registration with Anthropic.
@@ -472,6 +476,7 @@ async fn oauth_login() -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "oauth")]
 /// Clears stored OAuth credentials.
 async fn oauth_logout() -> Result<()> {
     auth_storage::clear_oauth_credentials().await?;

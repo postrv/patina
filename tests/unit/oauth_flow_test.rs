@@ -1,3 +1,4 @@
+#![cfg(feature = "oauth")]
 //! Unit tests for the OAuth 2.0 authorization flow.
 //!
 //! These tests verify the OAuth flow components including:

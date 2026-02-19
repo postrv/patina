@@ -1,50 +1,31 @@
-//! Secure credential storage using the OS keychain.
+//! Secure credential storage for OAuth tokens.
 //!
-//! This module provides functions to store and retrieve OAuth credentials
-//! in the operating system's secure credential storage:
+//! This module provides:
+//! - The [`CredentialStorage`] trait for abstracting storage backends
+//! - [`MockCredentialStorage`] for testing
+//!
+//! When the `oauth` feature is enabled, OS keychain functions are also available:
 //! - macOS: Keychain
 //! - Windows: Credential Manager
 //! - Linux: Secret Service (GNOME Keyring, KWallet)
-//!
-//! # Example
-//!
-//! ```no_run
-//! use patina::auth::storage::{store_oauth_credentials, load_oauth_credentials, clear_oauth_credentials};
-//! use patina::auth::OAuthCredentials;
-//! use secrecy::SecretString;
-//! use std::time::Duration;
-//!
-//! #[tokio::main]
-//! async fn main() -> anyhow::Result<()> {
-//!     // Store credentials
-//!     let creds = OAuthCredentials::new(
-//!         SecretString::new("access_token".into()),
-//!         SecretString::new("refresh_token".into()),
-//!         Duration::from_secs(3600),
-//!     );
-//!     store_oauth_credentials(&creds).await?;
-//!
-//!     // Load credentials
-//!     if let Some(loaded) = load_oauth_credentials().await? {
-//!         println!("Loaded credentials, expires at {:?}", loaded.expires_at());
-//!     }
-//!
-//!     // Clear credentials
-//!     clear_oauth_credentials().await?;
-//!
-//!     Ok(())
-//! }
-//! ```
 
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Mutex;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+#[cfg(feature = "oauth")]
+use std::time::Duration;
+use std::time::SystemTime;
+#[cfg(feature = "oauth")]
+use std::time::UNIX_EPOCH;
 
-use anyhow::{Context, Result};
+#[cfg(feature = "oauth")]
+use anyhow::Context;
+use anyhow::Result;
+#[cfg(feature = "oauth")]
 use keyring::Entry;
 use secrecy::{ExposeSecret, SecretString};
+#[cfg(feature = "oauth")]
 use tracing::{debug, warn};
 
 use super::OAuthCredentials;
@@ -123,6 +104,7 @@ impl fmt::Display for StorageError {
 
 impl std::error::Error for StorageError {}
 
+#[cfg(feature = "oauth")]
 impl From<keyring::Error> for StorageError {
     fn from(err: keyring::Error) -> Self {
         match err {
@@ -353,21 +335,27 @@ impl CredentialStorage for MockCredentialStorage {
     }
 }
 
+#[cfg(feature = "oauth")]
 /// Service name for keyring entries.
 const SERVICE_NAME: &str = "patina";
 
+#[cfg(feature = "oauth")]
 /// Username for keyring entries (used as a namespace).
 const USERNAME: &str = "oauth";
 
+#[cfg(feature = "oauth")]
 /// Key suffix for the access token.
 const ACCESS_TOKEN_KEY: &str = "access_token";
 
+#[cfg(feature = "oauth")]
 /// Key suffix for the refresh token.
 const REFRESH_TOKEN_KEY: &str = "refresh_token";
 
+#[cfg(feature = "oauth")]
 /// Key suffix for the expiry timestamp.
 const EXPIRY_KEY: &str = "expiry";
 
+#[cfg(feature = "oauth")]
 /// Stores OAuth credentials in the OS keychain.
 ///
 /// # Arguments
@@ -408,6 +396,7 @@ pub async fn store_oauth_credentials(credentials: &OAuthCredentials) -> Result<(
     Ok(())
 }
 
+#[cfg(feature = "oauth")]
 /// Loads OAuth credentials from the OS keychain.
 ///
 /// # Returns
@@ -477,6 +466,7 @@ pub async fn load_oauth_credentials() -> Result<Option<OAuthCredentials>> {
     )))
 }
 
+#[cfg(feature = "oauth")]
 /// Clears OAuth credentials from the OS keychain.
 ///
 /// # Errors
@@ -514,6 +504,7 @@ pub async fn clear_oauth_credentials() -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "oauth")]
 /// Checks if OAuth credentials are stored in the keychain.
 ///
 /// This is a quick check that doesn't load the actual credentials.
@@ -526,7 +517,7 @@ pub fn has_stored_credentials() -> bool {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "oauth"))]
 mod tests {
     use super::*;
 

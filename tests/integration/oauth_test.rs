@@ -1,3 +1,4 @@
+#![cfg(feature = "oauth")]
 //! Integration tests for the OAuth 2.0 authorization flow.
 //!
 //! These tests verify:

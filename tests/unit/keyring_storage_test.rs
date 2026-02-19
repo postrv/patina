@@ -1,3 +1,4 @@
+#![cfg(feature = "oauth")]
 //! Unit tests for keyring credential storage.
 //!
 //! These tests verify:

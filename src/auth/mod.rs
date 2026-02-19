@@ -56,7 +56,9 @@
 //! }
 //! ```
 
+#[cfg(feature = "oauth")]
 pub mod flow;
+#[cfg(feature = "oauth")]
 pub mod pkce;
 pub mod refresh;
 pub mod storage;
@@ -342,7 +344,8 @@ impl AuthManager {
             return self.get_api_key_auth();
         }
 
-        // Try to load OAuth from keychain
+        // Try to load OAuth from keychain (requires oauth feature for keyring access)
+        #[cfg(feature = "oauth")]
         match storage::load_oauth_credentials().await {
             Ok(Some(creds)) => {
                 if creds.is_expired() || creds.expires_within(Duration::from_secs(60)) {

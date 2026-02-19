@@ -24,6 +24,29 @@ Patina can be used both as a CLI application and as a library. The library expos
 | `tools` | Tool execution with security policy |
 | `types` | Core types (Message, Role, StreamEvent, Config) |
 
+## Authentication
+
+Patina supports API key authentication as the primary and recommended method.
+
+### API Key
+
+Set the `ANTHROPIC_API_KEY` environment variable or pass `--api-key` on the command line:
+
+```bash
+export ANTHROPIC_API_KEY="sk-ant-..."
+patina "Hello, Claude"
+```
+
+### OAuth Status
+
+OAuth 2.0 authentication is scaffolded but not yet active. The OAuth flow, PKCE challenge, token refresh, and keychain storage are implemented behind the `oauth` Cargo feature flag. OAuth will be enabled when Anthropic registers a public `client_id` for Patina.
+
+To build with OAuth support (not useful until a client_id is registered):
+
+```bash
+cargo build --features oauth
+```
+
 ## Core Types
 
 ### Message
