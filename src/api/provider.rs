@@ -71,6 +71,8 @@ use crate::types::{ApiMessageV2, StreamEvent};
 /// - [`ProviderKind::OpenRouter`](crate::types::config::ProviderKind::OpenRouter): Creates
 ///   an [`OpenRouterProvider`](crate::api::providers::openrouter::OpenRouterProvider) using
 ///   the OpenRouter API key and model from the provider config.
+/// - [`ProviderKind::Fallback`](crate::types::config::ProviderKind::Fallback): Creates
+///   a [`FallbackProvider`] that tries each provider in the fallback chain in order.
 ///
 /// # Arguments
 ///
@@ -99,37 +101,57 @@ use crate::types::{ApiMessageV2, StreamEvent};
 /// ```
 #[must_use]
 pub fn create_provider(config: &crate::types::Config) -> Box<dyn LlmProvider> {
+    create_provider_from_config(&config.provider, &config.api_key, &config.model)
+}
+
+/// Creates a provider from a [`ProviderConfig`], using the given API key and
+/// model as defaults for Anthropic providers.
+///
+/// # Panics
+///
+/// Panics if the provider config is invalid (e.g., OpenRouter without an API key,
+/// or Fallback with an empty chain).
+#[must_use]
+fn create_provider_from_config(
+    provider_config: &crate::types::config::ProviderConfig,
+    api_key: &secrecy::SecretString,
+    model: &str,
+) -> Box<dyn LlmProvider> {
     use crate::types::config::ProviderKind;
 
-    match config.provider.kind {
-        ProviderKind::Anthropic => Box::new(super::AnthropicClient::new(
-            config.api_key.clone(),
-            &config.model,
-        )),
+    match provider_config.kind {
+        ProviderKind::Anthropic => Box::new(super::AnthropicClient::new(api_key.clone(), model)),
         ProviderKind::OpenRouter => {
             use crate::api::providers::openrouter::OpenRouterProvider;
 
-            let api_key = config
-                .provider
+            let or_key = provider_config
                 .openrouter_api_key
                 .clone()
                 .expect("OpenRouter provider requires an API key");
-            let model = config
-                .provider
+            let or_model = provider_config
                 .openrouter_model
                 .as_deref()
                 .expect("OpenRouter provider requires a model identifier");
 
-            let mut provider = OpenRouterProvider::new(api_key, model);
+            let mut provider = OpenRouterProvider::new(or_key, or_model);
 
-            if let Some(ref url) = config.provider.site_url {
+            if let Some(ref url) = provider_config.site_url {
                 provider = provider.with_site_url(url.clone());
             }
-            if let Some(ref name) = config.provider.app_name {
+            if let Some(ref name) = provider_config.app_name {
                 provider = provider.with_app_name(name.clone());
             }
 
             Box::new(provider)
+        }
+        ProviderKind::Fallback => {
+            let providers: Vec<Box<dyn LlmProvider>> = provider_config
+                .fallback_chain
+                .iter()
+                .map(|pc| create_provider_from_config(pc, api_key, model))
+                .collect();
+
+            Box::new(FallbackProvider::new(providers))
         }
     }
 }
@@ -210,7 +232,10 @@ impl FallbackProvider {
     /// ```
     #[must_use]
     pub fn new(providers: Vec<Box<dyn LlmProvider>>) -> Self {
-        assert!(!providers.is_empty(), "FallbackProvider requires at least one provider");
+        assert!(
+            !providers.is_empty(),
+            "FallbackProvider requires at least one provider"
+        );
         Self { providers }
     }
 
@@ -895,6 +920,30 @@ data: {"type":"message_stop"}
         assert_eq!(provider.name(), "openrouter");
     }
 
+    #[test]
+    fn test_create_provider_fallback() {
+        use crate::types::config::ProviderConfig;
+        use secrecy::SecretString;
+
+        let config = crate::types::Config::new(
+            SecretString::from("sk-ant-test"),
+            "claude-sonnet-4",
+            std::path::PathBuf::from("."),
+        )
+        .with_provider(ProviderConfig::fallback(vec![
+            ProviderConfig::anthropic(),
+            ProviderConfig::openrouter(
+                SecretString::from("sk-or-test"),
+                "anthropic/claude-sonnet-4",
+            ),
+        ]));
+
+        let provider = create_provider(&config);
+        assert_eq!(provider.name(), "fallback");
+        // Model comes from primary (first) provider
+        assert_eq!(provider.model(), "claude-sonnet-4");
+    }
+
     // =========================================================================
     // Phase 2.7: FallbackProvider tests
     // =========================================================================
@@ -940,9 +989,11 @@ data: {"type":"message_stop"}
 
     #[test]
     fn test_fallback_provider_name() {
-        let providers: Vec<Box<dyn LlmProvider>> = vec![
-            Box::new(MockProvider::new("anthropic", "claude-sonnet-4", vec![])),
-        ];
+        let providers: Vec<Box<dyn LlmProvider>> = vec![Box::new(MockProvider::new(
+            "anthropic",
+            "claude-sonnet-4",
+            vec![],
+        ))];
         let fallback = FallbackProvider::new(providers);
         assert_eq!(fallback.name(), "fallback");
     }
@@ -951,7 +1002,11 @@ data: {"type":"message_stop"}
     fn test_fallback_provider_model_returns_primary() {
         let providers: Vec<Box<dyn LlmProvider>> = vec![
             Box::new(MockProvider::new("anthropic", "claude-sonnet-4", vec![])),
-            Box::new(MockProvider::new("openrouter", "anthropic/claude-sonnet-4", vec![])),
+            Box::new(MockProvider::new(
+                "openrouter",
+                "anthropic/claude-sonnet-4",
+                vec![],
+            )),
         ];
         let fallback = FallbackProvider::new(providers);
         assert_eq!(fallback.model(), "claude-sonnet-4");
@@ -1021,7 +1076,11 @@ data: {"type":"message_stop"}
             },
         ];
         let providers: Vec<Box<dyn LlmProvider>> = vec![
-            Box::new(FailingProvider::new("primary", "model-1", "connection refused")),
+            Box::new(FailingProvider::new(
+                "primary",
+                "model-1",
+                "connection refused",
+            )),
             Box::new(MockProvider::new("backup", "model-2", events.clone())),
         ];
         let fallback = FallbackProvider::new(providers);
@@ -1073,9 +1132,8 @@ data: {"type":"message_stop"}
         let events = vec![StreamEvent::MessageComplete {
             stop_reason: StopReason::EndTurn,
         }];
-        let providers: Vec<Box<dyn LlmProvider>> = vec![
-            Box::new(MockProvider::new("only", "model", events.clone())),
-        ];
+        let providers: Vec<Box<dyn LlmProvider>> =
+            vec![Box::new(MockProvider::new("only", "model", events.clone()))];
         let fallback = FallbackProvider::new(providers);
 
         let (tx, mut rx) = mpsc::channel(32);
@@ -1091,9 +1149,11 @@ data: {"type":"message_stop"}
 
     #[tokio::test]
     async fn test_fallback_single_provider_fails() {
-        let providers: Vec<Box<dyn LlmProvider>> = vec![
-            Box::new(FailingProvider::new("only", "model", "network error")),
-        ];
+        let providers: Vec<Box<dyn LlmProvider>> = vec![Box::new(FailingProvider::new(
+            "only",
+            "model",
+            "network error",
+        ))];
         let fallback = FallbackProvider::new(providers);
 
         let (tx, _rx) = mpsc::channel(32);
@@ -1111,9 +1171,8 @@ data: {"type":"message_stop"}
         let events = vec![StreamEvent::MessageComplete {
             stop_reason: StopReason::EndTurn,
         }];
-        let providers: Vec<Box<dyn LlmProvider>> = vec![
-            Box::new(MockProvider::new("primary", "model", events)),
-        ];
+        let providers: Vec<Box<dyn LlmProvider>> =
+            vec![Box::new(MockProvider::new("primary", "model", events))];
         let provider: Box<dyn LlmProvider> = Box::new(FallbackProvider::new(providers));
 
         assert_eq!(provider.name(), "fallback");
@@ -1144,9 +1203,11 @@ data: {"type":"message_stop"}
                 stop_reason: StopReason::ToolUse,
             },
         ];
-        let providers: Vec<Box<dyn LlmProvider>> = vec![
-            Box::new(MockProvider::new("primary", "model", events.clone())),
-        ];
+        let providers: Vec<Box<dyn LlmProvider>> = vec![Box::new(MockProvider::new(
+            "primary",
+            "model",
+            events.clone(),
+        ))];
         let fallback = FallbackProvider::new(providers);
 
         let tools = vec![ToolDefinition::new(
@@ -1193,6 +1254,9 @@ data: {"type":"message_stop"}
             .expect("should succeed with third provider");
 
         let first = rx.recv().await.unwrap();
-        assert_eq!(first, StreamEvent::ContentDelta("Third provider".to_string()));
+        assert_eq!(
+            first,
+            StreamEvent::ContentDelta("Third provider".to_string())
+        );
     }
 }

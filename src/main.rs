@@ -138,9 +138,16 @@ struct Args {
     #[arg(long)]
     no_auto_context: bool,
 
-    /// LLM provider to use: "anthropic" (default) or "openrouter".
+    /// LLM provider to use: "anthropic" (default), "openrouter", or "fallback".
     #[arg(long, value_name = "PROVIDER")]
     provider: Option<String>,
+
+    /// Fallback provider chain (e.g., --fallback anthropic,openrouter).
+    ///
+    /// Comma-separated list of providers to try in order.
+    /// Required when --provider=fallback.
+    #[arg(long, value_name = "CHAIN", value_delimiter = ',')]
+    fallback: Vec<String>,
 
     /// API key for OpenRouter (or set OPENROUTER_API_KEY env var).
     ///
@@ -351,10 +358,62 @@ async fn main() -> Result<()> {
             }
             config
         }
+        Some("fallback") => {
+            if args.fallback.is_empty() {
+                anyhow::bail!(
+                    "Fallback provider requires --fallback flag.\n\
+                     Example: --provider fallback --fallback anthropic,openrouter"
+                );
+            }
+
+            let mut chain = Vec::new();
+            for provider_name in &args.fallback {
+                let pc = match provider_name.as_str() {
+                    "anthropic" => patina::types::config::ProviderConfig::anthropic(),
+                    "openrouter" => {
+                        let or_key = args
+                            .openrouter_key
+                            .clone()
+                            .or_else(|| std::env::var("OPENROUTER_API_KEY").ok().map(Into::into))
+                            .ok_or_else(|| {
+                                anyhow::anyhow!(
+                                    "OpenRouter in fallback chain requires an API key.\n\
+                                     Set OPENROUTER_API_KEY or use --openrouter-key flag."
+                                )
+                            })?;
+                        let or_model = args.openrouter_model.clone().ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "OpenRouter in fallback chain requires a model.\n\
+                                 Use --openrouter-model flag."
+                            )
+                        })?;
+                        let mut pc =
+                            patina::types::config::ProviderConfig::openrouter(or_key, &or_model);
+                        if let Some(ref url) = args.openrouter_site_url {
+                            pc = pc.with_site_url(url.clone());
+                        }
+                        if let Some(ref name) = args.openrouter_app_name {
+                            pc = pc.with_app_name(name.clone());
+                        }
+                        pc
+                    }
+                    other => {
+                        anyhow::bail!(
+                            "Unknown provider '{}' in fallback chain. \
+                             Supported: anthropic, openrouter",
+                            other
+                        );
+                    }
+                };
+                chain.push(pc);
+            }
+
+            patina::types::config::ProviderConfig::fallback(chain)
+        }
         Some("anthropic") | None => patina::types::config::ProviderConfig::anthropic(),
         Some(other) => {
             anyhow::bail!(
-                "Unknown provider '{}'. Supported providers: anthropic, openrouter",
+                "Unknown provider '{}'. Supported providers: anthropic, openrouter, fallback",
                 other
             );
         }
