@@ -430,9 +430,9 @@ Before marking ANY task `[x]`:
 **Description**: Implement `/agent new`, `/agent list`, `/agent status`, `/agent merge` slash commands.
 
 **TDD Cycle**:
-- [ ] RED: Write tests for each command — `new` spawns agent, `list` shows table, `status` shows detail, `merge` performs conflict check + git merge
-- [ ] GREEN: Register agent commands in `SlashCommandHandler`, wire to `WorktreeAgentManager`
-- [ ] REFACTOR: Add tab completion for agent names, status display in TUI, merge confirmation prompt
+- [x] RED: Write tests for each command — `new` spawns agent, `list` shows table, `status` shows detail, `merge` performs conflict check + git merge
+- [x] GREEN: Register agent commands in `SlashCommandHandler`, wire to `WorktreeAgentManager`
+- [x] REFACTOR: Add tab completion for agent names, status display in TUI, merge confirmation prompt
 - Files: `src/app/commands.rs`, `src/agents/worktree_agent.rs`
 - Acceptance: All agent commands functional from TUI input
 
