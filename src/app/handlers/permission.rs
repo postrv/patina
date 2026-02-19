@@ -12,10 +12,15 @@ use std::future::Future;
 use std::pin::Pin;
 
 use anyhow::Result;
+use crossterm::event::KeyCode;
+use tracing::debug;
 
 use crate::app::context::AppContext;
 use crate::app::dispatch::{EventHandler, Handled};
 use crate::app::events::AppEvent;
+use crate::permissions::PermissionResponse;
+use crate::tui::widgets::permission_prompt::PermissionPromptState;
+use crate::tui::widgets::handle_permission_key;
 
 /// Handles permission prompts for tool execution approval.
 ///
@@ -49,18 +54,100 @@ pub struct PermissionHandler;
 impl EventHandler for PermissionHandler {
     fn handle<'a>(
         &'a mut self,
-        _event: &'a AppEvent,
-        _ctx: &'a mut AppContext<'_>,
+        event: &'a AppEvent,
+        ctx: &'a mut AppContext<'_>,
     ) -> Pin<Box<dyn Future<Output = Result<Handled>> + Send + 'a>> {
         Box::pin(async move {
-            // Stub: always ignore — tests will fail until implemented.
-            Ok(Handled::IGNORED)
+            match event {
+                AppEvent::Key(key) => {
+                    if !ctx.state.has_pending_permission() {
+                        return Ok(Handled::IGNORED);
+                    }
+
+                    // Convert the key event to a permission response.
+                    let response = convert_key_to_response(ctx, *key);
+
+                    if let Some(response) = response {
+                        apply_permission_response(ctx, response).await?;
+                    }
+
+                    // All key events are consumed while the permission
+                    // prompt is active — even navigation or unrecognized keys.
+                    Ok(Handled::CONSUMED)
+                }
+                AppEvent::PermissionResponse(response) => {
+                    let response = *response;
+                    apply_permission_response(ctx, response).await?;
+                    Ok(Handled::CONSUMED)
+                }
+                _ => Ok(Handled::IGNORED),
+            }
         })
     }
 
     fn name(&self) -> &str {
         "permission"
     }
+}
+
+/// Converts a crossterm key event into a permission response, if the key
+/// maps to a decision (y/n/a/Enter/Esc). Navigation keys return `None`.
+fn convert_key_to_response(
+    ctx: &mut AppContext<'_>,
+    key: crossterm::event::KeyEvent,
+) -> Option<PermissionResponse> {
+    let request = ctx.state.pending_permission()?.clone();
+    let mut prompt_state = PermissionPromptState::new(request);
+
+    let key_char = match key.code {
+        KeyCode::Char(c) => c,
+        KeyCode::Enter => '\r',
+        KeyCode::Esc => '\x1b',
+        KeyCode::Tab => '\t',
+        KeyCode::Backspace => '\x08',
+        KeyCode::Left => 'h',
+        KeyCode::Right => 'l',
+        _ => return None,
+    };
+
+    let response = handle_permission_key(&mut prompt_state, key_char);
+
+    if response.is_some() {
+        ctx.state.clear_pending_permission();
+    }
+
+    response
+}
+
+/// Applies a permission response: updates state and triggers tool execution
+/// or denial accordingly.
+///
+/// # Errors
+///
+/// Returns an error if tool execution setup or denial fails.
+async fn apply_permission_response(
+    ctx: &mut AppContext<'_>,
+    response: PermissionResponse,
+) -> Result<()> {
+    debug!(?response, "Applying permission response");
+
+    ctx.state.handle_permission_response(response).await;
+
+    if matches!(
+        response,
+        PermissionResponse::AllowOnce | PermissionResponse::AllowAlways
+    ) {
+        crate::app::start_tool_execution(ctx.state)?;
+    } else {
+        // deny_all_tools() fails if the tool loop is already Idle, which
+        // can happen when a PermissionResponse event arrives without a
+        // matching tool execution. Log and continue rather than crashing.
+        if let Err(e) = ctx.state.deny_all_tools() {
+            debug!(?e, "deny_all_tools failed (tool loop may already be idle)");
+        }
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
