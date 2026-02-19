@@ -537,9 +537,9 @@ Before marking ANY task `[x]`:
 **Description**: Implement multi-factor stagnation detection — commit gaps, repeated file edits, recurring errors, test count plateau.
 
 **TDD Cycle**:
-- [ ] RED: Write tests for stagnation scoring — commit gap increases score, same files edited repeatedly increases score, recurring errors increase score, score resets on meaningful progress, risk levels (Low/Medium/High/Critical) at correct thresholds
-- [ ] GREEN: Implement `StagnationDetector` in `src/continuous/stagnation.rs` with weighted risk factors
-- [ ] REFACTOR: Add configurable weights and thresholds, history window (last N iterations)
+- [x] RED: Write tests for stagnation scoring — commit gap increases score, same files edited repeatedly increases score, recurring errors increase score, score resets on meaningful progress, risk levels (Low/Medium/High/Critical) at correct thresholds
+- [x] GREEN: Implement `StagnationDetector` in `src/continuous/stagnation.rs` with weighted risk factors
+- [x] REFACTOR: Add configurable weights and thresholds, history window (last N iterations)
 - Files: `src/continuous/stagnation.rs` (new)
 - Acceptance: Stagnation detected accurately for synthetic scenarios, risk levels trigger at correct thresholds
 
