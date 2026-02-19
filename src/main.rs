@@ -318,6 +318,7 @@ async fn main() -> Result<()> {
         ide_port: args.ide_port,
         auto_context_enabled: !args.no_auto_context,
         compression: CompressionConfig::default(),
+        provider: patina::types::config::ProviderConfig::default(),
     })
     .await
 }
