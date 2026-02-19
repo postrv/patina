@@ -225,7 +225,7 @@ async fn handle_submit(ctx: &mut AppContext<'_>) -> Result<()> {
     if input.trim().starts_with('/') {
         handle_slash_command(ctx, &input);
     } else {
-        ctx.state.submit_message(ctx.client, input).await?;
+        ctx.state.submit_message(&ctx.client, input).await?;
         // SessionHandler observer saves when it sees the dirty flag.
         ctx.state.mark_session_dirty();
     }
@@ -427,7 +427,7 @@ fn handle_mouse(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::AnthropicClient;
+    use crate::api::{AnthropicClient, LlmProvider};
     use crate::app::state::AppState;
     use crate::session::SessionManager;
     use crate::types::config::ParallelMode;
@@ -439,6 +439,7 @@ mod tests {
     use secrecy::SecretString;
     use std::io;
     use std::path::PathBuf;
+    use std::sync::Arc;
     use tempfile::TempDir;
 
     // =========================================================================
@@ -450,8 +451,11 @@ mod tests {
         Terminal::new(backend).expect("failed to create test terminal")
     }
 
-    fn test_client() -> AnthropicClient {
-        AnthropicClient::new(SecretString::from("test-key"), "claude-test")
+    fn test_client() -> Arc<dyn LlmProvider> {
+        Arc::new(AnthropicClient::new(
+            SecretString::from("test-key"),
+            "claude-test",
+        ))
     }
 
     fn test_state() -> AppState {
@@ -485,7 +489,7 @@ mod tests {
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::Tick;
         let result = handler.handle(&event, &mut ctx).await.unwrap();
@@ -504,7 +508,7 @@ mod tests {
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::Quit;
         let result = handler.handle(&event, &mut ctx).await.unwrap();
@@ -523,7 +527,7 @@ mod tests {
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::ApiChunk(crate::api::StreamEvent::ContentDelta("hi".to_string()));
         let result = handler.handle(&event, &mut ctx).await.unwrap();
@@ -542,7 +546,7 @@ mod tests {
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::ToolResult {
             tool_id: "toolu_test".to_string(),
@@ -568,7 +572,7 @@ mod tests {
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::PermissionResponse(crate::permissions::PermissionResponse::AllowOnce);
         let result = handler.handle(&event, &mut ctx).await.unwrap();
@@ -591,7 +595,7 @@ mod tests {
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
 
         let mut key = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE);
         key.kind = KeyEventKind::Release;
@@ -616,7 +620,7 @@ mod tests {
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
         let result = handler.handle(&event, &mut ctx).await.unwrap();
@@ -635,7 +639,7 @@ mod tests {
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::Key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL));
         let result = handler.handle(&event, &mut ctx).await.unwrap();
@@ -658,7 +662,7 @@ mod tests {
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::Key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
         let result = handler.handle(&event, &mut ctx).await.unwrap();
@@ -677,7 +681,7 @@ mod tests {
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::Key(KeyEvent::new(KeyCode::Char('X'), KeyModifiers::SHIFT));
         let result = handler.handle(&event, &mut ctx).await.unwrap();
@@ -706,7 +710,7 @@ mod tests {
         state.insert_char('b');
         assert_eq!(state.input, "ab");
 
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
         let result = handler.handle(&event, &mut ctx).await.unwrap();
@@ -729,7 +733,7 @@ mod tests {
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::CONTROL));
         let result = handler.handle(&event, &mut ctx).await.unwrap();
@@ -748,7 +752,7 @@ mod tests {
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::Key(KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE));
         let result = handler.handle(&event, &mut ctx).await.unwrap();
@@ -767,7 +771,7 @@ mod tests {
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::Key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::CONTROL));
         let result = handler.handle(&event, &mut ctx).await.unwrap();
@@ -786,7 +790,7 @@ mod tests {
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::CONTROL));
         let result = handler.handle(&event, &mut ctx).await.unwrap();
@@ -805,7 +809,7 @@ mod tests {
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::Key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE));
         let result = handler.handle(&event, &mut ctx).await.unwrap();
@@ -824,7 +828,7 @@ mod tests {
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::Key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::CONTROL));
         let result = handler.handle(&event, &mut ctx).await.unwrap();
@@ -843,7 +847,7 @@ mod tests {
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::Key(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
         let result = handler.handle(&event, &mut ctx).await.unwrap();
@@ -862,7 +866,7 @@ mod tests {
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::Key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL));
         let result = handler.handle(&event, &mut ctx).await.unwrap();
@@ -881,7 +885,7 @@ mod tests {
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::Key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
         let result = handler.handle(&event, &mut ctx).await.unwrap();
@@ -907,7 +911,7 @@ mod tests {
 
         assert!(state.input.is_empty());
 
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         let result = handler.handle(&event, &mut ctx).await.unwrap();
@@ -936,7 +940,7 @@ mod tests {
         state.selection_mut().select_all(10);
         assert!(state.selection().has_selection());
 
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         let result = handler.handle(&event, &mut ctx).await.unwrap();
@@ -958,7 +962,7 @@ mod tests {
 
         assert!(!state.selection().has_selection());
 
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         let result = handler.handle(&event, &mut ctx).await.unwrap();
@@ -986,7 +990,7 @@ mod tests {
         // Clear any initial render flags
         state.mark_rendered();
 
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::Resize {
             width: 120,
@@ -1012,7 +1016,7 @@ mod tests {
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
 
         let mouse = MouseEvent {
             kind: MouseEventKind::ScrollUp,
@@ -1037,7 +1041,7 @@ mod tests {
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
 
         let mouse = MouseEvent {
             kind: MouseEventKind::ScrollDown,
@@ -1062,7 +1066,7 @@ mod tests {
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
 
         let mouse = MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
@@ -1091,7 +1095,7 @@ mod tests {
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::SUPER));
         let result = handler.handle(&event, &mut ctx).await.unwrap();
@@ -1106,7 +1110,7 @@ mod tests {
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::ALT));
         let result = handler.handle(&event, &mut ctx).await.unwrap();
@@ -1125,7 +1129,7 @@ mod tests {
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::Key(KeyEvent::new(
             KeyCode::Char('C'),
@@ -1147,7 +1151,7 @@ mod tests {
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::Key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL));
         let result = handler.handle(&event, &mut ctx).await.unwrap();
@@ -1170,7 +1174,7 @@ mod tests {
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::Key(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::SUPER));
         let result = handler.handle(&event, &mut ctx).await.unwrap();
@@ -1185,7 +1189,7 @@ mod tests {
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::Key(KeyEvent::new(KeyCode::Char('v'), KeyModifiers::ALT));
         let result = handler.handle(&event, &mut ctx).await.unwrap();
@@ -1208,7 +1212,7 @@ mod tests {
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::Key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::SUPER));
         let result = handler.handle(&event, &mut ctx).await.unwrap();
@@ -1227,7 +1231,7 @@ mod tests {
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::Key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::ALT));
         let result = handler.handle(&event, &mut ctx).await.unwrap();
@@ -1246,7 +1250,7 @@ mod tests {
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::Key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL));
         let result = handler.handle(&event, &mut ctx).await.unwrap();
@@ -1282,7 +1286,7 @@ mod tests {
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
 
         // Key event should be consumed
         let event = AppEvent::Key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
@@ -1314,7 +1318,7 @@ mod tests {
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
 
         // F12 is not a recognized binding
         let event = AppEvent::Key(KeyEvent::new(KeyCode::F(12), KeyModifiers::NONE));

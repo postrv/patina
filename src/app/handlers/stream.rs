@@ -94,7 +94,7 @@ impl EventHandler for StreamHandler {
                     if is_executing && ctx.state.all_tools_complete() {
                         debug!("All tools complete, setting up continuation");
                         ctx.state.clear_tool_result_rx();
-                        crate::app::finish_tool_execution_and_continue(ctx.state, ctx.client)
+                        crate::app::finish_tool_execution_and_continue(ctx.state, &ctx.client)
                             .await?;
                     }
 
@@ -113,8 +113,8 @@ impl EventHandler for StreamHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::AnthropicClient;
     use crate::api::StreamEvent;
+    use crate::api::{AnthropicClient, LlmProvider};
     use crate::app::state::AppState;
     use crate::session::SessionManager;
     use crate::types::config::ParallelMode;
@@ -125,6 +125,7 @@ mod tests {
     use secrecy::SecretString;
     use std::io;
     use std::path::PathBuf;
+    use std::sync::Arc;
     use tempfile::TempDir;
 
     // =========================================================================
@@ -136,8 +137,11 @@ mod tests {
         Terminal::new(backend).expect("failed to create test terminal")
     }
 
-    fn test_client() -> AnthropicClient {
-        AnthropicClient::new(SecretString::from("test-key"), "claude-test")
+    fn test_client() -> Arc<dyn LlmProvider> {
+        Arc::new(AnthropicClient::new(
+            SecretString::from("test-key"),
+            "claude-test",
+        ))
     }
 
     fn test_state() -> AppState {
@@ -171,7 +175,7 @@ mod tests {
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::ApiChunk(StreamEvent::ContentDelta("hello".to_string()));
         let result = handler.handle(&event, &mut ctx).await.unwrap();
@@ -190,7 +194,7 @@ mod tests {
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::ApiChunk(StreamEvent::MessageStop);
         let result = handler.handle(&event, &mut ctx).await.unwrap();
@@ -209,7 +213,7 @@ mod tests {
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::ApiChunk(StreamEvent::MessageComplete {
             stop_reason: StopReason::EndTurn,
@@ -230,7 +234,7 @@ mod tests {
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::ApiChunk(StreamEvent::Error("test error".to_string()));
         let result = handler.handle(&event, &mut ctx).await.unwrap();
@@ -249,7 +253,7 @@ mod tests {
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::ApiChunk(StreamEvent::ToolUseStart {
             id: "toolu_123".to_string(),
@@ -272,7 +276,7 @@ mod tests {
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::ApiChunk(StreamEvent::ContentBlockComplete { index: 0 });
         let result = handler.handle(&event, &mut ctx).await.unwrap();
@@ -299,7 +303,7 @@ mod tests {
         // Set up a tool as executing so record_tool_result has something to remove.
         state.mark_tool_executing("toolu_test");
 
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::ToolResult {
             tool_id: "toolu_test".to_string(),
@@ -329,7 +333,7 @@ mod tests {
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::Key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
         let result = handler.handle(&event, &mut ctx).await.unwrap();
@@ -348,7 +352,7 @@ mod tests {
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::Tick;
         let result = handler.handle(&event, &mut ctx).await.unwrap();
@@ -367,7 +371,7 @@ mod tests {
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::Quit;
         let result = handler.handle(&event, &mut ctx).await.unwrap();
@@ -386,7 +390,7 @@ mod tests {
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::Resize {
             width: 80,
@@ -415,7 +419,7 @@ mod tests {
 
         state.set_loading(true);
 
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::ApiChunk(StreamEvent::MessageStop);
         let _result = handler.handle(&event, &mut ctx).await.unwrap();
@@ -436,7 +440,7 @@ mod tests {
 
         state.set_loading(true);
 
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::ApiChunk(StreamEvent::MessageComplete {
             stop_reason: StopReason::EndTurn,
@@ -459,7 +463,7 @@ mod tests {
 
         state.set_loading(true);
 
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::ApiChunk(StreamEvent::Error("test error".to_string()));
         let _result = handler.handle(&event, &mut ctx).await.unwrap();
@@ -475,7 +479,7 @@ mod tests {
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
 
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::ApiChunk(StreamEvent::MessageStop);
         let _result = handler.handle(&event, &mut ctx).await.unwrap();
@@ -494,7 +498,7 @@ mod tests {
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
 
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::ApiChunk(StreamEvent::MessageComplete {
             stop_reason: StopReason::EndTurn,
@@ -522,7 +526,7 @@ mod tests {
         state.mark_tool_executing("toolu_abc");
         assert!(state.has_executing_tools());
 
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::ToolResult {
             tool_id: "toolu_abc".to_string(),
@@ -549,7 +553,7 @@ mod tests {
         let (session_mgr, _dir) = test_session_manager();
 
         // No tools marked as executing — handler must still succeed.
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::ToolResult {
             tool_id: "toolu_orphan".to_string(),
@@ -591,7 +595,7 @@ mod tests {
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
 
         // ApiChunk should be consumed.
         let event = AppEvent::ApiChunk(StreamEvent::ContentDelta("test".to_string()));

@@ -225,7 +225,7 @@ impl EventDispatcher {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::AnthropicClient;
+    use crate::api::{AnthropicClient, LlmProvider};
     use crate::app::state::AppState;
     use crate::session::SessionManager;
     use crate::types::config::ParallelMode;
@@ -248,8 +248,11 @@ mod tests {
         Terminal::new(backend).expect("failed to create test terminal")
     }
 
-    fn test_client() -> AnthropicClient {
-        AnthropicClient::new(SecretString::from("test-key"), "claude-test")
+    fn test_client() -> Arc<dyn LlmProvider> {
+        Arc::new(AnthropicClient::new(
+            SecretString::from("test-key"),
+            "claude-test",
+        ))
     }
 
     fn test_state() -> AppState {
@@ -399,7 +402,7 @@ mod tests {
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
 
         let event = tick_event();
         let result = handler.handle(&event, &mut ctx).await.unwrap();
@@ -443,7 +446,7 @@ mod tests {
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
 
         let event = tick_event();
         let result = dispatcher.dispatch(&event, &mut ctx).await.unwrap();
@@ -458,7 +461,7 @@ mod tests {
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
 
         let event = tick_event();
         let result = dispatcher.dispatch(&event, &mut ctx).await.unwrap();
@@ -475,7 +478,7 @@ mod tests {
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
 
         let event = tick_event();
         let result = dispatcher.dispatch(&event, &mut ctx).await.unwrap();
@@ -494,7 +497,7 @@ mod tests {
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
 
         let event = key_event();
         let result = dispatcher.dispatch(&event, &mut ctx).await.unwrap();
@@ -518,7 +521,7 @@ mod tests {
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
 
         let event = key_event();
         let result = dispatcher.dispatch(&event, &mut ctx).await.unwrap();
@@ -538,7 +541,7 @@ mod tests {
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
 
         let event = tick_event();
         let result = dispatcher.dispatch(&event, &mut ctx).await.unwrap();
@@ -558,7 +561,7 @@ mod tests {
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
 
         let event = tick_event();
         let result = dispatcher.dispatch(&event, &mut ctx).await;
@@ -577,7 +580,7 @@ mod tests {
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
 
         let event = tick_event();
         let result = dispatcher.dispatch(&event, &mut ctx).await;
@@ -602,7 +605,7 @@ mod tests {
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
 
         let event = tick_event();
         let result = dispatcher.dispatch(&event, &mut ctx).await.unwrap();
@@ -633,7 +636,7 @@ mod tests {
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
 
         // Dispatch three events
         for _ in 0..3 {
@@ -673,7 +676,7 @@ mod tests {
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
 
         let event = tick_event();
         let result = dispatcher.dispatch(&event, &mut ctx).await.unwrap();
@@ -701,7 +704,7 @@ mod tests {
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
 
         let event = tick_event();
         let result = dispatcher.dispatch(&event, &mut ctx).await.unwrap();
@@ -721,7 +724,7 @@ mod tests {
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
 
         let event = tick_event();
         let result = dispatcher.dispatch(&event, &mut ctx).await.unwrap();
@@ -741,7 +744,7 @@ mod tests {
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
 
         let event = tick_event();
         let result = dispatcher.dispatch(&event, &mut ctx).await;
