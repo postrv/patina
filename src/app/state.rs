@@ -145,6 +145,10 @@ pub struct AppState {
     /// Set by handlers/code that modify conversation state; cleared by `SessionHandler`.
     session_dirty: bool,
 
+    /// Whether the application should exit the event loop.
+    /// Set by `KeyboardHandler` on Ctrl+C / Ctrl+D; checked by the event loop.
+    quit_requested: bool,
+
     // Tool execution state
     tool_loop: ToolLoop,
     tool_executor: Arc<HookedToolExecutor>,
@@ -350,6 +354,7 @@ impl AppState {
             worktree_behind: 0,
             session_id: None,
             session_dirty: false,
+            quit_requested: false,
             tool_loop: ToolLoop::new(),
             tool_executor,
             permission_manager,
@@ -999,6 +1004,21 @@ impl AppState {
 
     pub fn is_loading(&self) -> bool {
         self.loading
+    }
+
+    /// Signals that the application should exit the event loop.
+    ///
+    /// Called by `KeyboardHandler` when the user presses Ctrl+C or Ctrl+D.
+    /// The event loop checks [`wants_quit`](Self::wants_quit) after each
+    /// dispatch cycle.
+    pub fn request_quit(&mut self) {
+        self.quit_requested = true;
+    }
+
+    /// Returns `true` if the application should exit the event loop.
+    #[must_use]
+    pub fn wants_quit(&self) -> bool {
+        self.quit_requested
     }
 
     pub fn tick_throbber(&mut self) {

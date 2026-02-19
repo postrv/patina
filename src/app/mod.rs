@@ -1102,7 +1102,7 @@ fn handle_permission_key_event(
 ///
 /// Creates a new session or updates an existing one. Errors are logged
 /// but do not interrupt the application flow.
-async fn auto_save_session(state: &mut AppState, session_manager: &SessionManager) {
+pub(crate) async fn auto_save_session(state: &mut AppState, session_manager: &SessionManager) {
     let session = state.to_session();
 
     let result = if let Some(existing_id) = state.session_id() {
