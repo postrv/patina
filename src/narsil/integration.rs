@@ -773,6 +773,156 @@ pub fn security_verdict_from_findings(
     SecurityVerdict::Allow
 }
 
+// =============================================================================
+// Parallel MCP capability detection (Phase 5.2)
+// =============================================================================
+
+/// Result of parallel capability detection across multiple MCP servers.
+///
+/// Aggregates individual server results and provides convenience methods
+/// for building `NarsilCapabilities` from the combined tool lists.
+///
+/// # Example
+///
+/// ```ignore
+/// let results = detect_all_capabilities(&mut clients, Duration::from_secs(10)).await;
+/// println!("Detected {} servers, {} succeeded", results.total(), results.successful_count());
+///
+/// let capabilities = results.merged_capabilities();
+/// if capabilities.has(NarsilCapability::SecurityScan) {
+///     println!("Security scanning available!");
+/// }
+/// ```
+#[derive(Debug, Clone)]
+pub struct ParallelCapabilityResult {
+    /// Per-server results.
+    results: Vec<crate::mcp::client::ServerCapabilityResult>,
+}
+
+impl ParallelCapabilityResult {
+    /// Returns the total number of servers queried.
+    #[must_use]
+    pub fn total(&self) -> usize {
+        self.results.len()
+    }
+
+    /// Returns the number of servers that responded successfully.
+    #[must_use]
+    pub fn successful_count(&self) -> usize {
+        self.results.iter().filter(|r| r.success).count()
+    }
+
+    /// Returns the number of servers that failed (error or timeout).
+    #[must_use]
+    pub fn failed_count(&self) -> usize {
+        self.results.iter().filter(|r| !r.success).count()
+    }
+
+    /// Returns the number of servers that timed out.
+    #[must_use]
+    pub fn timeout_count(&self) -> usize {
+        self.results.iter().filter(|r| r.is_timeout()).count()
+    }
+
+    /// Returns the per-server results.
+    #[must_use]
+    pub fn server_results(&self) -> &[crate::mcp::client::ServerCapabilityResult] {
+        &self.results
+    }
+
+    /// Merges all successful tool lists into a single `NarsilCapabilities`.
+    ///
+    /// Tools from all successful servers are combined. Duplicate tool names
+    /// are deduplicated by the `NarsilCapabilities::from_tools` constructor.
+    #[must_use]
+    pub fn merged_capabilities(&self) -> NarsilCapabilities {
+        let all_tools: Vec<String> = self
+            .results
+            .iter()
+            .filter(|r| r.success)
+            .flat_map(|r| r.tool_names())
+            .collect();
+        NarsilCapabilities::from_tools(&all_tools)
+    }
+
+    /// Returns the names of servers that failed.
+    #[must_use]
+    pub fn failed_servers(&self) -> Vec<&str> {
+        self.results
+            .iter()
+            .filter(|r| !r.success)
+            .map(|r| r.server_name.as_str())
+            .collect()
+    }
+
+    /// Returns true if all servers were detected successfully.
+    #[must_use]
+    pub fn all_succeeded(&self) -> bool {
+        self.results.iter().all(|r| r.success)
+    }
+}
+
+/// Detects capabilities from multiple MCP servers in parallel.
+///
+/// Queries `list_tools()` on all provided clients concurrently, each with
+/// an individual timeout. Servers that fail or timeout are reported in the
+/// result rather than failing the entire operation.
+///
+/// # Arguments
+///
+/// * `clients` - Mutable slice of already-started MCP clients to query
+/// * `per_server_timeout` - Maximum time to wait for each server to respond
+///
+/// # Returns
+///
+/// A `ParallelCapabilityResult` containing per-server results and methods
+/// to merge capabilities across servers.
+///
+/// # Example
+///
+/// ```ignore
+/// let mut clients = vec![narsil_client, other_mcp_client];
+/// let result = detect_all_capabilities(&mut clients, Duration::from_secs(10)).await;
+///
+/// // Check overall status
+/// tracing::info!(
+///     total = result.total(),
+///     success = result.successful_count(),
+///     failed = result.failed_count(),
+///     "MCP capability detection complete"
+/// );
+///
+/// // Build capabilities from all successful servers
+/// let capabilities = result.merged_capabilities();
+/// ```
+pub async fn detect_all_capabilities(
+    clients: &mut [McpClient],
+    per_server_timeout: Duration,
+) -> ParallelCapabilityResult {
+    let results =
+        crate::mcp::client::detect_all_server_capabilities(clients, per_server_timeout).await;
+
+    for result in &results {
+        if result.success {
+            tracing::info!(
+                server = %result.server_name,
+                tools = result.tools.len(),
+                duration_ms = result.duration.as_millis() as u64,
+                "MCP server capabilities detected"
+            );
+        } else {
+            tracing::warn!(
+                server = %result.server_name,
+                error = result.error.as_deref().unwrap_or("unknown"),
+                duration_ms = result.duration.as_millis() as u64,
+                "MCP server capability detection failed"
+            );
+        }
+    }
+
+    ParallelCapabilityResult { results }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1406,5 +1556,228 @@ mod tests {
 
         assert!(!result.content().is_empty());
         assert_eq!(result.level(), CompressionLevel::Manifest);
+    }
+
+    // =============================================================================
+    // Phase 5.2 - Parallel MCP capability detection tests
+    // =============================================================================
+
+    mod parallel_capability_tests {
+        use super::*;
+        use crate::mcp::client::{McpTool, ServerCapabilityResult};
+
+        fn make_success_result(name: &str, tool_names: &[&str]) -> ServerCapabilityResult {
+            ServerCapabilityResult {
+                server_name: name.to_string(),
+                tools: tool_names
+                    .iter()
+                    .map(|n| McpTool {
+                        name: n.to_string(),
+                        description: String::new(),
+                        input_schema: serde_json::json!({}),
+                    })
+                    .collect(),
+                success: true,
+                error: None,
+                duration: Duration::from_millis(50),
+            }
+        }
+
+        fn make_failure_result(name: &str, error: &str) -> ServerCapabilityResult {
+            ServerCapabilityResult {
+                server_name: name.to_string(),
+                tools: Vec::new(),
+                success: false,
+                error: Some(error.to_string()),
+                duration: Duration::from_millis(5),
+            }
+        }
+
+        fn make_timeout_result(name: &str) -> ServerCapabilityResult {
+            ServerCapabilityResult {
+                server_name: name.to_string(),
+                tools: Vec::new(),
+                success: false,
+                error: Some("capability detection timed out after 10s".to_string()),
+                duration: Duration::from_secs(10),
+            }
+        }
+
+        #[test]
+        fn test_parallel_result_all_succeed() {
+            let results = vec![
+                make_success_result("server-a", &["scan_security", "get_call_graph"]),
+                make_success_result("server-b", &["search_code", "find_symbols"]),
+            ];
+
+            let parallel = ParallelCapabilityResult { results };
+
+            assert_eq!(parallel.total(), 2);
+            assert_eq!(parallel.successful_count(), 2);
+            assert_eq!(parallel.failed_count(), 0);
+            assert_eq!(parallel.timeout_count(), 0);
+            assert!(parallel.all_succeeded());
+            assert!(parallel.failed_servers().is_empty());
+        }
+
+        #[test]
+        fn test_parallel_result_mixed_success_and_failure() {
+            let results = vec![
+                make_success_result("narsil", &["scan_security", "get_call_graph"]),
+                make_failure_result("broken", "connection refused"),
+                make_success_result("other", &["search_code"]),
+            ];
+
+            let parallel = ParallelCapabilityResult { results };
+
+            assert_eq!(parallel.total(), 3);
+            assert_eq!(parallel.successful_count(), 2);
+            assert_eq!(parallel.failed_count(), 1);
+            assert!(!parallel.all_succeeded());
+            assert_eq!(parallel.failed_servers(), vec!["broken"]);
+        }
+
+        #[test]
+        fn test_parallel_result_with_timeouts() {
+            let results = vec![
+                make_success_result("fast-server", &["get_call_graph"]),
+                make_timeout_result("slow-server"),
+                make_timeout_result("dead-server"),
+            ];
+
+            let parallel = ParallelCapabilityResult { results };
+
+            assert_eq!(parallel.total(), 3);
+            assert_eq!(parallel.successful_count(), 1);
+            assert_eq!(parallel.failed_count(), 2);
+            assert_eq!(parallel.timeout_count(), 2);
+        }
+
+        #[test]
+        fn test_parallel_result_all_fail() {
+            let results = vec![
+                make_failure_result("server-a", "connection refused"),
+                make_timeout_result("server-b"),
+            ];
+
+            let parallel = ParallelCapabilityResult { results };
+
+            assert_eq!(parallel.total(), 2);
+            assert_eq!(parallel.successful_count(), 0);
+            assert_eq!(parallel.failed_count(), 2);
+            assert!(!parallel.all_succeeded());
+        }
+
+        #[test]
+        fn test_parallel_result_empty() {
+            let parallel = ParallelCapabilityResult {
+                results: Vec::new(),
+            };
+
+            assert_eq!(parallel.total(), 0);
+            assert_eq!(parallel.successful_count(), 0);
+            assert_eq!(parallel.failed_count(), 0);
+            assert!(parallel.all_succeeded()); // vacuously true
+        }
+
+        #[test]
+        fn test_merged_capabilities_combines_tools_from_all_servers() {
+            let results = vec![
+                make_success_result(
+                    "narsil",
+                    &["scan_security", "get_call_graph", "get_callers"],
+                ),
+                make_success_result("other", &["search_code", "semantic_search"]),
+            ];
+
+            let parallel = ParallelCapabilityResult { results };
+            let caps = parallel.merged_capabilities();
+
+            // Should detect capabilities from both servers
+            assert!(caps.has(NarsilCapability::SecurityScan));
+            assert!(caps.has(NarsilCapability::CallGraph));
+            assert!(caps.has(NarsilCapability::CodeSearch));
+            assert!(caps.is_available());
+        }
+
+        #[test]
+        fn test_merged_capabilities_excludes_failed_servers() {
+            let results = vec![
+                make_success_result("narsil", &["scan_security"]),
+                make_failure_result("broken", "connection refused"),
+            ];
+
+            let parallel = ParallelCapabilityResult { results };
+            let caps = parallel.merged_capabilities();
+
+            // Only tools from successful servers should be included
+            assert!(caps.has(NarsilCapability::SecurityScan));
+            assert_eq!(caps.tools().len(), 1);
+        }
+
+        #[test]
+        fn test_merged_capabilities_empty_when_all_fail() {
+            let results = vec![
+                make_failure_result("server-a", "error"),
+                make_timeout_result("server-b"),
+            ];
+
+            let parallel = ParallelCapabilityResult { results };
+            let caps = parallel.merged_capabilities();
+
+            assert!(!caps.is_available());
+            assert_eq!(caps.count(), 0);
+        }
+
+        #[test]
+        fn test_merged_capabilities_deduplicates_tools() {
+            // Both servers provide the same tool - should not double-count
+            let results = vec![
+                make_success_result("server-a", &["scan_security", "search_code"]),
+                make_success_result("server-b", &["scan_security", "find_symbols"]),
+            ];
+
+            let parallel = ParallelCapabilityResult { results };
+            let caps = parallel.merged_capabilities();
+
+            // scan_security from both should still be one capability
+            assert!(caps.has(NarsilCapability::SecurityScan));
+            assert!(caps.has(NarsilCapability::CodeSearch));
+            assert!(caps.has(NarsilCapability::SymbolAnalysis));
+            // Three unique tool names total
+            assert_eq!(caps.tools().len(), 3);
+        }
+
+        #[test]
+        fn test_server_results_preserves_order() {
+            let results = vec![
+                make_success_result("first", &["tool_a"]),
+                make_failure_result("second", "error"),
+                make_success_result("third", &["tool_b"]),
+            ];
+
+            let parallel = ParallelCapabilityResult { results };
+            let server_results = parallel.server_results();
+
+            assert_eq!(server_results[0].server_name, "first");
+            assert_eq!(server_results[1].server_name, "second");
+            assert_eq!(server_results[2].server_name, "third");
+        }
+
+        #[test]
+        fn test_parallel_result_timeout_detection_specific() {
+            let results = vec![
+                make_success_result("fast", &["tool_a"]),
+                make_timeout_result("slow"),
+                make_failure_result("broken", "connection refused"),
+            ];
+
+            let parallel = ParallelCapabilityResult { results };
+
+            // Only the timeout server should be counted
+            assert_eq!(parallel.timeout_count(), 1);
+            // Both non-success should be failed
+            assert_eq!(parallel.failed_count(), 2);
+        }
     }
 }

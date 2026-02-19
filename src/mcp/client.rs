@@ -37,7 +37,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Commands that are ALWAYS blocked, even with absolute paths (Unix).
 ///
@@ -684,6 +684,151 @@ impl McpClient {
     }
 }
 
+/// Result of detecting capabilities from a single MCP server.
+///
+/// Contains the discovered tools and metadata about the detection process,
+/// including timing and error information for servers that failed or timed out.
+///
+/// # Example
+///
+/// ```ignore
+/// let result = detect_server_capabilities(&mut client, Duration::from_secs(10)).await;
+/// if result.success {
+///     println!("Found {} tools in {:?}", result.tools.len(), result.duration);
+/// } else {
+///     eprintln!("Detection failed: {}", result.error.unwrap());
+/// }
+/// ```
+#[derive(Debug, Clone)]
+pub struct ServerCapabilityResult {
+    /// Name of the MCP server that was queried.
+    pub server_name: String,
+    /// Tools discovered from the server (empty if detection failed).
+    pub tools: Vec<McpTool>,
+    /// Whether capability detection succeeded.
+    pub success: bool,
+    /// Error message if detection failed (timeout, connection error, etc.).
+    pub error: Option<String>,
+    /// Time taken for the detection attempt.
+    pub duration: Duration,
+}
+
+impl ServerCapabilityResult {
+    /// Returns the tool names discovered from this server.
+    #[must_use]
+    pub fn tool_names(&self) -> Vec<String> {
+        self.tools.iter().map(|t| t.name.clone()).collect()
+    }
+
+    /// Returns true if the server timed out during detection.
+    #[must_use]
+    pub fn is_timeout(&self) -> bool {
+        self.error.as_ref().is_some_and(|e| e.contains("timed out"))
+    }
+}
+
+/// Detects capabilities from a single MCP server with a per-server timeout.
+///
+/// Queries `list_tools()` on the given client, wrapping it in a timeout.
+/// If the server does not respond within `timeout`, the result is marked
+/// as a timeout failure rather than propagating an error.
+///
+/// # Arguments
+///
+/// * `client` - An already-started MCP client to query
+/// * `timeout` - Maximum time to wait for the server to respond
+///
+/// # Returns
+///
+/// A `ServerCapabilityResult` containing the discovered tools on success,
+/// or error information on failure/timeout.
+///
+/// # Example
+///
+/// ```ignore
+/// let mut client = McpClient::new("my-server", "/path/to/server", vec![]);
+/// client.start().await?;
+///
+/// let result = detect_server_capabilities(&mut client, Duration::from_secs(10)).await;
+/// println!("{}: {} tools", result.server_name, result.tools.len());
+/// ```
+pub async fn detect_server_capabilities(
+    client: &mut McpClient,
+    timeout: Duration,
+) -> ServerCapabilityResult {
+    let server_name = client.name().to_string();
+    let start = Instant::now();
+
+    match tokio::time::timeout(timeout, client.list_tools()).await {
+        Ok(Ok(tools)) => ServerCapabilityResult {
+            server_name,
+            tools,
+            success: true,
+            error: None,
+            duration: start.elapsed(),
+        },
+        Ok(Err(e)) => ServerCapabilityResult {
+            server_name,
+            tools: Vec::new(),
+            success: false,
+            error: Some(format!("capability detection failed: {e}")),
+            duration: start.elapsed(),
+        },
+        Err(_) => ServerCapabilityResult {
+            server_name,
+            tools: Vec::new(),
+            success: false,
+            error: Some(format!("capability detection timed out after {timeout:?}")),
+            duration: start.elapsed(),
+        },
+    }
+}
+
+/// Detects capabilities from multiple MCP servers in parallel.
+///
+/// Each server is queried concurrently using `futures::future::join_all`.
+/// Individual server failures or timeouts do not affect other servers —
+/// each result is independent.
+///
+/// # Arguments
+///
+/// * `clients` - Mutable slice of already-started MCP clients to query
+/// * `per_server_timeout` - Maximum time to wait for each individual server
+///
+/// # Returns
+///
+/// A vector of `ServerCapabilityResult`, one per client, in the same order
+/// as the input slice. Failed/timed-out servers have `success: false`.
+///
+/// # Example
+///
+/// ```ignore
+/// let mut clients = vec![client_a, client_b, client_c];
+/// let results = detect_all_server_capabilities(
+///     &mut clients,
+///     Duration::from_secs(10),
+/// ).await;
+///
+/// for result in &results {
+///     if result.success {
+///         println!("{}: {} tools", result.server_name, result.tools.len());
+///     } else {
+///         eprintln!("{}: {}", result.server_name, result.error.as_deref().unwrap_or("unknown"));
+///     }
+/// }
+/// ```
+pub async fn detect_all_server_capabilities(
+    clients: &mut [McpClient],
+    per_server_timeout: Duration,
+) -> Vec<ServerCapabilityResult> {
+    let futures: Vec<_> = clients
+        .iter_mut()
+        .map(|client| detect_server_capabilities(client, per_server_timeout))
+        .collect();
+
+    futures::future::join_all(futures).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -778,5 +923,128 @@ mod tests {
             let result = validate_mcp_command(r"C:\Program Files\mcp-server.exe", &[]);
             assert!(result.is_ok());
         }
+    }
+
+    // =============================================================================
+    // ServerCapabilityResult tests
+    // =============================================================================
+
+    #[test]
+    fn test_server_capability_result_tool_names() {
+        let result = ServerCapabilityResult {
+            server_name: "test-server".to_string(),
+            tools: vec![
+                McpTool {
+                    name: "scan_security".to_string(),
+                    description: "Security scan".to_string(),
+                    input_schema: serde_json::json!({}),
+                },
+                McpTool {
+                    name: "get_call_graph".to_string(),
+                    description: "Call graph".to_string(),
+                    input_schema: serde_json::json!({}),
+                },
+            ],
+            success: true,
+            error: None,
+            duration: Duration::from_millis(50),
+        };
+
+        let names = result.tool_names();
+        assert_eq!(names.len(), 2);
+        assert!(names.contains(&"scan_security".to_string()));
+        assert!(names.contains(&"get_call_graph".to_string()));
+    }
+
+    #[test]
+    fn test_server_capability_result_tool_names_empty() {
+        let result = ServerCapabilityResult {
+            server_name: "dead-server".to_string(),
+            tools: Vec::new(),
+            success: false,
+            error: Some("connection refused".to_string()),
+            duration: Duration::from_millis(5),
+        };
+
+        assert!(result.tool_names().is_empty());
+    }
+
+    #[test]
+    fn test_server_capability_result_is_timeout_true() {
+        let result = ServerCapabilityResult {
+            server_name: "slow-server".to_string(),
+            tools: Vec::new(),
+            success: false,
+            error: Some("capability detection timed out after 10s".to_string()),
+            duration: Duration::from_secs(10),
+        };
+
+        assert!(result.is_timeout());
+    }
+
+    #[test]
+    fn test_server_capability_result_is_timeout_false_for_other_errors() {
+        let result = ServerCapabilityResult {
+            server_name: "broken-server".to_string(),
+            tools: Vec::new(),
+            success: false,
+            error: Some("connection refused".to_string()),
+            duration: Duration::from_millis(5),
+        };
+
+        assert!(!result.is_timeout());
+    }
+
+    #[test]
+    fn test_server_capability_result_is_timeout_false_on_success() {
+        let result = ServerCapabilityResult {
+            server_name: "good-server".to_string(),
+            tools: vec![McpTool {
+                name: "tool1".to_string(),
+                description: String::new(),
+                input_schema: serde_json::json!({}),
+            }],
+            success: true,
+            error: None,
+            duration: Duration::from_millis(100),
+        };
+
+        assert!(!result.is_timeout());
+    }
+
+    #[test]
+    fn test_server_capability_result_success_fields() {
+        let result = ServerCapabilityResult {
+            server_name: "narsil".to_string(),
+            tools: vec![McpTool {
+                name: "scan_security".to_string(),
+                description: "Scan for security issues".to_string(),
+                input_schema: serde_json::json!({"type": "object"}),
+            }],
+            success: true,
+            error: None,
+            duration: Duration::from_millis(250),
+        };
+
+        assert!(result.success);
+        assert!(result.error.is_none());
+        assert_eq!(result.server_name, "narsil");
+        assert_eq!(result.tools.len(), 1);
+        assert!(result.duration.as_millis() >= 250);
+    }
+
+    #[test]
+    fn test_server_capability_result_failure_fields() {
+        let result = ServerCapabilityResult {
+            server_name: "broken".to_string(),
+            tools: Vec::new(),
+            success: false,
+            error: Some("capability detection failed: not connected".to_string()),
+            duration: Duration::from_millis(1),
+        };
+
+        assert!(!result.success);
+        assert!(result.error.is_some());
+        assert!(result.tools.is_empty());
     }
 }
