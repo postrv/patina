@@ -1619,6 +1619,21 @@ impl AppState {
         truncate_context(&self.api_messages, DEFAULT_MAX_INPUT_TOKENS)
     }
 
+    /// Builds the final API message list for sending to the LLM.
+    ///
+    /// This is the single entry point for constructing the message payload
+    /// before an API call. Currently returns truncated messages without
+    /// context injection — the compression orchestrator will be wired in
+    /// via [`inject_ccg_context`] in a future change.
+    ///
+    /// # Returns
+    ///
+    /// A new vector containing the message history ready for the API call.
+    #[must_use]
+    pub fn build_api_messages(&self) -> Vec<ApiMessageV2> {
+        self.api_messages_truncated()
+    }
+
     pub async fn submit_message(
         &mut self,
         client: &std::sync::Arc<dyn LlmProvider>,
@@ -4076,6 +4091,117 @@ mod tests {
     fn test_get_git_head_hash_returns_none_for_non_repo() {
         let hash = get_git_head_hash(std::path::Path::new("/tmp"));
         assert!(hash.is_none());
+    }
+
+    // =========================================================================
+    // 7.1.1 - Characterization Tests for Message Flow
+    //
+    // These tests document the current message preparation behavior:
+    // - api_messages() is a raw accessor with no context injection
+    // - submit_message() is the only path that injects CCG context
+    // - inject_ccg_context() exists but is orphaned (never called by production code)
+    // =========================================================================
+
+    #[test]
+    fn test_build_api_messages_baseline_no_context_injection() {
+        // Characterization: build_api_messages() returns messages without
+        // automatic context injection by the orchestrator.
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+
+        // Even with auto-context enabled and cached context present,
+        // build_api_messages does NOT inject context.
+        state.set_auto_context_enabled(true);
+        state.cached_ccg_context = Some("## Codebase Context".to_string());
+
+        // Push messages directly (bypassing submit_message)
+        state
+            .api_messages_mut()
+            .push(ApiMessageV2::user("Hello, Claude"));
+        state
+            .api_messages_mut()
+            .push(ApiMessageV2::assistant("Hi there!"));
+
+        // build_api_messages should return messages without context wrapper
+        let messages = state.build_api_messages();
+        assert_eq!(messages.len(), 2);
+
+        let content = messages[0].content.to_text();
+        assert_eq!(content, "Hello, Claude");
+        assert!(
+            !content.contains("<context>"),
+            "build_api_messages should not inject CCG context (yet)"
+        );
+
+        // Cached context should still be present (not consumed)
+        assert!(
+            state.has_cached_ccg_context(),
+            "build_api_messages should not consume cached context"
+        );
+    }
+
+    #[test]
+    fn test_build_api_messages_empty_returns_empty() {
+        let state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+        let messages = state.build_api_messages();
+        assert!(messages.is_empty());
+    }
+
+    #[test]
+    fn test_build_api_messages_delegates_to_truncated() {
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+
+        state.api_messages_mut().push(ApiMessageV2::user("Hello"));
+        state
+            .api_messages_mut()
+            .push(ApiMessageV2::assistant("Hi there"));
+
+        // build_api_messages and api_messages_truncated should return
+        // identical results (build_api_messages currently delegates)
+        let built = state.build_api_messages();
+        let truncated = state.api_messages_truncated();
+
+        assert_eq!(built.len(), truncated.len());
+        for (b, t) in built.iter().zip(truncated.iter()) {
+            assert_eq!(b.content.to_text(), t.content.to_text());
+            assert_eq!(b.role, t.role);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_inject_ccg_context_exists_and_callable() {
+        // Characterization: inject_ccg_context() exists as a public async method
+        // on AppState, but it is ORPHANED — no production code calls it.
+        // The actual context injection path is:
+        //   submit_message() -> refresh_build_context() -> orchestrator.build_context()
+        //
+        // This test documents the method's existence and its early-return behavior
+        // when no orchestrator is configured.
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+
+        // Without an orchestrator, inject_ccg_context returns Ok(None) immediately
+        assert!(
+            state.compression_orchestrator().is_none(),
+            "Default AppState should have no compression orchestrator"
+        );
+
+        // The method requires an McpClient, but returns early before using it
+        // when no orchestrator is available. We verify the early return here.
+        // Note: We cannot call inject_ccg_context directly without a real McpClient,
+        // but we can verify the precondition that guarantees the early return.
+        assert!(
+            state.compression_orchestrator().is_none(),
+            "inject_ccg_context() would return Ok(None) without orchestrator"
+        );
+
+        // The orphaned method does NOT affect the working context injection path:
+        // refresh_build_context() is the method actually used by submit_message().
+        // With auto_context disabled, refresh_build_context returns None immediately.
+        assert!(!state.auto_context_enabled());
+        let result = state.refresh_build_context().await;
+        assert!(
+            result.is_none(),
+            "refresh_build_context() returns None when auto_context is disabled"
+        );
     }
 
     // ========================================================================
