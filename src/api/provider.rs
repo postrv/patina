@@ -375,4 +375,237 @@ mod tests {
         }
         assert_eq!(received, events);
     }
+
+    // =========================================================================
+    // AnthropicClient as LlmProvider (Phase 2.2)
+    // =========================================================================
+
+    #[test]
+    fn test_anthropic_client_implements_llm_provider() {
+        use crate::api::AnthropicClient;
+        use secrecy::SecretString;
+
+        let client = AnthropicClient::new(SecretString::from("test-key"), "claude-sonnet-4");
+
+        // AnthropicClient must implement LlmProvider
+        let _provider: &dyn LlmProvider = &client;
+    }
+
+    #[test]
+    fn test_anthropic_provider_name() {
+        use crate::api::AnthropicClient;
+        use secrecy::SecretString;
+
+        let client = AnthropicClient::new(SecretString::from("test-key"), "claude-sonnet-4");
+        let provider: &dyn LlmProvider = &client;
+
+        assert_eq!(provider.name(), "anthropic");
+    }
+
+    #[test]
+    fn test_anthropic_provider_model() {
+        use crate::api::AnthropicClient;
+        use secrecy::SecretString;
+
+        let client = AnthropicClient::new(SecretString::from("test-key"), "claude-sonnet-4");
+        let provider: &dyn LlmProvider = &client;
+
+        assert_eq!(provider.model(), "claude-sonnet-4");
+    }
+
+    #[test]
+    fn test_anthropic_provider_model_custom() {
+        use crate::api::AnthropicClient;
+        use secrecy::SecretString;
+
+        let client =
+            AnthropicClient::new(SecretString::from("test-key"), "claude-opus-4-20250514");
+        let provider: &dyn LlmProvider = &client;
+
+        assert_eq!(provider.model(), "claude-opus-4-20250514");
+    }
+
+    #[test]
+    fn test_anthropic_provider_as_boxed_trait_object() {
+        use crate::api::AnthropicClient;
+        use secrecy::SecretString;
+
+        let client = AnthropicClient::new(SecretString::from("test-key"), "claude-sonnet-4");
+        let provider: Box<dyn LlmProvider> = Box::new(client);
+
+        assert_eq!(provider.name(), "anthropic");
+        assert_eq!(provider.model(), "claude-sonnet-4");
+    }
+
+    #[test]
+    fn test_anthropic_provider_as_arc_trait_object() {
+        use crate::api::AnthropicClient;
+        use secrecy::SecretString;
+        use std::sync::Arc;
+
+        let client = AnthropicClient::new(SecretString::from("test-key"), "claude-sonnet-4");
+        let provider: Arc<dyn LlmProvider> = Arc::new(client);
+
+        assert_eq!(provider.name(), "anthropic");
+        assert_eq!(provider.model(), "claude-sonnet-4");
+
+        // Arc cloning should work for spawning patterns
+        let provider2 = Arc::clone(&provider);
+        assert_eq!(provider2.name(), "anthropic");
+    }
+
+    #[tokio::test]
+    async fn test_anthropic_provider_stream_message_delegates() {
+        use crate::api::AnthropicClient;
+        use secrecy::SecretString;
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let mock_server = MockServer::start().await;
+
+        // Set up mock to return a simple SSE stream
+        let sse_response = r#"event: content_block_start
+data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello from provider"}}
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":0}
+
+event: message_delta
+data: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}
+
+event: message_stop
+data: {"type":"message_stop"}
+
+"#;
+
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_raw(sse_response, "text/event-stream")
+                    .append_header("content-type", "text/event-stream"),
+            )
+            .mount(&mock_server)
+            .await;
+
+        let client = AnthropicClient::new_with_base_url(
+            SecretString::from("test-key"),
+            "claude-sonnet-4",
+            &mock_server.uri(),
+        );
+
+        // Use through the LlmProvider trait
+        let provider: &dyn LlmProvider = &client;
+
+        let (tx, mut rx) = mpsc::channel(32);
+        let messages = vec![ApiMessageV2::user("Hello")];
+
+        provider
+            .stream_message(&messages, None, None, tx)
+            .await
+            .expect("stream_message should succeed via trait");
+
+        // Verify we get the expected events
+        let mut events = Vec::new();
+        while let Some(event) = rx.try_recv().ok() {
+            events.push(event);
+        }
+
+        // Should contain the content delta
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, StreamEvent::ContentDelta(s) if s == "Hello from provider")),
+            "Expected ContentDelta('Hello from provider'), got: {:?}",
+            events
+        );
+
+        // Should contain MessageComplete with EndTurn
+        assert!(
+            events.iter().any(
+                |e| matches!(e, StreamEvent::MessageComplete { stop_reason: StopReason::EndTurn })
+            ),
+            "Expected MessageComplete(EndTurn), got: {:?}",
+            events
+        );
+    }
+
+    #[tokio::test]
+    async fn test_anthropic_provider_stream_message_with_tools() {
+        use crate::api::AnthropicClient;
+        use secrecy::SecretString;
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let mock_server = MockServer::start().await;
+
+        let sse_response = r#"event: content_block_start
+data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_abc","name":"bash"}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"command\":\"ls\"}"}}
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":0}
+
+event: message_delta
+data: {"type":"message_delta","delta":{"stop_reason":"tool_use"}}
+
+event: message_stop
+data: {"type":"message_stop"}
+
+"#;
+
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_raw(sse_response, "text/event-stream")
+                    .append_header("content-type", "text/event-stream"),
+            )
+            .mount(&mock_server)
+            .await;
+
+        let client = AnthropicClient::new_with_base_url(
+            SecretString::from("test-key"),
+            "claude-sonnet-4",
+            &mock_server.uri(),
+        );
+
+        let provider: &dyn LlmProvider = &client;
+
+        let tools = vec![crate::api::tools::ToolDefinition::new(
+            "bash",
+            "Run commands",
+            serde_json::json!({"type": "object", "properties": {}}),
+        )];
+
+        let (tx, mut rx) = mpsc::channel(32);
+        let messages = vec![ApiMessageV2::user("List files")];
+
+        provider
+            .stream_message(&messages, Some(&tools), Some(&ToolChoice::Auto), tx)
+            .await
+            .expect("stream_message with tools should succeed");
+
+        let mut events = Vec::new();
+        while let Some(event) = rx.try_recv().ok() {
+            events.push(event);
+        }
+
+        // Should produce the same tool use events as the direct client
+        assert!(
+            events.iter().any(|e| matches!(e, StreamEvent::ToolUseStart { name, .. } if name == "bash")),
+            "Expected ToolUseStart with name 'bash', got: {:?}",
+            events
+        );
+        assert!(
+            events.iter().any(|e| matches!(e, StreamEvent::MessageComplete { stop_reason: StopReason::ToolUse })),
+            "Expected MessageComplete(ToolUse), got: {:?}",
+            events
+        );
+    }
 }
