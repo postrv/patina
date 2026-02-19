@@ -73,9 +73,9 @@ impl EventHandler for SessionHandler {
 
 /// Performs the auto-save, creating or updating the session as appropriate.
 ///
-/// # Errors
-///
-/// Returns `Ok(())` even on save failure — errors are logged but not propagated.
+/// Creates a new session when [`AppState::session_id`] is `None`, or updates
+/// the existing session. On success for new sessions, sets the session ID on
+/// state. On failure, logs a warning but does not propagate the error.
 async fn auto_save(state: &mut crate::app::state::AppState, session_manager: &SessionManager) {
     let session = state.to_session();
 
