@@ -7,5 +7,7 @@
 //! # Providers
 //!
 //! - [`openai_types`]: OpenAI Chat Completions API message types (used by OpenRouter)
+//! - [`openrouter`]: Bidirectional message format translation (Anthropic <-> OpenAI)
 
 pub mod openai_types;
+pub mod openrouter;
