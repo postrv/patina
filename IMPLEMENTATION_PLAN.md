@@ -233,9 +233,9 @@ Before marking ANY task `[x]`:
 **Description**: Define the OpenAI/OpenRouter message format types for serialization/deserialization. These are distinct from Anthropic types.
 
 **TDD Cycle**:
-- [ ] RED: Write serde round-trip tests for `OpenAiMessage`, `OpenAiFunctionCall`, `OpenAiStreamChunk`, `OpenAiDelta` — verify serialization matches OpenAI API spec
-- [ ] GREEN: Implement types in `src/api/providers/openai_types.rs` with serde derives
-- [ ] REFACTOR: Add `From` conversions where appropriate, doc comments referencing OpenAI API docs
+- [x] RED: Write serde round-trip tests for `OpenAiMessage`, `OpenAiFunctionCall`, `OpenAiStreamChunk`, `OpenAiDelta` — verify serialization matches OpenAI API spec
+- [x] GREEN: Implement types in `src/api/providers/openai_types.rs` with serde derives
+- [x] REFACTOR: Add `From` conversions where appropriate, doc comments referencing OpenAI API docs
 - Files: `src/api/providers/openai_types.rs` (new), `src/api/providers/mod.rs` (new)
 - Acceptance: Types serialize/deserialize correctly, round-trip tests pass
 
