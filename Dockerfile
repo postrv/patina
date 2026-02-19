@@ -14,6 +14,7 @@ RUN mkdir -p src benches tests/helpers && \
     echo "fn main() {}" > src/main.rs && \
     echo "fn main() {}" > benches/rendering.rs && \
     echo "fn main() {}" > benches/parallel_tools.rs && \
+    echo "fn main() {}" > benches/compression.rs && \
     echo "fn main() {}" > tests/helpers/mock_mcp_server.rs && \
     cargo build --release && \
     rm -rf src benches tests

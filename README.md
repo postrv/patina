@@ -13,13 +13,14 @@ A high-performance terminal client for the Claude API, written in Rust. Designed
 ## Highlights
 
 - **Sub-millisecond rendering** - Full 100-message redraw in <1ms
+- **Multi-provider LLM support** - Claude (Anthropic) and OpenRouter-compatible models with automatic failover
 - **Parallel tool execution** - 5x+ speedup on multi-file operations
-- **2,500+ tests** with 85%+ code coverage
-- **Lightweight binary** - Single executable with minimal dependencies
-- **Zero unsafe code** - Pure safe Rust (~56,000 LOC)
+- **Autonomous agent orchestration** - Spawn parallel sub-agents in isolated git worktrees
+- **Continuous coding loop** - Run tasks autonomously with stagnation detection and quality gates
+- **3,500+ tests** with 85%+ code coverage
+- **Zero unsafe code** - Pure safe Rust (~87,000 LOC)
 - **Cross-platform** - Linux, macOS, Windows
 - **Security-first** - Defense-in-depth with command filtering, path validation, and session integrity
-- **Patina theme** - Distinctive bronze & verdigris color palette
 
 ## Features
 
@@ -29,11 +30,23 @@ A high-performance terminal client for the Claude API, written in Rust. Designed
 |---------|-------------|
 | **Streaming TUI** | Real-time response streaming with syntax highlighting |
 | **Agentic Tool Loop** | Claude can autonomously execute tools and continue conversations |
+| **Multi-Provider LLM** | Anthropic, OpenRouter, and any OpenAI-compatible API |
+| **Provider Failover** | Automatic fallback between providers on failure |
 | **Parallel Execution** | Concurrent tool execution with safety classification (5x+ speedup) |
 | **Session Resume** | Save and restore conversations with full context |
 | **Context Compaction** | Automatic summarization when context window fills |
+| **Context Compression** | Intelligent context building with token budgeting and narsil-mcp integration |
 | **MCP Support** | Model Context Protocol for tool server integration |
-| **Multi-Model** | Anthropic direct + AWS Bedrock provider support |
+
+### Autonomous Agents
+
+| Feature | Description |
+|---------|-------------|
+| **Worktree Agents** | Spawn sub-agents in isolated git worktrees for parallel work |
+| **Conflict Detection** | Cross-agent file conflict detection before merging |
+| **Continuous Loop** | Run tasks autonomously with `/continuous` command |
+| **Stagnation Detection** | Multi-factor scoring detects stuck agents and triggers recovery |
+| **Quality Gates** | Automated clippy, test, and format checks with timeout enforcement |
 
 ### Built-in Tools
 
@@ -56,8 +69,7 @@ A high-performance terminal client for the Claude API, written in Rust. Designed
 | **Plugin System** | TOML-based plugins with auto-discovery |
 | **Skills Engine** | Context-aware suggestions via SKILL.md files |
 | **Hooks** | 11 lifecycle events (PreToolUse, PostToolUse, SessionStart, etc.) |
-| **Slash Commands** | `/worktree`, `/help`, and user-defined workflows |
-| **Subagent Orchestration** | Multi-agent coordination for complex tasks |
+| **Slash Commands** | `/worktree`, `/agent`, `/continuous`, `/help`, and user-defined workflows |
 
 ### Developer Experience
 
@@ -124,6 +136,9 @@ patina -c
 
 # List saved sessions
 patina --list-sessions
+
+# Use OpenRouter instead of Anthropic
+patina --provider openrouter --model anthropic/claude-sonnet-4
 ```
 
 ## Command Line Options
@@ -134,6 +149,8 @@ patina --list-sessions
 | `-p, --print` | Print mode (non-interactive) | `false` |
 | `--api-key` | API key (or `ANTHROPIC_API_KEY` env) | - |
 | `-m, --model` | Model to use | `claude-sonnet-4-20250514` |
+| `--provider` | LLM provider (`anthropic`, `openrouter`) | `anthropic` |
+| `--fallback-provider` | Fallback provider on failure | - |
 | `-C, --directory` | Working directory | `.` |
 | `-c, --continue` | Resume most recent session | - |
 | `-r, --resume` | Resume specific session by ID | - |
@@ -181,6 +198,11 @@ patina --list-sessions
 | `/worktree switch <name>` | Switch to worktree |
 | `/worktree remove <name>` | Remove worktree |
 | `/worktree status` | Show worktree status |
+| `/agent spawn <task>` | Spawn a sub-agent in an isolated worktree |
+| `/agent list` | List running agents |
+| `/agent merge <name>` | Merge agent changes back |
+| `/continuous` | Start autonomous coding loop with quality gates |
+| `/help` | Show available commands |
 
 ## Security
 
@@ -258,6 +280,7 @@ Patina implements the [Model Context Protocol](https://spec.modelcontextprotocol
 - **Protocol:** JSON-RPC 2.0
 - **Transports:** stdio (default), HTTP SSE
 - **Security:** Command validation, interpreter path requirements
+- **Parallel detection:** Concurrent capability probing across MCP servers
 
 ## Performance
 
@@ -266,8 +289,8 @@ Benchmarks (Criterion, 120x40 terminal):
 | Benchmark | Target |
 |-----------|--------|
 | Full redraw (100 messages) | <1ms |
-| Streaming token append | <100μs |
-| Scroll operations | <1μs |
+| Streaming token append | <100us |
+| Scroll operations | <1us |
 | Large message rendering | <5ms |
 
 ### Parallel Tool Execution
@@ -288,23 +311,36 @@ cargo bench
 # HTML reports in target/criterion/
 ```
 
-## Project Structure
+## Architecture
+
+Patina uses an event-driven architecture with a priority-ordered handler dispatch system:
 
 ```
 src/
 ├── main.rs           # CLI entry point
-├── app/              # Event loop, application state
-├── api/              # Anthropic API client, streaming, vision
+├── app/              # Event loop, dispatcher, and handlers
+│   ├── state.rs      # Application state
+│   ├── context.rs    # Handler context (shared state bundle)
+│   ├── dispatch.rs   # Priority-ordered event dispatcher
+│   └── handlers/     # Focused event handlers
+│       ├── keyboard  # Input, copy/paste, selection
+│       ├── stream    # API streaming events
+│       ├── session   # Session persistence
+│       ├── permission# Tool approval prompts
+│       ├── tick      # UI refresh, throbber animation
+│       ├── agent     # Sub-agent lifecycle
+│       └── continuous# Autonomous loop control
+├── api/              # LLM providers (Anthropic, OpenRouter, fallback)
 ├── tui/              # Terminal UI (ratatui), image display
 ├── tools/            # Tool execution, security, parallel execution
 ├── mcp/              # Model Context Protocol client
 ├── hooks/            # Lifecycle events
 ├── skills/           # Context-aware suggestions
 ├── commands/         # Slash command parsing
-├── agents/           # Subagent orchestration
+├── agents/           # Worktree-based agent orchestration
 ├── plugins/          # Plugin system
 ├── session/          # Session persistence
-├── context/          # Context management, compaction, tokens
+├── context/          # Context management, compression, token budgeting
 ├── worktree/         # Git worktree management
 ├── permissions/      # Permission management
 ├── auth/             # Authentication (API key, OAuth scaffolding)
@@ -333,13 +369,13 @@ cargo tarpaulin --out Html
 
 | Metric | Value |
 |--------|-------|
-| Version | 0.7.0 |
+| Version | 0.9.0 |
 | MSRV | Rust 1.75 |
 | Edition | 2021 |
-| Tests | 2,500+ |
+| Tests | 3,500+ |
 | Coverage | 85%+ |
 | Unsafe | 0 blocks |
-| LOC | ~56,000 |
+| LOC | ~87,000 |
 
 ### Key Dependencies
 
@@ -359,18 +395,19 @@ Patina can be used as a Rust library for building custom AI-powered tools:
 
 ```toml
 [dependencies]
-patina = "0.6"
+patina = "0.9"
 ```
 
 ### Available Modules
 
 | Module | Description |
 |--------|-------------|
-| `patina::api` | Anthropic API client with streaming support |
+| `patina::api` | Multi-provider LLM client with streaming support |
 | `patina::tools` | Tool execution framework with security policies |
 | `patina::mcp` | Model Context Protocol client |
 | `patina::context` | Context management, compression, and token budgeting |
-| `patina::continuous` | Continuous coding plugin infrastructure |
+| `patina::continuous` | Continuous autonomous coding infrastructure |
+| `patina::agents` | Worktree-based agent orchestration |
 | `patina::worktree` | Git worktree management and experiments |
 | `patina::narsil` | Code intelligence integration |
 
@@ -433,4 +470,4 @@ Copyright (c) 2026 Laurence Avent
 
 **Laurence Avent** ([@postrv](https://github.com/postrv))
 
-<!-- METRICS:tests=2500,loc=56000 -->
+<!-- METRICS:tests=3500,loc=87000 -->

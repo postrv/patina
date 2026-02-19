@@ -42,7 +42,7 @@ sbom.json
 # Internal collaboration
 .cowork/
 
-# Version-specific implementation plans (use IMPLEMENTATION_PLAN.md)
+# Version-specific implementation plans (use IMPLEMENTATION_PLAN111.md)
 IMPLEMENTATION_PLAN_v*.md
 
 # Coverage reports

@@ -10,7 +10,7 @@ on:
       - 'LICENSE*'
       - '.ralph/**'
       - '.claude/**'
-      - '../../.archive/IMPLEMENTATION_PLAN.md'
+      - '.archive/**'
       - 'Formula/**'
       - 'scripts/**'
   pull_request:
