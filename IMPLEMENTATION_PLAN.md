@@ -325,9 +325,9 @@ Before marking ANY task `[x]`:
 **Description**: Wire architecture/import graph fetch to `McpClient::call_tool("get_import_graph", ...)` and `get_dependencies`.
 
 **TDD Cycle**:
-- [ ] RED: Write tests for `fetch_architecture()` — calls correct MCP tools, parses module dependency info, caches by commit hash, renders to markdown within token budget
-- [ ] GREEN: Implement `fetch_architecture()` using MCP calls, parse into `CcgArchitecture`, render as markdown
-- [ ] REFACTOR: Add token estimation for architecture output, truncate if exceeds budget allocation
+- [x] RED: Write tests for `fetch_architecture()` — calls correct MCP tools, parses module dependency info, caches by commit hash, renders to markdown within token budget
+- [x] GREEN: Implement `fetch_architecture()` using MCP calls, parse into `CcgArchitecture`, render as markdown
+- [x] REFACTOR: Add token estimation for architecture output, truncate if exceeds budget allocation
 - Files: `src/context/compression/orchestrator.rs`, `src/context/compression/render.rs`
 - Acceptance: Architecture context produced from live narsil data, token-limited
 
