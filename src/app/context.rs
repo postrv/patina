@@ -5,14 +5,15 @@
 //! borrow-friendly struct. This replaces the four separate parameters
 //! previously threaded through the event loop.
 
-use crossterm::event::Event;
+use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
+use futures::StreamExt;
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 use std::io;
 
 use crate::api::AnthropicClient;
 use crate::app::events::AppEvent;
-use crate::app::state::AppState;
+use crate::app::state::{AppState, BackgroundEvent};
 use crate::session::SessionManager;
 
 /// Bundles shared references needed by event handlers.
@@ -141,15 +142,72 @@ impl<'a> AppContext<'a> {
     /// ```
     pub async fn recv_event<S>(
         &mut self,
-        _crossterm_events: &mut S,
-        _tick_interval: &mut tokio::time::Interval,
+        crossterm_events: &mut S,
+        tick_interval: &mut tokio::time::Interval,
     ) -> AppEvent
     where
         S: futures::Stream<Item = Result<Event, io::Error>> + Unpin,
     {
-        // Stub: RED phase — tests define the expected behavior.
-        // GREEN phase will replace this with the real tokio::select! implementation.
-        AppEvent::Tick
+        loop {
+            tokio::select! {
+                biased;
+
+                // Branch 1: Crossterm terminal events (highest priority).
+                Some(Ok(event)) = crossterm_events.next() => {
+                    match event {
+                        Event::Key(key) => {
+                            // Skip key release events to prevent character duplication
+                            // when REPORT_EVENT_TYPES is enabled.
+                            if key.kind == KeyEventKind::Release {
+                                continue;
+                            }
+                            // Map Ctrl+C / Ctrl+D to Quit.
+                            if matches!(
+                                (key.code, key.modifiers),
+                                (KeyCode::Char('c'), KeyModifiers::CONTROL)
+                                    | (KeyCode::Char('d'), KeyModifiers::CONTROL)
+                            ) {
+                                return AppEvent::Quit;
+                            }
+                            return AppEvent::Key(key);
+                        }
+                        Event::Mouse(mouse) => return AppEvent::Mouse(mouse),
+                        Event::Resize(w, h) => {
+                            return AppEvent::Resize {
+                                width: w,
+                                height: h,
+                            };
+                        }
+                        // FocusGained, FocusLost, Paste — not handled; loop again.
+                        _ => continue,
+                    }
+                }
+
+                // Branch 2: Background events (API chunks, tool results).
+                Some(bg) = self.state.recv_background_event(),
+                    if self.state.has_background_work() =>
+                {
+                    match bg {
+                        BackgroundEvent::ApiChunk(chunk) => {
+                            return AppEvent::ApiChunk(chunk);
+                        }
+                        BackgroundEvent::ToolResult(id, result) => {
+                            return AppEvent::ToolResult {
+                                tool_id: id,
+                                result,
+                            };
+                        }
+                    }
+                }
+
+                // Branch 3: Throbber / animation tick.
+                _ = tick_interval.tick(),
+                    if self.state.is_loading() || self.state.has_executing_tools() =>
+                {
+                    return AppEvent::Tick;
+                }
+            }
+        }
     }
 }
 
