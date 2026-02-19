@@ -10,6 +10,7 @@ use patina::tui::render_timeline_to_lines;
 use patina::types::config::ParallelMode;
 use patina::types::{ConversationEntry, Role};
 use ratatui::text::Line;
+use serial_test::serial;
 use std::path::PathBuf;
 
 /// Helper to convert rendered lines to a string for snapshot comparison.
@@ -32,6 +33,7 @@ fn lines_to_string(lines: &[Line]) -> String {
 // ============================================================================
 
 /// Tests that timeline entries maintain correct order during iteration.
+#[serial]
 #[test]
 fn test_timeline_iteration_order() {
     let mut state = AppState::new(PathBuf::from("/tmp"), true, ParallelMode::Enabled);
@@ -61,6 +63,7 @@ fn test_timeline_iteration_order() {
 }
 
 /// Tests that tool blocks track their associated message index.
+#[serial]
 #[test]
 fn test_tool_block_follows_correct_message() {
     let mut state = AppState::new(PathBuf::from("/tmp"), true, ParallelMode::Enabled);
@@ -99,6 +102,7 @@ fn test_tool_block_follows_correct_message() {
 }
 
 /// Tests timeline with streaming entry at the end.
+#[serial]
 #[test]
 fn test_timeline_streaming_at_end() {
     let mut state = AppState::new(PathBuf::from("/tmp"), true, ParallelMode::Enabled);
@@ -120,6 +124,7 @@ fn test_timeline_streaming_at_end() {
 }
 
 /// Tests that timeline correctly orders multiple tools after same assistant message.
+#[serial]
 #[test]
 fn test_multiple_tools_same_message() {
     let mut state = AppState::new(PathBuf::from("/tmp"), true, ParallelMode::Enabled);
@@ -153,6 +158,7 @@ fn test_multiple_tools_same_message() {
 // ============================================================================
 
 /// Tests that timeline produces expected content for rendering.
+#[serial]
 #[test]
 fn test_timeline_produces_render_content() {
     let mut state = AppState::new(PathBuf::from("/tmp"), true, ParallelMode::Enabled);
@@ -210,6 +216,7 @@ fn test_timeline_produces_render_content() {
 // ============================================================================
 
 /// Tests empty timeline.
+#[serial]
 #[test]
 fn test_empty_timeline() {
     let state = AppState::new(PathBuf::from("/tmp"), true, ParallelMode::Enabled);
@@ -218,6 +225,7 @@ fn test_empty_timeline() {
 }
 
 /// Tests timeline with only streaming (no complete messages).
+#[serial]
 #[test]
 fn test_timeline_only_streaming() {
     let mut state = AppState::new(PathBuf::from("/tmp"), true, ParallelMode::Enabled);
@@ -234,6 +242,7 @@ fn test_timeline_only_streaming() {
 ///
 /// When Claude sends only tool_use blocks (no text), the assistant message
 /// is empty and should not be rendered to avoid spurious "Patina:" lines.
+#[serial]
 #[test]
 fn test_empty_assistant_message_not_rendered() {
     use patina::types::Timeline;
@@ -271,6 +280,7 @@ fn test_empty_assistant_message_not_rendered() {
 }
 
 /// Tests that tool error status is preserved.
+#[serial]
 #[test]
 fn test_tool_error_status() {
     let mut state = AppState::new(PathBuf::from("/tmp"), true, ParallelMode::Enabled);
@@ -302,6 +312,7 @@ fn test_tool_error_status() {
 /// - Assistant message
 /// - Tool block (immediately after assistant)
 /// - NOT: tool blocks gathered at the end
+#[serial]
 #[test]
 fn test_timeline_renders_tool_blocks_inline() {
     let mut state = AppState::new(PathBuf::from("/tmp"), true, ParallelMode::Enabled);
@@ -328,6 +339,7 @@ fn test_timeline_renders_tool_blocks_inline() {
 ///
 /// Scenario: User asks two questions, each answered with a tool call.
 /// Tool blocks should appear immediately after their producing assistant message.
+#[serial]
 #[test]
 fn test_timeline_renders_interleaved_tools() {
     let mut state = AppState::new(PathBuf::from("/tmp"), true, ParallelMode::Enabled);
@@ -361,6 +373,7 @@ fn test_timeline_renders_interleaved_tools() {
 }
 
 /// Tests that streaming always appears at the end of timeline.
+#[serial]
 #[test]
 fn test_timeline_renders_streaming_at_end() {
     let mut state = AppState::new(PathBuf::from("/tmp"), true, ParallelMode::Enabled);
@@ -381,6 +394,7 @@ fn test_timeline_renders_streaming_at_end() {
 }
 
 /// Tests timeline rendering with tool errors.
+#[serial]
 #[test]
 fn test_timeline_renders_tool_error() {
     let mut state = AppState::new(PathBuf::from("/tmp"), true, ParallelMode::Enabled);
@@ -399,6 +413,7 @@ fn test_timeline_renders_tool_error() {
 }
 
 /// Tests timeline rendering with multiple tools after same message.
+#[serial]
 #[test]
 fn test_timeline_renders_multiple_tools_same_message() {
     let mut state = AppState::new(PathBuf::from("/tmp"), true, ParallelMode::Enabled);

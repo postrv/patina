@@ -436,6 +436,7 @@ mod tests {
         KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
     };
     use secrecy::SecretString;
+    use serial_test::serial;
     use std::path::PathBuf;
     use std::sync::Arc;
     use tempfile::TempDir;
@@ -1160,6 +1161,7 @@ mod tests {
     // Paste bindings (Cmd+V, Option+V, Ctrl+Shift+V)
     // =========================================================================
 
+    #[serial]
     #[tokio::test]
     async fn handle_super_v_consumed_as_paste() {
         let mut handler = KeyboardHandler;
@@ -1175,6 +1177,7 @@ mod tests {
         assert_eq!(result, Handled::CONSUMED, "Cmd+V must be consumed as paste");
     }
 
+    #[serial]
     #[tokio::test]
     async fn handle_alt_v_consumed_as_paste() {
         let mut handler = KeyboardHandler;

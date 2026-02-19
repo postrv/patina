@@ -67,7 +67,7 @@ pub fn matches_pattern(pattern: &str, value: &str) -> bool {
     }
 
     // Check cache for compiled regex
-    let cache = PATTERN_CACHE.lock().unwrap();
+    let cache = PATTERN_CACHE.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(regex) = cache.get(pattern) {
         return regex.is_match(value);
     }
@@ -82,7 +82,7 @@ pub fn matches_pattern(pattern: &str, value: &str) -> bool {
     let matches = regex.is_match(value);
 
     // Cache the compiled regex
-    let mut cache = PATTERN_CACHE.lock().unwrap();
+    let mut cache = PATTERN_CACHE.lock().unwrap_or_else(|e| e.into_inner());
     if cache.len() < MAX_CACHE_SIZE {
         cache.insert(pattern.to_string(), regex);
     }
@@ -376,7 +376,7 @@ mod tests {
         }
 
         // Verify cache has the pattern
-        let cache = PATTERN_CACHE.lock().unwrap();
+        let cache = PATTERN_CACHE.lock().unwrap_or_else(|e| e.into_inner());
         assert!(cache.contains_key("test*pattern"));
     }
 }

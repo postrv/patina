@@ -8,6 +8,7 @@ use patina::tui::render;
 use patina::types::config::ParallelMode;
 use patina::types::{Message, Role};
 use ratatui::{backend::TestBackend, Terminal};
+use serial_test::serial;
 use std::path::PathBuf;
 
 /// Helper to render state to a string buffer for snapshot testing.
@@ -44,6 +45,7 @@ fn new_state() -> AppState {
 // ============================================================================
 
 /// Tests rendering of an empty state - no messages, no input.
+#[serial]
 #[test]
 fn test_empty_state_render() {
     let mut state = new_state();
@@ -52,6 +54,7 @@ fn test_empty_state_render() {
 }
 
 /// Tests rendering with only input text, no messages.
+#[serial]
 #[test]
 fn test_input_only_render() {
     let mut state = new_state();
@@ -70,6 +73,7 @@ fn test_input_only_render() {
 // ============================================================================
 
 /// Tests rendering a single user message.
+#[serial]
 #[test]
 fn test_single_user_message_render() {
     let mut state = new_state();
@@ -83,6 +87,7 @@ fn test_single_user_message_render() {
 }
 
 /// Tests rendering a single assistant message.
+#[serial]
 #[test]
 fn test_single_assistant_message_render() {
     let mut state = new_state();
@@ -96,6 +101,7 @@ fn test_single_assistant_message_render() {
 }
 
 /// Tests rendering a conversation with multiple messages.
+#[serial]
 #[test]
 fn test_conversation_render() {
     let mut state = new_state();
@@ -122,6 +128,7 @@ fn test_conversation_render() {
 }
 
 /// Tests rendering multi-line message content.
+#[serial]
 #[test]
 fn test_multiline_message_render() {
     let mut state = new_state();
@@ -140,6 +147,7 @@ fn test_multiline_message_render() {
 // ============================================================================
 
 /// Tests rendering when streaming a response (loading state with partial content).
+#[serial]
 #[test]
 fn test_streaming_response_render() {
     let mut state = new_state();
@@ -160,6 +168,7 @@ fn test_streaming_response_render() {
 
 /// Tests throbber animation frames.
 /// Verifies that each tick produces a different character.
+#[serial]
 #[test]
 fn test_throbber_animation() {
     let mut state = new_state();
@@ -191,6 +200,7 @@ fn test_throbber_animation() {
 /// - Unicode in messages renders without crashing
 /// - Unicode in input renders correctly
 /// - Emoji and CJK characters display properly
+#[serial]
 #[test]
 fn test_tui_handles_unicode() {
     let mut state = new_state();
@@ -215,6 +225,7 @@ fn test_tui_handles_unicode() {
 }
 
 /// Tests that Unicode input is handled correctly.
+#[serial]
 #[test]
 fn test_tui_unicode_input() {
     let mut state = new_state();
@@ -245,6 +256,7 @@ fn test_tui_unicode_input() {
 /// Verifies:
 /// - Scroll offset is applied
 /// - Content shifts when scrolling
+#[serial]
 #[test]
 fn test_tui_scrolls_long_content() {
     let mut state = new_state();
@@ -283,6 +295,7 @@ fn test_tui_scrolls_long_content() {
 }
 
 /// Tests that input cursor position tracking works correctly.
+#[serial]
 #[test]
 fn test_tui_input_cursor_visible() {
     let mut state = new_state();
@@ -306,6 +319,7 @@ fn test_tui_input_cursor_visible() {
 }
 
 /// Tests cursor movement within input.
+#[serial]
 #[test]
 fn test_tui_cursor_movement() {
     let mut state = new_state();
@@ -349,6 +363,7 @@ fn test_tui_cursor_movement() {
 
 /// Tests that key events are processed correctly.
 /// Verifies character insertion, deletion, and navigation.
+#[serial]
 #[test]
 fn test_tui_key_events() {
     let mut state = new_state();
@@ -381,6 +396,7 @@ fn test_tui_key_events() {
 
 /// Tests that resize events are handled correctly.
 /// The UI should re-render correctly at different sizes.
+#[serial]
 #[test]
 fn test_tui_resize_event() {
     let mut state = new_state();
@@ -415,6 +431,7 @@ fn test_tui_resize_event() {
 
 /// Tests that paste events (multiple characters) are handled.
 /// This simulates pasting text by inserting multiple characters.
+#[serial]
 #[test]
 fn test_tui_paste_event() {
     let mut state = new_state();
@@ -434,6 +451,7 @@ fn test_tui_paste_event() {
 }
 
 /// Tests that the dirty flag system works correctly.
+#[serial]
 #[test]
 fn test_dirty_flags() {
     let mut state = new_state();
@@ -473,6 +491,7 @@ fn test_dirty_flags() {
 // ============================================================================
 
 /// Tests that the status bar displays the current branch name.
+#[serial]
 #[test]
 fn test_status_bar_shows_branch_name() {
     let mut state = new_state();
@@ -491,6 +510,7 @@ fn test_status_bar_shows_branch_name() {
 }
 
 /// Tests that the status bar displays ahead/behind counts.
+#[serial]
 #[test]
 fn test_status_bar_shows_ahead_behind() {
     let mut state = new_state();
@@ -517,6 +537,7 @@ fn test_status_bar_shows_ahead_behind() {
 }
 
 /// Tests that the status bar displays modified file count.
+#[serial]
 #[test]
 fn test_status_bar_shows_modified_count() {
     let mut state = new_state();
@@ -535,6 +556,7 @@ fn test_status_bar_shows_modified_count() {
 }
 
 /// Tests that status bar renders with full worktree status.
+#[serial]
 #[test]
 fn test_status_bar_full_worktree_status() {
     let mut state = new_state();
@@ -549,6 +571,7 @@ fn test_status_bar_full_worktree_status() {
 }
 
 /// Tests that status bar handles clean worktree (no modified files).
+#[serial]
 #[test]
 fn test_status_bar_clean_worktree() {
     let mut state = new_state();

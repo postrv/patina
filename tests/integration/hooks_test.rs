@@ -9,6 +9,7 @@ use patina::hooks::{
     HookCommand, HookContext, HookDecision, HookDefinition, HookEvent, HookExecutor,
 };
 use serde_json::json;
+use serial_test::serial;
 
 // =============================================================================
 // Cross-Platform Test Helpers
@@ -87,6 +88,7 @@ fn hook_with_matcher(matcher: &str, command: &str) -> HookDefinition {
 
 /// Test that a pre-tool-use hook with exit code 0 allows execution to continue.
 /// This test is cross-platform using the exit_with_code helper.
+#[serial]
 #[tokio::test]
 async fn test_pre_tool_use_hook_continues() {
     let mut executor = HookExecutor::new();
@@ -108,6 +110,7 @@ async fn test_pre_tool_use_hook_continues() {
 
 /// Test that a pre-tool-use hook with exit code 2 blocks execution.
 /// This test is cross-platform using the echo_and_exit helper.
+#[serial]
 #[tokio::test]
 async fn test_pre_tool_use_hook_blocks() {
     let mut executor = HookExecutor::new();
@@ -138,6 +141,7 @@ async fn test_pre_tool_use_hook_blocks() {
 }
 
 /// Test that hooks without a matcher run for all tools.
+#[serial]
 #[tokio::test]
 async fn test_pre_tool_use_hook_no_matcher_runs_for_all() {
     let mut executor = HookExecutor::new();
@@ -164,6 +168,7 @@ async fn test_pre_tool_use_hook_no_matcher_runs_for_all() {
 }
 
 /// Test that when no hooks are registered, execution continues.
+#[serial]
 #[tokio::test]
 async fn test_pre_tool_use_no_hooks_continues() {
     let executor = HookExecutor::new();
@@ -181,6 +186,7 @@ async fn test_pre_tool_use_no_hooks_continues() {
 ///
 /// Note: This test uses bash-specific constructs ($(cat), grep -q).
 #[cfg(unix)]
+#[serial]
 #[tokio::test]
 async fn test_pre_tool_use_hook_receives_context_json() {
     let mut executor = HookExecutor::new();
@@ -209,6 +215,7 @@ async fn test_pre_tool_use_hook_receives_context_json() {
 }
 
 /// Test that multiple hooks in sequence are executed until one blocks.
+#[serial]
 #[tokio::test]
 async fn test_pre_tool_use_multiple_hooks_first_block_wins() {
     let mut executor = HookExecutor::new();
@@ -239,6 +246,7 @@ async fn test_pre_tool_use_multiple_hooks_first_block_wins() {
 }
 
 /// Test that hooks with non-zero, non-2 exit codes log but continue.
+#[serial]
 #[tokio::test]
 async fn test_pre_tool_use_hook_error_exit_continues() {
     let mut executor = HookExecutor::new();
@@ -280,6 +288,7 @@ fn post_tool_context(tool_name: &str, response: serde_json::Value) -> HookContex
 ///
 /// Note: This test uses bash-specific constructs ($(cat), grep -q).
 #[cfg(unix)]
+#[serial]
 #[tokio::test]
 async fn test_post_tool_use_receives_response() {
     let mut executor = HookExecutor::new();
@@ -305,6 +314,7 @@ async fn test_post_tool_use_receives_response() {
 }
 
 /// Test post-tool-use failure event is triggered separately.
+#[serial]
 #[tokio::test]
 async fn test_post_tool_use_failure_event() {
     let mut executor = HookExecutor::new();
@@ -344,6 +354,7 @@ async fn test_post_tool_use_failure_event() {
 // =============================================================================
 
 /// Test that exact matcher matches only the specified tool.
+#[serial]
 #[tokio::test]
 #[ignore = "CI shell environment issue - will be fixed by cross-platform implementation (Phase 2)"]
 async fn test_hook_matcher_exact() {
@@ -380,6 +391,7 @@ async fn test_hook_matcher_exact() {
 /// Note: This test specifies desired behavior for pipe-separated patterns (e.g., "Bash|Read|Write").
 /// The current implementation uses glob patterns which don't support this syntax natively.
 /// This test will pass once the matcher is enhanced to support pipe-separated values.
+#[serial]
 #[tokio::test]
 #[ignore = "CI shell environment issue - will be fixed by cross-platform implementation (Phase 2)"]
 async fn test_hook_matcher_pipe_separated() {
@@ -424,6 +436,7 @@ async fn test_hook_matcher_pipe_separated() {
 }
 
 /// Test that wildcard matcher matches all tools.
+#[serial]
 #[tokio::test]
 #[ignore = "CI shell environment issue - will be fixed by cross-platform implementation (Phase 2)"]
 async fn test_hook_matcher_wildcard() {
@@ -447,6 +460,7 @@ async fn test_hook_matcher_wildcard() {
 }
 
 /// Test that glob patterns work for partial matches.
+#[serial]
 #[tokio::test]
 #[ignore = "CI shell environment issue - will be fixed by cross-platform implementation (Phase 2)"]
 async fn test_hook_matcher_glob_pattern() {
@@ -485,6 +499,7 @@ async fn test_hook_matcher_glob_pattern() {
 /// Test that hooks with configured timeouts complete successfully.
 /// Note: Full timeout enforcement requires implementation in HookExecutor.
 /// This test verifies basic timeout configuration and successful completion.
+#[serial]
 #[tokio::test]
 async fn test_hook_timeout() {
     let mut executor = HookExecutor::new();
@@ -515,6 +530,7 @@ async fn test_hook_timeout() {
 }
 
 /// Test that hooks don't hang on slow commands (regression test).
+#[serial]
 #[tokio::test]
 async fn test_hook_no_hang_on_slow_command() {
     let mut executor = HookExecutor::new();
@@ -540,6 +556,7 @@ async fn test_hook_no_hang_on_slow_command() {
 }
 
 /// Test that hooks complete before timeout under normal conditions.
+#[serial]
 #[tokio::test]
 #[ignore = "CI shell environment issue - will be fixed by cross-platform implementation (Phase 2)"]
 async fn test_hook_completes_before_timeout() {
@@ -576,6 +593,7 @@ async fn test_hook_completes_before_timeout() {
 // =============================================================================
 
 /// Test that empty commands are handled gracefully.
+#[serial]
 #[tokio::test]
 async fn test_hook_empty_command() {
     let mut executor = HookExecutor::new();
@@ -590,6 +608,7 @@ async fn test_hook_empty_command() {
 }
 
 /// Test that hooks work with special characters in tool names.
+#[serial]
 #[tokio::test]
 async fn test_hook_special_chars_in_tool_name() {
     let mut executor = HookExecutor::new();
@@ -609,6 +628,7 @@ async fn test_hook_special_chars_in_tool_name() {
 }
 
 /// Test that multiple hook definitions can be registered for the same event.
+#[serial]
 #[tokio::test]
 async fn test_multiple_hook_definitions_same_event() {
     let mut executor = HookExecutor::new();
@@ -643,6 +663,7 @@ use patina::hooks::HookManager;
 use tempfile::TempDir;
 
 /// Test that HookManager can be created with configuration.
+#[serial]
 #[tokio::test]
 async fn test_hook_manager_creation() {
     let manager = HookManager::new("test-session-001".to_string());
@@ -650,6 +671,7 @@ async fn test_hook_manager_creation() {
 }
 
 /// Test that HookManager can load hooks from TOML configuration.
+#[serial]
 #[tokio::test]
 async fn test_hook_manager_load_config() {
     let temp_dir = TempDir::new().unwrap();
@@ -685,6 +707,7 @@ timeout_ms = 5000
 /// This tests graceful degradation: if the hooks configuration file is missing,
 /// the hook manager should return Ok (not error) and simply have no hooks
 /// registered. This allows the application to continue without hooks.
+#[serial]
 #[tokio::test]
 async fn test_hook_manager_missing_config_returns_ok() {
     let temp_dir = TempDir::new().unwrap();
@@ -717,6 +740,7 @@ async fn test_hook_manager_missing_config_returns_ok() {
 /// While missing config files should be tolerated (graceful degradation),
 /// malformed config files indicate user error and should return an error
 /// so the user can fix their configuration.
+#[serial]
 #[tokio::test]
 async fn test_hook_manager_malformed_config_returns_error() {
     let temp_dir = TempDir::new().unwrap();
@@ -736,6 +760,7 @@ async fn test_hook_manager_malformed_config_returns_error() {
 }
 
 /// Test that SessionStart hook fires on session initialization.
+#[serial]
 #[tokio::test]
 async fn test_session_start_hook_fires() {
     let mut manager = HookManager::new("test-session-start".to_string());
@@ -758,6 +783,7 @@ async fn test_session_start_hook_fires() {
 }
 
 /// Test that SessionStart hook can block session start.
+#[serial]
 #[tokio::test]
 async fn test_session_start_hook_blocks() {
     let mut manager = HookManager::new("test-session-blocked".to_string());
@@ -776,6 +802,7 @@ async fn test_session_start_hook_blocks() {
 }
 
 /// Test that SessionEnd hook fires on session shutdown.
+#[serial]
 #[tokio::test]
 async fn test_session_end_hook_fires() {
     let mut manager = HookManager::new("test-session-end".to_string());
@@ -795,6 +822,7 @@ async fn test_session_end_hook_fires() {
 ///
 /// Note: This test uses bash-specific constructs ($(cat), grep -q).
 #[cfg(unix)]
+#[serial]
 #[tokio::test]
 async fn test_session_end_receives_stop_reason() {
     let mut manager = HookManager::new("test-session-reason".to_string());
@@ -815,6 +843,7 @@ async fn test_session_end_receives_stop_reason() {
 }
 
 /// Test that UserPromptSubmit hook fires before message submission.
+#[serial]
 #[tokio::test]
 #[ignore = "CI shell environment issue - will be fixed by cross-platform implementation (Phase 2)"]
 async fn test_user_prompt_submit_hook_fires() {
@@ -839,6 +868,7 @@ async fn test_user_prompt_submit_hook_fires() {
 ///
 /// Note: This test uses bash-specific constructs ($(cat), grep -q).
 #[cfg(unix)]
+#[serial]
 #[tokio::test]
 async fn test_user_prompt_submit_hook_blocks() {
     let mut manager = HookManager::new("test-prompt-blocked".to_string());
@@ -870,6 +900,7 @@ async fn test_user_prompt_submit_hook_blocks() {
 ///
 /// Note: This test uses bash-specific constructs ($(cat), grep -q).
 #[cfg(unix)]
+#[serial]
 #[tokio::test]
 async fn test_user_prompt_submit_receives_prompt() {
     let mut manager = HookManager::new("test-prompt-context".to_string());
@@ -891,6 +922,7 @@ async fn test_user_prompt_submit_receives_prompt() {
 }
 
 /// Test Stop hook fires when stop is requested.
+#[serial]
 #[tokio::test]
 async fn test_stop_hook_fires() {
     let mut manager = HookManager::new("test-stop".to_string());
@@ -911,6 +943,7 @@ async fn test_stop_hook_fires() {
 }
 
 /// Test Notification hook fires.
+#[serial]
 #[tokio::test]
 async fn test_notification_hook_fires() {
     let mut manager = HookManager::new("test-notification".to_string());
@@ -927,6 +960,7 @@ async fn test_notification_hook_fires() {
 }
 
 /// Test PreCompact hook fires before context compaction.
+#[serial]
 #[tokio::test]
 async fn test_pre_compact_hook_fires() {
     let mut manager = HookManager::new("test-compact".to_string());
@@ -943,6 +977,7 @@ async fn test_pre_compact_hook_fires() {
 }
 
 /// Test SubagentStop hook fires when subagent stops.
+#[serial]
 #[tokio::test]
 #[ignore = "CI shell environment issue - will be fixed by cross-platform implementation (Phase 2)"]
 async fn test_subagent_stop_hook_fires() {
@@ -972,6 +1007,7 @@ async fn test_subagent_stop_hook_fires() {
 /// This is a critical security test - hooks should never be able to execute
 /// destructive filesystem commands that could destroy the system.
 #[cfg(unix)]
+#[serial]
 #[tokio::test]
 async fn test_hook_blocks_rm_rf() {
     let mut executor = HookExecutor::new();
@@ -1024,6 +1060,7 @@ async fn test_hook_blocks_rm_rf() {
 ///
 /// Hooks should not be able to escalate privileges using sudo.
 #[cfg(unix)]
+#[serial]
 #[tokio::test]
 async fn test_hook_blocks_sudo() {
     let mut executor = HookExecutor::new();
@@ -1064,6 +1101,7 @@ async fn test_hook_blocks_sudo() {
 /// This pattern is commonly used in attacks to download and execute
 /// malicious scripts. Hooks must never allow this.
 #[cfg(unix)]
+#[serial]
 #[tokio::test]
 async fn test_hook_blocks_curl_pipe_bash() {
     let mut executor = HookExecutor::new();
@@ -1119,6 +1157,7 @@ async fn test_hook_blocks_curl_pipe_bash() {
 ///
 /// This is the Windows equivalent of `rm -rf` - recursive delete with quiet mode.
 #[cfg(windows)]
+#[serial]
 #[tokio::test]
 async fn test_hook_blocks_del_recursive() {
     let mut executor = HookExecutor::new();
@@ -1157,6 +1196,7 @@ async fn test_hook_blocks_del_recursive() {
 ///
 /// Encoded PowerShell commands are a common attack vector that bypass security scanning.
 #[cfg(windows)]
+#[serial]
 #[tokio::test]
 async fn test_hook_blocks_powershell_encoded() {
     let mut executor = HookExecutor::new();
@@ -1195,6 +1235,7 @@ async fn test_hook_blocks_powershell_encoded() {
 ///
 /// iex executes arbitrary code and is commonly used in attacks.
 #[cfg(windows)]
+#[serial]
 #[tokio::test]
 async fn test_hook_blocks_invoke_expression() {
     let mut executor = HookExecutor::new();
@@ -1234,6 +1275,7 @@ async fn test_hook_blocks_invoke_expression() {
 /// While dangerous commands should be blocked, safe commands like echo,
 /// cat (on safe paths), and other standard utilities should work.
 /// The security validation should only block dangerous patterns, not safe ones.
+#[serial]
 #[tokio::test]
 async fn test_hook_allows_safe_commands() {
     let mut executor = HookExecutor::new();

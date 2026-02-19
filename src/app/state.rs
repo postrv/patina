@@ -395,7 +395,7 @@ impl AppState {
     /// * `skip_permissions` - If true, bypass all permission prompts
     /// * `parallel_mode` - Controls parallel tool execution
     pub fn new(working_dir: PathBuf, skip_permissions: bool, parallel_mode: ParallelMode) -> Self {
-        Self::with_options(working_dir, skip_permissions, parallel_mode, true, false)
+        Self::with_options(working_dir, skip_permissions, parallel_mode, false, false)
     }
 
     /// Creates a new AppState with optional plugin loading.
