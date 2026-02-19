@@ -42,6 +42,7 @@ use std::fmt;
 use std::future::Future;
 
 use serde::{Deserialize, Serialize};
+use tracing::{debug, info, warn};
 
 /// A location extracted from a compiler or test error message.
 ///
@@ -716,30 +717,6 @@ pub struct GateCheckResult {
     pub error_output: String,
 }
 
-/// Record of a single recovery attempt for logging and diagnostics.
-///
-/// # Example
-///
-/// ```
-/// use patina::continuous::recovery::RecoveryAttemptRecord;
-///
-/// let record = RecoveryAttemptRecord {
-///     attempt: 1,
-///     prompt_summary: "Fix type mismatch in src/main.rs".to_string(),
-///     gate_passed: true,
-/// };
-/// assert_eq!(record.attempt, 1);
-/// ```
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RecoveryAttemptRecord {
-    /// Attempt number (1-indexed).
-    pub attempt: u32,
-    /// Summary of the recovery prompt sent.
-    pub prompt_summary: String,
-    /// Whether quality gates passed after this attempt.
-    pub gate_passed: bool,
-}
-
 /// Metrics tracked across recovery sessions.
 ///
 /// # Example
@@ -832,10 +809,7 @@ pub trait RecoveryExecutor: Send {
     /// # Errors
     ///
     /// Returns an error if the LLM call fails or the fix cannot be applied.
-    fn execute_fix(
-        &mut self,
-        prompt: &str,
-    ) -> impl Future<Output = anyhow::Result<()>> + Send;
+    fn execute_fix(&mut self, prompt: &str) -> impl Future<Output = anyhow::Result<()>> + Send;
 
     /// Re-run quality gates after a fix attempt.
     ///
@@ -954,13 +928,26 @@ pub async fn attempt_recovery<E: RecoveryExecutor>(
     executor: &mut E,
     metrics: &mut RecoveryMetrics,
 ) -> RecoveryOutcome {
+    info!(
+        max_attempts = config.max_attempts,
+        error_locations = analysis.error_locations.len(),
+        relevant_files = analysis.relevant_files.len(),
+        "Starting recovery loop"
+    );
+
     let mut last_error = analysis.error_summary.clone();
 
     for attempt in 1..=config.max_attempts {
+        debug!(
+            attempt,
+            max = config.max_attempts,
+            "Building recovery prompt"
+        );
         let prompt = build_recovery_prompt(analysis, attempt, &last_error);
 
         // Execute the fix via the LLM
         if let Err(e) = executor.execute_fix(&prompt).await {
+            warn!(attempt, error = %e, "Recovery fix execution failed");
             last_error = e.to_string();
             continue;
         }
@@ -969,14 +956,29 @@ pub async fn attempt_recovery<E: RecoveryExecutor>(
         let result = executor.check_gates().await;
 
         if result.passed {
+            info!(attempt, "Recovery succeeded — all gates passed");
             let outcome = RecoveryOutcome::Fixed { attempts: attempt };
             metrics.record_session(&outcome);
             return outcome;
         }
 
+        debug!(
+            attempt,
+            error = result
+                .error_output
+                .chars()
+                .take(100)
+                .collect::<String>()
+                .as_str(),
+            "Gate check failed, will retry"
+        );
         last_error = result.error_output;
     }
 
+    warn!(
+        attempts = config.max_attempts,
+        "Recovery exhausted all attempts — needs human intervention"
+    );
     let outcome = RecoveryOutcome::NeedsHuman {
         attempts: config.max_attempts,
         last_error,
@@ -1507,10 +1509,7 @@ error[E0425]: second
     }
 
     impl MockRecoveryExecutor {
-        fn new(
-            fix_results: Vec<Result<(), String>>,
-            gate_results: Vec<GateCheckResult>,
-        ) -> Self {
+        fn new(fix_results: Vec<Result<(), String>>, gate_results: Vec<GateCheckResult>) -> Self {
             Self {
                 fix_results,
                 gate_results,
@@ -1545,8 +1544,7 @@ error[E0425]: second
 
         /// Creates an executor that fails N times then succeeds.
         fn succeeds_after(failures: u32, error: &str) -> Self {
-            let fix_results: Vec<Result<(), String>> =
-                vec![Ok(()); (failures + 1) as usize];
+            let fix_results: Vec<Result<(), String>> = vec![Ok(()); (failures + 1) as usize];
             let mut gate_results: Vec<GateCheckResult> = (0..failures)
                 .map(|_| GateCheckResult {
                     passed: false,
@@ -1580,9 +1578,7 @@ error[E0425]: second
             }
         }
 
-        fn check_gates(
-            &mut self,
-        ) -> impl std::future::Future<Output = GateCheckResult> + Send {
+        fn check_gates(&mut self) -> impl std::future::Future<Output = GateCheckResult> + Send {
             let idx = self
                 .gate_call_count
                 .min(self.gate_results.len().saturating_sub(1));
@@ -1933,7 +1929,11 @@ error[E0425]: second
         let outcome = attempt_recovery(&analysis, &config, &mut executor, &mut metrics).await;
 
         assert!(!outcome.is_fixed(), "should not be fixed");
-        assert_eq!(outcome.attempt_count(), 3, "should have made exactly 3 attempts");
+        assert_eq!(
+            outcome.attempt_count(),
+            3,
+            "should have made exactly 3 attempts"
+        );
     }
 
     #[tokio::test]
