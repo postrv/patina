@@ -247,8 +247,131 @@ where
     /// - [`RunOutcome::HumanCheckpointRequired`] on fatal error or critical stagnation
     /// - [`RunOutcome::MaxIterationsReached`] if the iteration limit is hit
     pub async fn run(&mut self) -> RunOutcome {
-        // Stub: will be implemented in GREEN phase
-        RunOutcome::MaxIterationsReached { iterations: 0 }
+        for iteration in 1..=self.config.max_iterations {
+            (self.event_callback)(ContinuousEvent::IterationStart { iteration });
+            let start = Instant::now();
+
+            // 1. Run LLM coding iteration
+            let snapshot = match self.executor.run_iteration().await {
+                Ok(s) => s,
+                Err(e) => {
+                    warn!(iteration, error = %e, "Fatal error during iteration");
+                    let reason = format!("Fatal error during iteration: {e}");
+                    (self.event_callback)(ContinuousEvent::HumanCheckpointRequired {
+                        reason: reason.clone(),
+                    });
+                    return RunOutcome::HumanCheckpointRequired {
+                        reason,
+                        iterations: iteration,
+                    };
+                }
+            };
+
+            // 2. Check quality gates
+            let gate_result = self.executor.check_gates().await;
+
+            (self.event_callback)(ContinuousEvent::QualityGateResult {
+                gate: "all".to_string(),
+                passed: gate_result.passed,
+                message: if gate_result.passed {
+                    None
+                } else {
+                    Some(gate_result.error_output.chars().take(200).collect())
+                },
+            });
+
+            if gate_result.passed {
+                info!(iteration, "All quality gates passed");
+                let duration_ms = start.elapsed().as_millis() as u64;
+                (self.event_callback)(ContinuousEvent::IterationComplete {
+                    iteration,
+                    duration_ms,
+                });
+                return RunOutcome::AllGatesPassed {
+                    iterations: iteration,
+                };
+            }
+
+            // 3. Record stagnation snapshot and evaluate risk
+            let mut snapshot = snapshot;
+            if snapshot.errors.is_empty() {
+                snapshot.errors = vec![gate_result.error_output.clone()];
+            }
+            self.stagnation_detector.record(snapshot);
+
+            let score = self.stagnation_detector.evaluate();
+            debug!(
+                iteration,
+                total = score.total,
+                risk = %score.risk_level,
+                "Stagnation score"
+            );
+
+            if score.risk_level >= RiskLevel::Critical {
+                warn!(
+                    iteration,
+                    score = score.total,
+                    "Critical stagnation detected"
+                );
+                (self.event_callback)(ContinuousEvent::StagnationDetected {
+                    iterations_without_progress: iteration,
+                    threshold: self.config.stagnation.history_window as u32,
+                });
+                let reason = format!(
+                    "Critical stagnation detected (score: {:.2}, risk: {})",
+                    score.total, score.risk_level
+                );
+                (self.event_callback)(ContinuousEvent::HumanCheckpointRequired {
+                    reason: reason.clone(),
+                });
+                return RunOutcome::HumanCheckpointRequired {
+                    reason,
+                    iterations: iteration,
+                };
+            }
+
+            // 4. Attempt recovery
+            let analysis = build_analysis_from_gate_error(&gate_result.error_output);
+            let recovery_outcome = attempt_recovery(
+                &analysis,
+                &self.config.recovery,
+                &mut self.executor,
+                &mut self.recovery_metrics,
+            )
+            .await;
+
+            if recovery_outcome.is_fixed() {
+                info!(iteration, "Recovery succeeded");
+                let duration_ms = start.elapsed().as_millis() as u64;
+                (self.event_callback)(ContinuousEvent::IterationComplete {
+                    iteration,
+                    duration_ms,
+                });
+                return RunOutcome::AllGatesPassed {
+                    iterations: iteration,
+                };
+            }
+
+            debug!(
+                iteration,
+                attempts = recovery_outcome.attempt_count(),
+                "Recovery failed, continuing to next iteration"
+            );
+
+            let duration_ms = start.elapsed().as_millis() as u64;
+            (self.event_callback)(ContinuousEvent::IterationComplete {
+                iteration,
+                duration_ms,
+            });
+        }
+
+        info!(
+            max = self.config.max_iterations,
+            "Maximum iterations reached"
+        );
+        RunOutcome::MaxIterationsReached {
+            iterations: self.config.max_iterations,
+        }
     }
 }
 
