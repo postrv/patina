@@ -391,9 +391,9 @@ Before marking ANY task `[x]`:
 **Description**: Create `WorktreeAgentManager` that manages agent lifecycle — create worktree, track status, clean up.
 
 **TDD Cycle**:
-- [ ] RED: Write tests for agent lifecycle — `spawn()` creates git worktree, `list()` returns active agents, `status()` returns per-agent info, `cleanup()` removes worktree
-- [ ] GREEN: Implement `WorktreeAgentManager` with `HashMap<String, AgentHandle>`, `AgentStatus` enum, git worktree commands
-- [ ] REFACTOR: Add worktree path validation, branch name sanitization, concurrent spawn protection
+- [x] RED: Write tests for agent lifecycle — `spawn()` creates git worktree, `list()` returns active agents, `status()` returns per-agent info, `cleanup()` removes worktree
+- [x] GREEN: Implement `WorktreeAgentManager` with `HashMap<String, AgentHandle>`, `AgentStatus` enum, git worktree commands
+- [x] REFACTOR: Add worktree path validation, branch name sanitization, concurrent spawn protection
 - Files: `src/agents/worktree_agent.rs` (new)
 - Acceptance: Agents create real git worktrees in temp dirs, lifecycle tracked correctly
 

@@ -26,6 +26,7 @@
 
 pub mod orchestrator;
 pub mod parallel;
+pub mod worktree_agent;
 
 // Re-export orchestrator types for convenience
 pub use orchestrator::{
