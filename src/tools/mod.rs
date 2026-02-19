@@ -30,7 +30,8 @@ pub use stateful::{ShellState, StatefulToolExecutor};
 
 // Re-export security types
 pub use security::{
-    normalize_command, resolve_alias, resolve_alias_with_timeout, ToolExecutionPolicy,
+    is_dangerous_pattern, normalize_command, resolve_alias, resolve_alias_with_timeout,
+    ToolExecutionPolicy,
 };
 
 // Re-export parallel execution types for convenience

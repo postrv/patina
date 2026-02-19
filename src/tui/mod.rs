@@ -505,50 +505,24 @@ pub fn render_permission_modal(frame: &mut Frame, request: &PermissionRequest) {
 
 /// Checks if a permission request is for a dangerous command.
 ///
-/// A command is considered dangerous if it matches any of the patterns
-/// in the security policy's dangerous pattern list.
+/// Delegates to [`crate::tools::is_dangerous_pattern`] for the canonical
+/// pattern list. This ensures the TUI warning layer and the tool execution
+/// blocking layer use identical detection logic.
+///
+/// Only Bash tool calls are checked — other tools (Read, Write, etc.) are
+/// not command-based and cannot match dangerous patterns.
 #[must_use]
 pub fn is_dangerous_command(request: &PermissionRequest) -> bool {
-    use once_cell::sync::Lazy;
-    use regex::Regex;
-
-    // Pattern list for dangerous commands (subset of tools/mod.rs patterns)
-    static DANGEROUS_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
-        vec![
-            // Destructive file operations
-            Regex::new(r"rm\s+-rf").expect("invalid regex"),
-            Regex::new(r"rm\s+--no-preserve-root").expect("invalid regex"),
-            // Privilege escalation
-            Regex::new(r"\bsudo\s+").expect("invalid regex"),
-            Regex::new(r"\bsu\s+-").expect("invalid regex"),
-            // Disk destruction
-            Regex::new(r"\bmkfs\.").expect("invalid regex"),
-            Regex::new(r"\bdd\s+if=.+of=/dev/").expect("invalid regex"),
-            // Fork bombs
-            Regex::new(r":\(\)\s*\{").expect("invalid regex"),
-            // Remote code execution
-            Regex::new(r"curl\s+.+\|\s*(ba)?sh").expect("invalid regex"),
-            Regex::new(r"wget\s+.+\|\s*(ba)?sh").expect("invalid regex"),
-            // System disruption
-            Regex::new(r"\bshutdown\b").expect("invalid regex"),
-            Regex::new(r"\breboot\b").expect("invalid regex"),
-            // Dangerous eval
-            Regex::new(r"\beval\s+\$").expect("invalid regex"),
-        ]
-    });
+    use crate::tools::is_dangerous_pattern;
 
     // Only check Bash tool calls
     if request.tool_name != "Bash" && request.tool_name != "bash" {
         return false;
     }
 
-    // Check the tool input against dangerous patterns
+    // Delegate to canonical security module
     if let Some(ref input) = request.tool_input {
-        for pattern in DANGEROUS_PATTERNS.iter() {
-            if pattern.is_match(input) {
-                return true;
-            }
-        }
+        return is_dangerous_pattern(input);
     }
 
     false
@@ -930,6 +904,31 @@ mod tests {
     fn test_is_not_dangerous_no_input() {
         let request = PermissionRequest::new("Bash", None, "No input");
         assert!(!is_dangerous_command(&request));
+    }
+
+    #[test]
+    fn test_tui_dangerous_command_delegates_to_security() {
+        // Patterns only in security.rs canonical list (not in old TUI subset)
+        // should now be detected via delegation. These test chmod, history
+        // manipulation, and halt — all present in security.rs but missing
+        // from the old 12-pattern TUI subset.
+        let chmod = PermissionRequest::new("Bash", Some("chmod 777 /tmp/file"), "Change perms");
+        assert!(
+            is_dangerous_command(&chmod),
+            "chmod 777 should be detected via delegation to security module"
+        );
+
+        let halt = PermissionRequest::new("Bash", Some("halt"), "Halt system");
+        assert!(
+            is_dangerous_command(&halt),
+            "halt should be detected via delegation to security module"
+        );
+
+        let history = PermissionRequest::new("Bash", Some("history -c"), "Clear history");
+        assert!(
+            is_dangerous_command(&history),
+            "history -c should be detected via delegation to security module"
+        );
     }
 
     // =========================================================================
