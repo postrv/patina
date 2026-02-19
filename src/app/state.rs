@@ -398,6 +398,13 @@ pub struct AppState {
     /// Cached terminal height for scroll calculations.
     /// Updated on resize events; defaults to 24 for headless/test environments.
     terminal_height: u16,
+
+    /// Active slash-command completion popup, if any.
+    completion: Option<super::completion::CompletionState>,
+
+    /// Optional MCP server manager for external tool servers.
+    /// Set during app startup if `.mcp.json` or `~/.claude.json` contains server entries.
+    mcp_manager: Option<crate::mcp::manager::McpManager>,
 }
 
 #[derive(Default)]
@@ -598,6 +605,8 @@ impl AppState {
                 gate_results: Vec::new(),
             },
             terminal_height: 24,
+            completion: None,
+            mcp_manager: None,
         }
     }
 
@@ -1231,6 +1240,9 @@ impl AppState {
     }
 
     /// Inserts a character at the current cursor position.
+    ///
+    /// When `/` is typed as the first character, activates the completion popup.
+    /// When typing continues after `/`, updates the completion filter.
     pub fn insert_char(&mut self, c: char) {
         // Get byte position from char position
         let byte_pos = self
@@ -1242,9 +1254,21 @@ impl AppState {
         self.input.insert(byte_pos, c);
         self.cursor_pos += 1;
         self.dirty.input = true;
+
+        // Trigger or update completion
+        if c == '/' && self.input == "/" {
+            self.show_completion();
+        } else if self.completion.is_some() && self.input.starts_with('/') {
+            self.update_completion_filter();
+        } else if self.completion.is_some() {
+            self.completion = None;
+        }
     }
 
     /// Deletes the character before the cursor (backspace behavior).
+    ///
+    /// If backspacing removes the leading `/`, dismisses the completion popup.
+    /// Otherwise updates the completion filter.
     pub fn delete_char(&mut self) {
         if self.cursor_pos > 0 {
             // Get byte position of the character to delete (one before cursor)
@@ -1258,6 +1282,15 @@ impl AppState {
             self.cursor_pos -= 1;
         }
         self.dirty.input = true;
+
+        // Update or dismiss completion
+        if self.completion.is_some() {
+            if self.input.starts_with('/') {
+                self.update_completion_filter();
+            } else {
+                self.completion = None;
+            }
+        }
     }
 
     /// Takes and returns the current input, clearing the buffer and resetting cursor.
@@ -1795,7 +1828,7 @@ impl AppState {
         }
 
         let client = std::sync::Arc::clone(client);
-        let tools = default_tools();
+        let tools = self.all_tool_definitions();
         tokio::spawn(async move {
             if let Err(e) = client
                 .stream_message(&api_messages, Some(&tools), Some(&ToolChoice::Auto), tx)
@@ -2494,6 +2527,77 @@ impl AppState {
         self.dirty.full = true;
     }
 
+    // --- Completion state ---
+
+    /// Returns the active completion state, if any.
+    #[must_use]
+    pub fn completion(&self) -> Option<&super::completion::CompletionState> {
+        self.completion.as_ref()
+    }
+
+    /// Returns a mutable reference to the active completion state.
+    #[must_use]
+    pub fn completion_mut(&mut self) -> Option<&mut super::completion::CompletionState> {
+        self.completion.as_mut()
+    }
+
+    /// Returns true if the completion popup is currently active.
+    #[must_use]
+    pub fn has_completion(&self) -> bool {
+        self.completion.is_some()
+    }
+
+    /// Activates the completion popup by gathering candidates from all providers.
+    pub fn show_completion(&mut self) {
+        use super::completion::{
+            BuiltinCommandProvider, CompletionProvider, CompletionState, McpToolProvider,
+            PluginCommandProvider,
+        };
+
+        let builtin = BuiltinCommandProvider;
+        let plugins = PluginCommandProvider::from_registry(&self.plugin_registry);
+        let mcp = McpToolProvider::empty();
+
+        let mut candidates = builtin.candidates();
+        candidates.extend(plugins.candidates());
+        candidates.extend(mcp.candidates());
+
+        self.completion = Some(CompletionState::new(candidates));
+        self.dirty.input = true;
+    }
+
+    /// Dismisses the completion popup.
+    pub fn dismiss_completion(&mut self) {
+        self.completion = None;
+        self.dirty.input = true;
+    }
+
+    /// Accepts the selected completion and replaces input with `/name `.
+    ///
+    /// Returns the accepted command name, or `None` if nothing was selected.
+    pub fn accept_completion(&mut self) -> Option<String> {
+        let name = self.completion.as_ref().and_then(|c| c.accept());
+        if let Some(ref name) = name {
+            self.input = format!("/{name} ");
+            self.cursor_pos = self.input.chars().count();
+            self.dirty.input = true;
+        }
+        self.completion = None;
+        name
+    }
+
+    /// Updates the completion filter from the current input.
+    fn update_completion_filter(&mut self) {
+        if let Some(ref mut completion) = self.completion {
+            let filter = if self.input.starts_with('/') {
+                &self.input[1..]
+            } else {
+                ""
+            };
+            completion.set_filter(filter);
+        }
+    }
+
     /// Handles a permission response from the user.
     ///
     /// This grants or denies permission for the pending tool call and
@@ -2576,11 +2680,11 @@ impl AppState {
             tool_id_to_block_index.insert(tool_id, index);
         }
 
-        // Execute the tools
+        // Execute the tools (pass MCP manager for namespaced tool routing)
         let result = self
             .tool_state
             .tool_loop
-            .execute_pending(&self.tool_state.tool_executor)
+            .execute_pending(&self.tool_state.tool_executor, self.mcp_manager.as_mut())
             .await
             .map_err(|e| match e {
                 ToolLoopError::InvalidStateTransition { from, to } => {
@@ -3075,6 +3179,44 @@ impl AppState {
             }
         }
         self.dirty.messages = true;
+    }
+
+    // =========================================================================
+    // MCP Manager
+    // =========================================================================
+
+    /// Sets the MCP server manager.
+    pub fn set_mcp_manager(&mut self, manager: crate::mcp::manager::McpManager) {
+        self.mcp_manager = Some(manager);
+    }
+
+    /// Returns a reference to the MCP manager, if set.
+    #[must_use]
+    pub fn mcp_manager(&self) -> Option<&crate::mcp::manager::McpManager> {
+        self.mcp_manager.as_ref()
+    }
+
+    /// Returns a mutable reference to the MCP manager, if set.
+    pub fn mcp_manager_mut(&mut self) -> Option<&mut crate::mcp::manager::McpManager> {
+        self.mcp_manager.as_mut()
+    }
+
+    /// Returns `true` if an MCP manager is configured.
+    #[must_use]
+    pub fn has_mcp_manager(&self) -> bool {
+        self.mcp_manager.is_some()
+    }
+
+    /// Returns all tool definitions: built-in defaults plus MCP server tools.
+    ///
+    /// This is the unified tool list sent to the Anthropic API.
+    #[must_use]
+    pub fn all_tool_definitions(&self) -> Vec<crate::api::tools::ToolDefinition> {
+        let mut tools = default_tools();
+        if let Some(manager) = &self.mcp_manager {
+            tools.extend(manager.tool_definitions());
+        }
+        tools
     }
 }
 
@@ -5328,5 +5470,109 @@ mod tests {
 
         // Focus area: default
         assert_eq!(state.focus_area(), FocusArea::default());
+    }
+
+    // --- Completion integration tests (8.3.1) ---
+
+    #[test]
+    fn test_completion_initially_none() {
+        let state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+        assert!(state.completion().is_none());
+        assert!(!state.has_completion());
+    }
+
+    #[test]
+    fn test_show_completion_activates() {
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+        state.show_completion();
+        assert!(state.has_completion());
+        assert!(state.completion().unwrap().filtered().len() >= 6);
+    }
+
+    #[test]
+    fn test_dismiss_completion_deactivates() {
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+        state.show_completion();
+        state.dismiss_completion();
+        assert!(!state.has_completion());
+    }
+
+    #[test]
+    fn test_insert_slash_at_position_zero_triggers_completion() {
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+        state.insert_char('/');
+        assert!(state.has_completion());
+    }
+
+    #[test]
+    fn test_typing_after_slash_updates_filter() {
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+        state.insert_char('/');
+        state.insert_char('h');
+        state.insert_char('e');
+        let completion = state.completion().unwrap();
+        assert_eq!(completion.filter(), "he");
+        // "help" should be in filtered results
+        assert!(completion.filtered().iter().any(|e| e.name == "help"));
+    }
+
+    #[test]
+    fn test_backspace_past_slash_dismisses_completion() {
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+        state.insert_char('/');
+        assert!(state.has_completion());
+        state.delete_char(); // removes '/'
+        assert!(!state.has_completion());
+    }
+
+    #[test]
+    fn test_backspace_updates_filter() {
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+        state.insert_char('/');
+        state.insert_char('h');
+        state.insert_char('e');
+        state.delete_char(); // removes 'e', filter becomes "h"
+        assert!(state.has_completion());
+        assert_eq!(state.completion().unwrap().filter(), "h");
+    }
+
+    #[test]
+    fn test_slash_mid_input_does_not_trigger_completion() {
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+        state.insert_char('h');
+        state.insert_char('i');
+        state.insert_char('/');
+        assert!(!state.has_completion());
+    }
+
+    #[test]
+    fn test_accept_completion_replaces_input() {
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+        state.insert_char('/');
+        let name = state.accept_completion();
+        assert!(name.is_some());
+        let name = name.unwrap();
+        assert_eq!(state.input, format!("/{name} "));
+        assert!(!state.has_completion());
+    }
+
+    #[test]
+    fn test_accept_completion_empty_returns_none() {
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+        state.insert_char('/');
+        // Filter to something with no matches
+        for c in "zzzzz".chars() {
+            state.insert_char(c);
+        }
+        let name = state.accept_completion();
+        assert!(name.is_none());
+    }
+
+    #[test]
+    fn test_completion_dirty_flag() {
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+        state.dirty.clear();
+        state.show_completion();
+        assert!(state.dirty.input);
     }
 }

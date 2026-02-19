@@ -28,7 +28,6 @@
 
 #[cfg(unix)]
 use patina::mcp::client::McpClient;
-use patina::mcp::McpTransport;
 
 // =============================================================================
 // 1.2.1 MCP Command Validation Tests (RED - Security M-1)
@@ -265,38 +264,19 @@ async fn test_mcp_allows_valid_absolute_path() {
     // If it somehow succeeded, that's fine for this test
 }
 
-/// Test that MCP validates McpTransport::Stdio commands.
+/// Test that MCP validates dangerous server commands.
 ///
-/// When using the McpTransport enum directly, validation should apply.
-/// This test documents the expected validation function API.
+/// The validation function should block dangerous commands like `rm`.
 #[test]
 fn test_mcp_transport_validation() {
-    // Create a Stdio transport configuration with a dangerous command
-    let transport = McpTransport::Stdio {
-        command: "rm".to_string(),
-        args: vec!["-rf".to_string(), "/".to_string()],
-        env: std::collections::HashMap::new(),
-    };
+    use patina::mcp::client::validate_mcp_command;
 
-    match transport {
-        McpTransport::Stdio { command, args, .. } => {
-            use patina::mcp::client::validate_mcp_command;
+    let command = "rm";
+    let args = vec!["-rf".to_string(), "/".to_string()];
 
-            let full_command = format!("{} {}", command, args.join(" "));
-
-            // Verify test setup
-            assert!(command == "rm", "Test setup: command should be 'rm'");
-            assert!(
-                full_command.contains("rm") && full_command.contains("-rf"),
-                "Test setup: should be a dangerous command"
-            );
-
-            // validate_mcp_command should block dangerous commands like rm -rf
-            let result = validate_mcp_command(&command, &args);
-            assert!(result.is_err(), "Should block dangerous commands");
-        }
-        _ => panic!("Expected Stdio transport"),
-    }
+    // validate_mcp_command should block dangerous commands like rm -rf
+    let result = validate_mcp_command(command, &args);
+    assert!(result.is_err(), "Should block dangerous commands");
 }
 
 /// Test that MCP blocks shell injection in arguments.
@@ -356,33 +336,22 @@ fn test_mcp_filters_dangerous_env_vars() {
     env.insert("LD_PRELOAD".to_string(), "/tmp/malicious.so".to_string());
     env.insert("PATH".to_string(), "/tmp/malicious:$PATH".to_string());
 
-    let transport = McpTransport::Stdio {
-        command: "/usr/bin/mcp-server".to_string(),
-        args: vec![],
-        env,
-    };
+    // Verify test setup: dangerous env vars are present
+    assert!(
+        env.contains_key("LD_PRELOAD"),
+        "Test setup: env should contain LD_PRELOAD"
+    );
 
-    match transport {
-        McpTransport::Stdio { env, .. } => {
-            // Verify test setup: dangerous env vars are present
-            assert!(
-                env.contains_key("LD_PRELOAD"),
-                "Test setup: env should contain LD_PRELOAD"
-            );
-
-            // Note: Env var filtering is enforced at process spawn time in McpClient::start(),
-            // which filters dangerous env vars like LD_PRELOAD before starting the MCP server.
-            // This test documents the dangerous patterns that should be filtered.
-            let has_dangerous_vars = env.contains_key("LD_PRELOAD")
-                || env.contains_key("LD_LIBRARY_PATH")
-                || env.contains_key("DYLD_INSERT_LIBRARIES");
-            assert!(
-                has_dangerous_vars,
-                "Test setup: at least one dangerous env var should be present"
-            );
-        }
-        _ => panic!("Expected Stdio transport"),
-    }
+    // Note: Env var filtering is enforced at process spawn time in McpClient::start(),
+    // which filters dangerous env vars like LD_PRELOAD before starting the MCP server.
+    // This test documents the dangerous patterns that should be filtered.
+    let has_dangerous_vars = env.contains_key("LD_PRELOAD")
+        || env.contains_key("LD_LIBRARY_PATH")
+        || env.contains_key("DYLD_INSERT_LIBRARIES");
+    assert!(
+        has_dangerous_vars,
+        "Test setup: at least one dangerous env var should be present"
+    );
 }
 
 // =============================================================================

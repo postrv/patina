@@ -81,7 +81,7 @@ async fn test_mcp_stdio_initialization() {
         1,
         "initialize",
         json!({
-            "protocolVersion": "2024-11-05",
+            "protocolVersion": "2025-11-25",
             "capabilities": {},
             "clientInfo": {
                 "name": "rct",
@@ -98,7 +98,7 @@ async fn test_mcp_stdio_initialization() {
     assert!(response.is_success(), "Initialize should succeed");
 
     let result = response.result().expect("Should have result");
-    assert_eq!(result["protocolVersion"], "2024-11-05");
+    assert_eq!(result["protocolVersion"], "2025-11-25");
     assert!(result["capabilities"].is_object());
     assert!(result["serverInfo"].is_object());
 

@@ -336,6 +336,9 @@ pub fn validate_mcp_command(command: &str, args: &[String]) -> RctResult<()> {
 /// Default timeout for MCP requests.
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// MCP protocol version used during initialization handshake.
+pub const MCP_PROTOCOL_VERSION: &str = "2025-11-25";
+
 /// MCP tool definition from tools/list response.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpTool {
@@ -433,6 +436,38 @@ impl McpClient {
         }
     }
 
+    /// Creates a new MCP client with environment variables.
+    ///
+    /// The environment variables are passed to the spawned server process
+    /// in addition to the inherited environment.
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - Name to identify this server connection
+    /// * `command` - Command to spawn the MCP server
+    /// * `args` - Arguments for the command
+    /// * `env` - Environment variables for the server process
+    #[must_use]
+    pub fn new_with_env<S: Into<String>>(
+        name: S,
+        command: &str,
+        args: Vec<&str>,
+        env: std::collections::HashMap<String, String>,
+    ) -> Self {
+        let args_owned: Vec<String> = args.iter().map(|s| (*s).to_string()).collect();
+        Self {
+            name: name.into(),
+            command: command.to_string(),
+            args: args_owned.clone(),
+            transport: StdioTransport::new(command, args).with_env(env),
+            connected: AtomicBool::new(false),
+            initialized: AtomicBool::new(false),
+            request_id: AtomicI64::new(1),
+            capabilities: None,
+            server_info: None,
+        }
+    }
+
     /// Returns the server name.
     #[must_use]
     pub fn name(&self) -> &str {
@@ -508,7 +543,7 @@ impl McpClient {
             self.next_request_id(),
             "initialize",
             serde_json::json!({
-                "protocolVersion": "2024-11-05",
+                "protocolVersion": MCP_PROTOCOL_VERSION,
                 "capabilities": {},
                 "clientInfo": {
                     "name": "rct",

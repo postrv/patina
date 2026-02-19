@@ -942,14 +942,16 @@ impl std::error::Error for ExecutionError {}
 ///
 /// This function bridges the gap between the tool loop's `ToolUseBlock` and
 /// the `HookedToolExecutor`. It:
-/// 1. Converts the `ToolUseBlock` to a `ToolCall`
-/// 2. Executes via the provided executor
-/// 3. Converts the result to a `ToolResultBlock`
+/// 1. Checks if the tool is an MCP-namespaced tool (contains `__`)
+/// 2. If MCP: routes to the MCP manager
+/// 3. Otherwise: converts to `ToolCall` and executes via the executor
+/// 4. Converts the result to a `ToolResultBlock`
 ///
 /// # Arguments
 ///
 /// * `tool_use` - The tool use block from Claude's response
-/// * `executor` - The tool executor to run the tool
+/// * `executor` - The tool executor to run built-in tools
+/// * `mcp_manager` - Optional MCP manager for routing namespaced tool calls
 ///
 /// # Returns
 ///
@@ -972,7 +974,7 @@ impl std::error::Error for ExecutionError {}
 /// let executor = HookedToolExecutor::new(PathBuf::from("."), hooks);
 /// let tool_use = ToolUseBlock::new("toolu_123", "bash", json!({"command": "pwd"}));
 ///
-/// let result = execute_tool(&tool_use, &executor).await?;
+/// let result = execute_tool(&tool_use, &executor, None).await?;
 /// println!("Result: {}", result.content);
 /// # Ok(())
 /// # }
@@ -980,9 +982,41 @@ impl std::error::Error for ExecutionError {}
 pub async fn execute_tool(
     tool_use: &ToolUseBlock,
     executor: &crate::tools::HookedToolExecutor,
+    mcp_manager: Option<&mut crate::mcp::manager::McpManager>,
 ) -> Result<ToolResultBlock, ExecutionError> {
+    use crate::mcp::manager::is_mcp_tool;
     use crate::tools::ToolResult;
 
+    // Route MCP-namespaced tools to the MCP manager
+    if is_mcp_tool(&tool_use.name) {
+        let manager = mcp_manager.ok_or_else(|| {
+            ExecutionError::ExecutionFailed(format!(
+                "MCP tool '{}' called but no MCP manager available",
+                tool_use.name
+            ))
+        })?;
+
+        return match manager
+            .call_tool(&tool_use.name, tool_use.input.clone())
+            .await
+        {
+            Ok(ToolResult::Success(output)) => Ok(ToolResultBlock::success(&tool_use.id, output)),
+            Ok(ToolResult::Error(msg)) => Ok(ToolResultBlock::error(&tool_use.id, msg)),
+            Ok(ToolResult::Cancelled) => Ok(ToolResultBlock::error(
+                &tool_use.id,
+                "Tool execution cancelled",
+            )),
+            Ok(ToolResult::NeedsPermission(_)) => {
+                Err(ExecutionError::NeedsPermission(tool_use.name.clone()))
+            }
+            Err(e) => Ok(ToolResultBlock::error(
+                &tool_use.id,
+                format!("MCP tool error: {e}"),
+            )),
+        };
+    }
+
+    // Built-in tool path
     let call = tool_use_to_call(tool_use);
 
     let result = executor
@@ -1021,9 +1055,15 @@ impl ToolLoop {
     ///
     /// Returns a list of tool IDs that require permission (if any).
     /// Tools that succeed or fail are recorded in the loop state.
+    ///
+    /// # Arguments
+    ///
+    /// * `executor` - The built-in tool executor
+    /// * `mcp_manager` - Optional MCP manager for routing namespaced tool calls
     pub async fn execute_pending(
         &mut self,
         executor: &crate::tools::HookedToolExecutor,
+        mcp_manager: Option<&mut crate::mcp::manager::McpManager>,
     ) -> Result<Vec<String>, ToolLoopError> {
         if !matches!(self.state, ToolLoopState::Executing) {
             return Err(ToolLoopError::InvalidStateTransition {
@@ -1042,6 +1082,10 @@ impl ToolLoop {
             .map(|c| c.tool_use.id.clone())
             .collect();
 
+        // We need to thread the mcp_manager through each call.
+        // Since execute_tool takes Option<&mut McpManager>, we pass it through.
+        let mut mcp = mcp_manager;
+
         for tool_id in tool_ids {
             // Get the tool_use - we need to clone to avoid borrow issues
             let tool_use = {
@@ -1049,7 +1093,7 @@ impl ToolLoop {
                 call.tool_use.clone()
             };
 
-            match execute_tool(&tool_use, executor).await {
+            match execute_tool(&tool_use, executor, mcp.as_deref_mut()).await {
                 Ok(result_block) => {
                     if let Some(call) = self.pending_calls.get_mut(&tool_id) {
                         call.set_result(result_block);
@@ -1425,7 +1469,7 @@ mod tests {
         let tool_use = ToolUseBlock::new("toolu_123", "bash", json!({"command": "echo hello"}));
 
         // Execute the tool
-        let result = execute_tool(&tool_use, &executor).await;
+        let result = execute_tool(&tool_use, &executor, None).await;
 
         assert!(result.is_ok());
         let block = result.unwrap();
@@ -1453,7 +1497,7 @@ mod tests {
             json!({"path": "nonexistent_file_12345.txt"}),
         );
 
-        let result = execute_tool(&tool_use, &executor).await;
+        let result = execute_tool(&tool_use, &executor, None).await;
 
         assert!(result.is_ok());
         let block = result.unwrap();
@@ -1490,7 +1534,7 @@ mod tests {
         loop_state.approve_all().unwrap();
 
         // Execute all pending tools
-        let needs_permission = loop_state.execute_pending(&executor).await.unwrap();
+        let needs_permission = loop_state.execute_pending(&executor, None).await.unwrap();
         assert!(needs_permission.is_empty());
 
         // Verify all tools executed
@@ -1528,7 +1572,7 @@ mod tests {
         loop_state.approve_all().unwrap();
 
         // Execute
-        let needs_permission = loop_state.execute_pending(&executor).await.unwrap();
+        let needs_permission = loop_state.execute_pending(&executor, None).await.unwrap();
         assert!(needs_permission.is_empty());
 
         // Both should have results
@@ -1559,7 +1603,7 @@ mod tests {
         let mut loop_state = ToolLoop::new();
 
         // Try to execute in Idle state
-        let result = loop_state.execute_pending(&executor).await;
+        let result = loop_state.execute_pending(&executor, None).await;
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),

@@ -1,111 +1,193 @@
 //! Tests for MCP Manager
 
-use patina::mcp::{McpManager, McpServerConfig, McpTool, McpTransport};
+use patina::mcp::client::McpTool;
+use patina::mcp::config::McpServerEntry;
+use patina::mcp::manager::{
+    is_mcp_tool, mcp_tool_to_definition, namespace_tool_name, parse_namespaced_tool, McpManager,
+};
 use std::collections::HashMap;
+use std::time::Duration;
+
+// =============================================================================
+// Namespace helper tests
+// =============================================================================
 
 #[test]
-fn test_mcp_manager_new() {
-    let manager = McpManager::new();
-    assert!(manager.get_tools().is_empty());
+fn test_namespace_tool_name() {
+    assert_eq!(namespace_tool_name("fs", "read"), "fs__read");
+    assert_eq!(
+        namespace_tool_name("narsil", "scan_security"),
+        "narsil__scan_security"
+    );
 }
 
 #[test]
-fn test_mcp_manager_default() {
-    let manager = McpManager::default();
-    assert!(manager.get_tools().is_empty());
+fn test_parse_namespaced_tool() {
+    assert_eq!(parse_namespaced_tool("fs__read"), Some(("fs", "read")));
+    assert_eq!(parse_namespaced_tool("a__b__c"), Some(("a", "b__c")));
+    assert_eq!(parse_namespaced_tool("bash"), None);
+    assert_eq!(parse_namespaced_tool("read_file"), None);
+}
+
+#[test]
+fn test_is_mcp_tool() {
+    assert!(is_mcp_tool("fs__read"));
+    assert!(!is_mcp_tool("bash"));
+    assert!(!is_mcp_tool("read_file"));
+}
+
+// =============================================================================
+// Tool definition conversion tests
+// =============================================================================
+
+#[test]
+fn test_mcp_tool_to_definition_converts_correctly() {
+    let tool = McpTool {
+        name: "echo".to_string(),
+        description: "Echo text back".to_string(),
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": {
+                "text": {"type": "string"}
+            },
+            "required": ["text"]
+        }),
+    };
+
+    let def = mcp_tool_to_definition("mock", &tool);
+    assert_eq!(def.name, "mock__echo");
+    assert_eq!(def.description, "Echo text back");
+    assert_eq!(def.input_schema["type"], "object");
+    assert!(def.input_schema["properties"]["text"].is_object());
+}
+
+#[test]
+fn test_mcp_tool_to_definition_uses_namespaced_name() {
+    let tool = McpTool {
+        name: "scan_security".to_string(),
+        description: "Scan for issues".to_string(),
+        input_schema: serde_json::json!({"type": "object"}),
+    };
+    let def = mcp_tool_to_definition("narsil", &tool);
+    assert_eq!(def.name, "narsil__scan_security");
+}
+
+// =============================================================================
+// Manager lifecycle tests
+// =============================================================================
+
+#[tokio::test]
+async fn test_manager_empty_configs_yields_empty() {
+    let manager = McpManager::start_all(HashMap::new(), Duration::from_secs(1)).await;
+    assert!(manager.is_empty());
+    assert_eq!(manager.connected_count(), 0);
+    assert_eq!(manager.tool_count(), 0);
+    assert!(manager.tool_definitions().is_empty());
 }
 
 #[tokio::test]
-async fn test_mcp_manager_initialize_empty() {
-    let mut manager = McpManager::new();
-    let configs = HashMap::new();
-    let result = manager.initialize(configs).await;
-    assert!(result.is_ok());
-}
-
-#[tokio::test]
-async fn test_mcp_manager_initialize_disabled_server() {
-    let mut manager = McpManager::new();
+async fn test_manager_startup_skips_disabled() {
     let mut configs = HashMap::new();
     configs.insert(
-        "test-server".to_string(),
-        McpServerConfig {
-            transport: McpTransport::Stdio {
-                command: "echo".to_string(),
-                args: vec![],
-                env: HashMap::new(),
-            },
-            enabled: false,
+        "disabled".to_string(),
+        McpServerEntry {
+            command: "echo".to_string(),
+            args: vec![],
+            env: HashMap::new(),
+            url: None,
+            headers: None,
+            disabled: true,
         },
     );
-    let result = manager.initialize(configs).await;
-    assert!(result.is_ok());
+
+    let manager = McpManager::start_all(configs, Duration::from_secs(1)).await;
+    assert!(manager.is_empty());
 }
 
 #[tokio::test]
-async fn test_mcp_manager_initialize_stdio() {
-    let mut manager = McpManager::new();
+async fn test_manager_startup_invalid_command_marks_failed() {
     let mut configs = HashMap::new();
     configs.insert(
-        "test-server".to_string(),
-        McpServerConfig {
-            transport: McpTransport::Stdio {
-                command: "echo".to_string(),
-                args: vec!["hello".to_string()],
-                env: HashMap::new(),
-            },
-            enabled: true,
+        "bad-server".to_string(),
+        McpServerEntry {
+            command: "/nonexistent/bin/server".to_string(),
+            args: vec![],
+            env: HashMap::new(),
+            url: None,
+            headers: None,
+            disabled: false,
         },
     );
-    let result = manager.initialize(configs).await;
-    assert!(result.is_ok());
+
+    let manager = McpManager::start_all(configs, Duration::from_secs(2)).await;
+    assert_eq!(manager.connected_count(), 0);
+
+    let statuses = manager.server_statuses();
+    assert_eq!(statuses.len(), 1);
+    assert!(!statuses[0].1.is_connected());
 }
 
 #[tokio::test]
-async fn test_mcp_manager_initialize_sse() {
-    let mut manager = McpManager::new();
+async fn test_manager_sse_not_yet_supported() {
     let mut configs = HashMap::new();
     configs.insert(
-        "sse-server".to_string(),
-        McpServerConfig {
-            transport: McpTransport::Sse {
-                url: "http://localhost:8080/sse".to_string(),
-                headers: HashMap::new(),
-            },
-            enabled: true,
+        "sse".to_string(),
+        McpServerEntry {
+            command: String::new(),
+            args: vec![],
+            env: HashMap::new(),
+            url: Some("http://localhost:8080/sse".to_string()),
+            headers: None,
+            disabled: false,
         },
     );
-    let result = manager.initialize(configs).await;
-    assert!(result.is_ok());
+
+    let manager = McpManager::start_all(configs, Duration::from_secs(1)).await;
+    assert_eq!(manager.connected_count(), 0);
 }
 
-#[tokio::test]
-async fn test_mcp_manager_initialize_http() {
-    let mut manager = McpManager::new();
-    let mut configs = HashMap::new();
-    configs.insert(
-        "http-server".to_string(),
-        McpServerConfig {
-            transport: McpTransport::Http {
-                url: "http://localhost:8080/api".to_string(),
-                headers: HashMap::new(),
-            },
-            enabled: true,
-        },
-    );
-    let result = manager.initialize(configs).await;
-    assert!(result.is_ok());
-}
+// =============================================================================
+// Tool routing tests
+// =============================================================================
 
 #[tokio::test]
-async fn test_mcp_manager_call_tool() {
-    let manager = McpManager::new();
+async fn test_call_tool_no_double_underscore_returns_error() {
+    let mut manager = McpManager::start_all(HashMap::new(), Duration::from_secs(1)).await;
     let result = manager
-        .call_tool("test-tool", serde_json::json!({"input": "value"}))
+        .call_tool("bash", serde_json::json!({"command": "ls"}))
         .await;
-    assert!(result.is_ok());
-    assert_eq!(result.unwrap(), serde_json::json!({}));
+    assert!(result.is_err());
 }
+
+#[tokio::test]
+async fn test_call_tool_unknown_namespace_returns_error() {
+    let mut manager = McpManager::start_all(HashMap::new(), Duration::from_secs(1)).await;
+    let result = manager
+        .call_tool("nonexistent__tool", serde_json::json!({}))
+        .await;
+    assert!(result.is_err());
+}
+
+// =============================================================================
+// Shutdown tests
+// =============================================================================
+
+#[tokio::test]
+async fn test_shutdown_handles_empty_manager() {
+    let mut manager = McpManager::start_all(HashMap::new(), Duration::from_secs(1)).await;
+    manager.shutdown_all().await;
+    // Should not panic
+}
+
+#[tokio::test]
+async fn test_is_empty_after_no_startup() {
+    let manager = McpManager::start_all(HashMap::new(), Duration::from_secs(1)).await;
+    assert!(manager.is_empty());
+}
+
+// =============================================================================
+// McpTool serialization tests
+// =============================================================================
 
 #[test]
 fn test_mcp_tool_serialization() {
@@ -126,97 +208,4 @@ fn test_mcp_tool_serialization() {
 
     let deserialized: McpTool = serde_json::from_str(&json).unwrap();
     assert_eq!(deserialized.name, "test-tool");
-}
-
-#[test]
-fn test_mcp_server_config_deserialization_stdio() {
-    let json = r#"{
-        "transport": {
-            "type": "stdio",
-            "command": "node",
-            "args": ["server.js"],
-            "env": {"NODE_ENV": "production"}
-        },
-        "enabled": true
-    }"#;
-
-    let config: McpServerConfig = serde_json::from_str(json).unwrap();
-    assert!(config.enabled);
-    match config.transport {
-        McpTransport::Stdio { command, args, env } => {
-            assert_eq!(command, "node");
-            assert_eq!(args, vec!["server.js"]);
-            assert_eq!(env.get("NODE_ENV"), Some(&"production".to_string()));
-        }
-        _ => panic!("Expected Stdio transport"),
-    }
-}
-
-#[test]
-fn test_mcp_server_config_deserialization_sse() {
-    let json = r#"{
-        "transport": {
-            "type": "sse",
-            "url": "http://localhost:8080/events",
-            "headers": {"Authorization": "Bearer token"}
-        },
-        "enabled": false
-    }"#;
-
-    let config: McpServerConfig = serde_json::from_str(json).unwrap();
-    assert!(!config.enabled);
-    match config.transport {
-        McpTransport::Sse { url, headers } => {
-            assert_eq!(url, "http://localhost:8080/events");
-            assert_eq!(
-                headers.get("Authorization"),
-                Some(&"Bearer token".to_string())
-            );
-        }
-        _ => panic!("Expected Sse transport"),
-    }
-}
-
-#[test]
-fn test_mcp_server_config_deserialization_http() {
-    let json = r#"{
-        "transport": {
-            "type": "http",
-            "url": "http://localhost:8080/api",
-            "headers": {}
-        },
-        "enabled": true
-    }"#;
-
-    let config: McpServerConfig = serde_json::from_str(json).unwrap();
-    assert!(config.enabled);
-    match config.transport {
-        McpTransport::Http { url, headers } => {
-            assert_eq!(url, "http://localhost:8080/api");
-            assert!(headers.is_empty());
-        }
-        _ => panic!("Expected Http transport"),
-    }
-}
-
-#[test]
-fn test_mcp_server_config_defaults() {
-    // Test that enabled defaults to false
-    let json = r#"{
-        "transport": {
-            "type": "stdio",
-            "command": "echo"
-        }
-    }"#;
-
-    let config: McpServerConfig = serde_json::from_str(json).unwrap();
-    assert!(!config.enabled);
-    match config.transport {
-        McpTransport::Stdio { command, args, env } => {
-            assert_eq!(command, "echo");
-            assert!(args.is_empty());
-            assert!(env.is_empty());
-        }
-        _ => panic!("Expected Stdio transport"),
-    }
 }

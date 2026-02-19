@@ -30,6 +30,9 @@ mod context_test;
 #[path = "unit/mcp_manager_test.rs"]
 mod mcp_manager_test;
 
+#[path = "unit/mcp_config_test.rs"]
+mod mcp_config_test;
+
 #[path = "unit/ide_test.rs"]
 mod ide_test;
 

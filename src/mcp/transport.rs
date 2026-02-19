@@ -115,6 +115,7 @@ enum WriterMessage {
 pub struct StdioTransport {
     command: String,
     args: Vec<String>,
+    env: HashMap<String, String>,
     child: Option<Child>,
     writer_tx: Option<mpsc::Sender<WriterMessage>>,
     pending_requests: Arc<Mutex<HashMap<String, oneshot::Sender<Result<JsonRpcResponse>>>>>,
@@ -132,19 +133,32 @@ impl StdioTransport {
         Self {
             command: command.into(),
             args: args.into_iter().map(String::from).collect(),
+            env: HashMap::new(),
             child: None,
             writer_tx: None,
             pending_requests: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
+    /// Sets environment variables for the child process.
+    ///
+    /// These variables are passed to the spawned MCP server process
+    /// in addition to the inherited environment.
+    #[must_use]
+    pub fn with_env(mut self, env: HashMap<String, String>) -> Self {
+        self.env = env;
+        self
+    }
+
     /// Spawns the child process and starts I/O tasks.
     async fn spawn_and_start(&mut self) -> Result<()> {
-        let mut child = Command::new(&self.command)
-            .args(&self.args)
+        let mut cmd = Command::new(&self.command);
+        cmd.args(&self.args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
+            .envs(&self.env);
+        let mut child = cmd
             .spawn()
             .with_context(|| format!("Failed to spawn command: {}", self.command))?;
 

@@ -18,6 +18,7 @@ use tokio::time::interval;
 use tracing::{debug, info, warn};
 
 pub mod commands;
+pub mod completion;
 pub mod context;
 pub mod dispatch;
 pub mod events;
@@ -157,6 +158,60 @@ fn initialize_compression_orchestrator(state: &mut AppState, config: &Config) {
     state.set_context_token_budget(config.compression.max_context_tokens);
 }
 
+/// Initializes MCP servers from config files.
+///
+/// Loads `.mcp.json` (project-local) and `~/.claude.json` (user-global),
+/// starts all configured servers in parallel with a 10-second timeout,
+/// and returns a manager if any servers connected successfully.
+///
+/// # Arguments
+///
+/// * `working_dir` - The project root to search for `.mcp.json`
+async fn initialize_mcp_servers(
+    working_dir: &std::path::Path,
+) -> Option<crate::mcp::manager::McpManager> {
+    let configs = match crate::mcp::config::load_mcp_config(working_dir) {
+        Ok(c) => c,
+        Err(e) => {
+            warn!("Failed to load MCP config: {}", e);
+            return None;
+        }
+    };
+
+    if configs.is_empty() {
+        return None;
+    }
+
+    info!(
+        server_count = configs.len(),
+        "Starting MCP servers from config"
+    );
+
+    let manager =
+        crate::mcp::manager::McpManager::start_all(configs, Duration::from_secs(10)).await;
+
+    // Log server statuses
+    for (name, status) in manager.server_statuses() {
+        if status.is_connected() {
+            info!(server = %name, "MCP server connected");
+        } else {
+            warn!(server = %name, status = ?status, "MCP server failed to connect");
+        }
+    }
+
+    if manager.connected_count() > 0 {
+        info!(
+            connected = manager.connected_count(),
+            tools = manager.tool_count(),
+            "MCP servers initialized"
+        );
+        Some(manager)
+    } else {
+        info!("No MCP servers connected, continuing without MCP");
+        None
+    }
+}
+
 pub async fn run(config: Config) -> Result<()> {
     // If print mode is enabled with an initial prompt, run non-interactively
     if config.print_mode {
@@ -212,6 +267,11 @@ pub async fn run(config: Config) -> Result<()> {
 
     // Initialize compression orchestrator for CCG context management
     initialize_compression_orchestrator(&mut state, &config);
+
+    // Initialize MCP servers from .mcp.json / ~/.claude.json
+    if let Some(manager) = initialize_mcp_servers(&config.working_dir).await {
+        state.set_mcp_manager(manager);
+    }
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -275,6 +335,11 @@ pub async fn run(config: Config) -> Result<()> {
     }
 
     let result = event_loop(&mut terminal, &client, &mut state, &session_manager).await;
+
+    // Shut down MCP servers before terminal cleanup
+    if let Some(manager) = state.mcp_manager_mut() {
+        manager.shutdown_all().await;
+    }
 
     // Clean up terminal state
     if keyboard_enhancement_supported {
@@ -345,7 +410,6 @@ async fn load_session_state(config: &Config) -> Result<AppState> {
 ///
 /// This matches Claude Code's `-p` / `--print` flag behavior.
 async fn run_print_mode(config: &Config, prompt: &str) -> Result<()> {
-    use crate::api::tools::default_tools;
     use crate::api::ToolChoice;
 
     let client: std::sync::Arc<dyn LlmProvider> =
@@ -362,6 +426,11 @@ async fn run_print_mode(config: &Config, prompt: &str) -> Result<()> {
     // This enables auto-context injection in print mode when narsil is available
     initialize_compression_orchestrator(&mut state, config);
 
+    // Initialize MCP servers from .mcp.json / ~/.claude.json
+    if let Some(manager) = initialize_mcp_servers(&config.working_dir).await {
+        state.set_mcp_manager(manager);
+    }
+
     // Refresh CCG context before the first API call (async, requires narsil MCP)
     state.refresh_build_context().await;
 
@@ -374,7 +443,7 @@ async fn run_print_mode(config: &Config, prompt: &str) -> Result<()> {
     state.api_messages_mut().push(user_msg);
 
     // Set up streaming using build_api_messages which includes context injection
-    let tools = default_tools();
+    let tools = state.all_tool_definitions();
     let (tx, mut rx) = tokio::sync::mpsc::channel(STREAMING_CHANNEL_BUFFER);
     let api_messages = state.build_api_messages();
     let client_clone = std::sync::Arc::clone(&client);
@@ -453,7 +522,7 @@ async fn run_print_mode(config: &Config, prompt: &str) -> Result<()> {
         let (tx, mut rx) = tokio::sync::mpsc::channel(STREAMING_CHANNEL_BUFFER);
         let api_messages = state.build_api_messages();
         let client_clone = std::sync::Arc::clone(&client);
-        let tools = default_tools();
+        let tools = state.all_tool_definitions();
 
         tokio::spawn(async move {
             if let Err(e) = client_clone
@@ -474,6 +543,11 @@ async fn run_print_mode(config: &Config, prompt: &str) -> Result<()> {
         }
     }
 
+    // Shut down MCP servers
+    if let Some(manager) = state.mcp_manager_mut() {
+        manager.shutdown_all().await;
+    }
+
     Ok(())
 }
 
@@ -481,16 +555,18 @@ async fn run_print_mode(config: &Config, prompt: &str) -> Result<()> {
 ///
 /// Handler priority (highest first):
 /// 1. [`PermissionHandler`](handlers::permission::PermissionHandler) — intercepts keys during permission prompts
-/// 2. [`KeyboardHandler`](handlers::keyboard::KeyboardHandler) — user input (keys, mouse, resize)
-/// 3. [`StreamHandler`](handlers::stream::StreamHandler) — API chunks and tool results
-/// 4. [`AgentHandler`](handlers::agent::AgentHandler) — background agent events
-/// 5. [`ContinuousHandler`](handlers::continuous::ContinuousHandler) — continuous loop progress
-/// 6. [`TickHandler`](handlers::tick::TickHandler) — throbber animation
-/// 7. [`SessionHandler`](handlers::session::SessionHandler) — auto-save observer (always last, never consumes)
+/// 2. [`CompletionHandler`](handlers::completion::CompletionHandler) — slash command auto-completion navigation
+/// 3. [`KeyboardHandler`](handlers::keyboard::KeyboardHandler) — user input (keys, mouse, resize)
+/// 4. [`StreamHandler`](handlers::stream::StreamHandler) — API chunks and tool results
+/// 5. [`AgentHandler`](handlers::agent::AgentHandler) — background agent events
+/// 6. [`ContinuousHandler`](handlers::continuous::ContinuousHandler) — continuous loop progress
+/// 7. [`TickHandler`](handlers::tick::TickHandler) — throbber animation
+/// 8. [`SessionHandler`](handlers::session::SessionHandler) — auto-save observer (always last, never consumes)
 #[must_use]
 fn create_dispatcher() -> dispatch::EventDispatcher {
     dispatch::EventDispatcher::new(vec![
         Box::new(handlers::permission::PermissionHandler),
+        Box::new(handlers::completion::CompletionHandler),
         Box::new(handlers::keyboard::KeyboardHandler),
         Box::new(handlers::stream::StreamHandler),
         Box::new(handlers::agent::AgentHandler),
@@ -608,7 +684,6 @@ pub(crate) async fn finish_tool_execution_and_continue(
     state: &mut AppState,
     client: &std::sync::Arc<dyn LlmProvider>,
 ) -> Result<()> {
-    use crate::api::tools::default_tools;
     use crate::api::ToolChoice;
 
     // Finish execution and get continuation data
@@ -668,7 +743,7 @@ pub(crate) async fn finish_tool_execution_and_continue(
 
     let api_messages = state.api_messages().to_vec();
     let client_clone = std::sync::Arc::clone(client);
-    let tools = default_tools();
+    let tools = state.all_tool_definitions();
 
     tokio::spawn(async move {
         if let Err(e) = client_clone
@@ -832,12 +907,12 @@ mod tests {
     // =========================================================================
 
     #[test]
-    fn create_dispatcher_returns_six_handlers_and_one_observer() {
+    fn create_dispatcher_returns_seven_handlers_and_one_observer() {
         let dispatcher = create_dispatcher();
         assert_eq!(
             dispatcher.handler_count(),
-            6,
-            "Dispatcher must have 6 handlers: Permission, Keyboard, Stream, Agent, Continuous, Tick"
+            7,
+            "Dispatcher must have 7 handlers: Permission, Completion, Keyboard, Stream, Agent, Continuous, Tick"
         );
         assert_eq!(
             dispatcher.observer_count(),
