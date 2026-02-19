@@ -32,6 +32,9 @@ use tokio::sync::mpsc;
 
 use crate::types::{Message, Role};
 
+// Re-export provider trait
+pub use provider::LlmProvider;
+
 // Re-export tool types for convenience
 pub use tools::{ToolChoice, ToolDefinition};
 
