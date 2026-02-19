@@ -140,6 +140,226 @@ impl Default for CompressionConfig {
     }
 }
 
+/// Identifies which LLM provider to use.
+///
+/// Defaults to [`ProviderKind::Anthropic`] for direct Anthropic API access.
+/// Use [`ProviderKind::OpenRouter`] to route through OpenRouter with OpenAI-compatible
+/// message format translation.
+///
+/// # Examples
+///
+/// ```
+/// use patina::types::config::ProviderKind;
+///
+/// let kind = ProviderKind::default();
+/// assert_eq!(kind, ProviderKind::Anthropic);
+/// assert_eq!(kind.as_str(), "anthropic");
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ProviderKind {
+    /// Use the Anthropic API directly.
+    #[default]
+    Anthropic,
+
+    /// Use OpenRouter (OpenAI-compatible API with message format translation).
+    OpenRouter,
+}
+
+impl ProviderKind {
+    /// Returns the provider name as a string slice.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use patina::types::config::ProviderKind;
+    ///
+    /// assert_eq!(ProviderKind::Anthropic.as_str(), "anthropic");
+    /// assert_eq!(ProviderKind::OpenRouter.as_str(), "openrouter");
+    /// ```
+    #[must_use]
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Anthropic => "anthropic",
+            Self::OpenRouter => "openrouter",
+        }
+    }
+}
+
+/// Configuration for LLM provider selection.
+///
+/// Determines which provider is used and holds provider-specific settings.
+/// For Anthropic, the API key is inherited from the top-level [`Config::api_key`].
+/// For OpenRouter, a separate API key and model are required.
+///
+/// # Examples
+///
+/// ```
+/// use patina::types::config::{ProviderConfig, ProviderKind};
+///
+/// // Default: Anthropic
+/// let config = ProviderConfig::default();
+/// assert_eq!(config.kind, ProviderKind::Anthropic);
+///
+/// // OpenRouter with API key
+/// use secrecy::SecretString;
+/// let config = ProviderConfig::openrouter(
+///     SecretString::new("sk-or-...".into()),
+///     "anthropic/claude-sonnet-4",
+/// );
+/// assert_eq!(config.kind, ProviderKind::OpenRouter);
+/// ```
+#[derive(Clone)]
+pub struct ProviderConfig {
+    /// Which provider to use.
+    pub kind: ProviderKind,
+
+    /// API key for OpenRouter (required when `kind` is `OpenRouter`).
+    pub openrouter_api_key: Option<SecretString>,
+
+    /// Model identifier for OpenRouter (e.g., "anthropic/claude-sonnet-4").
+    ///
+    /// Required when `kind` is `OpenRouter`. This is separate from
+    /// [`Config::model`] because OpenRouter uses different model identifiers.
+    pub openrouter_model: Option<String>,
+
+    /// Site URL sent as `HTTP-Referer` to OpenRouter for analytics.
+    pub site_url: Option<String>,
+
+    /// App name sent as `X-Title` to OpenRouter for analytics.
+    pub app_name: Option<String>,
+}
+
+impl Default for ProviderConfig {
+    fn default() -> Self {
+        Self::anthropic()
+    }
+}
+
+impl std::fmt::Debug for ProviderConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProviderConfig")
+            .field("kind", &self.kind)
+            .field(
+                "openrouter_api_key",
+                &self.openrouter_api_key.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field("openrouter_model", &self.openrouter_model)
+            .field("site_url", &self.site_url)
+            .field("app_name", &self.app_name)
+            .finish()
+    }
+}
+
+impl ProviderConfig {
+    /// Creates a provider config for direct Anthropic API access.
+    ///
+    /// The API key is inherited from [`Config::api_key`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use patina::types::config::{ProviderConfig, ProviderKind};
+    ///
+    /// let config = ProviderConfig::anthropic();
+    /// assert_eq!(config.kind, ProviderKind::Anthropic);
+    /// ```
+    #[must_use]
+    pub fn anthropic() -> Self {
+        Self {
+            kind: ProviderKind::Anthropic,
+            openrouter_api_key: None,
+            openrouter_model: None,
+            site_url: None,
+            app_name: None,
+        }
+    }
+
+    /// Creates a provider config for OpenRouter.
+    ///
+    /// # Arguments
+    ///
+    /// * `api_key` - The OpenRouter API key
+    /// * `model` - The OpenRouter model identifier (e.g., "anthropic/claude-sonnet-4")
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use patina::types::config::{ProviderConfig, ProviderKind};
+    /// use secrecy::SecretString;
+    ///
+    /// let config = ProviderConfig::openrouter(
+    ///     SecretString::new("sk-or-...".into()),
+    ///     "anthropic/claude-sonnet-4",
+    /// );
+    /// assert_eq!(config.kind, ProviderKind::OpenRouter);
+    /// ```
+    #[must_use]
+    pub fn openrouter(api_key: SecretString, model: impl Into<String>) -> Self {
+        Self {
+            kind: ProviderKind::OpenRouter,
+            openrouter_api_key: Some(api_key),
+            openrouter_model: Some(model.into()),
+            site_url: None,
+            app_name: None,
+        }
+    }
+
+    /// Sets the site URL for OpenRouter analytics.
+    ///
+    /// Sent as the `HTTP-Referer` header with OpenRouter requests.
+    #[must_use]
+    pub fn with_site_url(mut self, url: impl Into<String>) -> Self {
+        self.site_url = Some(url.into());
+        self
+    }
+
+    /// Sets the app name for OpenRouter analytics.
+    ///
+    /// Sent as the `X-Title` header with OpenRouter requests.
+    #[must_use]
+    pub fn with_app_name(mut self, name: impl Into<String>) -> Self {
+        self.app_name = Some(name.into());
+        self
+    }
+
+    /// Validates the provider configuration.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - `kind` is `OpenRouter` but `openrouter_api_key` is `None`
+    /// - `kind` is `OpenRouter` but `openrouter_model` is `None`
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use patina::types::config::ProviderConfig;
+    ///
+    /// let config = ProviderConfig::anthropic();
+    /// assert!(config.validate().is_ok());
+    /// ```
+    pub fn validate(&self) -> Result<(), String> {
+        match self.kind {
+            ProviderKind::Anthropic => Ok(()),
+            ProviderKind::OpenRouter => {
+                if self.openrouter_api_key.is_none() {
+                    return Err(
+                        "OpenRouter provider requires an API key. Set OPENROUTER_API_KEY \
+                         environment variable or configure openrouter_api_key in config."
+                            .to_string(),
+                    );
+                }
+                if self.openrouter_model.is_none() {
+                    return Err("OpenRouter provider requires a model identifier \
+                         (e.g., 'anthropic/claude-sonnet-4')."
+                        .to_string());
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
 /// Application configuration.
 ///
 /// Contains all settings needed to initialize and run the Patina application.
@@ -174,6 +394,7 @@ impl Default for CompressionConfig {
 ///     ide_port: None,
 ///     auto_context_enabled: true,
 ///     compression: CompressionConfig::default(),
+///     provider: ProviderConfig::default(),
 /// };
 /// ```
 pub struct Config {
@@ -289,6 +510,12 @@ pub struct Config {
     /// Controls cache TTL, max entries, and token budget for context compression.
     /// Used when creating the `CompressionOrchestrator`.
     pub compression: CompressionConfig,
+
+    /// LLM provider configuration.
+    ///
+    /// Controls which provider is used (Anthropic, OpenRouter) and
+    /// provider-specific settings like API keys and model identifiers.
+    pub provider: ProviderConfig,
 }
 
 impl Config {
@@ -336,6 +563,7 @@ impl Config {
             ide_port: None,
             auto_context_enabled: true,
             compression: CompressionConfig::default(),
+            provider: ProviderConfig::default(),
         }
     }
 
@@ -608,6 +836,34 @@ impl Config {
     pub fn auto_context_enabled(&self) -> bool {
         self.auto_context_enabled
     }
+
+    /// Sets the LLM provider configuration.
+    ///
+    /// # Arguments
+    ///
+    /// * `provider` - The provider configuration specifying which provider to use
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use patina::types::config::{Config, ProviderConfig};
+    /// use secrecy::SecretString;
+    /// use std::path::PathBuf;
+    ///
+    /// let config = Config::new(
+    ///     SecretString::new("sk-ant-api...".into()),
+    ///     "claude-sonnet-4",
+    ///     PathBuf::from("."),
+    /// ).with_provider(ProviderConfig::openrouter(
+    ///     SecretString::new("sk-or-...".into()),
+    ///     "anthropic/claude-sonnet-4",
+    /// ));
+    /// ```
+    #[must_use]
+    pub fn with_provider(mut self, provider: ProviderConfig) -> Self {
+        self.provider = provider;
+        self
+    }
 }
 
 #[cfg(test)]
@@ -647,6 +903,7 @@ mod tests {
             ide_port: None,
             auto_context_enabled: true,
             compression: CompressionConfig::default(),
+            provider: ProviderConfig::default(),
         };
 
         assert_eq!(config.model(), "claude-opus-4-20250514");
@@ -673,6 +930,7 @@ mod tests {
             ide_port: None,
             auto_context_enabled: true,
             compression: CompressionConfig::default(),
+            provider: ProviderConfig::default(),
         };
 
         assert_eq!(config.working_dir(), &path);
@@ -1062,5 +1320,135 @@ mod tests {
         // Config should have default compression settings
         assert_eq!(config.compression.cache_ttl, Duration::from_secs(300));
         assert_eq!(config.compression.max_cache_entries, 100);
+    }
+
+    // =========================================================================
+    // Phase 2.6: Provider config and selection tests
+    // =========================================================================
+
+    #[test]
+    fn test_provider_kind_default_is_anthropic() {
+        assert_eq!(ProviderKind::default(), ProviderKind::Anthropic);
+    }
+
+    #[test]
+    fn test_provider_kind_display() {
+        assert_eq!(ProviderKind::Anthropic.as_str(), "anthropic");
+        assert_eq!(ProviderKind::OpenRouter.as_str(), "openrouter");
+    }
+
+    #[test]
+    fn test_provider_config_default() {
+        let config = ProviderConfig::default();
+        assert_eq!(config.kind, ProviderKind::Anthropic);
+        assert!(config.openrouter_api_key.is_none());
+        assert!(config.openrouter_model.is_none());
+        assert!(config.site_url.is_none());
+        assert!(config.app_name.is_none());
+    }
+
+    #[test]
+    fn test_provider_config_anthropic_constructor() {
+        let config = ProviderConfig::anthropic();
+        assert_eq!(config.kind, ProviderKind::Anthropic);
+    }
+
+    #[test]
+    fn test_provider_config_openrouter_constructor() {
+        let config = ProviderConfig::openrouter(
+            SecretString::new("sk-or-test".into()),
+            "anthropic/claude-sonnet-4",
+        );
+        assert_eq!(config.kind, ProviderKind::OpenRouter);
+        assert!(config.openrouter_api_key.is_some());
+        assert_eq!(
+            config.openrouter_model.as_deref(),
+            Some("anthropic/claude-sonnet-4")
+        );
+    }
+
+    #[test]
+    fn test_provider_config_openrouter_with_site_url() {
+        let config = ProviderConfig::openrouter(SecretString::new("sk-or-test".into()), "model")
+            .with_site_url("https://patina.dev");
+
+        assert_eq!(config.site_url.as_deref(), Some("https://patina.dev"));
+    }
+
+    #[test]
+    fn test_provider_config_openrouter_with_app_name() {
+        let config = ProviderConfig::openrouter(SecretString::new("sk-or-test".into()), "model")
+            .with_app_name("Patina");
+
+        assert_eq!(config.app_name.as_deref(), Some("Patina"));
+    }
+
+    #[test]
+    fn test_config_default_provider_is_anthropic() {
+        let config = Config::new(
+            SecretString::new("test-key".into()),
+            "test-model",
+            PathBuf::from("/tmp"),
+        );
+
+        assert_eq!(config.provider.kind, ProviderKind::Anthropic);
+    }
+
+    #[test]
+    fn test_config_with_provider() {
+        let provider_config = ProviderConfig::openrouter(
+            SecretString::new("sk-or-test".into()),
+            "anthropic/claude-sonnet-4",
+        );
+        let config = Config::new(
+            SecretString::new("test-key".into()),
+            "test-model",
+            PathBuf::from("/tmp"),
+        )
+        .with_provider(provider_config);
+
+        assert_eq!(config.provider.kind, ProviderKind::OpenRouter);
+    }
+
+    #[test]
+    fn test_provider_config_validate_anthropic_ok() {
+        // Anthropic config is always valid (API key is on Config, not ProviderConfig)
+        let config = ProviderConfig::anthropic();
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_provider_config_validate_openrouter_missing_key() {
+        // OpenRouter config without API key should fail validation
+        let config = ProviderConfig {
+            kind: ProviderKind::OpenRouter,
+            openrouter_api_key: None,
+            openrouter_model: Some("model".to_string()),
+            site_url: None,
+            app_name: None,
+        };
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_provider_config_validate_openrouter_missing_model() {
+        // OpenRouter config without model should fail validation
+        let config = ProviderConfig {
+            kind: ProviderKind::OpenRouter,
+            openrouter_api_key: Some(SecretString::new("key".into())),
+            openrouter_model: None,
+            site_url: None,
+            app_name: None,
+        };
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_provider_config_validate_openrouter_ok() {
+        let config = ProviderConfig::openrouter(
+            SecretString::new("sk-or-test".into()),
+            "anthropic/claude-sonnet-4",
+        );
+        assert!(config.validate().is_ok());
     }
 }

@@ -61,6 +61,79 @@ use crate::types::{ApiMessageV2, StreamEvent};
 ///     // ...
 /// }
 /// ```
+/// Creates an LLM provider based on the application configuration.
+///
+/// Reads the [`ProviderConfig`](crate::types::config::ProviderConfig) from the
+/// given [`Config`](crate::types::Config) and constructs the appropriate provider:
+///
+/// - [`ProviderKind::Anthropic`](crate::types::config::ProviderKind::Anthropic): Creates
+///   an [`AnthropicClient`](super::AnthropicClient) using `config.api_key` and `config.model`.
+/// - [`ProviderKind::OpenRouter`](crate::types::config::ProviderKind::OpenRouter): Creates
+///   an [`OpenRouterProvider`](crate::api::providers::openrouter::OpenRouterProvider) using
+///   the OpenRouter API key and model from the provider config.
+///
+/// # Arguments
+///
+/// * `config` - The application configuration containing provider settings.
+///
+/// # Panics
+///
+/// Panics if the provider config is invalid (e.g., OpenRouter without an API key).
+/// Call [`ProviderConfig::validate()`](crate::types::config::ProviderConfig::validate)
+/// before calling this function to handle errors gracefully.
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// use patina::api::provider::create_provider;
+/// use patina::types::config::Config;
+/// use secrecy::SecretString;
+///
+/// let config = Config::new(
+///     SecretString::from("sk-ant-..."),
+///     "claude-sonnet-4",
+///     std::path::PathBuf::from("."),
+/// );
+/// let provider = create_provider(&config);
+/// assert_eq!(provider.name(), "anthropic");
+/// ```
+#[must_use]
+pub fn create_provider(config: &crate::types::Config) -> Box<dyn LlmProvider> {
+    use crate::types::config::ProviderKind;
+
+    match config.provider.kind {
+        ProviderKind::Anthropic => Box::new(super::AnthropicClient::new(
+            config.api_key.clone(),
+            &config.model,
+        )),
+        ProviderKind::OpenRouter => {
+            use crate::api::providers::openrouter::OpenRouterProvider;
+
+            let api_key = config
+                .provider
+                .openrouter_api_key
+                .clone()
+                .expect("OpenRouter provider requires an API key");
+            let model = config
+                .provider
+                .openrouter_model
+                .as_deref()
+                .expect("OpenRouter provider requires a model identifier");
+
+            let mut provider = OpenRouterProvider::new(api_key, model);
+
+            if let Some(ref url) = config.provider.site_url {
+                provider = provider.with_site_url(url.clone());
+            }
+            if let Some(ref name) = config.provider.app_name {
+                provider = provider.with_app_name(name.clone());
+            }
+
+            Box::new(provider)
+        }
+    }
+}
+
 pub trait LlmProvider: Send + Sync {
     /// Returns the provider name (e.g., "anthropic", "openrouter").
     fn name(&self) -> &str;
@@ -636,5 +709,84 @@ data: {"type":"message_stop"}
             "Expected MessageComplete(ToolUse), got: {:?}",
             events
         );
+    }
+
+    // =========================================================================
+    // Phase 2.6: create_provider factory tests
+    // =========================================================================
+
+    #[test]
+    fn test_create_provider_default_anthropic() {
+        use secrecy::SecretString;
+
+        let config = crate::types::Config::new(
+            SecretString::from("sk-ant-test"),
+            "claude-sonnet-4",
+            std::path::PathBuf::from("."),
+        );
+
+        let provider = create_provider(&config);
+        assert_eq!(provider.name(), "anthropic");
+        assert_eq!(provider.model(), "claude-sonnet-4");
+    }
+
+    #[test]
+    fn test_create_provider_explicit_anthropic() {
+        use crate::types::config::ProviderConfig;
+        use secrecy::SecretString;
+
+        let config = crate::types::Config::new(
+            SecretString::from("sk-ant-test"),
+            "claude-opus-4-20250514",
+            std::path::PathBuf::from("."),
+        )
+        .with_provider(ProviderConfig::anthropic());
+
+        let provider = create_provider(&config);
+        assert_eq!(provider.name(), "anthropic");
+        assert_eq!(provider.model(), "claude-opus-4-20250514");
+    }
+
+    #[test]
+    fn test_create_provider_openrouter() {
+        use crate::types::config::ProviderConfig;
+        use secrecy::SecretString;
+
+        let config = crate::types::Config::new(
+            SecretString::from("sk-ant-test"),
+            "claude-sonnet-4",
+            std::path::PathBuf::from("."),
+        )
+        .with_provider(ProviderConfig::openrouter(
+            SecretString::from("sk-or-test"),
+            "anthropic/claude-sonnet-4",
+        ));
+
+        let provider = create_provider(&config);
+        assert_eq!(provider.name(), "openrouter");
+        assert_eq!(provider.model(), "anthropic/claude-sonnet-4");
+    }
+
+    #[test]
+    fn test_create_provider_openrouter_with_metadata() {
+        use crate::types::config::ProviderConfig;
+        use secrecy::SecretString;
+
+        let config = crate::types::Config::new(
+            SecretString::from("sk-ant-test"),
+            "claude-sonnet-4",
+            std::path::PathBuf::from("."),
+        )
+        .with_provider(
+            ProviderConfig::openrouter(
+                SecretString::from("sk-or-test"),
+                "anthropic/claude-sonnet-4",
+            )
+            .with_site_url("https://patina.dev")
+            .with_app_name("Patina"),
+        );
+
+        let provider = create_provider(&config);
+        assert_eq!(provider.name(), "openrouter");
     }
 }
