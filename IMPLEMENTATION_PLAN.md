@@ -272,9 +272,9 @@ Before marking ANY task `[x]`:
 **Description**: Extend `Config` to support provider selection. Add `[provider]` section to config with per-provider settings.
 
 **TDD Cycle**:
-- [ ] RED: Write tests for config parsing — `default` provider, per-provider API keys (as `SecretString`), model selection, OpenRouter-specific fields (`site_url`, `app_name`)
-- [ ] GREEN: Add `ProviderConfig` to `src/types/config.rs`, parse from config file, construct appropriate `Box<dyn LlmProvider>` based on selection
-- [ ] REFACTOR: Add config validation — warn on missing API keys, validate model names, default to Anthropic if no provider section
+- [x] RED: Write tests for config parsing — `default` provider, per-provider API keys (as `SecretString`), model selection, OpenRouter-specific fields (`site_url`, `app_name`)
+- [x] GREEN: Add `ProviderConfig` to `src/types/config.rs`, parse from config file, construct appropriate `Box<dyn LlmProvider>` based on selection
+- [x] REFACTOR: Add config validation — warn on missing API keys, validate model names, default to Anthropic if no provider section
 - Files: `src/types/config.rs`, `src/main.rs` (provider construction)
 - Acceptance: Config file with `[provider.openrouter]` section correctly creates `OpenRouterProvider`
 
