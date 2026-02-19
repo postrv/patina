@@ -507,18 +507,19 @@ async fn event_loop(
     let mut tick_interval = interval(Duration::from_millis(250));
     let mut dispatcher = create_dispatcher();
 
+    // Cache initial terminal height in state for handler access.
+    if let Ok(size) = terminal.size() {
+        state.set_terminal_height(size.height);
+    }
+
     loop {
         if state.needs_render() {
             terminal.draw(|frame| tui::render(frame, state))?;
             state.mark_rendered();
         }
 
-        let mut ctx = context::AppContext::new(
-            terminal,
-            std::sync::Arc::clone(client),
-            state,
-            session_manager,
-        );
+        let mut ctx =
+            context::AppContext::new(std::sync::Arc::clone(client), state, session_manager);
         let event = ctx.recv_event(&mut events, &mut tick_interval).await;
         let is_quit = event.is_quit();
         let _ = dispatcher.dispatch(&event, &mut ctx).await?;
@@ -737,8 +738,6 @@ mod tests {
     use crate::session::SessionManager;
     use crate::types::config::ParallelMode;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
-    use ratatui::backend::CrosstermBackend;
-    use ratatui::Terminal;
     use secrecy::SecretString;
     use std::path::PathBuf;
     use std::sync::Arc;
@@ -747,11 +746,6 @@ mod tests {
     // =========================================================================
     // Test helpers
     // =========================================================================
-
-    fn test_terminal() -> Terminal<CrosstermBackend<io::Stdout>> {
-        let backend = CrosstermBackend::new(io::stdout());
-        Terminal::new(backend).expect("failed to create test terminal")
-    }
 
     fn test_client() -> Arc<dyn LlmProvider> {
         Arc::new(AnthropicClient::new(
@@ -839,12 +833,12 @@ mod tests {
     #[tokio::test]
     async fn dispatcher_quit_event_triggers_session_save() {
         let mut dispatcher = create_dispatcher();
-        let mut terminal = test_terminal();
+
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
 
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         // Quit event should be dispatched to all handlers (none consume it
         // except SessionHandler which observes and returns IGNORED).
@@ -868,12 +862,12 @@ mod tests {
     #[tokio::test]
     async fn dispatcher_char_input_inserts_into_state() {
         let mut dispatcher = create_dispatcher();
-        let mut terminal = test_terminal();
+
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
 
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::Key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
         let result = dispatcher.dispatch(&event, &mut ctx).await.unwrap();
@@ -888,14 +882,14 @@ mod tests {
     #[tokio::test]
     async fn dispatcher_tick_advances_throbber() {
         let mut dispatcher = create_dispatcher();
-        let mut terminal = test_terminal();
+
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
 
         let before = state.throbber_char();
 
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::Tick;
         let result = dispatcher.dispatch(&event, &mut ctx).await.unwrap();
@@ -911,12 +905,12 @@ mod tests {
     #[tokio::test]
     async fn dispatcher_api_chunk_content_delta_consumed() {
         let mut dispatcher = create_dispatcher();
-        let mut terminal = test_terminal();
+
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
 
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::ApiChunk(crate::api::StreamEvent::ContentDelta("hello".to_string()));
         let result = dispatcher.dispatch(&event, &mut ctx).await.unwrap();
@@ -931,12 +925,12 @@ mod tests {
     #[tokio::test]
     async fn dispatcher_message_complete_marks_dirty_and_saves() {
         let mut dispatcher = create_dispatcher();
-        let mut terminal = test_terminal();
+
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
 
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         // MessageComplete should: StreamHandler marks dirty → SessionHandler saves.
         let event = AppEvent::ApiChunk(crate::api::StreamEvent::MessageComplete {
@@ -956,7 +950,7 @@ mod tests {
     #[tokio::test]
     async fn dispatcher_permission_key_consumed_before_keyboard() {
         let mut dispatcher = create_dispatcher();
-        let mut terminal = test_terminal();
+
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
@@ -964,7 +958,7 @@ mod tests {
         // Set up a pending permission.
         state.set_pending_permission(PermissionRequest::new("Bash", Some("ls"), "List"));
 
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         // Send 'z' key — should be consumed by PermissionHandler, NOT
         // reach KeyboardHandler (which would insert 'z' into input).
@@ -985,7 +979,7 @@ mod tests {
     #[tokio::test]
     async fn dispatcher_resize_marks_redraw() {
         let mut dispatcher = create_dispatcher();
-        let mut terminal = test_terminal();
+
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
@@ -993,7 +987,7 @@ mod tests {
         // Clear initial render flags.
         state.mark_rendered();
 
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::Resize {
             width: 120,
@@ -1011,12 +1005,12 @@ mod tests {
     #[tokio::test]
     async fn dispatcher_mouse_scroll_consumed() {
         let mut dispatcher = create_dispatcher();
-        let mut terminal = test_terminal();
+
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
 
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::Mouse(MouseEvent {
             kind: MouseEventKind::ScrollUp,
@@ -1036,12 +1030,12 @@ mod tests {
     #[tokio::test]
     async fn dispatcher_ctrl_c_as_quit_saves_and_is_detectable() {
         let mut dispatcher = create_dispatcher();
-        let mut terminal = test_terminal();
+
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
 
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         // In the real event loop, Ctrl+C is mapped to AppEvent::Quit by recv_event().
         // Dispatching Quit should save the session (via SessionHandler).
@@ -1059,12 +1053,12 @@ mod tests {
     #[tokio::test]
     async fn dispatcher_keyboard_quit_sets_wants_quit() {
         let mut dispatcher = create_dispatcher();
-        let mut terminal = test_terminal();
+
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
 
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         // If a Key event for Ctrl+C reaches KeyboardHandler (bypassing recv_event's
         // Quit mapping), it should set wants_quit on state.
@@ -1081,7 +1075,7 @@ mod tests {
     #[tokio::test]
     async fn dispatcher_multiple_events_sequence() {
         let mut dispatcher = create_dispatcher();
-        let mut terminal = test_terminal();
+
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
@@ -1097,8 +1091,7 @@ mod tests {
         ];
 
         for event in &events {
-            let mut ctx =
-                AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+            let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
             let result = dispatcher.dispatch(event, &mut ctx).await.unwrap();
             assert_eq!(result, Handled::CONSUMED, "Event {event} must be consumed");
         }

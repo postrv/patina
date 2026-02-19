@@ -363,6 +363,10 @@ pub struct AppState {
 
     /// Accumulated quality gate results for the current iteration.
     continuous_gate_results: Vec<GateResult>,
+
+    /// Cached terminal height for scroll calculations.
+    /// Updated on resize events; defaults to 24 for headless/test environments.
+    terminal_height: u16,
 }
 
 #[derive(Default)]
@@ -554,6 +558,7 @@ impl AppState {
             continuous_last_duration_ms: None,
             continuous_checking_gate: None,
             continuous_gate_results: Vec::new(),
+            terminal_height: 24,
         }
     }
 
@@ -1528,6 +1533,21 @@ impl AppState {
 
     pub fn mark_full_redraw(&mut self) {
         self.dirty.full = true;
+    }
+
+    /// Returns the cached terminal height in rows.
+    ///
+    /// Defaults to 24 if no resize event has been received.
+    #[must_use]
+    pub fn terminal_height(&self) -> u16 {
+        self.terminal_height
+    }
+
+    /// Updates the cached terminal height.
+    ///
+    /// Called from the event loop on startup and on resize events.
+    pub fn set_terminal_height(&mut self, height: u16) {
+        self.terminal_height = height;
     }
 
     /// Adds a message to the conversation timeline and display.

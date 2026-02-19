@@ -159,10 +159,7 @@ mod tests {
     use crate::session::SessionManager;
     use crate::types::config::ParallelMode;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-    use ratatui::backend::CrosstermBackend;
-    use ratatui::Terminal;
     use secrecy::SecretString;
-    use std::io;
     use std::path::PathBuf;
     use std::sync::Arc;
     use tempfile::TempDir;
@@ -170,11 +167,6 @@ mod tests {
     // =========================================================================
     // Test helpers
     // =========================================================================
-
-    fn test_terminal() -> Terminal<CrosstermBackend<io::Stdout>> {
-        let backend = CrosstermBackend::new(io::stdout());
-        Terminal::new(backend).expect("failed to create test terminal")
-    }
 
     fn test_client() -> Arc<dyn LlmProvider> {
         Arc::new(AnthropicClient::new(
@@ -218,7 +210,7 @@ mod tests {
     #[tokio::test]
     async fn handle_key_when_no_permission_pending_returns_ignored() {
         let mut handler = PermissionHandler;
-        let mut terminal = test_terminal();
+
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
@@ -226,7 +218,7 @@ mod tests {
         // No permission set — should pass through.
         assert!(!state.has_pending_permission());
 
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
         let event = AppEvent::Key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
         let result = handler.handle(&event, &mut ctx).await.unwrap();
 
@@ -240,11 +232,11 @@ mod tests {
     #[tokio::test]
     async fn handle_tick_returns_ignored() {
         let mut handler = PermissionHandler;
-        let mut terminal = test_terminal();
+
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::Tick;
         let result = handler.handle(&event, &mut ctx).await.unwrap();
@@ -259,11 +251,11 @@ mod tests {
     #[tokio::test]
     async fn handle_quit_returns_ignored() {
         let mut handler = PermissionHandler;
-        let mut terminal = test_terminal();
+
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::Quit;
         let result = handler.handle(&event, &mut ctx).await.unwrap();
@@ -278,11 +270,11 @@ mod tests {
     #[tokio::test]
     async fn handle_resize_returns_ignored() {
         let mut handler = PermissionHandler;
-        let mut terminal = test_terminal();
+
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::Resize {
             width: 80,
@@ -300,11 +292,11 @@ mod tests {
     #[tokio::test]
     async fn handle_api_chunk_returns_ignored() {
         let mut handler = PermissionHandler;
-        let mut terminal = test_terminal();
+
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::ApiChunk(crate::api::StreamEvent::ContentDelta("hi".to_string()));
         let result = handler.handle(&event, &mut ctx).await.unwrap();
@@ -319,11 +311,11 @@ mod tests {
     #[tokio::test]
     async fn handle_tool_result_returns_ignored() {
         let mut handler = PermissionHandler;
-        let mut terminal = test_terminal();
+
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::ToolResult {
             tool_id: "toolu_test".to_string(),
@@ -349,7 +341,7 @@ mod tests {
     #[tokio::test]
     async fn handle_key_when_permission_pending_returns_consumed() {
         let mut handler = PermissionHandler;
-        let mut terminal = test_terminal();
+
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
@@ -357,7 +349,7 @@ mod tests {
         state.set_pending_permission(test_permission_request());
         assert!(state.has_pending_permission());
 
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
         let event = AppEvent::Key(KeyEvent::new(KeyCode::Char('z'), KeyModifiers::NONE));
         let result = handler.handle(&event, &mut ctx).await.unwrap();
 
@@ -371,14 +363,14 @@ mod tests {
     #[tokio::test]
     async fn handle_non_key_when_permission_pending_returns_ignored() {
         let mut handler = PermissionHandler;
-        let mut terminal = test_terminal();
+
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
 
         state.set_pending_permission(test_permission_request());
 
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
         let event = AppEvent::Tick;
         let result = handler.handle(&event, &mut ctx).await.unwrap();
 
@@ -396,14 +388,14 @@ mod tests {
     #[tokio::test]
     async fn handle_key_y_clears_pending_permission() {
         let mut handler = PermissionHandler;
-        let mut terminal = test_terminal();
+
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
 
         state.set_pending_permission(test_permission_request());
 
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
         let event = AppEvent::Key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
         let _result = handler.handle(&event, &mut ctx).await.unwrap();
 
@@ -416,14 +408,14 @@ mod tests {
     #[tokio::test]
     async fn handle_key_a_clears_pending_permission() {
         let mut handler = PermissionHandler;
-        let mut terminal = test_terminal();
+
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
 
         state.set_pending_permission(test_permission_request());
 
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
         let event = AppEvent::Key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
         let _result = handler.handle(&event, &mut ctx).await.unwrap();
 
@@ -436,14 +428,14 @@ mod tests {
     #[tokio::test]
     async fn handle_key_n_clears_pending_permission() {
         let mut handler = PermissionHandler;
-        let mut terminal = test_terminal();
+
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
 
         state.set_pending_permission(test_permission_request());
 
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
         let event = AppEvent::Key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE));
         let _result = handler.handle(&event, &mut ctx).await.unwrap();
 
@@ -456,14 +448,14 @@ mod tests {
     #[tokio::test]
     async fn handle_key_esc_clears_pending_permission() {
         let mut handler = PermissionHandler;
-        let mut terminal = test_terminal();
+
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
 
         state.set_pending_permission(test_permission_request());
 
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
         let event = AppEvent::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         let _result = handler.handle(&event, &mut ctx).await.unwrap();
 
@@ -476,14 +468,14 @@ mod tests {
     #[tokio::test]
     async fn handle_key_enter_clears_pending_permission() {
         let mut handler = PermissionHandler;
-        let mut terminal = test_terminal();
+
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
 
         state.set_pending_permission(test_permission_request());
 
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
         let event = AppEvent::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         let _result = handler.handle(&event, &mut ctx).await.unwrap();
 
@@ -496,14 +488,14 @@ mod tests {
     #[tokio::test]
     async fn handle_navigation_key_preserves_pending_permission() {
         let mut handler = PermissionHandler;
-        let mut terminal = test_terminal();
+
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
 
         state.set_pending_permission(test_permission_request());
 
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         // Left arrow navigates but doesn't confirm — permission stays pending.
         let event = AppEvent::Key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
@@ -523,14 +515,14 @@ mod tests {
     #[tokio::test]
     async fn handle_unrecognized_key_preserves_pending_permission() {
         let mut handler = PermissionHandler;
-        let mut terminal = test_terminal();
+
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
 
         state.set_pending_permission(test_permission_request());
 
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         // An unrecognized key is consumed but doesn't resolve the prompt.
         let event = AppEvent::Key(KeyEvent::new(KeyCode::Char('z'), KeyModifiers::NONE));
@@ -554,14 +546,14 @@ mod tests {
     #[tokio::test]
     async fn handle_permission_response_allow_once_returns_consumed() {
         let mut handler = PermissionHandler;
-        let mut terminal = test_terminal();
+
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
 
         state.set_pending_permission(test_permission_request());
 
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
         let event = AppEvent::PermissionResponse(PermissionResponse::AllowOnce);
         let result = handler.handle(&event, &mut ctx).await.unwrap();
 
@@ -575,14 +567,14 @@ mod tests {
     #[tokio::test]
     async fn handle_permission_response_deny_returns_consumed() {
         let mut handler = PermissionHandler;
-        let mut terminal = test_terminal();
+
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
 
         state.set_pending_permission(test_permission_request());
 
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
         let event = AppEvent::PermissionResponse(PermissionResponse::Deny);
         let result = handler.handle(&event, &mut ctx).await.unwrap();
 
@@ -596,14 +588,14 @@ mod tests {
     #[tokio::test]
     async fn handle_permission_response_clears_pending() {
         let mut handler = PermissionHandler;
-        let mut terminal = test_terminal();
+
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
 
         state.set_pending_permission(test_permission_request());
 
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
         let event = AppEvent::PermissionResponse(PermissionResponse::AllowAlways);
         let _result = handler.handle(&event, &mut ctx).await.unwrap();
 
@@ -616,7 +608,7 @@ mod tests {
     #[tokio::test]
     async fn handle_permission_response_without_pending_still_consumed() {
         let mut handler = PermissionHandler;
-        let mut terminal = test_terminal();
+
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
@@ -625,7 +617,7 @@ mod tests {
         // (it's a dedicated event type with no other handler).
         assert!(!state.has_pending_permission());
 
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
         let event = AppEvent::PermissionResponse(PermissionResponse::Deny);
         let result = handler.handle(&event, &mut ctx).await.unwrap();
 
@@ -656,14 +648,14 @@ mod tests {
 
         let handler = PermissionHandler;
         let mut dispatcher = EventDispatcher::new(vec![Box::new(handler)]);
-        let mut terminal = test_terminal();
+
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
 
         state.set_pending_permission(test_permission_request());
 
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         // Key event should be consumed when permission pending.
         let event = AppEvent::Key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));

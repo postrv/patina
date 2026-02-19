@@ -122,10 +122,7 @@ mod tests {
     use crate::app::state::{AppState, ContinuousLoopStatus};
     use crate::continuous::ContinuousEvent;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-    use ratatui::backend::CrosstermBackend;
-    use ratatui::Terminal;
     use secrecy::SecretString;
-    use std::io;
     use std::path::PathBuf;
     use std::sync::Arc;
     use tempfile::TempDir;
@@ -136,11 +133,6 @@ mod tests {
     // =========================================================================
     // Test helpers
     // =========================================================================
-
-    fn test_terminal() -> Terminal<CrosstermBackend<io::Stdout>> {
-        let backend = CrosstermBackend::new(io::stdout());
-        Terminal::new(backend).expect("failed to create test terminal")
-    }
 
     fn test_client() -> Arc<dyn LlmProvider> {
         Arc::new(AnthropicClient::new(
@@ -176,11 +168,10 @@ mod tests {
     #[tokio::test]
     async fn handle_iteration_start_returns_consumed() {
         let mut handler = ContinuousHandler;
-        let mut terminal = test_terminal();
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::Continuous(ContinuousEvent::IterationStart { iteration: 1 });
         let result = handler.handle(&event, &mut ctx).await.unwrap();
@@ -195,11 +186,10 @@ mod tests {
     #[tokio::test]
     async fn handle_iteration_complete_returns_consumed() {
         let mut handler = ContinuousHandler;
-        let mut terminal = test_terminal();
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::Continuous(ContinuousEvent::IterationComplete {
             iteration: 1,
@@ -217,11 +207,10 @@ mod tests {
     #[tokio::test]
     async fn handle_quality_gate_check_returns_consumed() {
         let mut handler = ContinuousHandler;
-        let mut terminal = test_terminal();
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::Continuous(ContinuousEvent::QualityGateCheck {
             gate: "tests".to_string(),
@@ -238,11 +227,10 @@ mod tests {
     #[tokio::test]
     async fn handle_quality_gate_result_returns_consumed() {
         let mut handler = ContinuousHandler;
-        let mut terminal = test_terminal();
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::Continuous(ContinuousEvent::QualityGateResult {
             gate: "clippy".to_string(),
@@ -261,11 +249,10 @@ mod tests {
     #[tokio::test]
     async fn handle_stagnation_detected_returns_consumed() {
         let mut handler = ContinuousHandler;
-        let mut terminal = test_terminal();
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::Continuous(ContinuousEvent::StagnationDetected {
             iterations_without_progress: 5,
@@ -283,11 +270,10 @@ mod tests {
     #[tokio::test]
     async fn handle_human_checkpoint_returns_consumed() {
         let mut handler = ContinuousHandler;
-        let mut terminal = test_terminal();
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::Continuous(ContinuousEvent::HumanCheckpointRequired {
             reason: "Test failures unresolvable".to_string(),
@@ -308,11 +294,10 @@ mod tests {
     #[tokio::test]
     async fn handle_key_returns_ignored() {
         let mut handler = ContinuousHandler;
-        let mut terminal = test_terminal();
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::Key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
         let result = handler.handle(&event, &mut ctx).await.unwrap();
@@ -327,11 +312,10 @@ mod tests {
     #[tokio::test]
     async fn handle_tick_returns_ignored() {
         let mut handler = ContinuousHandler;
-        let mut terminal = test_terminal();
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::Tick;
         let result = handler.handle(&event, &mut ctx).await.unwrap();
@@ -346,11 +330,10 @@ mod tests {
     #[tokio::test]
     async fn handle_quit_returns_ignored() {
         let mut handler = ContinuousHandler;
-        let mut terminal = test_terminal();
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::Quit;
         let result = handler.handle(&event, &mut ctx).await.unwrap();
@@ -365,11 +348,10 @@ mod tests {
     #[tokio::test]
     async fn handle_resize_returns_ignored() {
         let mut handler = ContinuousHandler;
-        let mut terminal = test_terminal();
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::Resize {
             width: 80,
@@ -391,7 +373,6 @@ mod tests {
     #[tokio::test]
     async fn handle_iteration_start_updates_state() {
         let mut handler = ContinuousHandler;
-        let mut terminal = test_terminal();
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
@@ -402,7 +383,7 @@ mod tests {
             "Status should be Inactive before first event"
         );
 
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
         let event = AppEvent::Continuous(ContinuousEvent::IterationStart { iteration: 3 });
         let _ = handler.handle(&event, &mut ctx).await.unwrap();
 
@@ -416,11 +397,10 @@ mod tests {
     #[tokio::test]
     async fn handle_iteration_complete_updates_state() {
         let mut handler = ContinuousHandler;
-        let mut terminal = test_terminal();
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         // Start iteration first
         let start = AppEvent::Continuous(ContinuousEvent::IterationStart { iteration: 1 });
@@ -440,11 +420,10 @@ mod tests {
     #[tokio::test]
     async fn handle_gate_check_records_checking_gate() {
         let mut handler = ContinuousHandler;
-        let mut terminal = test_terminal();
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::Continuous(ContinuousEvent::QualityGateCheck {
             gate: "tests".to_string(),
@@ -461,11 +440,10 @@ mod tests {
     #[tokio::test]
     async fn handle_gate_result_pass_records_result() {
         let mut handler = ContinuousHandler;
-        let mut terminal = test_terminal();
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::Continuous(ContinuousEvent::QualityGateResult {
             gate: "clippy".to_string(),
@@ -484,11 +462,10 @@ mod tests {
     #[tokio::test]
     async fn handle_gate_result_fail_records_result() {
         let mut handler = ContinuousHandler;
-        let mut terminal = test_terminal();
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::Continuous(ContinuousEvent::QualityGateResult {
             gate: "tests".to_string(),
@@ -505,11 +482,10 @@ mod tests {
     #[tokio::test]
     async fn handle_stagnation_updates_state() {
         let mut handler = ContinuousHandler;
-        let mut terminal = test_terminal();
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::Continuous(ContinuousEvent::StagnationDetected {
             iterations_without_progress: 5,
@@ -529,11 +505,10 @@ mod tests {
     #[tokio::test]
     async fn handle_human_checkpoint_updates_state() {
         let mut handler = ContinuousHandler;
-        let mut terminal = test_terminal();
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::Continuous(ContinuousEvent::HumanCheckpointRequired {
             reason: "Cannot resolve test failures".to_string(),
@@ -551,14 +526,13 @@ mod tests {
     #[tokio::test]
     async fn handle_progress_marks_dirty_for_render() {
         let mut handler = ContinuousHandler;
-        let mut terminal = test_terminal();
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
 
         state.mark_rendered();
 
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
         let event = AppEvent::Continuous(ContinuousEvent::IterationStart { iteration: 1 });
         let _ = handler.handle(&event, &mut ctx).await.unwrap();
 
@@ -571,11 +545,10 @@ mod tests {
     #[tokio::test]
     async fn handle_multiple_gate_results_accumulate() {
         let mut handler = ContinuousHandler;
-        let mut terminal = test_terminal();
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         let event1 = AppEvent::Continuous(ContinuousEvent::QualityGateResult {
             gate: "tests".to_string(),
@@ -614,11 +587,10 @@ mod tests {
 
         let handler = ContinuousHandler;
         let mut dispatcher = EventDispatcher::new(vec![Box::new(handler)]);
-        let mut terminal = test_terminal();
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         // Continuous event should be consumed.
         let event = AppEvent::Continuous(ContinuousEvent::IterationStart { iteration: 1 });

@@ -230,10 +230,7 @@ mod tests {
     use crate::session::SessionManager;
     use crate::types::config::ParallelMode;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-    use ratatui::backend::CrosstermBackend;
-    use ratatui::Terminal;
     use secrecy::SecretString;
-    use std::io;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
@@ -242,11 +239,6 @@ mod tests {
     // =========================================================================
     // Test helpers
     // =========================================================================
-
-    fn test_terminal() -> Terminal<CrosstermBackend<io::Stdout>> {
-        let backend = CrosstermBackend::new(io::stdout());
-        Terminal::new(backend).expect("failed to create test terminal")
-    }
 
     fn test_client() -> Arc<dyn LlmProvider> {
         Arc::new(AnthropicClient::new(
@@ -398,11 +390,10 @@ mod tests {
     #[tokio::test]
     async fn mock_handler_tracks_calls() {
         let (mut handler, count) = MockHandler::new("test", Handled::CONSUMED);
-        let mut terminal = test_terminal();
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         let event = tick_event();
         let result = handler.handle(&event, &mut ctx).await.unwrap();
@@ -442,11 +433,10 @@ mod tests {
     #[tokio::test]
     async fn dispatch_empty_returns_ignored() {
         let mut dispatcher = EventDispatcher::new(vec![]);
-        let mut terminal = test_terminal();
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         let event = tick_event();
         let result = dispatcher.dispatch(&event, &mut ctx).await.unwrap();
@@ -457,11 +447,10 @@ mod tests {
     async fn dispatch_single_consuming_handler_returns_consumed() {
         let (handler, count) = MockHandler::new("consumer", Handled::CONSUMED);
         let mut dispatcher = EventDispatcher::new(vec![Box::new(handler)]);
-        let mut terminal = test_terminal();
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         let event = tick_event();
         let result = dispatcher.dispatch(&event, &mut ctx).await.unwrap();
@@ -474,11 +463,10 @@ mod tests {
     async fn dispatch_single_ignoring_handler_returns_ignored() {
         let (handler, count) = MockHandler::new("ignorer", Handled::IGNORED);
         let mut dispatcher = EventDispatcher::new(vec![Box::new(handler)]);
-        let mut terminal = test_terminal();
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         let event = tick_event();
         let result = dispatcher.dispatch(&event, &mut ctx).await.unwrap();
@@ -493,11 +481,10 @@ mod tests {
         let (h1, count1) = MockHandler::new("first", Handled::CONSUMED);
         let (h2, count2) = MockHandler::new("second", Handled::CONSUMED);
         let mut dispatcher = EventDispatcher::new(vec![Box::new(h1), Box::new(h2)]);
-        let mut terminal = test_terminal();
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         let event = key_event();
         let result = dispatcher.dispatch(&event, &mut ctx).await.unwrap();
@@ -517,11 +504,10 @@ mod tests {
         let (h1, count1) = MockHandler::new("ignorer", Handled::IGNORED);
         let (h2, count2) = MockHandler::new("consumer", Handled::CONSUMED);
         let mut dispatcher = EventDispatcher::new(vec![Box::new(h1), Box::new(h2)]);
-        let mut terminal = test_terminal();
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         let event = key_event();
         let result = dispatcher.dispatch(&event, &mut ctx).await.unwrap();
@@ -537,11 +523,10 @@ mod tests {
         let (h2, count2) = MockHandler::new("b", Handled::IGNORED);
         let (h3, count3) = MockHandler::new("c", Handled::IGNORED);
         let mut dispatcher = EventDispatcher::new(vec![Box::new(h1), Box::new(h2), Box::new(h3)]);
-        let mut terminal = test_terminal();
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         let event = tick_event();
         let result = dispatcher.dispatch(&event, &mut ctx).await.unwrap();
@@ -557,11 +542,10 @@ mod tests {
     async fn dispatch_error_propagates() {
         let (handler, count) = ErrorHandler::new("failing");
         let mut dispatcher = EventDispatcher::new(vec![Box::new(handler)]);
-        let mut terminal = test_terminal();
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         let event = tick_event();
         let result = dispatcher.dispatch(&event, &mut ctx).await;
@@ -576,11 +560,10 @@ mod tests {
         let (h1, count1) = ErrorHandler::new("error");
         let (h2, count2) = MockHandler::new("never", Handled::CONSUMED);
         let mut dispatcher = EventDispatcher::new(vec![Box::new(h1), Box::new(h2)]);
-        let mut terminal = test_terminal();
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         let event = tick_event();
         let result = dispatcher.dispatch(&event, &mut ctx).await;
@@ -601,11 +584,10 @@ mod tests {
         let (h2, count2) = MockHandler::new("second", Handled::CONSUMED);
         let (h3, count3) = MockHandler::new("third", Handled::IGNORED);
         let mut dispatcher = EventDispatcher::new(vec![Box::new(h1), Box::new(h2), Box::new(h3)]);
-        let mut terminal = test_terminal();
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         let event = tick_event();
         let result = dispatcher.dispatch(&event, &mut ctx).await.unwrap();
@@ -632,11 +614,10 @@ mod tests {
     async fn dispatch_multiple_events_independently() {
         let (handler, count) = MockHandler::new("counter", Handled::CONSUMED);
         let mut dispatcher = EventDispatcher::new(vec![Box::new(handler)]);
-        let mut terminal = test_terminal();
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         // Dispatch three events
         for _ in 0..3 {
@@ -672,11 +653,10 @@ mod tests {
         let (obs, o_count) = MockHandler::new("observer", Handled::IGNORED);
         let mut dispatcher =
             EventDispatcher::new(vec![Box::new(handler)]).with_observers(vec![Box::new(obs)]);
-        let mut terminal = test_terminal();
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         let event = tick_event();
         let result = dispatcher.dispatch(&event, &mut ctx).await.unwrap();
@@ -700,11 +680,10 @@ mod tests {
         let (obs, o_count) = MockHandler::new("observer", Handled::IGNORED);
         let mut dispatcher =
             EventDispatcher::new(vec![Box::new(handler)]).with_observers(vec![Box::new(obs)]);
-        let mut terminal = test_terminal();
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         let event = tick_event();
         let result = dispatcher.dispatch(&event, &mut ctx).await.unwrap();
@@ -720,11 +699,10 @@ mod tests {
         // does not change the dispatch result to CONSUMED.
         let (obs, _) = MockHandler::new("observer", Handled::CONSUMED);
         let mut dispatcher = EventDispatcher::new(vec![]).with_observers(vec![Box::new(obs)]);
-        let mut terminal = test_terminal();
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         let event = tick_event();
         let result = dispatcher.dispatch(&event, &mut ctx).await.unwrap();
@@ -740,11 +718,10 @@ mod tests {
     async fn observer_error_propagates() {
         let (obs, _) = ErrorHandler::new("failing_observer");
         let mut dispatcher = EventDispatcher::new(vec![]).with_observers(vec![Box::new(obs)]);
-        let mut terminal = test_terminal();
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         let event = tick_event();
         let result = dispatcher.dispatch(&event, &mut ctx).await;
