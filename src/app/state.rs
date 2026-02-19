@@ -15,7 +15,7 @@ use crate::narsil::context::ContextSuggestion;
 use crate::permissions::{PermissionManager, PermissionRequest, PermissionResponse};
 use crate::plugins::PluginRegistry;
 use crate::session::Session;
-use crate::tools::{HookedToolExecutor, ParallelConfig};
+use crate::tools::HookedToolExecutor;
 use crate::tui::scroll::ScrollState;
 use crate::tui::selection::{FocusArea, SelectionState};
 use crate::tui::widgets::{CompactionProgressState, ToolBlockState};
@@ -383,6 +383,42 @@ impl AppState {
         plugins_enabled: bool,
         subagents_enabled: bool,
     ) -> Self {
+        use crate::types::config::PerformanceConfig;
+
+        // Build PerformanceConfig from ParallelMode with default limits
+        let performance = PerformanceConfig {
+            parallel_mode,
+            ..PerformanceConfig::default()
+        };
+
+        Self::with_performance_config(
+            working_dir,
+            skip_permissions,
+            &performance,
+            plugins_enabled,
+            subagents_enabled,
+        )
+    }
+
+    /// Creates a new AppState using a [`PerformanceConfig`] for parallelism settings.
+    ///
+    /// This method provides full control over parallelism policy, tool concurrency,
+    /// and agent concurrency limits.
+    ///
+    /// # Arguments
+    ///
+    /// * `working_dir` - The working directory for file operations
+    /// * `skip_permissions` - If true, bypass all permission prompts
+    /// * `performance` - Controls parallelism policy and concurrency limits
+    /// * `plugins_enabled` - If true, load plugins from config directory
+    /// * `subagents_enabled` - If true, initialize subagent spawner
+    pub fn with_performance_config(
+        working_dir: PathBuf,
+        skip_permissions: bool,
+        performance: &crate::types::config::PerformanceConfig,
+        plugins_enabled: bool,
+        subagents_enabled: bool,
+    ) -> Self {
         // Generate a unique session ID for hooks
         let hook_session_id = uuid::Uuid::new_v4().to_string();
         let hook_manager = HookManager::new(hook_session_id);
@@ -392,12 +428,8 @@ impl AppState {
         pm.set_skip_permissions(skip_permissions);
         let permission_manager = Arc::new(Mutex::new(pm));
 
-        // Convert ParallelMode to ParallelConfig
-        let parallel_config = match parallel_mode {
-            ParallelMode::Enabled => ParallelConfig::enabled(),
-            ParallelMode::Disabled => ParallelConfig::disabled(),
-            ParallelMode::Aggressive => ParallelConfig::aggressive(),
-        };
+        // Convert PerformanceConfig to ParallelConfig
+        let parallel_config = performance.to_parallel_config();
 
         // Create tool executor with hook, permission, and parallel configuration
         let tool_executor = Arc::new(
