@@ -483,9 +483,9 @@ Before marking ANY task `[x]`:
 **Description**: Detect capabilities of all configured MCP servers in parallel on startup.
 
 **TDD Cycle**:
-- [ ] RED: Write tests for parallel detection — multiple MCP clients queried concurrently, results collected, timeout handling for slow servers
-- [ ] GREEN: Implement `detect_all_capabilities()` using `futures::future::join_all()` on `McpClient::list_tools()`
-- [ ] REFACTOR: Add timeout per server, graceful handling of unreachable servers
+- [x] RED: Write tests for parallel detection — multiple MCP clients queried concurrently, results collected, timeout handling for slow servers
+- [x] GREEN: Implement `detect_all_capabilities()` using `futures::future::join_all()` on `McpClient::list_tools()`
+- [x] REFACTOR: Add timeout per server, graceful handling of unreachable servers
 - Files: `src/narsil/integration.rs`, `src/mcp/client.rs`
 - Acceptance: Multiple MCP servers detected concurrently, no blocking
 
