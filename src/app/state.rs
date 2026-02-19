@@ -1639,8 +1639,8 @@ impl AppState {
         let target_tokens = context_limit / 2; // Target 50% of context
         self.start_compaction(target_tokens, current_tokens, true);
 
-        // Create compactor with mock summarizer
-        // TODO: In production, use ClaudeSummarizer with client
+        // Uses MockSummarizer until the LlmProvider trait (Sprint 2) enables
+        // wiring a real summarizer without coupling to AnthropicClient.
         let compactor = ContextCompactor::<MockSummarizer>::new_mock();
 
         let config = CompactionConfig {

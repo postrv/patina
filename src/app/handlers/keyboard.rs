@@ -226,7 +226,8 @@ async fn handle_submit(ctx: &mut AppContext<'_>) -> Result<()> {
         handle_slash_command(ctx, &input);
     } else {
         ctx.state.submit_message(ctx.client, input).await?;
-        crate::app::auto_save_session(ctx.state, ctx.session_manager).await;
+        // SessionHandler observer saves when it sees the dirty flag.
+        ctx.state.mark_session_dirty();
     }
 
     Ok(())
