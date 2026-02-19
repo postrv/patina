@@ -33,12 +33,16 @@ pub struct TickHandler;
 impl EventHandler for TickHandler {
     fn handle<'a>(
         &'a mut self,
-        _event: &'a AppEvent,
-        _ctx: &'a mut AppContext<'_>,
+        event: &'a AppEvent,
+        ctx: &'a mut AppContext<'_>,
     ) -> Pin<Box<dyn Future<Output = Result<Handled>> + Send + 'a>> {
         Box::pin(async move {
-            // Stub: always ignores — tests will fail until implemented.
-            Ok(Handled::IGNORED)
+            if matches!(event, AppEvent::Tick) {
+                ctx.state.tick_throbber();
+                Ok(Handled::CONSUMED)
+            } else {
+                Ok(Handled::IGNORED)
+            }
         })
     }
 
