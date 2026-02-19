@@ -3,6 +3,7 @@
 pub mod compaction;
 pub mod context;
 pub mod multi_model;
+pub mod provider;
 pub mod tokens;
 pub mod tools;
 
