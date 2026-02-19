@@ -56,9 +56,12 @@ impl EventHandler for SessionHandler {
         ctx: &'a mut AppContext<'_>,
     ) -> Pin<Box<dyn Future<Output = Result<Handled>> + Send + 'a>> {
         Box::pin(async move {
-            // Stub: always ignore — tests will define the expected behavior.
-            let _ = event;
-            let _ = ctx;
+            let should_save = ctx.state.take_session_dirty() || matches!(event, AppEvent::Quit);
+
+            if should_save {
+                auto_save(ctx.state, ctx.session_manager).await;
+            }
+
             Ok(Handled::IGNORED)
         })
     }
