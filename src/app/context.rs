@@ -1,9 +1,10 @@
-//! Shared application context for event handlers.
+//! Shared application context and event unification for the event-driven architecture.
 //!
 //! `AppContext` bundles the references that event handlers need — terminal,
 //! API client, application state, and session manager — into a single
-//! borrow-friendly struct. This replaces the four separate parameters
-//! previously threaded through the event loop.
+//! borrow-friendly struct. It also provides [`AppContext::recv_event`], which
+//! merges all event sources (crossterm, background channels, tick timer) into
+//! a unified [`AppEvent`](crate::app::events::AppEvent) stream.
 
 use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
 use futures::StreamExt;
@@ -108,6 +109,14 @@ impl<'a> AppContext<'a> {
     #[must_use]
     pub fn has_pending_permission(&self) -> bool {
         self.state.has_pending_permission()
+    }
+
+    /// Returns `true` if there are tools currently being executed in background tasks.
+    ///
+    /// Delegates to [`AppState::has_executing_tools`].
+    #[must_use]
+    pub fn has_executing_tools(&self) -> bool {
+        self.state.has_executing_tools()
     }
 
     /// Receives the next application event from all event sources.
@@ -216,7 +225,9 @@ mod tests {
     use super::*;
     use crate::api::StreamEvent;
     use crate::types::config::ParallelMode;
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+    use crossterm::event::{
+        KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+    };
     use secrecy::SecretString;
     use std::path::PathBuf;
     use std::time::Duration;
