@@ -49,12 +49,12 @@ pub enum IdeRequest {
         request_id: String,
     },
 
-    /// Apply a code edit
+    /// Apply structured code edits to a file
     ApplyEdit {
-        /// Target file
+        /// Target file path (relative to workspace)
         file: PathBuf,
-        /// Unified diff format
-        diff: String,
+        /// Ordered list of text edits to apply
+        edits: Vec<TextEdit>,
     },
 
     /// Initialize session with workspace info
@@ -79,6 +79,31 @@ pub struct TextSelection {
     pub end_column: u32,
     /// The selected text content
     pub text: String,
+}
+
+/// A single text edit operation on a file.
+///
+/// Edits replace the text between `start_line` and `end_line` (inclusive,
+/// 1-indexed) with `new_text`. To insert without replacing, set `start_line`
+/// and `end_line` to the same value and provide the new content.
+///
+/// # Examples
+///
+/// ```ignore
+/// // Replace lines 5-7 with new content
+/// TextEdit { start_line: 5, end_line: 7, new_text: "let x = 42;\n".into() }
+///
+/// // Delete lines 10-12
+/// TextEdit { start_line: 10, end_line: 12, new_text: String::new() }
+/// ```
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TextEdit {
+    /// Start line (1-indexed, inclusive)
+    pub start_line: u32,
+    /// End line (1-indexed, inclusive)
+    pub end_line: u32,
+    /// Replacement text (empty string to delete)
+    pub new_text: String,
 }
 
 /// Messages sent FROM Patina TO the IDE
@@ -157,6 +182,14 @@ pub enum IdeResponse {
     Cancelled {
         /// Request ID that was cancelled
         request_id: String,
+    },
+
+    /// Edit successfully applied
+    EditApplied {
+        /// File that was edited
+        file: PathBuf,
+        /// Number of edits applied
+        edits_applied: u32,
     },
 
     /// Session initialized successfully
@@ -297,15 +330,60 @@ mod tests {
 
     #[test]
     fn test_parse_apply_edit_request() {
-        let json = r#"{"type": "apply_edit", "file": "src/foo.rs", "diff": "@@ -1,3 +1,3 @@\n-old\n+new"}"#;
+        let json = r#"{"type": "apply_edit", "file": "src/foo.rs", "edits": [{"start_line": 1, "end_line": 3, "new_text": "let x = 42;\n"}]}"#;
         let request = parse_request(json.as_bytes()).unwrap();
         assert_eq!(
             request,
             IdeRequest::ApplyEdit {
                 file: PathBuf::from("src/foo.rs"),
-                diff: "@@ -1,3 +1,3 @@\n-old\n+new".to_string(),
+                edits: vec![TextEdit {
+                    start_line: 1,
+                    end_line: 3,
+                    new_text: "let x = 42;\n".to_string(),
+                }],
             }
         );
+    }
+
+    #[test]
+    fn test_apply_edit_request_deserializes() {
+        let json = r#"{
+            "type": "apply_edit",
+            "file": "src/main.rs",
+            "edits": [
+                {"start_line": 5, "end_line": 7, "new_text": "fn main() {\n    println!(\"hello\");\n}"},
+                {"start_line": 10, "end_line": 10, "new_text": ""}
+            ]
+        }"#;
+        let request: IdeRequest = serde_json::from_str(json).unwrap();
+        match request {
+            IdeRequest::ApplyEdit { file, edits } => {
+                assert_eq!(file, PathBuf::from("src/main.rs"));
+                assert_eq!(edits.len(), 2);
+                assert_eq!(edits[0].start_line, 5);
+                assert_eq!(edits[0].end_line, 7);
+                assert!(edits[0].new_text.contains("main"));
+                assert_eq!(edits[1].new_text, ""); // deletion
+            }
+            _ => panic!("Expected ApplyEdit"),
+        }
+    }
+
+    #[test]
+    fn test_text_edit_struct_fields() {
+        let edit = TextEdit {
+            start_line: 1,
+            end_line: 5,
+            new_text: "replacement".to_string(),
+        };
+        assert_eq!(edit.start_line, 1);
+        assert_eq!(edit.end_line, 5);
+        assert_eq!(edit.new_text, "replacement");
+
+        // Verify serialization roundtrip
+        let json = serde_json::to_string(&edit).unwrap();
+        let deserialized: TextEdit = serde_json::from_str(&json).unwrap();
+        assert_eq!(edit, deserialized);
     }
 
     #[test]

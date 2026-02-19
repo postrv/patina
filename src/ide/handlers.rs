@@ -17,7 +17,7 @@
 //! });
 //! ```
 
-use super::protocol::{IdeRequest, IdeResponse};
+use super::protocol::{IdeRequest, IdeResponse, TextEdit};
 use std::collections::HashSet;
 use std::path::PathBuf;
 use tokio::sync::mpsc;
@@ -172,6 +172,112 @@ pub fn handle_init(workspace: &PathBuf, capabilities: &[String], session_id: &st
     }
 }
 
+/// Handle an apply_edit request - applies text edits to a file
+///
+/// Edits are applied bottom-up (highest line numbers first) to preserve
+/// line numbering for subsequent edits. Each edit replaces the specified
+/// line range with `new_text`.
+///
+/// # Arguments
+///
+/// * `file` - Target file path (relative to workspace)
+/// * `edits` - Ordered list of text edits
+///
+/// # Returns
+///
+/// Returns [`IdeResponse::EditApplied`] on success, or
+/// [`IdeResponse::Error`] if the file cannot be read/written or
+/// path validation fails.
+pub fn handle_apply_edit(file: &std::path::Path, edits: &[TextEdit]) -> IdeResponse {
+    // Validate the path doesn't use traversal
+    let path_str = file.to_string_lossy();
+    if path_str.contains("..") {
+        return IdeResponse::Error {
+            code: "PATH_TRAVERSAL".to_string(),
+            message: format!("Path traversal rejected: {path_str}"),
+            request_id: None,
+        };
+    }
+
+    // Validate edits are non-empty
+    if edits.is_empty() {
+        return IdeResponse::Error {
+            code: "INVALID_REQUEST".to_string(),
+            message: "No edits provided".to_string(),
+            request_id: None,
+        };
+    }
+
+    // Read the file
+    let content = match std::fs::read_to_string(file) {
+        Ok(c) => c,
+        Err(e) => {
+            return IdeResponse::Error {
+                code: "FILE_NOT_FOUND".to_string(),
+                message: format!("Failed to read file '{}': {}", path_str, e),
+                request_id: None,
+            };
+        }
+    };
+
+    let mut lines: Vec<String> = content.lines().map(String::from).collect();
+
+    // Sort edits by start_line descending so we apply from bottom to top
+    // This preserves line numbers for edits above the current one
+    let mut sorted_edits: Vec<&TextEdit> = edits.iter().collect();
+    sorted_edits.sort_by(|a, b| b.start_line.cmp(&a.start_line));
+
+    for edit in &sorted_edits {
+        // Convert 1-indexed to 0-indexed
+        let start = edit.start_line.saturating_sub(1) as usize;
+        let end = edit.end_line as usize; // exclusive after converting from inclusive 1-indexed
+
+        if start > lines.len() || end > lines.len() {
+            return IdeResponse::Error {
+                code: "OUT_OF_RANGE".to_string(),
+                message: format!(
+                    "Edit range {}-{} exceeds file length ({})",
+                    edit.start_line,
+                    edit.end_line,
+                    lines.len()
+                ),
+                request_id: None,
+            };
+        }
+
+        // Replace the line range with new content
+        let new_lines: Vec<String> = if edit.new_text.is_empty() {
+            Vec::new()
+        } else {
+            edit.new_text.lines().map(String::from).collect()
+        };
+
+        lines.splice(start..end, new_lines);
+    }
+
+    // Write back
+    let result = lines.join("\n") + "\n";
+    if let Err(e) = std::fs::write(file, result) {
+        return IdeResponse::Error {
+            code: "WRITE_FAILED".to_string(),
+            message: format!("Failed to write file '{}': {}", path_str, e),
+            request_id: None,
+        };
+    }
+
+    let edits_applied = sorted_edits.len() as u32;
+    tracing::info!(
+        file = %path_str,
+        edits = edits_applied,
+        "Applied edits to file"
+    );
+
+    IdeResponse::EditApplied {
+        file: file.to_path_buf(),
+        edits_applied,
+    }
+}
+
 /// Route an incoming request to the appropriate handler
 ///
 /// # Arguments
@@ -205,19 +311,7 @@ pub fn route_request(
             workspace,
             capabilities,
         } => handle_init(&workspace, &capabilities, session_id),
-        IdeRequest::ApplyEdit { file, diff } => {
-            // Edit application is handled separately through the tool system
-            tracing::info!(
-                "Apply edit request: {:?} with diff length {}",
-                file,
-                diff.len()
-            );
-            IdeResponse::Error {
-                code: "NOT_IMPLEMENTED".to_string(),
-                message: "Edit application through IDE protocol is not yet implemented".to_string(),
-                request_id: None,
-            }
-        }
+        IdeRequest::ApplyEdit { file, edits } => handle_apply_edit(&file, &edits),
     }
 }
 
@@ -479,8 +573,146 @@ mod tests {
         }
     }
 
+    // =========================================================================
+    // handle_apply_edit tests (7.2.2)
+    // =========================================================================
+
     #[test]
-    fn test_route_apply_edit_not_implemented() {
+    fn test_apply_edit_single_replacement() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("test.rs");
+        std::fs::write(&file, "line1\nline2\nline3\n").unwrap();
+
+        let response = handle_apply_edit(
+            &file,
+            &[TextEdit {
+                start_line: 2,
+                end_line: 2,
+                new_text: "replaced".to_string(),
+            }],
+        );
+
+        match response {
+            IdeResponse::EditApplied { edits_applied, .. } => {
+                assert_eq!(edits_applied, 1);
+            }
+            other => panic!("Expected EditApplied, got {:?}", other),
+        }
+
+        let content = std::fs::read_to_string(&file).unwrap();
+        assert_eq!(content, "line1\nreplaced\nline3\n");
+    }
+
+    #[test]
+    fn test_apply_edit_multiple_edits_applied_bottom_up() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("test.rs");
+        std::fs::write(&file, "a\nb\nc\nd\ne\n").unwrap();
+
+        // Replace line 4 ("d") and line 2 ("b") - should be applied bottom-up
+        let response = handle_apply_edit(
+            &file,
+            &[
+                TextEdit {
+                    start_line: 2,
+                    end_line: 2,
+                    new_text: "B".to_string(),
+                },
+                TextEdit {
+                    start_line: 4,
+                    end_line: 4,
+                    new_text: "D".to_string(),
+                },
+            ],
+        );
+
+        match response {
+            IdeResponse::EditApplied { edits_applied, .. } => {
+                assert_eq!(edits_applied, 2);
+            }
+            other => panic!("Expected EditApplied, got {:?}", other),
+        }
+
+        let content = std::fs::read_to_string(&file).unwrap();
+        assert_eq!(content, "a\nB\nc\nD\ne\n");
+    }
+
+    #[test]
+    fn test_apply_edit_file_not_found_returns_error() {
+        let response = handle_apply_edit(
+            std::path::Path::new("nonexistent_file_42.rs"),
+            &[TextEdit {
+                start_line: 1,
+                end_line: 1,
+                new_text: "content".to_string(),
+            }],
+        );
+
+        match response {
+            IdeResponse::Error { code, .. } => {
+                assert_eq!(code, "FILE_NOT_FOUND");
+            }
+            other => panic!("Expected FILE_NOT_FOUND error, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_apply_edit_rejects_path_traversal() {
+        let response = handle_apply_edit(
+            std::path::Path::new("../../../etc/passwd"),
+            &[TextEdit {
+                start_line: 1,
+                end_line: 1,
+                new_text: "content".to_string(),
+            }],
+        );
+
+        match response {
+            IdeResponse::Error { code, .. } => {
+                assert_eq!(code, "PATH_TRAVERSAL");
+            }
+            other => panic!("Expected PATH_TRAVERSAL error, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_apply_edit_empty_edits_returns_error() {
+        let response = handle_apply_edit(std::path::Path::new("test.rs"), &[]);
+
+        match response {
+            IdeResponse::Error { code, .. } => {
+                assert_eq!(code, "INVALID_REQUEST");
+            }
+            other => panic!("Expected INVALID_REQUEST error, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_apply_edit_delete_lines() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("test.rs");
+        std::fs::write(&file, "keep\ndelete_me\nalso_keep\n").unwrap();
+
+        let response = handle_apply_edit(
+            &file,
+            &[TextEdit {
+                start_line: 2,
+                end_line: 2,
+                new_text: String::new(),
+            }],
+        );
+
+        match response {
+            IdeResponse::EditApplied { .. } => {}
+            other => panic!("Expected EditApplied, got {:?}", other),
+        }
+
+        let content = std::fs::read_to_string(&file).unwrap();
+        assert_eq!(content, "keep\nalso_keep\n");
+    }
+
+    #[test]
+    fn test_route_apply_edit_request() {
         let (tx, _rx) = mpsc::unbounded_channel();
         let status_ctx = StatusContext {
             busy: false,
@@ -490,10 +722,15 @@ mod tests {
         let prompt_ctx = PromptContext { prompt_tx: tx };
         let pending = HashSet::new();
 
+        // This will fail because the file doesn't exist, but proves routing works
         let response = route_request(
             IdeRequest::ApplyEdit {
-                file: PathBuf::from("test.rs"),
-                diff: "-old\n+new".to_string(),
+                file: PathBuf::from("nonexistent_test_file.rs"),
+                edits: vec![TextEdit {
+                    start_line: 1,
+                    end_line: 1,
+                    new_text: "new content".to_string(),
+                }],
             },
             &status_ctx,
             &prompt_ctx,
@@ -503,9 +740,9 @@ mod tests {
 
         match response {
             IdeResponse::Error { code, .. } => {
-                assert_eq!(code, "NOT_IMPLEMENTED");
+                assert_eq!(code, "FILE_NOT_FOUND");
             }
-            _ => panic!("Expected Error response"),
+            _ => panic!("Expected FILE_NOT_FOUND error for nonexistent file"),
         }
     }
 }
