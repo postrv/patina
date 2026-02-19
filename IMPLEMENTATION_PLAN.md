@@ -576,9 +576,9 @@ Before marking ANY task `[x]`:
 **Description**: Implement the top-level `ContinuousRunner` that orchestrates iteration → quality gates → stagnation check → recovery → result.
 
 **TDD Cycle**:
-- [ ] RED: Write tests for full loop — all gates pass on first try returns `AllGatesPassed`, gate failure triggers recovery, stagnation detected returns `HumanCheckpointRequired`, max iterations returns `MaxIterationsReached`, fatal error propagated
-- [ ] GREEN: Implement `ContinuousRunner::run()` with the full state machine: iterate → run gates → check stagnation → attempt recovery → continue or stop
-- [ ] REFACTOR: Add event emission (`ContinuousEvent`) for TUI progress display, configurable max iterations and recovery attempts
+- [x] RED: Write tests for full loop — all gates pass on first try returns `AllGatesPassed`, gate failure triggers recovery, stagnation detected returns `HumanCheckpointRequired`, max iterations returns `MaxIterationsReached`, fatal error propagated
+- [x] GREEN: Implement `ContinuousRunner::run()` with the full state machine: iterate → run gates → check stagnation → attempt recovery → continue or stop
+- [x] REFACTOR: Add event emission (`ContinuousEvent`) for TUI progress display, configurable max iterations and recovery attempts
 - Files: `src/continuous/runner.rs` (new), `src/continuous/mod.rs`
 - Acceptance: Full continuous loop works end-to-end with mock provider and tools
 
