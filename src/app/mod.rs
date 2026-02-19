@@ -345,6 +345,13 @@ async fn run_print_mode(config: &Config, prompt: &str) -> Result<()> {
         config.subagents_enabled,
     );
 
+    // Initialize compression orchestrator for CCG context management
+    // This enables auto-context injection in print mode when narsil is available
+    initialize_compression_orchestrator(&mut state, config);
+
+    // Refresh CCG context before the first API call (async, requires narsil MCP)
+    state.refresh_build_context().await;
+
     // Add the user's prompt (adds to both display and API messages via submit logic)
     let user_msg = ApiMessageV2::user(prompt);
     state.add_message(Message {
@@ -353,10 +360,10 @@ async fn run_print_mode(config: &Config, prompt: &str) -> Result<()> {
     });
     state.api_messages_mut().push(user_msg);
 
-    // Set up streaming using API messages
+    // Set up streaming using build_api_messages which includes context injection
     let tools = default_tools();
     let (tx, mut rx) = tokio::sync::mpsc::channel(STREAMING_CHANNEL_BUFFER);
-    let api_messages = state.api_messages().to_vec();
+    let api_messages = state.build_api_messages();
     let client_clone = std::sync::Arc::clone(&client);
     let tools_clone = tools.clone();
 
@@ -431,7 +438,7 @@ async fn run_print_mode(config: &Config, prompt: &str) -> Result<()> {
         state.tool_loop_mut().start_streaming()?;
 
         let (tx, mut rx) = tokio::sync::mpsc::channel(STREAMING_CHANNEL_BUFFER);
-        let api_messages = state.api_messages().to_vec();
+        let api_messages = state.build_api_messages();
         let client_clone = std::sync::Arc::clone(&client);
         let tools = default_tools();
 
