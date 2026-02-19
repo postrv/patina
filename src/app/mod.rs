@@ -889,7 +889,7 @@ async fn event_loop(
 /// # Errors
 ///
 /// Returns an error if tool approval fails.
-fn start_tool_execution(state: &mut AppState) -> Result<()> {
+pub(crate) fn start_tool_execution(state: &mut AppState) -> Result<()> {
     // Only process if we're in PendingApproval state
     if !matches!(state.tool_loop_state(), ToolLoopState::PendingApproval) {
         debug!("Tool loop not in PendingApproval state, skipping");
@@ -924,7 +924,7 @@ fn start_tool_execution(state: &mut AppState) -> Result<()> {
 /// # Errors
 ///
 /// Returns an error if finishing tool execution or streaming setup fails.
-async fn finish_tool_execution_and_continue(
+pub(crate) async fn finish_tool_execution_and_continue(
     state: &mut AppState,
     client: &AnthropicClient,
     session_manager: &SessionManager,
