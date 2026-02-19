@@ -214,6 +214,46 @@ pub struct AgentPanelEntry {
     pub last_content: String,
 }
 
+/// Compression, context injection, and compaction state extracted from AppState.
+///
+/// Groups all fields related to: context compression (CCG orchestrator, caching),
+/// narsil MCP client management, auto-context injection, token budgeting,
+/// compaction progress, and compaction metrics.
+pub struct CompressionState {
+    /// Optional compression orchestrator for CCG context management.
+    pub(crate) compression_orchestrator: Option<Arc<CompressionOrchestrator>>,
+
+    /// Last repository hash used for CCG context injection.
+    pub(crate) last_ccg_hash: Option<String>,
+
+    /// Cached CCG context content for injection into messages.
+    pub(crate) cached_ccg_context: Option<String>,
+
+    /// Optional narsil MCP client for CCG context fetching.
+    pub(crate) narsil_client: Option<McpClient>,
+
+    /// Maximum tokens to include in auto-injected context.
+    pub(crate) context_token_budget: usize,
+
+    /// Tokens actually injected in the most recent context injection.
+    pub(crate) context_tokens_injected: usize,
+
+    /// Whether auto-context injection is enabled.
+    pub(crate) auto_context_enabled: bool,
+
+    /// Pending context suggestions to be injected into the next message.
+    pub(crate) pending_context: Vec<ContextSuggestion>,
+
+    /// Optional compaction progress state for displaying the compaction overlay.
+    pub(crate) compaction_state: Option<CompactionProgressState>,
+
+    /// Metrics tracking for compaction operations.
+    pub(crate) compaction_metrics: Arc<CompactionMetrics>,
+
+    /// Token budget tracking for the current session.
+    pub(crate) token_budget: TokenBudget,
+}
+
 /// Tool execution state extracted from AppState.
 ///
 /// Groups all tool-related fields: the tool loop state machine, executor,
@@ -306,13 +346,8 @@ pub struct AppState {
     /// Determines how shortcuts like Ctrl+A behave.
     focus_area: FocusArea,
 
-    /// Token budget tracking for the current session.
-    /// Displays usage in the status bar with color-coded warnings.
-    token_budget: TokenBudget,
-
-    /// Optional compaction progress state for displaying the compaction overlay.
-    /// When set, the compaction progress widget is shown as a modal.
-    compaction_state: Option<CompactionProgressState>,
+    /// All compression, context injection, and compaction state grouped together.
+    compression: CompressionState,
 
     /// Plugin registry for managing loaded plugins.
     /// Loaded from `~/.config/patina/plugins/` on startup unless disabled.
@@ -321,43 +356,6 @@ pub struct AppState {
     /// Optional subagent spawner for creating subagent sessions.
     /// Only initialized when subagent orchestration is enabled via `--enable-subagents`.
     subagent_spawner: Option<SubagentSpawner>,
-
-    /// Whether auto-context injection is enabled.
-    /// When true, context suggestions are injected before API calls.
-    auto_context_enabled: bool,
-
-    /// Pending context suggestions to be injected into the next message.
-    /// Set by external code when narsil context is available.
-    pending_context: Vec<ContextSuggestion>,
-
-    /// Optional compression orchestrator for CCG context management.
-    /// Provides automatic context injection from narsil-mcp when available.
-    /// Wrapped in Arc for shared access with async contexts.
-    compression_orchestrator: Option<Arc<CompressionOrchestrator>>,
-
-    /// Last repository hash used for CCG context injection.
-    /// Used to detect when the repository has changed and context needs refreshing.
-    last_ccg_hash: Option<String>,
-
-    /// Cached CCG context content for injection into messages.
-    /// Set by `inject_ccg_context()` and consumed by `take_ccg_context()`.
-    cached_ccg_context: Option<String>,
-
-    /// Optional narsil MCP client for CCG context fetching.
-    /// Lazily connected on first context injection attempt.
-    narsil_client: Option<McpClient>,
-
-    /// Maximum tokens to include in auto-injected context.
-    /// Sourced from `CompressionConfig.max_context_tokens`.
-    context_token_budget: usize,
-
-    /// Tokens actually injected in the most recent context injection.
-    /// Used for token budget display in the status bar.
-    context_tokens_injected: usize,
-
-    /// Metrics tracking for compaction operations.
-    /// Records number of compactions, tokens saved, and time spent.
-    compaction_metrics: Arc<CompactionMetrics>,
 
     /// Agent panel entries for the TUI agent status display.
     /// Updated by `AgentHandler` when agent events are received.
@@ -558,19 +556,21 @@ impl AppState {
             copy_pending: false,
             rendered_lines_cache: Vec::new(),
             focus_area: FocusArea::default(),
-            token_budget: TokenBudget::new(100_000), // Claude's typical context window
-            compaction_state: None,
+            compression: CompressionState {
+                token_budget: TokenBudget::new(100_000), // Claude's typical context window
+                compaction_state: None,
+                auto_context_enabled: false,
+                pending_context: Vec::new(),
+                compression_orchestrator: None,
+                last_ccg_hash: None,
+                cached_ccg_context: None,
+                narsil_client: None,
+                context_token_budget: 10_000,
+                context_tokens_injected: 0,
+                compaction_metrics: Arc::new(CompactionMetrics::new()),
+            },
             plugin_registry,
             subagent_spawner,
-            auto_context_enabled: false,
-            pending_context: Vec::new(),
-            compression_orchestrator: None,
-            last_ccg_hash: None,
-            cached_ccg_context: None,
-            narsil_client: None,
-            context_token_budget: 10_000,
-            context_tokens_injected: 0,
-            compaction_metrics: Arc::new(CompactionMetrics::new()),
             agent_panel_entries: Vec::new(),
             pending_conflict_reports: Vec::new(),
             continuous_status: ContinuousLoopStatus::Inactive,
@@ -848,7 +848,7 @@ impl AppState {
     /// user messages before API calls.
     #[must_use]
     pub fn auto_context_enabled(&self) -> bool {
-        self.auto_context_enabled
+        self.compression.auto_context_enabled
     }
 
     /// Sets whether auto-context injection is enabled.
@@ -857,19 +857,19 @@ impl AppState {
     ///
     /// * `enabled` - Whether to enable auto-context injection
     pub fn set_auto_context_enabled(&mut self, enabled: bool) {
-        self.auto_context_enabled = enabled;
+        self.compression.auto_context_enabled = enabled;
     }
 
     /// Returns whether there are pending context suggestions.
     #[must_use]
     pub fn has_pending_context(&self) -> bool {
-        !self.pending_context.is_empty()
+        !self.compression.pending_context.is_empty()
     }
 
     /// Returns a reference to the pending context suggestions.
     #[must_use]
     pub fn pending_context(&self) -> &[ContextSuggestion] {
-        &self.pending_context
+        &self.compression.pending_context
     }
 
     /// Sets the pending context suggestions to be injected into the next message.
@@ -880,7 +880,7 @@ impl AppState {
     ///
     /// * `suggestions` - Context suggestions from narsil
     pub fn set_pending_context(&mut self, suggestions: Vec<ContextSuggestion>) {
-        self.pending_context = suggestions;
+        self.compression.pending_context = suggestions;
     }
 
     /// Takes and returns the pending context suggestions, clearing them.
@@ -888,12 +888,12 @@ impl AppState {
     /// After calling this method, `has_pending_context()` will return false.
     #[must_use]
     pub fn take_pending_context(&mut self) -> Vec<ContextSuggestion> {
-        std::mem::take(&mut self.pending_context)
+        std::mem::take(&mut self.compression.pending_context)
     }
 
     /// Clears the pending context suggestions without returning them.
     pub fn clear_pending_context(&mut self) {
-        self.pending_context.clear();
+        self.compression.pending_context.clear();
     }
 
     // =========================================================================
@@ -909,13 +909,13 @@ impl AppState {
     ///
     /// * `orchestrator` - The compression orchestrator (wrapped in Arc)
     pub fn set_compression_orchestrator(&mut self, orchestrator: Arc<CompressionOrchestrator>) {
-        self.compression_orchestrator = Some(orchestrator);
+        self.compression.compression_orchestrator = Some(orchestrator);
     }
 
     /// Returns a reference to the compression orchestrator if available.
     #[must_use]
     pub fn compression_orchestrator(&self) -> Option<&Arc<CompressionOrchestrator>> {
-        self.compression_orchestrator.as_ref()
+        self.compression.compression_orchestrator.as_ref()
     }
 
     /// Returns true if the compression orchestrator supports CCG (Code Context Graph).
@@ -924,7 +924,8 @@ impl AppState {
     /// and architecture extraction. Returns false if no orchestrator is set.
     #[must_use]
     pub fn has_ccg_support(&self) -> bool {
-        self.compression_orchestrator
+        self.compression
+            .compression_orchestrator
             .as_ref()
             .is_some_and(|o| o.should_use_ccg())
     }
@@ -959,17 +960,21 @@ impl AppState {
         repo_hash: &str,
     ) -> anyhow::Result<Option<String>> {
         // Check if orchestrator is available
-        let orchestrator = match &self.compression_orchestrator {
+        let orchestrator = match &self.compression.compression_orchestrator {
             Some(orch) => orch.clone(),
             None => return Ok(None),
         };
 
         // Check if hash has changed (for cache invalidation tracking)
-        let hash_changed = self.last_ccg_hash.as_ref().map_or(true, |h| h != repo_hash);
+        let hash_changed = self
+            .compression
+            .last_ccg_hash
+            .as_ref()
+            .map_or(true, |h| h != repo_hash);
 
         if hash_changed {
             tracing::debug!(
-                old_hash = ?self.last_ccg_hash,
+                old_hash = ?self.compression.last_ccg_hash,
                 new_hash = %repo_hash,
                 "Repository hash changed, may fetch fresh CCG context"
             );
@@ -981,12 +986,12 @@ impl AppState {
             .await;
 
         // Update cached hash
-        self.last_ccg_hash = Some(repo_hash.to_string());
+        self.compression.last_ccg_hash = Some(repo_hash.to_string());
 
         // Return content if non-empty, also cache it
         let content = result.content();
         if content.is_empty() {
-            self.cached_ccg_context = None;
+            self.compression.cached_ccg_context = None;
             Ok(None)
         } else {
             tracing::info!(
@@ -995,7 +1000,7 @@ impl AppState {
                 "CCG context fetched and cached"
             );
             let content_string = content.to_string();
-            self.cached_ccg_context = Some(content_string.clone());
+            self.compression.cached_ccg_context = Some(content_string.clone());
             Ok(Some(content_string))
         }
     }
@@ -1006,18 +1011,18 @@ impl AppState {
     /// the last context injection.
     #[must_use]
     pub fn last_ccg_hash(&self) -> Option<&str> {
-        self.last_ccg_hash.as_deref()
+        self.compression.last_ccg_hash.as_deref()
     }
 
     /// Sets the last CCG hash (for testing and manual cache management).
     pub fn set_last_ccg_hash(&mut self, hash: String) {
-        self.last_ccg_hash = Some(hash);
+        self.compression.last_ccg_hash = Some(hash);
     }
 
     /// Returns whether there is cached CCG context available for injection.
     #[must_use]
     pub fn has_cached_ccg_context(&self) -> bool {
-        self.cached_ccg_context.is_some()
+        self.compression.cached_ccg_context.is_some()
     }
 
     /// Takes the cached CCG context, returning it and clearing the cache.
@@ -1029,7 +1034,7 @@ impl AppState {
     ///
     /// The cached CCG context if available, `None` otherwise.
     pub fn take_cached_ccg_context(&mut self) -> Option<String> {
-        self.cached_ccg_context.take()
+        self.compression.cached_ccg_context.take()
     }
 
     /// Returns the context to inject before sending a message.
@@ -1044,8 +1049,8 @@ impl AppState {
     /// is available, `None` otherwise.
     #[must_use]
     pub fn context_for_injection(&self) -> Option<&str> {
-        if self.auto_context_enabled {
-            self.cached_ccg_context.as_deref()
+        if self.compression.auto_context_enabled {
+            self.compression.cached_ccg_context.as_deref()
         } else {
             None
         }
@@ -1054,34 +1059,34 @@ impl AppState {
     /// Returns whether a narsil MCP client is available.
     #[must_use]
     pub fn has_narsil_client(&self) -> bool {
-        self.narsil_client.is_some()
+        self.compression.narsil_client.is_some()
     }
 
     /// Sets the narsil MCP client for context fetching.
     pub fn set_narsil_client(&mut self, client: McpClient) {
-        self.narsil_client = Some(client);
+        self.compression.narsil_client = Some(client);
     }
 
     /// Returns the maximum token budget for auto-injected context.
     #[must_use]
     pub fn context_token_budget(&self) -> usize {
-        self.context_token_budget
+        self.compression.context_token_budget
     }
 
     /// Sets the maximum token budget for auto-injected context.
     pub fn set_context_token_budget(&mut self, budget: usize) {
-        self.context_token_budget = budget;
+        self.compression.context_token_budget = budget;
     }
 
     /// Returns the number of tokens injected in the most recent context injection.
     #[must_use]
     pub fn context_tokens_injected(&self) -> usize {
-        self.context_tokens_injected
+        self.compression.context_tokens_injected
     }
 
     /// Sets the number of tokens injected (used by tests and status bar display).
     pub fn set_context_tokens_injected(&mut self, tokens: usize) {
-        self.context_tokens_injected = tokens;
+        self.compression.context_tokens_injected = tokens;
     }
 
     /// Refreshes the cached CCG context by calling `build_context()`.
@@ -1098,11 +1103,11 @@ impl AppState {
     ///
     /// The context string if successfully fetched, `None` otherwise.
     pub async fn refresh_build_context(&mut self) -> Option<String> {
-        if !self.auto_context_enabled {
+        if !self.compression.auto_context_enabled {
             return None;
         }
 
-        let orchestrator = match &self.compression_orchestrator {
+        let orchestrator = match &self.compression.compression_orchestrator {
             Some(orch) => orch.clone(),
             None => return None,
         };
@@ -1111,26 +1116,26 @@ impl AppState {
         // This prevents redundant MCP calls when the codebase hasn't changed.
         let repo_hash =
             get_git_head_hash(&self.working_dir).unwrap_or_else(|| "unknown".to_string());
-        let hash_changed = self.last_ccg_hash.as_ref() != Some(&repo_hash);
+        let hash_changed = self.compression.last_ccg_hash.as_ref() != Some(&repo_hash);
 
-        if !hash_changed && self.cached_ccg_context.is_some() {
+        if !hash_changed && self.compression.cached_ccg_context.is_some() {
             tracing::debug!(
                 hash = %repo_hash,
-                tokens = self.context_tokens_injected,
+                tokens = self.compression.context_tokens_injected,
                 "CCG hash unchanged, reusing cached context"
             );
-            return self.cached_ccg_context.clone();
+            return self.compression.cached_ccg_context.clone();
         }
 
         // Lazily initialize narsil client
-        if self.narsil_client.is_none() {
+        if self.compression.narsil_client.is_none() {
             let working_dir = self.working_dir.to_string_lossy().to_string();
             let mut client =
                 McpClient::new("narsil-mcp", "narsil-mcp", vec!["--repos", &working_dir]);
             match client.start().await {
                 Ok(()) => {
                     tracing::info!("Narsil MCP client connected for context injection");
-                    self.narsil_client = Some(client);
+                    self.compression.narsil_client = Some(client);
                 }
                 Err(e) => {
                     tracing::warn!("Failed to connect narsil-mcp for context: {}", e);
@@ -1140,27 +1145,27 @@ impl AppState {
         }
 
         // Take client to avoid borrow conflict with self
-        let mut client = self.narsil_client.take()?;
+        let mut client = self.compression.narsil_client.take()?;
 
         let result = orchestrator
             .build_context(
                 &mut client,
                 &repo_hash,
                 &[], // active_files: empty = project-wide symbols
-                self.context_token_budget,
+                self.compression.context_token_budget,
             )
             .await;
 
         // Put client back
-        self.narsil_client = Some(client);
+        self.compression.narsil_client = Some(client);
 
         // Update the hash to track what version of the codebase this context is for
-        self.last_ccg_hash = Some(repo_hash.clone());
+        self.compression.last_ccg_hash = Some(repo_hash.clone());
 
         let content = result.result().content().to_string();
         if content.is_empty() {
-            self.cached_ccg_context = None;
-            self.context_tokens_injected = 0;
+            self.compression.cached_ccg_context = None;
+            self.compression.context_tokens_injected = 0;
             tracing::debug!(hash = %repo_hash, "Context fetch returned empty result");
             None
         } else {
@@ -1173,8 +1178,8 @@ impl AppState {
                 cache_status = "miss",
                 "Build context refreshed for injection"
             );
-            self.context_tokens_injected = result.total_tokens();
-            self.cached_ccg_context = Some(content.clone());
+            self.compression.context_tokens_injected = result.total_tokens();
+            self.compression.cached_ccg_context = Some(content.clone());
             Some(content)
         }
     }
@@ -1686,8 +1691,8 @@ impl AppState {
         let mut messages = self.api_messages_truncated();
 
         // Inject cached CCG context as a leading user message when available
-        if self.auto_context_enabled {
-            if let Some(context) = &self.cached_ccg_context {
+        if self.compression.auto_context_enabled {
+            if let Some(context) = &self.compression.cached_ccg_context {
                 let context_msg = ApiMessageV2::user(format!("<context>\n{context}\n</context>"));
                 messages.insert(0, context_msg);
             }
@@ -1706,8 +1711,8 @@ impl AppState {
         self.refresh_build_context().await;
 
         // Build the API message content, optionally with CCG context
-        let api_content = if self.auto_context_enabled {
-            if let Some(context) = self.cached_ccg_context.take() {
+        let api_content = if self.compression.auto_context_enabled {
+            if let Some(context) = self.compression.cached_ccg_context.take() {
                 tracing::info!(
                     context_len = context.len(),
                     "Injecting CCG context into user message"
@@ -2028,25 +2033,25 @@ impl AppState {
     /// Returns a reference to the token budget for display.
     #[must_use]
     pub fn token_budget(&self) -> &TokenBudget {
-        &self.token_budget
+        &self.compression.token_budget
     }
 
     /// Returns a mutable reference to the token budget.
     pub fn token_budget_mut(&mut self) -> &mut TokenBudget {
-        &mut self.token_budget
+        &mut self.compression.token_budget
     }
 
     /// Adds token usage to the budget.
     ///
     /// Call this after each API request to track cumulative usage.
     pub fn add_token_usage(&mut self, tokens: usize) {
-        self.token_budget.add_usage(tokens);
+        self.compression.token_budget.add_usage(tokens);
         self.dirty.full = true;
     }
 
     /// Resets the token budget for a new conversation.
     pub fn reset_token_budget(&mut self) {
-        self.token_budget.reset();
+        self.compression.token_budget.reset();
         self.dirty.full = true;
     }
 
@@ -2057,12 +2062,12 @@ impl AppState {
     /// Returns the compaction progress state, if compaction is active.
     #[must_use]
     pub fn compaction_state(&self) -> Option<&CompactionProgressState> {
-        self.compaction_state.as_ref()
+        self.compression.compaction_state.as_ref()
     }
 
     /// Returns a mutable reference to the compaction progress state.
     pub fn compaction_state_mut(&mut self) -> Option<&mut CompactionProgressState> {
-        self.compaction_state.as_mut()
+        self.compression.compaction_state.as_mut()
     }
 
     /// Starts a compaction operation with the given target and before tokens.
@@ -2081,13 +2086,13 @@ impl AppState {
             CompactionProgressState::new(target_tokens, before_tokens)
         };
         state.set_status(crate::tui::widgets::CompactionStatus::Compacting);
-        self.compaction_state = Some(state);
+        self.compression.compaction_state = Some(state);
         self.dirty.full = true;
     }
 
     /// Updates the compaction progress (0.0 to 1.0).
     pub fn update_compaction_progress(&mut self, progress: f64) {
-        if let Some(state) = &mut self.compaction_state {
+        if let Some(state) = &mut self.compression.compaction_state {
             state.set_progress(progress);
             self.dirty.full = true;
         }
@@ -2095,7 +2100,7 @@ impl AppState {
 
     /// Completes the compaction operation with the final token count.
     pub fn complete_compaction(&mut self, after_tokens: usize) {
-        if let Some(state) = &mut self.compaction_state {
+        if let Some(state) = &mut self.compression.compaction_state {
             state.set_after_tokens(after_tokens);
             state.set_status(crate::tui::widgets::CompactionStatus::Complete);
             state.set_progress(1.0);
@@ -2105,7 +2110,7 @@ impl AppState {
 
     /// Marks the compaction operation as failed.
     pub fn fail_compaction(&mut self) {
-        if let Some(state) = &mut self.compaction_state {
+        if let Some(state) = &mut self.compression.compaction_state {
             state.set_status(crate::tui::widgets::CompactionStatus::Failed);
             self.dirty.full = true;
         }
@@ -2113,7 +2118,7 @@ impl AppState {
 
     /// Clears the compaction state (closes the overlay).
     pub fn clear_compaction(&mut self) {
-        self.compaction_state = None;
+        self.compression.compaction_state = None;
         self.dirty.full = true;
     }
 
@@ -2123,7 +2128,7 @@ impl AppState {
     /// and total time spent compacting across the session.
     #[must_use]
     pub fn compaction_metrics(&self) -> &CompactionMetrics {
-        &self.compaction_metrics
+        &self.compression.compaction_metrics
     }
 
     /// Returns a summary of compaction metrics.
@@ -2132,7 +2137,7 @@ impl AppState {
     /// totals, and averages.
     #[must_use]
     pub fn compaction_metrics_summary(&self) -> CompactionMetricsSummary {
-        self.compaction_metrics.summary()
+        self.compression.compaction_metrics.summary()
     }
 
     // ========================================================================
@@ -2161,8 +2166,8 @@ impl AppState {
     /// compaction to keep the budget accurate.
     pub fn sync_token_budget(&mut self) {
         let tokens = self.estimate_conversation_tokens();
-        self.token_budget.reset();
-        self.token_budget.add_usage(tokens);
+        self.compression.token_budget.reset();
+        self.compression.token_budget.add_usage(tokens);
         self.dirty.full = true;
     }
 
@@ -2244,7 +2249,8 @@ impl AppState {
                 let tokens_saved = result.saved_tokens;
 
                 // Record compaction metrics
-                self.compaction_metrics
+                self.compression
+                    .compaction_metrics
                     .record_compaction(tokens_saved, duration);
 
                 // Log metrics summary
@@ -2253,8 +2259,8 @@ impl AppState {
                     after = after_tokens,
                     saved = tokens_saved,
                     duration_ms = duration.as_millis() as u64,
-                    total_compactions = self.compaction_metrics.compaction_count(),
-                    total_tokens_saved = self.compaction_metrics.total_tokens_saved(),
+                    total_compactions = self.compression.compaction_metrics.compaction_count(),
+                    total_tokens_saved = self.compression.compaction_metrics.total_tokens_saved(),
                     "Compaction complete"
                 );
 
@@ -4007,7 +4013,7 @@ mod tests {
         let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
 
         // Set cached context directly for testing
-        state.cached_ccg_context = Some("test context".to_string());
+        state.compression.cached_ccg_context = Some("test context".to_string());
         assert!(state.has_cached_ccg_context());
 
         // Take should return and clear
@@ -4021,7 +4027,7 @@ mod tests {
         let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
 
         // Set cached context
-        state.cached_ccg_context = Some("test context".to_string());
+        state.compression.cached_ccg_context = Some("test context".to_string());
 
         // Auto-context disabled - should return None
         assert!(state.context_for_injection().is_none());
@@ -4119,7 +4125,8 @@ mod tests {
         let current_hash =
             get_git_head_hash(std::path::Path::new(".")).unwrap_or_else(|| "unknown".to_string());
         state.set_last_ccg_hash(current_hash);
-        state.cached_ccg_context = Some("## Cached Context\nAlready fetched".to_string());
+        state.compression.cached_ccg_context =
+            Some("## Cached Context\nAlready fetched".to_string());
         state.set_context_tokens_injected(3000);
 
         // refresh_build_context should detect hash is unchanged and return
@@ -4157,7 +4164,7 @@ mod tests {
         // fields are populated for the status bar and logging
         state.set_last_ccg_hash("abc123".to_string());
         state.set_context_tokens_injected(5000);
-        state.cached_ccg_context = Some("## Context".to_string());
+        state.compression.cached_ccg_context = Some("## Context".to_string());
 
         assert_eq!(state.last_ccg_hash(), Some("abc123"));
         assert_eq!(state.context_tokens_injected(), 5000);
@@ -4170,7 +4177,8 @@ mod tests {
         state.set_auto_context_enabled(true);
 
         // Pre-populate cached context
-        state.cached_ccg_context = Some("## Project Structure\nRust project".to_string());
+        state.compression.cached_ccg_context =
+            Some("## Project Structure\nRust project".to_string());
 
         // Create a mock provider
         let client: Arc<dyn crate::api::LlmProvider> = Arc::new(crate::api::AnthropicClient::new(
@@ -4256,7 +4264,7 @@ mod tests {
         let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
 
         // auto_context disabled (default), but cached context exists
-        state.cached_ccg_context = Some("## Codebase Context".to_string());
+        state.compression.cached_ccg_context = Some("## Codebase Context".to_string());
 
         state
             .api_messages_mut()
@@ -4360,7 +4368,8 @@ mod tests {
     fn test_prepare_api_messages_injects_context_when_enabled() {
         let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
         state.set_auto_context_enabled(true);
-        state.cached_ccg_context = Some("## Project Structure\nRust CLI app".to_string());
+        state.compression.cached_ccg_context =
+            Some("## Project Structure\nRust CLI app".to_string());
 
         // Push a user message
         state
@@ -4396,7 +4405,7 @@ mod tests {
     fn test_prepare_api_messages_skips_context_when_disabled() {
         let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
         // auto_context disabled (default)
-        state.cached_ccg_context = Some("## Some Context".to_string());
+        state.compression.cached_ccg_context = Some("## Some Context".to_string());
 
         state.api_messages_mut().push(ApiMessageV2::user("Hello"));
 
@@ -4427,7 +4436,7 @@ mod tests {
     fn test_prepare_api_messages_does_not_consume_cached_context() {
         let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
         state.set_auto_context_enabled(true);
-        state.cached_ccg_context = Some("## Context".to_string());
+        state.compression.cached_ccg_context = Some("## Context".to_string());
 
         state.api_messages_mut().push(ApiMessageV2::user("Hello"));
 
@@ -5213,5 +5222,57 @@ mod tests {
             description: "Read file".to_string(),
         });
         assert!(state.pending_permission().is_some());
+    }
+
+    // ========================================================================
+    // Phase 8.2: CompressionState extraction tests
+    // ========================================================================
+
+    /// Verifies that CompressionState is correctly initialized inside AppState.
+    #[test]
+    fn test_compression_state_construction() {
+        let state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+
+        // Orchestrator: not set by default
+        assert!(state.compression_orchestrator().is_none());
+        assert!(!state.has_ccg_support());
+
+        // CCG cache: empty by default
+        assert!(state.last_ccg_hash().is_none());
+        assert!(!state.has_cached_ccg_context());
+
+        // Narsil client: not connected by default
+        assert!(!state.has_narsil_client());
+
+        // Token budgets
+        assert_eq!(state.context_token_budget(), 10_000);
+        assert_eq!(state.context_tokens_injected(), 0);
+
+        // Auto-context: disabled by default
+        assert!(!state.auto_context_enabled());
+        assert!(!state.has_pending_context());
+
+        // Compaction: inactive by default
+        assert!(state.compaction_state().is_none());
+
+        // Token budget
+        assert_eq!(state.token_budget().used(), 0);
+    }
+
+    /// Verifies delegation methods for CompressionState provide clean access.
+    #[test]
+    fn test_compression_state_delegation() {
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+
+        // orchestrator() delegates correctly
+        assert!(state.compression_orchestrator().is_none());
+
+        // compaction_state() delegates correctly
+        assert!(state.compaction_state().is_none());
+
+        // token_budget() delegates correctly
+        assert_eq!(state.token_budget().used(), 0);
+        state.token_budget_mut().add_usage(500);
+        assert!(state.token_budget().used() > 0);
     }
 }
