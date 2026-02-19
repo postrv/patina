@@ -610,6 +610,60 @@ pub struct OpenAiFunctionCallDelta {
 }
 
 // =============================================================================
+// Conversions from Patina types
+// =============================================================================
+
+impl From<crate::api::tools::ToolDefinition> for OpenAiTool {
+    /// Converts a Patina [`ToolDefinition`](crate::api::tools::ToolDefinition) to the
+    /// OpenAI tool format.
+    ///
+    /// Maps `input_schema` to `parameters` and wraps in `type: "function"`.
+    fn from(tool: crate::api::tools::ToolDefinition) -> Self {
+        Self {
+            tool_type: "function".to_string(),
+            function: OpenAiFunctionDef {
+                name: tool.name,
+                description: Some(tool.description),
+                parameters: Some(tool.input_schema),
+            },
+        }
+    }
+}
+
+impl From<crate::api::tools::ToolChoice> for OpenAiToolChoice {
+    /// Converts a Patina [`ToolChoice`](crate::api::tools::ToolChoice) to the OpenAI
+    /// tool choice format.
+    ///
+    /// - `Auto` -> `"auto"`
+    /// - `Any` -> `"required"` (closest OpenAI equivalent)
+    /// - `Tool { name }` -> `{"type": "function", "function": {"name": "..."}}`
+    fn from(choice: crate::api::tools::ToolChoice) -> Self {
+        match choice {
+            crate::api::tools::ToolChoice::Auto => Self::auto(),
+            crate::api::tools::ToolChoice::Any => Self::required(),
+            crate::api::tools::ToolChoice::Tool { name } => Self::function(name),
+        }
+    }
+}
+
+impl From<OpenAiFinishReason> for crate::types::content::StopReason {
+    /// Converts an OpenAI finish reason to a Patina [`StopReason`](crate::types::content::StopReason).
+    ///
+    /// - `Stop` -> `EndTurn`
+    /// - `ToolCalls` -> `ToolUse`
+    /// - `Length` -> `MaxTokens`
+    /// - `ContentFilter` -> `EndTurn` (treated as a terminal stop)
+    fn from(reason: OpenAiFinishReason) -> Self {
+        match reason {
+            OpenAiFinishReason::Stop => Self::EndTurn,
+            OpenAiFinishReason::ToolCalls => Self::ToolUse,
+            OpenAiFinishReason::Length => Self::MaxTokens,
+            OpenAiFinishReason::ContentFilter => Self::EndTurn,
+        }
+    }
+}
+
+// =============================================================================
 // Tests
 // =============================================================================
 
@@ -1518,5 +1572,99 @@ mod tests {
         assert_sync::<OpenAiResponse>();
         assert_sync::<OpenAiTool>();
         assert_sync::<OpenAiToolChoice>();
+    }
+
+    // =========================================================================
+    // From conversions
+    // =========================================================================
+
+    #[test]
+    fn test_tool_definition_to_openai_tool() {
+        let patina_tool = crate::api::tools::ToolDefinition::new(
+            "bash",
+            "Run a command",
+            json!({"type": "object", "properties": {"command": {"type": "string"}}}),
+        );
+        let openai_tool: OpenAiTool = patina_tool.into();
+
+        assert_eq!(openai_tool.tool_type, "function");
+        assert_eq!(openai_tool.function.name, "bash");
+        assert_eq!(
+            openai_tool.function.description.as_deref(),
+            Some("Run a command")
+        );
+        assert_eq!(
+            openai_tool.function.parameters.as_ref().unwrap()["type"],
+            "object"
+        );
+    }
+
+    #[test]
+    fn test_tool_choice_auto_to_openai() {
+        let patina_choice = crate::api::tools::ToolChoice::Auto;
+        let openai_choice: OpenAiToolChoice = patina_choice.into();
+
+        assert_eq!(openai_choice, OpenAiToolChoice::auto());
+    }
+
+    #[test]
+    fn test_tool_choice_any_to_openai_required() {
+        let patina_choice = crate::api::tools::ToolChoice::Any;
+        let openai_choice: OpenAiToolChoice = patina_choice.into();
+
+        // Anthropic "Any" maps to OpenAI "required"
+        assert_eq!(openai_choice, OpenAiToolChoice::required());
+    }
+
+    #[test]
+    fn test_tool_choice_tool_to_openai_function() {
+        let patina_choice = crate::api::tools::ToolChoice::Tool {
+            name: "bash".to_string(),
+        };
+        let openai_choice: OpenAiToolChoice = patina_choice.into();
+
+        assert_eq!(openai_choice, OpenAiToolChoice::function("bash"));
+    }
+
+    #[test]
+    fn test_finish_reason_stop_to_end_turn() {
+        let stop_reason: crate::types::content::StopReason = OpenAiFinishReason::Stop.into();
+        assert_eq!(stop_reason, crate::types::content::StopReason::EndTurn);
+    }
+
+    #[test]
+    fn test_finish_reason_tool_calls_to_tool_use() {
+        let stop_reason: crate::types::content::StopReason = OpenAiFinishReason::ToolCalls.into();
+        assert_eq!(stop_reason, crate::types::content::StopReason::ToolUse);
+    }
+
+    #[test]
+    fn test_finish_reason_length_to_max_tokens() {
+        let stop_reason: crate::types::content::StopReason = OpenAiFinishReason::Length.into();
+        assert_eq!(stop_reason, crate::types::content::StopReason::MaxTokens);
+    }
+
+    #[test]
+    fn test_finish_reason_content_filter_to_end_turn() {
+        let stop_reason: crate::types::content::StopReason =
+            OpenAiFinishReason::ContentFilter.into();
+        assert_eq!(stop_reason, crate::types::content::StopReason::EndTurn);
+    }
+
+    #[test]
+    fn test_converted_tool_serializes_correctly() {
+        let patina_tool = crate::api::tools::ToolDefinition::new(
+            "read_file",
+            "Read a file",
+            json!({"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}),
+        );
+        let openai_tool: OpenAiTool = patina_tool.into();
+        let json = serde_json::to_value(&openai_tool).unwrap();
+
+        // Must match OpenAI spec format
+        assert_eq!(json["type"], "function");
+        assert_eq!(json["function"]["name"], "read_file");
+        assert_eq!(json["function"]["description"], "Read a file");
+        assert_eq!(json["function"]["parameters"]["required"][0], "path");
     }
 }
