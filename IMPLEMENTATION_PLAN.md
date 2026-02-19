@@ -496,9 +496,9 @@ Before marking ANY task `[x]`:
 **Description**: Add configurable parallelism policy to `Config` with `parallel_policy`, `max_parallel_agents`, `max_parallel_tools`.
 
 **TDD Cycle**:
-- [ ] RED: Write tests for config parsing — default policy, aggressive, sequential, max values validated
-- [ ] GREEN: Add `PerformanceConfig` to `src/types/config.rs`, wire into parallel executor and agent manager
-- [ ] REFACTOR: Add runtime policy switching via `/config` command, document in user guide
+- [x] RED: Write tests for config parsing — default policy, aggressive, sequential, max values validated
+- [x] GREEN: Add `PerformanceConfig` to `src/types/config.rs`, wire into parallel executor and agent manager
+- [x] REFACTOR: Add runtime policy switching via `/config` command, document in user guide
 - Files: `src/types/config.rs`, `src/tools/parallel/mod.rs`, `src/agents/worktree_agent.rs`
 - Acceptance: Parallelism policy respected by all parallel execution paths
 
