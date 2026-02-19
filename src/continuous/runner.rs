@@ -36,8 +36,8 @@ use tracing::{debug, info, warn};
 
 use super::events::ContinuousEvent;
 use super::recovery::{
-    attempt_recovery, parse_error_locations, GateCheckResult, RecoveryConfig, RecoveryExecutor,
-    RecoveryMetrics, RecoveryOutcome, RootCauseAnalysis,
+    attempt_recovery, parse_error_locations, RecoveryConfig, RecoveryExecutor, RecoveryMetrics,
+    RootCauseAnalysis,
 };
 use super::stagnation::{IterationSnapshot, RiskLevel, StagnationConfig, StagnationDetector};
 
@@ -405,6 +405,7 @@ fn build_analysis_from_gate_error(error_output: &str) -> RootCauseAnalysis {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::continuous::recovery::GateCheckResult;
     use std::sync::{Arc, Mutex};
 
     // =========================================================================
@@ -449,10 +450,11 @@ mod tests {
     }
 
     impl RecoveryExecutor for MockContinuousExecutor {
-        fn execute_fix(&mut self, _prompt: &str) -> impl Future<Output = anyhow::Result<()>> + Send {
-            let idx = self
-                .fix_idx
-                .min(self.fix_results.len().saturating_sub(1));
+        fn execute_fix(
+            &mut self,
+            _prompt: &str,
+        ) -> impl Future<Output = anyhow::Result<()>> + Send {
+            let idx = self.fix_idx.min(self.fix_results.len().saturating_sub(1));
             self.fix_idx += 1;
             let result = self.fix_results.get(idx).cloned().unwrap_or(Ok(()));
             async move {
@@ -464,9 +466,7 @@ mod tests {
         }
 
         fn check_gates(&mut self) -> impl Future<Output = GateCheckResult> + Send {
-            let idx = self
-                .gate_idx
-                .min(self.gate_results.len().saturating_sub(1));
+            let idx = self.gate_idx.min(self.gate_results.len().saturating_sub(1));
             self.gate_idx += 1;
             let result = self
                 .gate_results
@@ -535,7 +535,10 @@ mod tests {
         }
     }
 
-    fn collect_events() -> (Arc<Mutex<Vec<ContinuousEvent>>>, impl FnMut(ContinuousEvent)) {
+    fn collect_events() -> (
+        Arc<Mutex<Vec<ContinuousEvent>>>,
+        impl FnMut(ContinuousEvent),
+    ) {
         let events = Arc::new(Mutex::new(Vec::new()));
         let events_clone = events.clone();
         let callback = move |e: ContinuousEvent| {
@@ -828,10 +831,7 @@ error: second
         let mut runner = ContinuousRunner::new(executor, config, |_| {});
         let outcome = runner.run().await;
 
-        assert_eq!(
-            outcome,
-            RunOutcome::MaxIterationsReached { iterations: 5 }
-        );
+        assert_eq!(outcome, RunOutcome::MaxIterationsReached { iterations: 5 });
     }
 
     // =========================================================================
@@ -949,9 +949,9 @@ error: second
 
         // Should have QualityGateResult with passed=false
         assert!(
-            events.iter().any(
-                |e| matches!(e, ContinuousEvent::QualityGateResult { passed: false, .. })
-            ),
+            events
+                .iter()
+                .any(|e| matches!(e, ContinuousEvent::QualityGateResult { passed: false, .. })),
             "should emit failing QualityGateResult"
         );
     }
@@ -1029,14 +1029,11 @@ error: second
         // First iteration: gates fail, recovery fails.
         // Second iteration: gates pass.
         let executor = MockContinuousExecutor::new()
-            .with_iterations(vec![
-                Ok(ok_snapshot("hash1")),
-                Ok(ok_snapshot("hash2")),
-            ])
+            .with_iterations(vec![Ok(ok_snapshot("hash1")), Ok(ok_snapshot("hash2"))])
             .with_gates(vec![
-                failing_gates("error"),  // iter 1: runner check
-                failing_gates("error"),  // iter 1: recovery check
-                passing_gates(),         // iter 2: runner check
+                failing_gates("error"), // iter 1: runner check
+                failing_gates("error"), // iter 1: recovery check
+                passing_gates(),        // iter 2: runner check
             ])
             .with_fixes(vec![Ok(())]);
 
@@ -1077,9 +1074,6 @@ error: second
         let mut runner = ContinuousRunner::new(executor, config, |_| {});
         let outcome = runner.run().await;
 
-        assert_eq!(
-            outcome,
-            RunOutcome::MaxIterationsReached { iterations: 0 }
-        );
+        assert_eq!(outcome, RunOutcome::MaxIterationsReached { iterations: 0 });
     }
 }
