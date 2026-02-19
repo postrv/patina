@@ -152,7 +152,12 @@ impl EventDispatcher {
         event: &AppEvent,
         ctx: &mut AppContext<'_>,
     ) -> Result<Handled> {
-        // RED stub: does not actually call handlers
+        for handler in &mut self.handlers {
+            let result = handler.handle(event, ctx).await?;
+            if result == Handled::CONSUMED {
+                return Ok(Handled::CONSUMED);
+            }
+        }
         Ok(Handled::IGNORED)
     }
 }
