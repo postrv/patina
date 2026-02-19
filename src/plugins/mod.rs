@@ -26,7 +26,8 @@ pub struct PluginManifest {
     #[serde(default)]
     pub author: Option<String>,
     #[serde(default)]
-    pub min_rct_version: Option<String>,
+    #[serde(alias = "min_rct_version")]
+    pub min_patina_version: Option<String>,
 }
 
 #[derive(Debug)]

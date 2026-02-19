@@ -257,7 +257,7 @@ patina plugin remove my-plugin
 **Example Plugin Manifest:**
 
 ```toml
-# rct-plugin.toml
+# patina-plugin.toml
 name = "my-plugin"
 version = "1.0.0"
 description = "My custom plugin"

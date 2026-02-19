@@ -383,7 +383,7 @@ use std::path::Path;
 let mut manager = HookManager::new("session-123".to_string());
 
 // Load from config file
-manager.load_config(Path::new(".rct/hooks.toml"))?;
+manager.load_config(Path::new(".patina/hooks.toml"))?;
 
 // Register a tool hook
 manager.register_tool_hook(
@@ -504,7 +504,7 @@ use std::path::PathBuf;
 let mut engine = SkillEngine::new();
 
 // Load skills from directory
-engine.load_from_dir(&PathBuf::from(".rct/skills"))?;
+engine.load_from_dir(&PathBuf::from(".patina/skills"))?;
 
 // Match skills for a file
 let matches = engine.match_skills_for_file("src/main.rs");
@@ -530,7 +530,7 @@ use std::collections::HashMap;
 let mut executor = CommandExecutor::new();
 
 // Load commands from directory
-executor.load_from_dir(&PathBuf::from(".rct/commands"))?;
+executor.load_from_dir(&PathBuf::from(".patina/commands"))?;
 
 // List available commands
 let commands = executor.list();
@@ -556,7 +556,7 @@ let mut registry = PluginRegistry::new();
 // Discover plugins from paths
 registry.discover(&[
     PathBuf::from("~/.config/patina/plugins"),
-    PathBuf::from(".rct/plugins"),
+    PathBuf::from(".patina/plugins"),
 ])?;
 
 // List plugins

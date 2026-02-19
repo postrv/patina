@@ -50,7 +50,7 @@ In allowlist mode, commands are **blocked by default** unless they explicitly ma
 To enable allowlist mode, configure the `ToolExecutionPolicy`:
 
 ```rust
-use rct::tools::{ToolExecutor, ToolExecutionPolicy};
+use patina::tools::{ToolExecutor, ToolExecutionPolicy};
 use regex::Regex;
 
 let policy = ToolExecutionPolicy {

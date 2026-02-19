@@ -36,7 +36,7 @@ The `plugin.json` file is required and defines plugin metadata:
   "version": "1.0.0",
   "description": "A description of what this plugin does",
   "author": "Your Name",
-  "min_rct_version": "0.1.0"
+  "min_patina_version": "0.1.0"
 }
 ```
 
@@ -48,7 +48,7 @@ The `plugin.json` file is required and defines plugin metadata:
 | `version` | Yes | Semantic version string |
 | `description` | No | Brief description |
 | `author` | No | Plugin author |
-| `min_rct_version` | No | Minimum Patina version required |
+| `min_patina_version` | No | Minimum Patina version required |
 
 ## Commands
 
@@ -223,7 +223,7 @@ Short names (without namespace) work when unambiguous.
 
 ## Version Compatibility
 
-- Plugins specify `min_rct_version` in their manifest
+- Plugins specify `min_patina_version` in their manifest
 - Patina checks compatibility before loading
 - Incompatible plugins are skipped with a warning
 
