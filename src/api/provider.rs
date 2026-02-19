@@ -232,13 +232,41 @@ impl LlmProvider for FallbackProvider {
 
     fn stream_message<'a>(
         &'a self,
-        _messages: &'a [ApiMessageV2],
-        _tools: Option<&'a [ToolDefinition]>,
-        _tool_choice: Option<&'a ToolChoice>,
-        _tx: mpsc::Sender<StreamEvent>,
+        messages: &'a [ApiMessageV2],
+        tools: Option<&'a [ToolDefinition]>,
+        tool_choice: Option<&'a ToolChoice>,
+        tx: mpsc::Sender<StreamEvent>,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         Box::pin(async move {
-            anyhow::bail!("FallbackProvider::stream_message not yet implemented")
+            let mut errors = Vec::new();
+
+            for (i, provider) in self.providers.iter().enumerate() {
+                match provider
+                    .stream_message(messages, tools, tool_choice, tx.clone())
+                    .await
+                {
+                    Ok(()) => return Ok(()),
+                    Err(e) => {
+                        let msg = format!("{} ({}): {e}", provider.name(), provider.model());
+                        if i + 1 < self.providers.len() {
+                            tracing::warn!(
+                                provider = provider.name(),
+                                model = provider.model(),
+                                error = %e,
+                                next_provider = self.providers[i + 1].name(),
+                                "Provider failed, falling back to next provider"
+                            );
+                        }
+                        errors.push(msg);
+                    }
+                }
+            }
+
+            anyhow::bail!(
+                "All {} providers failed: {}",
+                errors.len(),
+                errors.join("; ")
+            )
         })
     }
 }
