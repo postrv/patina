@@ -550,9 +550,9 @@ Before marking ANY task `[x]`:
 **Description**: Use narsil call graph and symbol analysis to identify root causes of failures — which functions are involved, what changed recently, what files are relevant.
 
 **TDD Cycle**:
-- [ ] RED: Write tests for root-cause analysis — extracts file/function from error message, queries call graph via MCP, identifies relevant files, returns structured `RootCauseAnalysis`
-- [ ] GREEN: Implement `narsil_root_cause()` using `McpClient::call_tool("get_callers", ...)`, `get_file_history`, `get_blame`
-- [ ] REFACTOR: Add error location parsing for common Rust error formats (cargo test, clippy), fallback when narsil unavailable
+- [x] RED: Write tests for root-cause analysis — extracts file/function from error message, queries call graph via MCP, identifies relevant files, returns structured `RootCauseAnalysis`
+- [x] GREEN: Implement `narsil_root_cause()` using `McpClient::call_tool("get_callers", ...)`, `get_file_history`, `get_blame`
+- [x] REFACTOR: Add error location parsing for common Rust error formats (cargo test, clippy), fallback when narsil unavailable
 - Files: `src/continuous/recovery.rs` (new)
 - Acceptance: Root cause analysis produces actionable file list for test failures
 

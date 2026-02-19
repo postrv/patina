@@ -38,9 +38,11 @@
 //!
 //! - [`events`]: Event types emitted during continuous coding sessions
 //! - [`plugin`]: Plugin trait and quality gate definitions
+//! - [`recovery`]: Root-cause analysis and recovery for quality gate failures
 
 pub mod events;
 pub mod plugin;
+pub mod recovery;
 pub mod stagnation;
 
 pub use events::ContinuousEvent;
