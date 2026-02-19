@@ -144,6 +144,41 @@ pub enum BackgroundEvent {
     ToolResult(String, crate::types::ToolResultBlock),
 }
 
+/// Status of the continuous coding loop as displayed in the TUI.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ContinuousLoopStatus {
+    /// No continuous loop is running.
+    Inactive,
+    /// Loop is actively running at the given iteration.
+    Running {
+        /// Current iteration (1-indexed).
+        iteration: u32,
+    },
+    /// Stagnation has been detected.
+    Stagnated {
+        /// Number of iterations without progress.
+        iterations_without_progress: u32,
+        /// The threshold that was exceeded.
+        threshold: u32,
+    },
+    /// Human intervention is required.
+    HumanRequired {
+        /// Reason why human intervention is needed.
+        reason: String,
+    },
+}
+
+/// Result of a single quality gate check for display.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GateResult {
+    /// Name of the quality gate.
+    pub gate: String,
+    /// Whether the gate passed.
+    pub passed: bool,
+    /// Optional detail message.
+    pub message: Option<String>,
+}
+
 /// Status of an agent as displayed in the TUI agent panel.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AgentPanelStatus {
@@ -313,6 +348,21 @@ pub struct AppState {
     /// Pending conflict reports from cross-agent conflict detection.
     /// Consumed by the TUI to display conflict alerts.
     pending_conflict_reports: Vec<ConflictReport>,
+
+    /// Current status of the continuous coding loop.
+    continuous_status: ContinuousLoopStatus,
+
+    /// Number of completed iterations in the current continuous session.
+    continuous_iterations_completed: u32,
+
+    /// Duration of the last completed iteration in milliseconds.
+    continuous_last_duration_ms: Option<u64>,
+
+    /// Name of the quality gate currently being checked (if any).
+    continuous_checking_gate: Option<String>,
+
+    /// Accumulated quality gate results for the current iteration.
+    continuous_gate_results: Vec<GateResult>,
 }
 
 #[derive(Default)]
@@ -499,6 +549,11 @@ impl AppState {
             compaction_metrics: Arc::new(CompactionMetrics::new()),
             agent_panel_entries: Vec::new(),
             pending_conflict_reports: Vec::new(),
+            continuous_status: ContinuousLoopStatus::Inactive,
+            continuous_iterations_completed: 0,
+            continuous_last_duration_ms: None,
+            continuous_checking_gate: None,
+            continuous_gate_results: Vec::new(),
         }
     }
 
@@ -654,6 +709,96 @@ impl AppState {
     #[must_use]
     pub fn has_pending_conflicts(&self) -> bool {
         !self.pending_conflict_reports.is_empty()
+    }
+
+    // =========================================================================
+    // Continuous loop panel methods (Task 6.6)
+    // =========================================================================
+
+    /// Returns the current status of the continuous coding loop.
+    #[must_use]
+    pub fn continuous_status(&self) -> &ContinuousLoopStatus {
+        &self.continuous_status
+    }
+
+    /// Returns the number of completed iterations in the current session.
+    #[must_use]
+    pub fn continuous_iterations_completed(&self) -> u32 {
+        self.continuous_iterations_completed
+    }
+
+    /// Returns the duration of the last completed iteration in milliseconds.
+    #[must_use]
+    pub fn continuous_last_duration_ms(&self) -> Option<u64> {
+        self.continuous_last_duration_ms
+    }
+
+    /// Returns the name of the quality gate currently being checked.
+    #[must_use]
+    pub fn continuous_checking_gate(&self) -> Option<&str> {
+        self.continuous_checking_gate.as_deref()
+    }
+
+    /// Returns accumulated quality gate results for the current iteration.
+    #[must_use]
+    pub fn continuous_gate_results(&self) -> &[GateResult] {
+        &self.continuous_gate_results
+    }
+
+    /// Updates state for a new continuous iteration starting.
+    ///
+    /// Clears gate results from the previous iteration and sets status to Running.
+    pub fn update_continuous_iteration(&mut self, iteration: u32) {
+        self.continuous_status = ContinuousLoopStatus::Running { iteration };
+        self.continuous_checking_gate = None;
+        self.continuous_gate_results.clear();
+        self.dirty.full = true;
+    }
+
+    /// Records the completion of a continuous iteration.
+    pub fn complete_continuous_iteration(&mut self, _iteration: u32, duration_ms: u64) {
+        self.continuous_iterations_completed += 1;
+        self.continuous_last_duration_ms = Some(duration_ms);
+        self.dirty.full = true;
+    }
+
+    /// Records that a quality gate check is starting.
+    pub fn set_continuous_gate_checking(&mut self, gate: &str) {
+        self.continuous_checking_gate = Some(gate.to_string());
+        self.dirty.full = true;
+    }
+
+    /// Records the result of a quality gate check.
+    pub fn record_continuous_gate_result(
+        &mut self,
+        gate: &str,
+        passed: bool,
+        message: Option<&str>,
+    ) {
+        self.continuous_checking_gate = None;
+        self.continuous_gate_results.push(GateResult {
+            gate: gate.to_string(),
+            passed,
+            message: message.map(String::from),
+        });
+        self.dirty.full = true;
+    }
+
+    /// Records that stagnation was detected.
+    pub fn set_continuous_stagnation(&mut self, iterations_without_progress: u32, threshold: u32) {
+        self.continuous_status = ContinuousLoopStatus::Stagnated {
+            iterations_without_progress,
+            threshold,
+        };
+        self.dirty.full = true;
+    }
+
+    /// Records that human intervention is required.
+    pub fn set_continuous_human_checkpoint(&mut self, reason: &str) {
+        self.continuous_status = ContinuousLoopStatus::HumanRequired {
+            reason: reason.to_string(),
+        };
+        self.dirty.full = true;
     }
 
     // =========================================================================
