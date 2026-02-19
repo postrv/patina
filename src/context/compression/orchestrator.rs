@@ -20,9 +20,10 @@
 //! ```
 
 use crate::context::compression::{
-    parse_mcp_tool_response, parse_project_structure_to_manifest, render_manifest_markdown,
-    CacheKey, CcgBackend, CcgFetchError, CompressionLevel, CompressionMetrics, CompressionResult,
-    ContextSource, ResultCache,
+    parse_import_graph_to_architecture, parse_mcp_tool_response,
+    parse_project_structure_to_manifest, render_architecture_within_budget,
+    render_manifest_markdown, CacheKey, CcgBackend, CcgFetchError, CompressionLevel,
+    CompressionMetrics, CompressionResult, ContextSource, ResultCache,
 };
 use crate::mcp::client::McpClient;
 use crate::narsil::{NarsilCapabilities, NarsilCapability};
@@ -33,6 +34,12 @@ use tracing::warn;
 
 /// Default TTL for orchestrator cache (5 minutes).
 pub const DEFAULT_ORCHESTRATOR_TTL: Duration = Duration::from_secs(300);
+
+/// Default maximum token budget for architecture layer (~12K tokens).
+///
+/// This limits the architecture context to prevent oversized outputs
+/// from large codebases. Approximately 48KB of text.
+pub const DEFAULT_ARCHITECTURE_TOKEN_BUDGET: usize = 12_000;
 
 /// Default maximum cache entries for orchestrator.
 pub const DEFAULT_ORCHESTRATOR_MAX_ENTRIES: usize = 100;
@@ -792,6 +799,105 @@ impl CompressionOrchestrator {
                 );
                 self.enter_degraded_mode();
                 self.create_degraded_result(CompressionLevel::Manifest)
+            }
+        }
+    }
+
+    /// Fetches architecture data via live MCP call to `get_import_graph`.
+    ///
+    /// This is the unified entry point for architecture retrieval. It:
+    /// 1. Checks the cache (keyed by git commit hash)
+    /// 2. On cache miss, calls `get_import_graph` via MCP
+    /// 3. Parses the response into a [`CcgArchitecture`] and renders as Markdown
+    /// 4. Caches the result for future calls with the same commit hash
+    ///
+    /// Unlike [`get_architecture_async`], this method works without the CCG `--graph`
+    /// flag since `get_import_graph` is always available in narsil.
+    ///
+    /// # Arguments
+    ///
+    /// * `client` - An active MCP client connected to narsil-mcp
+    /// * `repo_hash` - Current git commit hash for cache invalidation
+    ///
+    /// # Returns
+    ///
+    /// A `CompressionResult` containing the rendered architecture Markdown,
+    /// or a degraded result on MCP failure.
+    ///
+    /// # Cache Behavior
+    ///
+    /// Results are cached keyed by `repo_hash`. Subsequent calls with the
+    /// same hash return the cached result. A new commit hash triggers a
+    /// fresh MCP call.
+    pub async fn fetch_architecture(
+        &self,
+        client: &mut McpClient,
+        repo_hash: &str,
+    ) -> CompressionResult {
+        // 1. Check cache
+        if let Some(cached) = self.get_cached(CompressionLevel::Architecture, repo_hash) {
+            return cached;
+        }
+
+        // 2. Fetch via MCP
+        let args = serde_json::json!({
+            "repo": self.repo_name
+        });
+
+        match client.call_tool("get_import_graph", args).await {
+            Ok(response) => self.process_architecture_response(&response, repo_hash),
+            Err(err) => {
+                warn!(
+                    repo = %self.repo_name,
+                    error = %err,
+                    "Architecture fetch via get_import_graph failed, entering degraded mode"
+                );
+                self.enter_degraded_mode();
+                self.create_degraded_result(CompressionLevel::Architecture)
+            }
+        }
+    }
+
+    /// Processes an MCP tool response into an architecture [`CompressionResult`].
+    ///
+    /// Separated from [`fetch_architecture`] for testability. Parses the MCP
+    /// response, extracts import graph data, builds a `CcgArchitecture`, renders
+    /// it as Markdown, and caches the result.
+    ///
+    /// # Arguments
+    ///
+    /// * `response` - The raw MCP tool response JSON
+    /// * `repo_hash` - Git commit hash for cache keying
+    ///
+    /// # Returns
+    ///
+    /// A `CompressionResult` on success, or a degraded result if the
+    /// response cannot be parsed.
+    pub fn process_architecture_response(
+        &self,
+        response: &serde_json::Value,
+        repo_hash: &str,
+    ) -> CompressionResult {
+        match parse_mcp_tool_response(response) {
+            Ok(content) => {
+                let architecture = parse_import_graph_to_architecture(&content, &self.repo_name);
+                let markdown = render_architecture_within_budget(
+                    &architecture,
+                    DEFAULT_ARCHITECTURE_TOKEN_BUDGET,
+                );
+                let result = self.create_architecture_result(markdown);
+                self.cache_result(CompressionLevel::Architecture, &result, repo_hash);
+                self.exit_degraded_mode();
+                result
+            }
+            Err(err) => {
+                warn!(
+                    repo = %self.repo_name,
+                    error = %err,
+                    "Failed to parse architecture MCP response, entering degraded mode"
+                );
+                self.enter_degraded_mode();
+                self.create_degraded_result(CompressionLevel::Architecture)
             }
         }
     }
@@ -1586,6 +1692,191 @@ mod tests {
         assert!(
             result.content().contains("Rust"),
             "Rendered manifest should mention Rust language"
+        );
+    }
+
+    // =============================================================================
+    // process_architecture_response tests (Task 3.2)
+    // =============================================================================
+
+    #[test]
+    fn test_process_architecture_response_parses_valid_response() {
+        let caps = create_capabilities_without_ccg();
+        let orchestrator = CompressionOrchestrator::new(caps, "test-repo");
+
+        let response = serde_json::json!({
+            "content": [{
+                "type": "text",
+                "text": "# Import Graph\n\n## Repository Import Summary\n\n| File | Dependencies | Dependents |\n|------|--------------|------------|\n| src/app/state.rs | 21 | 8 |\n| src/api/mod.rs | 10 | 15 |"
+            }]
+        });
+
+        let result = orchestrator.process_architecture_response(&response, "abc123");
+
+        assert_eq!(result.level(), CompressionLevel::Architecture);
+        assert!(
+            result.content().contains("Architecture"),
+            "Should render architecture markdown, got: {}",
+            result.content()
+        );
+    }
+
+    #[test]
+    fn test_process_architecture_response_caches_result() {
+        let caps = create_capabilities_without_ccg();
+        let orchestrator = CompressionOrchestrator::new(caps, "test-repo");
+
+        let response = serde_json::json!({
+            "content": [{
+                "type": "text",
+                "text": "| File | Dependencies | Dependents |\n|------|--------------|------------|\n| src/main.rs | 5 | 0 |"
+            }]
+        });
+
+        let _result = orchestrator.process_architecture_response(&response, "hash123");
+
+        let cached = orchestrator.get_cached(CompressionLevel::Architecture, "hash123");
+        assert!(cached.is_some(), "Result should be cached after processing");
+    }
+
+    #[test]
+    fn test_process_architecture_response_enters_degraded_on_invalid_response() {
+        let caps = create_capabilities_without_ccg();
+        let orchestrator = CompressionOrchestrator::new(caps, "test-repo");
+
+        let response = serde_json::json!({}); // Invalid - missing content
+
+        let result = orchestrator.process_architecture_response(&response, "hash123");
+
+        assert!(
+            orchestrator.is_degraded(),
+            "Should enter degraded mode on parse failure"
+        );
+        assert!(result.content().contains("Degraded Mode"));
+    }
+
+    #[test]
+    fn test_process_architecture_response_exits_degraded_on_success() {
+        let caps = create_capabilities_without_ccg();
+        let orchestrator = CompressionOrchestrator::new(caps, "test-repo");
+
+        // Enter degraded mode first
+        orchestrator.enter_degraded_mode();
+        assert!(orchestrator.is_degraded());
+
+        let response = serde_json::json!({
+            "content": [{
+                "type": "text",
+                "text": "| File | Dependencies | Dependents |\n|------|--------------|------------|\n| src/main.rs | 5 | 0 |"
+            }]
+        });
+
+        let _result = orchestrator.process_architecture_response(&response, "hash123");
+
+        assert!(
+            !orchestrator.is_degraded(),
+            "Should exit degraded mode on successful parse"
+        );
+    }
+
+    #[test]
+    fn test_process_architecture_response_cache_invalidation_on_hash_change() {
+        let caps = create_capabilities_without_ccg();
+        let orchestrator = CompressionOrchestrator::new(caps, "test-repo");
+
+        let response = serde_json::json!({
+            "content": [{
+                "type": "text",
+                "text": "| File | Dependencies | Dependents |\n|------|--------------|------------|\n| src/main.rs | 5 | 0 |"
+            }]
+        });
+
+        let _result = orchestrator.process_architecture_response(&response, "old_hash");
+
+        let cached = orchestrator.get_cached(CompressionLevel::Architecture, "new_hash");
+        assert!(
+            cached.is_none(),
+            "Different commit hash should not hit cache"
+        );
+    }
+
+    #[test]
+    fn test_process_architecture_response_renders_modules() {
+        let caps = create_capabilities_without_ccg();
+        let orchestrator = CompressionOrchestrator::new(caps, "test-repo");
+
+        let response = serde_json::json!({
+            "content": [{
+                "type": "text",
+                "text": "| File | Dependencies | Dependents |\n|------|--------------|------------|\n| src/app/state.rs | 21 | 8 |\n| src/api/mod.rs | 10 | 15 |"
+            }]
+        });
+
+        let result = orchestrator.process_architecture_response(&response, "hash");
+
+        assert!(
+            result.content().contains("Modules"),
+            "Architecture should contain Modules section"
+        );
+    }
+
+    #[test]
+    fn test_process_architecture_response_renders_dependencies() {
+        let caps = create_capabilities_without_ccg();
+        let orchestrator = CompressionOrchestrator::new(caps, "test-repo");
+
+        let response = serde_json::json!({
+            "content": [{
+                "type": "text",
+                "text": "| File | Dependencies | Dependents |\n|------|--------------|------------|\n| src/app/state.rs | 21 | 8 |"
+            }]
+        });
+
+        let result = orchestrator.process_architecture_response(&response, "hash");
+
+        assert!(
+            result.content().contains("Dependencies"),
+            "Architecture should contain Dependencies section"
+        );
+    }
+
+    #[test]
+    fn test_process_architecture_response_uses_correct_source_for_ccg() {
+        let caps = create_capabilities_with_ccg();
+        let orchestrator = CompressionOrchestrator::new(caps, "test-repo");
+
+        let response = serde_json::json!({
+            "content": [{
+                "type": "text",
+                "text": "| File | Dependencies | Dependents |\n|------|--------------|------------|\n| src/main.rs | 5 | 0 |"
+            }]
+        });
+
+        let result = orchestrator.process_architecture_response(&response, "hash");
+        assert_eq!(
+            result.source(),
+            ContextSource::CcgLayer1,
+            "CCG-capable orchestrator should mark source as CcgLayer1"
+        );
+    }
+
+    #[test]
+    fn test_process_architecture_response_uses_correct_source_for_fallback() {
+        let caps = create_capabilities_without_ccg();
+        let orchestrator = CompressionOrchestrator::new(caps, "test-repo");
+
+        let response = serde_json::json!({
+            "content": [{
+                "type": "text",
+                "text": "| File | Dependencies | Dependents |\n|------|--------------|------------|\n| src/main.rs | 5 | 0 |"
+            }]
+        });
+
+        let result = orchestrator.process_architecture_response(&response, "hash");
+        assert_eq!(
+            result.source(),
+            ContextSource::Constructed,
+            "Fallback orchestrator should mark source as Constructed"
         );
     }
 

@@ -588,6 +588,183 @@ fn language_name_from_extension(ext: &str) -> String {
     }
 }
 
+/// Parses a narsil `get_import_graph` response into a [`CcgArchitecture`].
+///
+/// Extracts module-level dependency information from the markdown table
+/// returned by narsil's import graph tool. Each row becomes a [`ModuleInfo`]
+/// with dependency counts mapped to symbol counts, and high-connectivity
+/// files become [`DependencyEdge`] entries representing architectural weight.
+///
+/// # Arguments
+///
+/// * `content` - The text output from narsil's `get_import_graph` tool
+/// * `repo_name` - Repository name for context
+///
+/// # Returns
+///
+/// A `CcgArchitecture` populated with module dependency information.
+///
+/// # Examples
+///
+/// ```ignore
+/// let arch = parse_import_graph_to_architecture(
+///     "| File | Dependencies | Dependents |\n|---|---|---|\n| src/main.rs | 5 | 0 |",
+///     "my-repo",
+/// );
+/// assert!(!arch.modules.is_empty());
+/// ```
+#[must_use]
+pub fn parse_import_graph_to_architecture(content: &str, repo_name: &str) -> CcgArchitecture {
+    let mut modules = Vec::new();
+    let mut dependency_graph = Vec::new();
+    let mut seen_files: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+
+        // Skip non-table rows: headers, separators, empty lines
+        if trimmed.is_empty()
+            || trimmed.starts_with('#')
+            || trimmed.starts_with("|-")
+            || !trimmed.starts_with('|')
+        {
+            continue;
+        }
+
+        let cols: Vec<&str> = trimmed.split('|').map(str::trim).collect();
+        // Expected: ["", "File", "Dependencies", "Dependents", ""]
+        // or data:  ["", "src/app/state.rs", "21", "8", ""]
+        if cols.len() < 4 {
+            continue;
+        }
+
+        let file_path = cols[1].trim();
+        let deps_str = cols[2].trim();
+        let dependents_str = cols[3].trim();
+
+        // Skip header row
+        if file_path == "File" || file_path.is_empty() {
+            continue;
+        }
+
+        // Parse numeric columns
+        let deps: usize = deps_str.parse().unwrap_or(0);
+        let dependents: usize = dependents_str.parse().unwrap_or(0);
+
+        // Deduplicate (narsil can return repeated entries)
+        if !seen_files.insert(file_path.to_string()) {
+            continue;
+        }
+
+        // Extract module name from file path
+        let name = extract_module_name(file_path);
+
+        modules.push(ModuleInfo {
+            path: file_path.to_string(),
+            name: name.clone(),
+            public_symbols: dependents,
+            private_symbols: deps,
+        });
+
+        // Create dependency edges for high-connectivity modules
+        // (dependents > 0 means other modules import this one)
+        if dependents > 0 {
+            dependency_graph.push(DependencyEdge {
+                from: format!("{repo_name} modules"),
+                to: name,
+                weight: dependents,
+            });
+        }
+    }
+
+    // Sort modules by total connectivity (most connected first)
+    modules.sort_by(|a, b| {
+        let total_a = a.public_symbols + a.private_symbols;
+        let total_b = b.public_symbols + b.private_symbols;
+        total_b.cmp(&total_a)
+    });
+
+    // Sort dependency edges by weight (most imported first)
+    dependency_graph.sort_by(|a, b| b.weight.cmp(&a.weight));
+
+    CcgArchitecture {
+        modules,
+        public_api: Vec::new(), // Not available from import graph alone
+        dependency_graph,
+    }
+}
+
+/// Extracts a module name from a file path.
+///
+/// Converts paths like `src/app/state.rs` to `app::state` and
+/// `src/api/mod.rs` to `api`.
+fn extract_module_name(path: &str) -> String {
+    let path = path.strip_prefix("src/").unwrap_or(path);
+    let path = path
+        .strip_suffix(".rs")
+        .or_else(|| path.strip_suffix('/'))
+        .unwrap_or(path);
+
+    // Remove mod.rs suffix to get the module name
+    let path = path.strip_suffix("/mod").unwrap_or(path);
+
+    path.replace('/', "::")
+}
+
+/// Renders a CCG architecture as Markdown within a token budget.
+///
+/// If the full architecture rendering exceeds the budget, modules are
+/// progressively removed (least connected first) until the output fits.
+/// The dependency graph section is dropped first if needed.
+///
+/// # Arguments
+///
+/// * `arch` - The architecture data to render
+/// * `token_budget` - Maximum approximate tokens for the output
+///
+/// # Returns
+///
+/// Markdown string that fits within the token budget.
+#[must_use]
+pub fn render_architecture_within_budget(arch: &CcgArchitecture, token_budget: usize) -> String {
+    use crate::context::compression::estimate_tokens;
+
+    // Try full render first
+    let full = render_architecture_markdown(arch);
+    if estimate_tokens(&full) <= token_budget {
+        return full;
+    }
+
+    // Try without dependency graph
+    let reduced = CcgArchitecture {
+        modules: arch.modules.clone(),
+        public_api: arch.public_api.clone(),
+        dependency_graph: Vec::new(),
+    };
+    let without_deps = render_architecture_markdown(&reduced);
+    if estimate_tokens(&without_deps) <= token_budget {
+        return without_deps;
+    }
+
+    // Progressively reduce modules (keep most connected)
+    let mut module_count = arch.modules.len();
+    while module_count > 0 {
+        let truncated = CcgArchitecture {
+            modules: arch.modules[..module_count].to_vec(),
+            public_api: Vec::new(),
+            dependency_graph: Vec::new(),
+        };
+        let rendered = render_architecture_markdown(&truncated);
+        if estimate_tokens(&rendered) <= token_budget {
+            return rendered;
+        }
+        module_count /= 2;
+    }
+
+    // Absolute minimum: just the header
+    "# Architecture\n\n_Truncated: token budget too small._\n".to_string()
+}
+
 /// Checks if content appears to be raw JSON rather than Markdown.
 #[must_use]
 pub fn looks_like_json(content: &str) -> bool {
@@ -1221,6 +1398,235 @@ mod tests {
     // =============================================================================
     // ParseError tests
     // =============================================================================
+
+    // =============================================================================
+    // parse_import_graph_to_architecture tests (Task 3.2)
+    // =============================================================================
+
+    #[test]
+    fn test_parse_import_graph_extracts_modules() {
+        let content = "\
+# Import Graph\n\
+\n\
+## Repository Import Summary\n\
+\n\
+| File | Dependencies | Dependents |\n\
+|------|--------------|------------|\n\
+| src/app/state.rs | 21 | 8 |\n\
+| src/api/mod.rs | 10 | 15 |\n\
+| src/main.rs | 5 | 0 |";
+
+        let arch = parse_import_graph_to_architecture(content, "test-repo");
+
+        assert_eq!(arch.modules.len(), 3, "Should extract 3 modules");
+
+        let state_mod = arch.modules.iter().find(|m| m.path == "src/app/state.rs");
+        assert!(state_mod.is_some(), "Should find app::state module");
+        let state_mod = state_mod.unwrap();
+        assert_eq!(
+            state_mod.private_symbols, 21,
+            "Dependencies should map to private_symbols"
+        );
+        assert_eq!(
+            state_mod.public_symbols, 8,
+            "Dependents should map to public_symbols"
+        );
+    }
+
+    #[test]
+    fn test_parse_import_graph_extracts_dependencies() {
+        let content = "\
+| File | Dependencies | Dependents |\n\
+|------|--------------|------------|\n\
+| src/app/state.rs | 21 | 8 |\n\
+| src/api/mod.rs | 10 | 15 |";
+
+        let arch = parse_import_graph_to_architecture(content, "test-repo");
+
+        assert!(
+            !arch.dependency_graph.is_empty(),
+            "Should create dependency edges for modules with dependents > 0"
+        );
+
+        let api_edge = arch.dependency_graph.iter().find(|e| e.to == "api");
+        assert!(api_edge.is_some(), "Should have edge for api module");
+        assert_eq!(api_edge.unwrap().weight, 15);
+    }
+
+    #[test]
+    fn test_parse_import_graph_handles_empty_content() {
+        let arch = parse_import_graph_to_architecture("", "repo");
+        assert!(arch.modules.is_empty());
+        assert!(arch.dependency_graph.is_empty());
+        assert!(arch.public_api.is_empty());
+    }
+
+    #[test]
+    fn test_parse_import_graph_deduplicates_entries() {
+        let content = "\
+| File | Dependencies | Dependents |\n\
+|------|--------------|------------|\n\
+| src/app/state.rs | 21 | 8 |\n\
+| src/app/state.rs | 21 | 8 |\n\
+| src/app/state.rs | 21 | 8 |";
+
+        let arch = parse_import_graph_to_architecture(content, "repo");
+
+        assert_eq!(arch.modules.len(), 1, "Should deduplicate repeated entries");
+    }
+
+    #[test]
+    fn test_parse_import_graph_sorts_by_connectivity() {
+        let content = "\
+| File | Dependencies | Dependents |\n\
+|------|--------------|------------|\n\
+| src/small.rs | 1 | 1 |\n\
+| src/big.rs | 20 | 15 |\n\
+| src/medium.rs | 5 | 5 |";
+
+        let arch = parse_import_graph_to_architecture(content, "repo");
+
+        assert_eq!(
+            arch.modules[0].path, "src/big.rs",
+            "Most connected module should be first"
+        );
+        assert_eq!(
+            arch.modules[2].path, "src/small.rs",
+            "Least connected module should be last"
+        );
+    }
+
+    #[test]
+    fn test_parse_import_graph_module_names() {
+        let content = "\
+| File | Dependencies | Dependents |\n\
+|------|--------------|------------|\n\
+| src/app/mod.rs | 5 | 3 |\n\
+| src/api/client.rs | 2 | 1 |\n\
+| src/main.rs | 10 | 0 |";
+
+        let arch = parse_import_graph_to_architecture(content, "repo");
+
+        let names: Vec<&str> = arch.modules.iter().map(|m| m.name.as_str()).collect();
+        assert!(names.contains(&"app"), "src/app/mod.rs should become 'app'");
+        assert!(
+            names.contains(&"api::client"),
+            "src/api/client.rs should become 'api::client'"
+        );
+        assert!(names.contains(&"main"), "src/main.rs should become 'main'");
+    }
+
+    #[test]
+    fn test_parse_import_graph_skips_header_row() {
+        let content = "\
+| File | Dependencies | Dependents |\n\
+|------|--------------|------------|\n\
+| src/main.rs | 5 | 0 |";
+
+        let arch = parse_import_graph_to_architecture(content, "repo");
+
+        assert_eq!(arch.modules.len(), 1);
+        assert_eq!(arch.modules[0].path, "src/main.rs");
+    }
+
+    // =============================================================================
+    // render_architecture_within_budget tests (Task 3.2 REFACTOR)
+    // =============================================================================
+
+    #[test]
+    fn test_render_architecture_within_budget_returns_full_when_fits() {
+        let arch = CcgArchitecture {
+            modules: vec![ModuleInfo {
+                path: "src/main.rs".to_string(),
+                name: "main".to_string(),
+                public_symbols: 0,
+                private_symbols: 5,
+            }],
+            dependency_graph: vec![DependencyEdge {
+                from: "a".to_string(),
+                to: "b".to_string(),
+                weight: 1,
+            }],
+            ..Default::default()
+        };
+
+        let result = render_architecture_within_budget(&arch, 10000);
+        let full = render_architecture_markdown(&arch);
+        assert_eq!(result, full, "Should return full render when within budget");
+    }
+
+    #[test]
+    fn test_render_architecture_within_budget_truncates_when_over() {
+        use crate::context::compression::estimate_tokens;
+
+        // Create a large architecture
+        let modules: Vec<ModuleInfo> = (0..100)
+            .map(|i| ModuleInfo {
+                path: format!("src/module_{i}/very_long_name_{i}.rs"),
+                name: format!("module_{i}::very_long_name_{i}"),
+                public_symbols: i,
+                private_symbols: 100 - i,
+            })
+            .collect();
+
+        let arch = CcgArchitecture {
+            modules,
+            dependency_graph: (0..50)
+                .map(|i| DependencyEdge {
+                    from: format!("module_{i}"),
+                    to: format!("module_{}", i + 1),
+                    weight: i,
+                })
+                .collect(),
+            ..Default::default()
+        };
+
+        let full_tokens = estimate_tokens(&render_architecture_markdown(&arch));
+        let budget = full_tokens / 4; // Quarter of what's needed
+
+        let result = render_architecture_within_budget(&arch, budget);
+        let result_tokens = estimate_tokens(&result);
+
+        assert!(
+            result_tokens <= budget,
+            "Result ({result_tokens} tokens) should fit in budget ({budget} tokens)"
+        );
+        assert!(
+            result.contains("Architecture"),
+            "Truncated result should still have header"
+        );
+    }
+
+    #[test]
+    fn test_render_architecture_within_budget_tiny_budget() {
+        let arch = CcgArchitecture {
+            modules: vec![ModuleInfo {
+                path: "src/main.rs".to_string(),
+                name: "main".to_string(),
+                public_symbols: 0,
+                private_symbols: 5,
+            }],
+            ..Default::default()
+        };
+
+        let result = render_architecture_within_budget(&arch, 1); // Impossibly small
+        assert!(
+            result.contains("Truncated"),
+            "Minimum output should indicate truncation"
+        );
+    }
+
+    #[test]
+    fn test_extract_module_name_from_path() {
+        assert_eq!(extract_module_name("src/app/state.rs"), "app::state");
+        assert_eq!(extract_module_name("src/api/mod.rs"), "api");
+        assert_eq!(extract_module_name("src/main.rs"), "main");
+        assert_eq!(extract_module_name("src/lib.rs"), "lib");
+        assert_eq!(
+            extract_module_name("src/app/handlers/keyboard.rs"),
+            "app::handlers::keyboard"
+        );
+    }
 
     #[test]
     fn test_parse_error_display() {
