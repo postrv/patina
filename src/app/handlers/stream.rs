@@ -94,12 +94,8 @@ impl EventHandler for StreamHandler {
                     if is_executing && ctx.state.all_tools_complete() {
                         debug!("All tools complete, setting up continuation");
                         ctx.state.clear_tool_result_rx();
-                        crate::app::finish_tool_execution_and_continue(
-                            ctx.state,
-                            ctx.client,
-                            ctx.session_manager,
-                        )
-                        .await?;
+                        crate::app::finish_tool_execution_and_continue(ctx.state, ctx.client)
+                            .await?;
                     }
 
                     Ok(Handled::CONSUMED)

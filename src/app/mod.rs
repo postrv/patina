@@ -547,8 +547,8 @@ pub(crate) fn start_tool_execution(state: &mut AppState) -> Result<()> {
 
     debug!("Tool loop in PendingApproval state, auto-approving tools");
 
-    // For now, auto-approve all tools
-    // TODO: In Phase 10.5.3, show permission prompt and wait for user response
+    // Auto-approve all tools. Interactive permission prompts are
+    // handled by PermissionHandler in the dispatch chain.
     state.approve_all_tools()?;
 
     // Spawn tool execution in background - returns immediately
@@ -576,7 +576,6 @@ pub(crate) fn start_tool_execution(state: &mut AppState) -> Result<()> {
 pub(crate) async fn finish_tool_execution_and_continue(
     state: &mut AppState,
     client: &AnthropicClient,
-    session_manager: &SessionManager,
 ) -> Result<()> {
     use crate::api::tools::default_tools;
     use crate::api::ToolChoice;
@@ -619,8 +618,8 @@ pub(crate) async fn finish_tool_execution_and_continue(
     });
     state.api_messages_mut().push(user_msg);
 
-    // Auto-save after tool execution
-    auto_save_session(state, session_manager).await;
+    // SessionHandler observer saves when it sees the dirty flag.
+    state.mark_session_dirty();
 
     // Continue the conversation with Claude using the full API messages
     debug!("Continuing conversation with tool results");
@@ -688,7 +687,7 @@ fn format_tool_results_for_display(user_msg: &ApiMessageV2) -> String {
 ///
 /// Creates a new session or updates an existing one. Errors are logged
 /// but do not interrupt the application flow.
-pub(crate) async fn auto_save_session(state: &mut AppState, session_manager: &SessionManager) {
+async fn auto_save_session(state: &mut AppState, session_manager: &SessionManager) {
     let session = state.to_session();
 
     let result = if let Some(existing_id) = state.session_id() {
