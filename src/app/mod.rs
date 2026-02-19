@@ -503,6 +503,44 @@ async fn run_print_mode(config: &Config, prompt: &str) -> Result<()> {
     Ok(())
 }
 
+/// Creates the event dispatcher with handlers in priority order.
+///
+/// Handler priority (highest first):
+/// 1. [`PermissionHandler`](handlers::permission::PermissionHandler) — intercepts keys during permission prompts
+/// 2. [`KeyboardHandler`](handlers::keyboard::KeyboardHandler) — user input (keys, mouse, resize)
+/// 3. [`StreamHandler`](handlers::stream::StreamHandler) — API chunks and tool results
+/// 4. [`TickHandler`](handlers::tick::TickHandler) — throbber animation
+/// 5. [`SessionHandler`](handlers::session::SessionHandler) — auto-save observer (always last, never consumes)
+#[must_use]
+fn create_dispatcher() -> dispatch::EventDispatcher {
+    dispatch::EventDispatcher::new(vec![
+        Box::new(handlers::permission::PermissionHandler),
+        Box::new(handlers::keyboard::KeyboardHandler),
+        Box::new(handlers::stream::StreamHandler),
+        Box::new(handlers::tick::TickHandler),
+    ])
+    .with_observers(vec![
+        Box::new(handlers::session::SessionHandler),
+    ])
+}
+
+/// The main event loop using the dispatched handler architecture.
+///
+/// Replaces the monolithic `tokio::select!` with a unified
+/// `recv_event()` + `EventDispatcher::dispatch()` loop. Events are
+/// received from all sources (crossterm, background channels, tick timer)
+/// via [`AppContext::recv_event`] and dispatched to handlers in priority
+/// order via [`EventDispatcher::dispatch`].
+///
+/// # Exit conditions
+///
+/// The loop exits when:
+/// - [`AppEvent::Quit`] is received (Ctrl+C or Ctrl+D via `recv_event`)
+/// - [`AppState::wants_quit`] returns `true` (programmatic quit request)
+///
+/// # Errors
+///
+/// Propagates errors from rendering, event handling, or session saving.
 async fn event_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     client: &AnthropicClient,
@@ -510,7 +548,8 @@ async fn event_loop(
     session_manager: &SessionManager,
 ) -> Result<()> {
     let mut events = EventStream::new();
-    let mut throbber_interval = interval(Duration::from_millis(250));
+    let mut tick_interval = interval(Duration::from_millis(250));
+    let mut dispatcher = create_dispatcher();
 
     loop {
         if state.needs_render() {
@@ -518,359 +557,18 @@ async fn event_loop(
             state.mark_rendered();
         }
 
-        tokio::select! {
-            biased;
+        let mut ctx = context::AppContext::new(terminal, client, state, session_manager);
+        let event = ctx.recv_event(&mut events, &mut tick_interval).await;
+        let is_quit = event.is_quit();
+        dispatcher.dispatch(&event, &mut ctx).await?;
 
-            Some(Ok(event)) = events.next() => {
-                match event {
-                    Event::Key(key) => {
-                        // Skip key release events - only process Press and Repeat
-                        // This prevents character duplication when REPORT_EVENT_TYPES is enabled
-                        if key.kind == KeyEventKind::Release {
-                            continue;
-                        }
-
-                        // Check if we have a pending permission - handle that first
-                        if state.has_pending_permission() {
-                            if let Some(response) = handle_permission_key_event(state, key) {
-                                // Handle the permission response
-                                state.handle_permission_response(response).await;
-
-                                // If user allowed, continue with tool execution
-                                if matches!(
-                                    response,
-                                    PermissionResponse::AllowOnce | PermissionResponse::AllowAlways
-                                ) {
-                                    // Continue with the tool execution
-                                    handle_tool_execution(state, client, session_manager).await?;
-                                } else {
-                                    // User denied - cancel the tool execution
-                                    state.deny_all_tools()?;
-                                }
-                            }
-                            continue; // Don't process other keys while permission prompt is active
-                        }
-
-                        debug!(?key, "key event received");
-
-                        match (key.code, key.modifiers) {
-                            // Exit commands
-                            (KeyCode::Char('c'), KeyModifiers::CONTROL) |
-                            (KeyCode::Char('d'), KeyModifiers::CONTROL) => break,
-
-                            // Submit input
-                            (KeyCode::Enter, KeyModifiers::NONE) if !state.input.is_empty() => {
-                                let input = state.take_input();
-
-                                // Check for slash commands before sending to API
-                                if input.trim().starts_with('/') {
-                                    use crate::app::commands::{CommandResult, SlashCommandHandler};
-
-                                    let plugin_info =
-                                        SlashCommandHandler::build_plugin_info(state.plugins());
-                                    let handler = SlashCommandHandler::new(state.working_dir.clone())
-                                        .with_plugins(plugin_info);
-                                    let result = handler.handle(&input);
-
-                                    // Display the user's command in timeline
-                                    state.add_message(Message {
-                                        role: Role::User,
-                                        content: input.clone(),
-                                    });
-
-                                    // Display the command result
-                                    let response = match result {
-                                        CommandResult::Executed(output) => output,
-                                        CommandResult::NotACommand => {
-                                            // This shouldn't happen since we checked for /
-                                            format!("Input doesn't look like a command: {}", input)
-                                        }
-                                        CommandResult::UnknownCommand(cmd) => {
-                                            format!("Unknown command: /{}. Type /help for available commands.", cmd)
-                                        }
-                                        CommandResult::Error(err) => {
-                                            format!("Error: {}", err)
-                                        }
-                                    };
-
-                                    state.add_message(Message {
-                                        role: Role::Assistant,
-                                        content: response,
-                                    });
-
-                                    state.mark_full_redraw();
-                                } else {
-                                    state.submit_message(client, input).await?;
-                                    // Auto-save after user message
-                                    auto_save_session(state, session_manager).await;
-                                }
-                            }
-
-                            // Delete character
-                            (KeyCode::Backspace, _) => {
-                                state.delete_char();
-                            }
-
-                            // Scroll up: Ctrl+Up, PageUp, Ctrl+k (vim-style)
-                            (KeyCode::Up, KeyModifiers::CONTROL) |
-                            (KeyCode::PageUp, _) |
-                            (KeyCode::Char('k'), KeyModifiers::CONTROL) => {
-                                debug!("scroll_up triggered");
-                                state.scroll_up(10);
-                            }
-                            // Scroll down: Ctrl+Down, PageDown, Ctrl+j (vim-style)
-                            (KeyCode::Down, KeyModifiers::CONTROL) |
-                            (KeyCode::PageDown, _) |
-                            (KeyCode::Char('j'), KeyModifiers::CONTROL) => {
-                                debug!("scroll_down triggered");
-                                state.scroll_down(10);
-                            }
-                            // Scroll to top: Home, Ctrl+g
-                            (KeyCode::Home, _) |
-                            (KeyCode::Char('g'), KeyModifiers::CONTROL) => {
-                                debug!("scroll_to_top triggered");
-                                state.scroll_to_top();
-                            }
-                            // Scroll to bottom: End
-                            (KeyCode::End, _) => {
-                                debug!("scroll_to_bottom triggered");
-                                let height = state.scroll_state().content_height();
-                                state.scroll_to_bottom(height);
-                            }
-
-                            // Select all: Cmd+A (macOS), Option+A (JetBrains fallback), Ctrl+A, or Ctrl+Shift+A
-                            // Cmd+A works when kitty protocol is enabled (iTerm2, kitty, WezTerm)
-                            // Option+A works in JetBrains terminals where Cmd is intercepted by IDE
-                            // Always selects all content regardless of focus area
-                            (KeyCode::Char('a') | KeyCode::Char('A'), modifiers)
-                                if modifiers == KeyModifiers::SUPER
-                                    || modifiers == KeyModifiers::ALT
-                                    || modifiers == KeyModifiers::CONTROL
-                                    || modifiers.contains(KeyModifiers::CONTROL | KeyModifiers::SHIFT) =>
-                            {
-                                let line_count = state.rendered_line_count();
-                                let timeline_len = state.timeline().len();
-                                let modifier_name = if modifiers == KeyModifiers::SUPER {
-                                    "Cmd+A"
-                                } else if modifiers == KeyModifiers::ALT {
-                                    "Option+A"
-                                } else {
-                                    "Ctrl+A"
-                                };
-                                debug!(
-                                    line_count,
-                                    timeline_len,
-                                    modifier = modifier_name,
-                                    focus_area = ?state.focus_area(),
-                                    "select_all triggered via {}",
-                                    modifier_name
-                                );
-                                if line_count == 0 {
-                                    debug!("select_all: no content to select (cache empty, timeline_len={})", timeline_len);
-                                } else {
-                                    // Set focus to Content so status bar shows correctly
-                                    state.set_focus_area(FocusArea::Content);
-                                    state.selection_mut().select_all(line_count);
-                                    state.mark_full_redraw();
-                                    let copy_hint = if modifiers == KeyModifiers::SUPER {
-                                        "Cmd+C"
-                                    } else if modifiers == KeyModifiers::ALT {
-                                        "Option+C"
-                                    } else {
-                                        "Ctrl+Y"
-                                    };
-                                    info!(
-                                        line_count,
-                                        "Selected all {} lines ({} to copy)",
-                                        line_count,
-                                        copy_hint
-                                    );
-                                }
-                            }
-
-                            // Copy selection: Cmd+C (macOS), Option+C (JetBrains fallback), Ctrl+Shift+C, or Ctrl+Y (yank)
-                            // Cmd+C works when kitty protocol is enabled (iTerm2, kitty, WezTerm)
-                            // Option+C works in JetBrains terminals where Cmd is intercepted by IDE
-                            // Note: Ctrl+C alone is reserved for exit
-                            (KeyCode::Char('c') | KeyCode::Char('C'), modifiers)
-                                if modifiers == KeyModifiers::SUPER
-                                    || modifiers == KeyModifiers::ALT
-                                    || modifiers.contains(KeyModifiers::CONTROL | KeyModifiers::SHIFT) =>
-                            {
-                                debug!(modifier = ?modifiers, "copy triggered");
-                                handle_copy(state);
-                            }
-
-                            // Alternative copy: Ctrl+Y (yank) - easier to type than Ctrl+Shift+C
-                            // This is the RECOMMENDED copy keybinding as it doesn't conflict
-                            (KeyCode::Char('y') | KeyCode::Char('Y'), KeyModifiers::CONTROL) =>
-                            {
-                                handle_copy(state);
-                            }
-
-                            // Paste: Cmd+V (macOS), Option+V (JetBrains fallback), Ctrl+Shift+V
-                            // Cmd+V works when iTerm2 is configured to send escape sequences
-                            // Option+V works in JetBrains terminals where Cmd is intercepted by IDE
-                            (KeyCode::Char('v') | KeyCode::Char('V'), modifiers)
-                                if modifiers == KeyModifiers::SUPER
-                                    || modifiers == KeyModifiers::ALT
-                                    || modifiers.contains(KeyModifiers::CONTROL | KeyModifiers::SHIFT) =>
-                            {
-                                debug!(modifier = ?modifiers, "paste triggered");
-                                match tui::clipboard::paste_from_clipboard() {
-                                    Ok(text) => {
-                                        // Insert clipboard text into input
-                                        for c in text.chars() {
-                                            // Skip control characters except newlines
-                                            if c == '\n' || (!c.is_control()) {
-                                                state.insert_char(c);
-                                            }
-                                        }
-                                        info!(len = text.len(), "Pasted from clipboard");
-                                    }
-                                    Err(e) => {
-                                        warn!("paste: clipboard error: {}", e);
-                                    }
-                                }
-                            }
-
-                            // Clear selection: Escape
-                            (KeyCode::Esc, KeyModifiers::NONE) if state.selection().has_selection() => {
-                                state.selection_mut().clear();
-                                state.mark_full_redraw();
-                            }
-
-                            // Text input (must come after special char bindings)
-                            (KeyCode::Char(c), KeyModifiers::NONE | KeyModifiers::SHIFT) => {
-                                state.insert_char(c);
-                            }
-
-                            _ => {
-                                debug!(?key.code, ?key.modifiers, "unhandled key");
-                            }
-                        }
-                    }
-                    Event::Resize(_, _) => {
-                        state.mark_full_redraw();
-                    }
-                    Event::Mouse(mouse) => {
-                        // Get terminal height for focus area detection
-                        let terminal_height = terminal.size().map(|s| s.height).unwrap_or(24);
-
-                        match mouse.kind {
-                            MouseEventKind::Down(MouseButton::Left) => {
-                                // Determine which area was clicked and set focus
-                                let clicked_area =
-                                    AppState::focus_area_for_row(mouse.row, terminal_height);
-
-                                // Update focus (clears selection if focus changes)
-                                state.set_focus_area(clicked_area);
-
-                                // Only start text selection if clicking in content area
-                                if clicked_area == FocusArea::Content {
-                                    // Convert screen coordinates to content position
-                                    // mouse.row is terminal row (0 = top of screen)
-                                    // first_visible_line() gives the content line at viewport top
-                                    // Account for Messages box border (1 row)
-                                    let first_visible = state.scroll_state().first_visible_line();
-                                    let content_row = mouse.row.saturating_sub(1) as usize;
-                                    let pos = ContentPosition::new(
-                                        first_visible + content_row,
-                                        mouse.column.saturating_sub(1) as usize,
-                                    );
-                                    state.selection_mut().start(pos);
-                                }
-                                state.mark_full_redraw();
-                            }
-                            MouseEventKind::Drag(MouseButton::Left) => {
-                                // Only update selection if content area has focus
-                                if state.focus_area() == FocusArea::Content {
-                                    let first_visible = state.scroll_state().first_visible_line();
-                                    let content_row = mouse.row.saturating_sub(1) as usize;
-                                    let pos = ContentPosition::new(
-                                        first_visible + content_row,
-                                        mouse.column.saturating_sub(1) as usize,
-                                    );
-                                    state.selection_mut().update(pos);
-                                    state.mark_full_redraw();
-                                }
-                            }
-                            MouseEventKind::Up(MouseButton::Left) => {
-                                // Complete selection if content area has focus
-                                if state.focus_area() == FocusArea::Content {
-                                    state.selection_mut().end();
-                                    state.mark_full_redraw();
-                                }
-                            }
-                            MouseEventKind::ScrollUp => {
-                                debug!("mouse scroll up");
-                                state.scroll_up(3);
-                            }
-                            MouseEventKind::ScrollDown => {
-                                debug!("mouse scroll down");
-                                state.scroll_down(3);
-                            }
-                            _ => {}
-                        }
-                    }
-                    _ => {}
-                }
-            }
-
-            // Receive background events (API chunks or tool results)
-            // Combined into a single branch to avoid borrow checker conflicts
-            Some(event) = state.recv_background_event(), if state.has_background_work() => {
-                match event {
-                    BackgroundEvent::ApiChunk(chunk) => {
-                        let is_message_complete = matches!(
-                            &chunk,
-                            crate::api::StreamEvent::MessageStop | crate::api::StreamEvent::MessageComplete { .. }
-                        );
-
-                        // Check if this is a tool_use stop reason BEFORE processing
-                        let is_tool_use_complete = matches!(
-                            &chunk,
-                            crate::api::StreamEvent::MessageComplete { stop_reason }
-                            if stop_reason.needs_tool_execution()
-                        );
-
-                        state.append_chunk(chunk)?;
-
-                        // Auto-save after assistant message completes
-                        if is_message_complete {
-                            auto_save_session(state, session_manager).await;
-                        }
-
-                        // Handle tool execution if this was a tool_use stop
-                        if is_tool_use_complete {
-                            // Start tool execution in background - doesn't block
-                            start_tool_execution(state)?;
-                        }
-                    }
-
-                    BackgroundEvent::ToolResult(tool_id, result) => {
-                        debug!(tool_id = %tool_id, is_error = result.is_error, "Tool result received");
-
-                        // Record the result and update UI
-                        state.record_tool_result(&tool_id, result);
-
-                        // Check if all tools have completed
-                        if state.all_tools_complete() {
-                            debug!("All tools complete, setting up continuation");
-                            state.clear_tool_result_rx();
-                            finish_tool_execution_and_continue(state, client, session_manager).await?;
-                        }
-                    }
-                }
-            }
-
-            _ = throbber_interval.tick(), if state.is_loading() || state.has_executing_tools() => {
-                state.tick_throbber();
-            }
+        if is_quit || ctx.state.wants_quit() {
+            break;
         }
     }
 
-    // Save session before exit
+    // Safety save for programmatic quit (request_quit) without Quit event.
+    // SessionHandler handles Quit events, but this catches edge cases.
     auto_save_session(state, session_manager).await;
 
     Ok(())
@@ -1375,12 +1073,17 @@ mod tests {
     // =========================================================================
 
     #[test]
-    fn create_dispatcher_returns_five_handlers() {
+    fn create_dispatcher_returns_four_handlers_and_one_observer() {
         let dispatcher = create_dispatcher();
         assert_eq!(
             dispatcher.handler_count(),
-            5,
-            "Dispatcher must have exactly 5 handlers: Permission, Keyboard, Stream, Tick, Session"
+            4,
+            "Dispatcher must have 4 handlers: Permission, Keyboard, Stream, Tick"
+        );
+        assert_eq!(
+            dispatcher.observer_count(),
+            1,
+            "Dispatcher must have 1 observer: Session"
         );
     }
 
