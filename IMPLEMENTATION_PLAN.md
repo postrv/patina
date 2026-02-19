@@ -128,9 +128,9 @@ Before marking ANY task `[x]`:
 **Description**: Extract API chunk processing and tool result handling from Branch 2 of the `tokio::select!` into `StreamHandler`. This handles `AppEvent::ApiChunk` and `AppEvent::ToolResult`.
 
 **TDD Cycle**:
-- [ ] RED: Write tests for `StreamHandler` — processes `ApiChunk` by calling `state.append_chunk()`, detects message completion, detects tool_use stop reason and triggers tool execution, processes `ToolResult` by calling `state.record_tool_result()`, detects all-tools-complete and triggers continuation
-- [ ] GREEN: Implement `StreamHandler` with the logic currently in `event_loop` lines 818-861 plus `start_tool_execution()` and `finish_tool_execution_and_continue()`
-- [ ] REFACTOR: Move `start_tool_execution()` and `finish_tool_execution_and_continue()` helper functions to be methods on `StreamHandler`
+- [x] RED: Write tests for `StreamHandler` — processes `ApiChunk` by calling `state.append_chunk()`, detects message completion, detects tool_use stop reason and triggers tool execution, processes `ToolResult` by calling `state.record_tool_result()`, detects all-tools-complete and triggers continuation
+- [x] GREEN: Implement `StreamHandler` with the logic currently in `event_loop` lines 818-861 plus `start_tool_execution()` and `finish_tool_execution_and_continue()`
+- [x] REFACTOR: Move `start_tool_execution()` and `finish_tool_execution_and_continue()` helper functions to be methods on `StreamHandler`
 - Files: `src/app/handlers/stream.rs` (new)
 - Acceptance: All streaming and tool continuation behavior identical, existing integration tests pass
 
