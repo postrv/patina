@@ -102,9 +102,9 @@ Before marking ANY task `[x]`:
 **Description**: Extract throbber animation tick handling into a standalone `TickHandler`. This is the simplest concern (1 line of logic) — ideal first extraction to validate the pattern.
 
 **TDD Cycle**:
-- [ ] RED: Write tests for `TickHandler` — `handle(Tick)` calls `state.tick_throbber()`, ignores non-Tick events, returns `Handled(true)` only for `Tick`
-- [ ] GREEN: Implement `TickHandler` struct implementing `EventHandler`
-- [ ] REFACTOR: Wire `TickHandler` into a test `EventDispatcher`, verify it works in isolation
+- [x] RED: Write tests for `TickHandler` — `handle(Tick)` calls `state.tick_throbber()`, ignores non-Tick events, returns `Handled(true)` only for `Tick`
+- [x] GREEN: Implement `TickHandler` struct implementing `EventHandler`
+- [x] REFACTOR: Wire `TickHandler` into a test `EventDispatcher`, verify it works in isolation
 - Files: `src/app/handlers/tick.rs` (new), `src/app/handlers/mod.rs` (new)
 - Acceptance: `TickHandler` passes all tests, throbber animation behavior identical to current code
 
