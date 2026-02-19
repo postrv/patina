@@ -404,9 +404,9 @@ Before marking ANY task `[x]`:
 **Description**: Implement `run_agent_loop()` — a simplified event loop that runs inside a worktree with its own session.
 
 **TDD Cycle**:
-- [ ] RED: Write tests for agent loop — creates session in worktree, runs LLM turns, records results, reports completion/failure, respects max iterations
-- [ ] GREEN: Implement `run_agent_loop()` using the new `EventHandler` architecture with a subset of handlers (Stream + Tool only, no TUI)
-- [ ] REFACTOR: Add iteration tracking, progress reporting via channel back to main loop
+- [x] RED: Write tests for agent loop — creates session in worktree, runs LLM turns, records results, reports completion/failure, respects max iterations
+- [x] GREEN: Implement `run_agent_loop()` using the new `EventHandler` architecture with a subset of handlers (Stream + Tool only, no TUI)
+- [x] REFACTOR: Add iteration tracking, progress reporting via channel back to main loop
 - Files: `src/agents/worktree_agent.rs`
 - Acceptance: Agent loop runs independently, produces results, respects iteration limit
 

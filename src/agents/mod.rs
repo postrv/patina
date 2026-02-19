@@ -40,6 +40,11 @@ pub use parallel::{
     ParallelTaskResult,
 };
 
+// Re-export worktree agent types
+pub use worktree_agent::{
+    run_agent_loop, AgentLoopConfig, AgentLoopResult, AgentProgress, WorktreeAgentManager,
+};
+
 use anyhow::Result;
 use std::collections::HashMap;
 use uuid::Uuid;
