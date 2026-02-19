@@ -19,8 +19,8 @@ use crate::app::context::AppContext;
 use crate::app::dispatch::{EventHandler, Handled};
 use crate::app::events::AppEvent;
 use crate::permissions::PermissionResponse;
-use crate::tui::widgets::permission_prompt::PermissionPromptState;
 use crate::tui::widgets::handle_permission_key;
+use crate::tui::widgets::permission_prompt::PermissionPromptState;
 
 /// Handles permission prompts for tool execution approval.
 ///

@@ -141,9 +141,9 @@ Before marking ANY task `[x]`:
 **Description**: Extract permission prompt handling from the keyboard input branch into `PermissionHandler`. Currently permission key events are processed inline when `state.has_pending_permission()` is true.
 
 **TDD Cycle**:
-- [ ] RED: Write tests for `PermissionHandler` — intercepts `Key` events when permission is pending, converts key to response (y/n/a), calls `state.handle_permission_response()`, triggers tool execution on approval, calls `state.deny_all_tools()` on denial, ignores events when no permission pending
-- [ ] GREEN: Implement `PermissionHandler` using logic from `event_loop` lines 529-548
-- [ ] REFACTOR: Ensure `PermissionHandler` runs before `KeyboardHandler` in dispatch order (consumes events when permission modal is active)
+- [x] RED: Write tests for `PermissionHandler` — intercepts `Key` events when permission is pending, converts key to response (y/n/a), calls `state.handle_permission_response()`, triggers tool execution on approval, calls `state.deny_all_tools()` on denial, ignores events when no permission pending
+- [x] GREEN: Implement `PermissionHandler` using logic from `event_loop` lines 529-548
+- [x] REFACTOR: Ensure `PermissionHandler` runs before `KeyboardHandler` in dispatch order (consumes events when permission modal is active)
 - Files: `src/app/handlers/permission.rs` (new)
 - Acceptance: Permission prompt UX unchanged, approve/deny behavior identical
 
