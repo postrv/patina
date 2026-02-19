@@ -3,8 +3,7 @@
 use anyhow::{Context, Result};
 use crossterm::{
     event::{
-        DisableMouseCapture, EnableMouseCapture, Event, EventStream, KeyCode, KeyEventKind,
-        KeyModifiers, KeyboardEnhancementFlags, MouseButton, MouseEventKind,
+        DisableMouseCapture, EnableMouseCapture, EventStream, KeyboardEnhancementFlags,
         PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
     },
     execute,
@@ -13,7 +12,6 @@ use crossterm::{
         LeaveAlternateScreen,
     },
 };
-use futures::StreamExt;
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::{io, time::Duration};
 use tokio::time::interval;
@@ -27,20 +25,16 @@ pub mod handlers;
 pub mod state;
 pub mod tool_loop;
 
-use state::{AppState, BackgroundEvent};
+use state::AppState;
 use tool_loop::ToolLoopState;
 
 use crate::api::AnthropicClient;
 use crate::ide::controller::IdeController;
 use crate::narsil::NarsilIntegration;
-use crate::permissions::PermissionResponse;
 use crate::plugins::narsil::{has_supported_code_files, is_narsil_available};
 use crate::session::{default_sessions_dir, SessionManager};
 use crate::terminal;
 use crate::tui;
-use crate::tui::selection::{ContentPosition, FocusArea};
-use crate::tui::widgets::handle_permission_key;
-use crate::tui::widgets::permission_prompt::PermissionPromptState;
 use crate::types::config::{NarsilMode, ResumeMode};
 use crate::types::{ApiMessageV2, Message, Role};
 
@@ -110,47 +104,6 @@ async fn process_print_stream(
 
     // Channel closed without explicit completion
     Ok(PrintStreamResult::Completed(response))
-}
-
-/// Handles copy operation with detailed logging.
-///
-/// Copies the current selection to clipboard and logs the result.
-fn handle_copy(state: &AppState) {
-    let selection = state.selection();
-    let cache_len = state.rendered_line_count();
-
-    if let Some((start, end)) = selection.range() {
-        let selected_lines = end.line.saturating_sub(start.line) + 1;
-        debug!(
-            start_line = start.line,
-            end_line = end.line,
-            selected_lines,
-            cache_len,
-            "copy: attempting to copy {} lines from cache of {} lines",
-            selected_lines,
-            cache_len
-        );
-
-        match state.copy_from_cache() {
-            Ok(true) => {
-                info!("Copied {} lines to clipboard", selected_lines);
-            }
-            Ok(false) => {
-                warn!(
-                    "copy: no text extracted (cache_len={}, selection=L{}-L{})",
-                    cache_len, start.line, end.line
-                );
-            }
-            Err(e) => {
-                warn!("copy: clipboard error: {}", e);
-            }
-        }
-    } else {
-        debug!(
-            "copy: no selection (has_selection={})",
-            selection.has_selection()
-        );
-    }
 }
 
 /// Initializes the compression orchestrator based on narsil configuration.
@@ -519,9 +472,7 @@ fn create_dispatcher() -> dispatch::EventDispatcher {
         Box::new(handlers::stream::StreamHandler),
         Box::new(handlers::tick::TickHandler),
     ])
-    .with_observers(vec![
-        Box::new(handlers::session::SessionHandler),
-    ])
+    .with_observers(vec![Box::new(handlers::session::SessionHandler)])
 }
 
 /// The main event loop using the dispatched handler architecture.
@@ -560,7 +511,7 @@ async fn event_loop(
         let mut ctx = context::AppContext::new(terminal, client, state, session_manager);
         let event = ctx.recv_event(&mut events, &mut tick_interval).await;
         let is_quit = event.is_quit();
-        dispatcher.dispatch(&event, &mut ctx).await?;
+        let _ = dispatcher.dispatch(&event, &mut ctx).await?;
 
         if is_quit || ctx.state.wants_quit() {
             break;
@@ -703,24 +654,6 @@ pub(crate) async fn finish_tool_execution_and_continue(
     Ok(())
 }
 
-/// Handles tool execution for permission prompts (blocking for user interaction).
-///
-/// This is used when a permission prompt is shown and the user approves.
-/// Unlike `start_tool_execution`, this is called from the keyboard handler
-/// where we need to continue execution after user approval.
-async fn handle_tool_execution(
-    state: &mut AppState,
-    _client: &AnthropicClient,
-    _session_manager: &SessionManager,
-) -> Result<()> {
-    // Start tool execution in background
-    start_tool_execution(state)?;
-
-    // Note: Results will be received via the recv_background_event branch
-    // in the main event loop. We don't await here to keep UI responsive.
-    Ok(())
-}
-
 /// Formats tool results for display in the conversation history.
 ///
 /// Extracts content from tool_result blocks and creates a human-readable summary.
@@ -749,51 +682,6 @@ fn format_tool_results_for_display(user_msg: &ApiMessageV2) -> String {
             }
         }
     }
-}
-
-/// Handles a key event for the permission prompt.
-///
-/// Converts crossterm key events to the format expected by the permission
-/// prompt handler and returns the user's response if a decision was made.
-///
-/// # Arguments
-///
-/// * `state` - The application state (used to get the pending permission)
-/// * `key` - The key event from crossterm
-///
-/// # Returns
-///
-/// The permission response if the user made a decision, or `None` if the
-/// key was handled but no decision was made (e.g., navigation).
-fn handle_permission_key_event(
-    state: &mut AppState,
-    key: crossterm::event::KeyEvent,
-) -> Option<PermissionResponse> {
-    // Create a prompt state from the pending permission
-    let request = state.pending_permission()?.clone();
-    let mut prompt_state = PermissionPromptState::new(request);
-
-    // Convert crossterm key event to char for the handler
-    let key_char = match key.code {
-        KeyCode::Char(c) => c,
-        KeyCode::Enter => '\r',
-        KeyCode::Esc => '\x1b',
-        KeyCode::Tab => '\t',
-        KeyCode::Backspace => '\x08',
-        KeyCode::Left => 'h',  // vim-style navigation
-        KeyCode::Right => 'l', // vim-style navigation
-        _ => return None,
-    };
-
-    // Handle the key input
-    let response = handle_permission_key(&mut prompt_state, key_char);
-
-    // If we got a response, clear the pending permission
-    if response.is_some() {
-        state.clear_pending_permission();
-    }
-
-    response
 }
 
 /// Auto-saves the current session.
@@ -834,15 +722,12 @@ mod tests {
     use super::*;
     use crate::api::AnthropicClient;
     use crate::app::context::AppContext;
-    use crate::app::dispatch::{EventDispatcher, Handled};
+    use crate::app::dispatch::Handled;
     use crate::app::events::AppEvent;
     use crate::permissions::PermissionRequest;
     use crate::session::SessionManager;
     use crate::types::config::ParallelMode;
-    use crossterm::event::{
-        KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers, MouseButton, MouseEvent,
-        MouseEventKind,
-    };
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
     use ratatui::backend::CrosstermBackend;
     use ratatui::Terminal;
     use secrecy::SecretString;
@@ -852,16 +737,6 @@ mod tests {
     // =========================================================================
     // Test helpers
     // =========================================================================
-
-    /// Creates a key event for testing.
-    fn make_key_event(code: KeyCode, modifiers: KeyModifiers) -> KeyEvent {
-        KeyEvent {
-            code,
-            modifiers,
-            kind: KeyEventKind::Press,
-            state: KeyEventState::empty(),
-        }
-    }
 
     fn test_terminal() -> Terminal<CrosstermBackend<io::Stdout>> {
         let backend = CrosstermBackend::new(io::stdout());
@@ -880,149 +755,6 @@ mod tests {
         let dir = TempDir::new().expect("failed to create temp dir");
         let mgr = SessionManager::new(dir.path().to_path_buf());
         (mgr, dir)
-    }
-
-    // =========================================================================
-    // Permission key event handling tests
-    // =========================================================================
-
-    #[test]
-    fn test_y_key_allows_once() {
-        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
-        let request = PermissionRequest::new("Bash", Some("echo hello"), "Print hello");
-        state.set_pending_permission(request);
-
-        let key = make_key_event(KeyCode::Char('y'), KeyModifiers::NONE);
-        let response = handle_permission_key_event(&mut state, key);
-
-        assert_eq!(response, Some(PermissionResponse::AllowOnce));
-        assert!(!state.has_pending_permission()); // Should be cleared
-    }
-
-    #[test]
-    fn test_y_uppercase_allows_once() {
-        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
-        let request = PermissionRequest::new("Bash", Some("ls"), "List files");
-        state.set_pending_permission(request);
-
-        let key = make_key_event(KeyCode::Char('Y'), KeyModifiers::SHIFT);
-        let response = handle_permission_key_event(&mut state, key);
-
-        assert_eq!(response, Some(PermissionResponse::AllowOnce));
-    }
-
-    #[test]
-    fn test_a_key_allows_always() {
-        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
-        let request = PermissionRequest::new("Read", Some("/tmp/test.txt"), "Read file");
-        state.set_pending_permission(request);
-
-        let key = make_key_event(KeyCode::Char('a'), KeyModifiers::NONE);
-        let response = handle_permission_key_event(&mut state, key);
-
-        assert_eq!(response, Some(PermissionResponse::AllowAlways));
-        assert!(!state.has_pending_permission()); // Should be cleared
-    }
-
-    #[test]
-    fn test_a_uppercase_allows_always() {
-        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
-        let request = PermissionRequest::new("Bash", Some("git status"), "Git status");
-        state.set_pending_permission(request);
-
-        let key = make_key_event(KeyCode::Char('A'), KeyModifiers::SHIFT);
-        let response = handle_permission_key_event(&mut state, key);
-
-        assert_eq!(response, Some(PermissionResponse::AllowAlways));
-    }
-
-    #[test]
-    fn test_n_key_denies() {
-        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
-        let request = PermissionRequest::new("Bash", Some("rm -rf /tmp"), "Delete files");
-        state.set_pending_permission(request);
-
-        let key = make_key_event(KeyCode::Char('n'), KeyModifiers::NONE);
-        let response = handle_permission_key_event(&mut state, key);
-
-        assert_eq!(response, Some(PermissionResponse::Deny));
-        assert!(!state.has_pending_permission()); // Should be cleared
-    }
-
-    #[test]
-    fn test_n_uppercase_denies() {
-        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
-        let request = PermissionRequest::new("Bash", Some("sudo"), "Sudo command");
-        state.set_pending_permission(request);
-
-        let key = make_key_event(KeyCode::Char('N'), KeyModifiers::SHIFT);
-        let response = handle_permission_key_event(&mut state, key);
-
-        assert_eq!(response, Some(PermissionResponse::Deny));
-    }
-
-    #[test]
-    fn test_escape_key_denies() {
-        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
-        let request = PermissionRequest::new("Bash", Some("command"), "Test");
-        state.set_pending_permission(request);
-
-        let key = make_key_event(KeyCode::Esc, KeyModifiers::NONE);
-        let response = handle_permission_key_event(&mut state, key);
-
-        assert_eq!(response, Some(PermissionResponse::Deny));
-    }
-
-    #[test]
-    fn test_enter_key_confirms_default() {
-        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
-        let request = PermissionRequest::new("Bash", Some("ls"), "List");
-        state.set_pending_permission(request);
-
-        // Default selection is AllowOnce
-        let key = make_key_event(KeyCode::Enter, KeyModifiers::NONE);
-        let response = handle_permission_key_event(&mut state, key);
-
-        assert_eq!(response, Some(PermissionResponse::AllowOnce));
-    }
-
-    #[test]
-    fn test_navigation_keys_no_response() {
-        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
-        let request = PermissionRequest::new("Bash", Some("ls"), "List");
-        state.set_pending_permission(request);
-
-        // Tab should navigate but not confirm
-        let key = make_key_event(KeyCode::Tab, KeyModifiers::NONE);
-        let response = handle_permission_key_event(&mut state, key);
-
-        assert!(response.is_none());
-        assert!(state.has_pending_permission()); // Still pending
-    }
-
-    #[test]
-    fn test_no_pending_permission_returns_none() {
-        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
-        // No pending permission set
-
-        let key = make_key_event(KeyCode::Char('y'), KeyModifiers::NONE);
-        let response = handle_permission_key_event(&mut state, key);
-
-        assert!(response.is_none());
-    }
-
-    #[test]
-    fn test_unrecognized_key_returns_none() {
-        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
-        let request = PermissionRequest::new("Bash", Some("ls"), "List");
-        state.set_pending_permission(request);
-
-        // F1 key - not handled
-        let key = make_key_event(KeyCode::F(1), KeyModifiers::NONE);
-        let response = handle_permission_key_event(&mut state, key);
-
-        assert!(response.is_none());
-        assert!(state.has_pending_permission()); // Still pending
     }
 
     // =========================================================================
@@ -1345,18 +1077,16 @@ mod tests {
         let events = vec![
             AppEvent::Key(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE)),
             AppEvent::Key(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE)),
-            AppEvent::ApiChunk(crate::api::StreamEvent::ContentDelta("response".to_string())),
+            AppEvent::ApiChunk(crate::api::StreamEvent::ContentDelta(
+                "response".to_string(),
+            )),
             AppEvent::Tick,
         ];
 
         for event in &events {
             let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
             let result = dispatcher.dispatch(event, &mut ctx).await.unwrap();
-            assert_eq!(
-                result,
-                Handled::CONSUMED,
-                "Event {event} must be consumed"
-            );
+            assert_eq!(result, Handled::CONSUMED, "Event {event} must be consumed");
         }
 
         assert_eq!(state.input, "hi", "Both characters must be inserted");

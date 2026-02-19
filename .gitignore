@@ -51,11 +51,11 @@ tarpaulin-report.html
 
 # Prompt files (development use)
 PROMPT_*.md
-/patina-strategic-roadmap.md
-/IMPLEMENTATION_PLAN.md
+/.archive/patina-strategic-roadmap.md
+/.archive/docs/IMPLEMENTATION_PLAN.md
 /REMEDIATION_PLAN.md
 
 # Backup files
 .rct_backups/
 /context_compression_plans/
-/patina-project-review.md
+/.archive/patina-project-review.md
