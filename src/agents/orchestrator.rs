@@ -405,10 +405,11 @@ impl SubagentResultCollector {
 /// use patina::agents::{SubagentRunner, SubagentSpawner, SubagentContext};
 /// use patina::api::AnthropicClient;
 /// use std::path::PathBuf;
+/// use std::sync::Arc;
 ///
 /// # async fn example() -> anyhow::Result<()> {
 /// let client = AnthropicClient::new(api_key, "claude-sonnet-4-20250514");
-/// let runner = SubagentRunner::new(client);
+/// let runner = SubagentRunner::new(Arc::new(client));
 ///
 /// let spawner = SubagentSpawner::new();
 /// let context = SubagentContext::new(PathBuf::from("/project"));
@@ -425,14 +426,14 @@ impl SubagentResultCollector {
 /// # }
 /// ```
 pub struct SubagentRunner {
-    /// The API client used for requests.
-    client: crate::api::AnthropicClient,
+    /// The LLM provider used for requests.
+    client: std::sync::Arc<dyn crate::api::LlmProvider>,
 }
 
 impl SubagentRunner {
-    /// Creates a new runner with the given API client.
+    /// Creates a new runner with the given LLM provider.
     #[must_use]
-    pub fn new(client: crate::api::AnthropicClient) -> Self {
+    pub fn new(client: std::sync::Arc<dyn crate::api::LlmProvider>) -> Self {
         Self { client }
     }
 
@@ -528,7 +529,7 @@ impl SubagentRunner {
         let (tx, mut rx) = mpsc::channel::<StreamEvent>(100);
 
         // Execute API call
-        let client = self.client.clone();
+        let client = std::sync::Arc::clone(&self.client);
         let tools_clone = tools.clone();
         let messages_clone = messages.clone();
 
@@ -540,7 +541,7 @@ impl SubagentRunner {
             };
 
             if let Err(e) = client
-                .stream_message_v2_with_tools(&messages_clone, tools_ref, tool_choice.as_ref(), tx)
+                .stream_message(&messages_clone, tools_ref, tool_choice.as_ref(), tx)
                 .await
             {
                 tracing::error!("Subagent API error: {}", e);
@@ -976,7 +977,7 @@ mod tests {
             SecretString::from("test-key"),
             "claude-sonnet-4-20250514",
         );
-        let runner = SubagentRunner::new(client);
+        let runner = SubagentRunner::new(std::sync::Arc::new(client));
 
         let spawner = SubagentSpawner::new();
         let session = spawner
@@ -1009,7 +1010,7 @@ mod tests {
             SecretString::from("test-key"),
             "claude-sonnet-4-20250514",
         );
-        let runner = SubagentRunner::new(client);
+        let runner = SubagentRunner::new(std::sync::Arc::new(client));
 
         let spawner = SubagentSpawner::new();
         let session = spawner
@@ -1035,7 +1036,7 @@ mod tests {
             SecretString::from("test-key"),
             "claude-sonnet-4-20250514",
         );
-        let runner = SubagentRunner::new(client);
+        let runner = SubagentRunner::new(std::sync::Arc::new(client));
 
         let spawner = SubagentSpawner::new();
         let session = spawner
@@ -1062,7 +1063,7 @@ mod tests {
             SecretString::from("test-key"),
             "claude-sonnet-4-20250514",
         );
-        let runner = SubagentRunner::new(client);
+        let runner = SubagentRunner::new(std::sync::Arc::new(client));
 
         let spawner = SubagentSpawner::new();
         let context = SubagentContext::new(PathBuf::from("/project"))
@@ -1087,7 +1088,7 @@ mod tests {
             SecretString::from("test-key"),
             "claude-sonnet-4-20250514",
         );
-        let runner = SubagentRunner::new(client);
+        let runner = SubagentRunner::new(std::sync::Arc::new(client));
 
         let spawner = SubagentSpawner::new();
         let context = SubagentContext::new(PathBuf::from("/project"))

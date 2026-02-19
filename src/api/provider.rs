@@ -438,8 +438,7 @@ mod tests {
         use crate::api::AnthropicClient;
         use secrecy::SecretString;
 
-        let client =
-            AnthropicClient::new(SecretString::from("test-key"), "claude-opus-4-20250514");
+        let client = AnthropicClient::new(SecretString::from("test-key"), "claude-opus-4-20250514");
         let provider: &dyn LlmProvider = &client;
 
         assert_eq!(provider.model(), "claude-opus-4-20250514");
@@ -545,9 +544,12 @@ data: {"type":"message_stop"}
 
         // Should contain MessageComplete with EndTurn
         assert!(
-            events.iter().any(
-                |e| matches!(e, StreamEvent::MessageComplete { stop_reason: StopReason::EndTurn })
-            ),
+            events.iter().any(|e| matches!(
+                e,
+                StreamEvent::MessageComplete {
+                    stop_reason: StopReason::EndTurn
+                }
+            )),
             "Expected MessageComplete(EndTurn), got: {:?}",
             events
         );
@@ -618,12 +620,19 @@ data: {"type":"message_stop"}
 
         // Should produce the same tool use events as the direct client
         assert!(
-            events.iter().any(|e| matches!(e, StreamEvent::ToolUseStart { name, .. } if name == "bash")),
+            events
+                .iter()
+                .any(|e| matches!(e, StreamEvent::ToolUseStart { name, .. } if name == "bash")),
             "Expected ToolUseStart with name 'bash', got: {:?}",
             events
         );
         assert!(
-            events.iter().any(|e| matches!(e, StreamEvent::MessageComplete { stop_reason: StopReason::ToolUse })),
+            events.iter().any(|e| matches!(
+                e,
+                StreamEvent::MessageComplete {
+                    stop_reason: StopReason::ToolUse
+                }
+            )),
             "Expected MessageComplete(ToolUse), got: {:?}",
             events
         );

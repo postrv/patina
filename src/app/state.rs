@@ -3,7 +3,7 @@
 use crate::agents::SubagentSpawner;
 use crate::api::tokens::model_context_limit;
 use crate::api::tools::default_tools;
-use crate::api::{AnthropicClient, StreamEvent, TokenBudget, ToolChoice};
+use crate::api::{LlmProvider, StreamEvent, TokenBudget, ToolChoice};
 use crate::app::tool_loop::{ContinuationData, ToolLoop, ToolLoopState};
 use crate::app::STREAMING_CHANNEL_BUFFER;
 use crate::context::compression::{
@@ -1113,7 +1113,7 @@ impl AppState {
 
     pub async fn submit_message(
         &mut self,
-        client: &AnthropicClient,
+        client: &std::sync::Arc<dyn LlmProvider>,
         content: String,
     ) -> Result<()> {
         // Build the API message content, optionally with CCG context
@@ -1181,16 +1181,11 @@ impl AppState {
             );
         }
 
-        let client = client.clone();
+        let client = std::sync::Arc::clone(client);
         let tools = default_tools();
         tokio::spawn(async move {
             if let Err(e) = client
-                .stream_message_v2_with_tools(
-                    &api_messages,
-                    Some(&tools),
-                    Some(&ToolChoice::Auto),
-                    tx,
-                )
+                .stream_message(&api_messages, Some(&tools), Some(&ToolChoice::Auto), tx)
                 .await
             {
                 tracing::error!("API error: {}", e);

@@ -28,7 +28,7 @@ pub mod tool_loop;
 use state::AppState;
 use tool_loop::ToolLoopState;
 
-use crate::api::AnthropicClient;
+use crate::api::{AnthropicClient, LlmProvider};
 use crate::ide::controller::IdeController;
 use crate::narsil::NarsilIntegration;
 use crate::plugins::narsil::{has_supported_code_files, is_narsil_available};
@@ -238,7 +238,8 @@ pub async fn run(config: Config) -> Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let client = AnthropicClient::new(config.api_key.clone(), &config.model);
+    let client: std::sync::Arc<dyn LlmProvider> =
+        std::sync::Arc::new(AnthropicClient::new(config.api_key.clone(), &config.model));
 
     // Start IDE server if port is specified
     if let Some(port) = config.ide_port {
@@ -330,7 +331,8 @@ async fn run_print_mode(config: &Config, prompt: &str) -> Result<()> {
     use crate::api::tools::default_tools;
     use crate::api::ToolChoice;
 
-    let client = AnthropicClient::new(config.api_key.clone(), &config.model);
+    let client: std::sync::Arc<dyn LlmProvider> =
+        std::sync::Arc::new(AnthropicClient::new(config.api_key.clone(), &config.model));
     let mut state = AppState::with_options(
         config.working_dir.clone(),
         config.skip_permissions,
@@ -351,12 +353,12 @@ async fn run_print_mode(config: &Config, prompt: &str) -> Result<()> {
     let tools = default_tools();
     let (tx, mut rx) = tokio::sync::mpsc::channel(STREAMING_CHANNEL_BUFFER);
     let api_messages = state.api_messages().to_vec();
-    let client_clone = client.clone();
+    let client_clone = std::sync::Arc::clone(&client);
     let tools_clone = tools.clone();
 
     tokio::spawn(async move {
         if let Err(e) = client_clone
-            .stream_message_v2_with_tools(
+            .stream_message(
                 &api_messages,
                 Some(&tools_clone),
                 Some(&ToolChoice::Auto),
@@ -426,17 +428,12 @@ async fn run_print_mode(config: &Config, prompt: &str) -> Result<()> {
 
         let (tx, mut rx) = tokio::sync::mpsc::channel(STREAMING_CHANNEL_BUFFER);
         let api_messages = state.api_messages().to_vec();
-        let client_clone = client.clone();
+        let client_clone = std::sync::Arc::clone(&client);
         let tools = default_tools();
 
         tokio::spawn(async move {
             if let Err(e) = client_clone
-                .stream_message_v2_with_tools(
-                    &api_messages,
-                    Some(&tools),
-                    Some(&ToolChoice::Auto),
-                    tx,
-                )
+                .stream_message(&api_messages, Some(&tools), Some(&ToolChoice::Auto), tx)
                 .await
             {
                 tracing::error!("API error during tool continuation: {}", e);
@@ -494,7 +491,7 @@ fn create_dispatcher() -> dispatch::EventDispatcher {
 /// Propagates errors from rendering, event handling, or session saving.
 async fn event_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
-    client: &AnthropicClient,
+    client: &std::sync::Arc<dyn LlmProvider>,
     state: &mut AppState,
     session_manager: &SessionManager,
 ) -> Result<()> {
@@ -508,7 +505,12 @@ async fn event_loop(
             state.mark_rendered();
         }
 
-        let mut ctx = context::AppContext::new(terminal, client, state, session_manager);
+        let mut ctx = context::AppContext::new(
+            terminal,
+            std::sync::Arc::clone(client),
+            state,
+            session_manager,
+        );
         let event = ctx.recv_event(&mut events, &mut tick_interval).await;
         let is_quit = event.is_quit();
         let _ = dispatcher.dispatch(&event, &mut ctx).await?;
@@ -575,7 +577,7 @@ pub(crate) fn start_tool_execution(state: &mut AppState) -> Result<()> {
 /// Returns an error if finishing tool execution or streaming setup fails.
 pub(crate) async fn finish_tool_execution_and_continue(
     state: &mut AppState,
-    client: &AnthropicClient,
+    client: &std::sync::Arc<dyn LlmProvider>,
 ) -> Result<()> {
     use crate::api::tools::default_tools;
     use crate::api::ToolChoice;
@@ -636,12 +638,12 @@ pub(crate) async fn finish_tool_execution_and_continue(
     state.set_current_response(String::new());
 
     let api_messages = state.api_messages().to_vec();
-    let client_clone = client.clone();
+    let client_clone = std::sync::Arc::clone(client);
     let tools = default_tools();
 
     tokio::spawn(async move {
         if let Err(e) = client_clone
-            .stream_message_v2_with_tools(&api_messages, Some(&tools), Some(&ToolChoice::Auto), tx)
+            .stream_message(&api_messages, Some(&tools), Some(&ToolChoice::Auto), tx)
             .await
         {
             tracing::error!("API error during tool continuation: {}", e);
@@ -719,7 +721,7 @@ async fn auto_save_session(state: &mut AppState, session_manager: &SessionManage
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::AnthropicClient;
+    use crate::api::{AnthropicClient, LlmProvider};
     use crate::app::context::AppContext;
     use crate::app::dispatch::Handled;
     use crate::app::events::AppEvent;
@@ -731,6 +733,7 @@ mod tests {
     use ratatui::Terminal;
     use secrecy::SecretString;
     use std::path::PathBuf;
+    use std::sync::Arc;
     use tempfile::TempDir;
 
     // =========================================================================
@@ -742,8 +745,11 @@ mod tests {
         Terminal::new(backend).expect("failed to create test terminal")
     }
 
-    fn test_client() -> AnthropicClient {
-        AnthropicClient::new(SecretString::from("test-key"), "claude-test")
+    fn test_client() -> Arc<dyn LlmProvider> {
+        Arc::new(AnthropicClient::new(
+            SecretString::from("test-key"),
+            "claude-test",
+        ))
     }
 
     fn test_state() -> AppState {
@@ -830,7 +836,7 @@ mod tests {
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
 
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
 
         // Quit event should be dispatched to all handlers (none consume it
         // except SessionHandler which observes and returns IGNORED).
@@ -859,7 +865,7 @@ mod tests {
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
 
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::Key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
         let result = dispatcher.dispatch(&event, &mut ctx).await.unwrap();
@@ -881,7 +887,7 @@ mod tests {
 
         let before = state.throbber_char();
 
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::Tick;
         let result = dispatcher.dispatch(&event, &mut ctx).await.unwrap();
@@ -902,7 +908,7 @@ mod tests {
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
 
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::ApiChunk(crate::api::StreamEvent::ContentDelta("hello".to_string()));
         let result = dispatcher.dispatch(&event, &mut ctx).await.unwrap();
@@ -922,7 +928,7 @@ mod tests {
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
 
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
 
         // MessageComplete should: StreamHandler marks dirty → SessionHandler saves.
         let event = AppEvent::ApiChunk(crate::api::StreamEvent::MessageComplete {
@@ -950,7 +956,7 @@ mod tests {
         // Set up a pending permission.
         state.set_pending_permission(PermissionRequest::new("Bash", Some("ls"), "List"));
 
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
 
         // Send 'z' key — should be consumed by PermissionHandler, NOT
         // reach KeyboardHandler (which would insert 'z' into input).
@@ -979,7 +985,7 @@ mod tests {
         // Clear initial render flags.
         state.mark_rendered();
 
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::Resize {
             width: 120,
@@ -1002,7 +1008,7 @@ mod tests {
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
 
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::Mouse(MouseEvent {
             kind: MouseEventKind::ScrollUp,
@@ -1027,7 +1033,7 @@ mod tests {
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
 
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
 
         // In the real event loop, Ctrl+C is mapped to AppEvent::Quit by recv_event().
         // Dispatching Quit should save the session (via SessionHandler).
@@ -1050,7 +1056,7 @@ mod tests {
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
 
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
 
         // If a Key event for Ctrl+C reaches KeyboardHandler (bypassing recv_event's
         // Quit mapping), it should set wants_quit on state.
@@ -1083,7 +1089,8 @@ mod tests {
         ];
 
         for event in &events {
-            let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+            let mut ctx =
+                AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
             let result = dispatcher.dispatch(event, &mut ctx).await.unwrap();
             assert_eq!(result, Handled::CONSUMED, "Event {event} must be consumed");
         }

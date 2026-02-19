@@ -106,7 +106,7 @@ async fn auto_save(state: &mut crate::app::state::AppState, session_manager: &Se
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::AnthropicClient;
+    use crate::api::{AnthropicClient, LlmProvider};
     use crate::app::state::AppState;
     use crate::session::SessionManager;
     use crate::types::config::ParallelMode;
@@ -116,6 +116,7 @@ mod tests {
     use secrecy::SecretString;
     use std::io;
     use std::path::PathBuf;
+    use std::sync::Arc;
     use tempfile::TempDir;
 
     // =========================================================================
@@ -127,8 +128,11 @@ mod tests {
         Terminal::new(backend).expect("failed to create test terminal")
     }
 
-    fn test_client() -> AnthropicClient {
-        AnthropicClient::new(SecretString::from("test-key"), "claude-test")
+    fn test_client() -> Arc<dyn LlmProvider> {
+        Arc::new(AnthropicClient::new(
+            SecretString::from("test-key"),
+            "claude-test",
+        ))
     }
 
     fn test_state() -> AppState {
@@ -166,7 +170,7 @@ mod tests {
         // Mark the session as needing a save.
         state.mark_session_dirty();
 
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
         let event = AppEvent::Tick;
         let _result = handler.handle(&event, &mut ctx).await.unwrap();
 
@@ -187,7 +191,7 @@ mod tests {
 
         state.mark_session_dirty();
 
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
         let event = AppEvent::Tick;
         let _result = handler.handle(&event, &mut ctx).await.unwrap();
 
@@ -207,7 +211,7 @@ mod tests {
         let (session_mgr, _dir) = test_session_manager();
 
         // No dirty flag set — session should NOT be saved.
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
         let event = AppEvent::Tick;
         let _result = handler.handle(&event, &mut ctx).await.unwrap();
 
@@ -230,7 +234,7 @@ mod tests {
         let (session_mgr, _dir) = test_session_manager();
 
         // Not dirty, but Quit should still trigger a save.
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
         let event = AppEvent::Quit;
         let _result = handler.handle(&event, &mut ctx).await.unwrap();
 
@@ -248,7 +252,7 @@ mod tests {
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
 
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
         let event = AppEvent::Quit;
         let result = handler.handle(&event, &mut ctx).await.unwrap();
 
@@ -271,7 +275,7 @@ mod tests {
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
 
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
         let event = AppEvent::Tick;
         let result = handler.handle(&event, &mut ctx).await.unwrap();
 
@@ -290,7 +294,7 @@ mod tests {
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
 
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
         let event = AppEvent::Key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
         let result = handler.handle(&event, &mut ctx).await.unwrap();
 
@@ -311,7 +315,7 @@ mod tests {
 
         state.mark_session_dirty();
 
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
         let event = AppEvent::Tick;
         let result = handler.handle(&event, &mut ctx).await.unwrap();
 
@@ -338,7 +342,7 @@ mod tests {
         assert!(state.session_id().is_none());
         state.mark_session_dirty();
 
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
         let event = AppEvent::Tick;
         let _result = handler.handle(&event, &mut ctx).await.unwrap();
 
@@ -357,7 +361,8 @@ mod tests {
         // First, create a session.
         state.mark_session_dirty();
         {
-            let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+            let mut ctx =
+                AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
             let _result = handler.handle(&AppEvent::Tick, &mut ctx).await.unwrap();
         }
         let first_id = state
@@ -368,7 +373,8 @@ mod tests {
         // Now mark dirty again — should update, not create.
         state.mark_session_dirty();
         {
-            let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+            let mut ctx =
+                AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
             let _result = handler.handle(&AppEvent::Tick, &mut ctx).await.unwrap();
         }
         let second_id = state
@@ -398,7 +404,7 @@ mod tests {
 
         state.mark_session_dirty();
 
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &mgr);
         let event = AppEvent::Tick;
 
         // This must not return Err — save failures are logged, not propagated.
@@ -436,7 +442,7 @@ mod tests {
 
         state.mark_session_dirty();
 
-        let mut ctx = AppContext::new(&mut terminal, &client, &mut state, &session_mgr);
+        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
 
         // Dispatch a Tick — SessionHandler should save but return IGNORED.
         let result = dispatcher
