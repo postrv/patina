@@ -20,10 +20,10 @@
 //! ```
 
 use crate::context::compression::{
-    parse_import_graph_to_architecture, parse_mcp_tool_response,
+    parse_find_symbols_response, parse_import_graph_to_architecture, parse_mcp_tool_response,
     parse_project_structure_to_manifest, render_architecture_within_budget,
-    render_manifest_markdown, CacheKey, CcgBackend, CcgFetchError, CompressionLevel,
-    CompressionMetrics, CompressionResult, ContextSource, ResultCache,
+    render_manifest_markdown, render_symbols_within_budget, CacheKey, CcgBackend, CcgFetchError,
+    CompressionLevel, CompressionMetrics, CompressionResult, ContextSource, ResultCache,
 };
 use crate::mcp::client::McpClient;
 use crate::narsil::{NarsilCapabilities, NarsilCapability};
@@ -43,6 +43,12 @@ pub const DEFAULT_ARCHITECTURE_TOKEN_BUDGET: usize = 12_000;
 
 /// Default maximum cache entries for orchestrator.
 pub const DEFAULT_ORCHESTRATOR_MAX_ENTRIES: usize = 100;
+
+/// Default token budget for symbol layer (~4K tokens).
+///
+/// This limits the symbol context to prevent oversized outputs.
+/// Approximately 16KB of text.
+pub const DEFAULT_SYMBOL_TOKEN_BUDGET: usize = 4_000;
 
 /// Routes compression requests to CCG or fallback backends.
 ///
@@ -227,6 +233,19 @@ impl CompressionOrchestrator {
             ContextSource::Constructed
         };
         CompressionResult::new(content, CompressionLevel::Manifest, source)
+    }
+
+    /// Creates a compression result for the symbol detail level.
+    ///
+    /// Uses `DirectTool` source since symbol queries go through core narsil tools.
+    #[must_use]
+    pub fn create_symbol_result(&self, content: String) -> CompressionResult {
+        self.metrics.record_fallback_call();
+        CompressionResult::new(
+            content,
+            CompressionLevel::SymbolDetail,
+            ContextSource::DirectTool,
+        )
     }
 
     /// Creates a compression result for the architecture level.
@@ -943,6 +962,121 @@ impl CompressionOrchestrator {
             source,
             manifest.tokens_approx() + architecture.tokens_approx(),
         )
+    }
+
+    /// Fetches symbol context via live MCP call to `find_symbols`.
+    ///
+    /// This is the unified entry point for symbol-level context. It:
+    /// 1. Checks the cache (keyed by git commit hash + active files)
+    /// 2. On cache miss, calls `find_symbols` via MCP for each active file
+    /// 3. Parses the response into [`SymbolResults`]
+    /// 4. Renders as Markdown within the token budget
+    /// 5. Caches the result for future calls with the same commit hash
+    ///
+    /// # Arguments
+    ///
+    /// * `client` - An active MCP client connected to narsil-mcp
+    /// * `repo_hash` - Current git commit hash for cache invalidation
+    /// * `active_files` - List of file paths the user is actively working with
+    /// * `token_budget` - Maximum tokens for symbol output
+    ///
+    /// # Returns
+    ///
+    /// A `CompressionResult` containing the rendered symbol Markdown,
+    /// or a degraded result on MCP failure.
+    ///
+    /// # Cache Behavior
+    ///
+    /// Results are cached keyed by `repo_hash`. Subsequent calls with the
+    /// same hash return the cached result. A new commit hash triggers a
+    /// fresh MCP call.
+    pub async fn fetch_symbols(
+        &self,
+        client: &mut McpClient,
+        repo_hash: &str,
+        active_files: &[String],
+        token_budget: usize,
+    ) -> CompressionResult {
+        // 1. Check cache
+        if let Some(cached) = self.get_cached(CompressionLevel::SymbolDetail, repo_hash) {
+            return cached;
+        }
+
+        // 2. Build args for find_symbols — scope to active files if provided
+        let args = if active_files.is_empty() {
+            serde_json::json!({
+                "repo": self.repo_name,
+                "exclude_tests": true
+            })
+        } else {
+            // Join active file patterns as a glob
+            let pattern = active_files
+                .iter()
+                .map(|f| format!("{{{f}}}"))
+                .collect::<Vec<_>>()
+                .join(",");
+            serde_json::json!({
+                "repo": self.repo_name,
+                "file_pattern": pattern,
+                "exclude_tests": true
+            })
+        };
+
+        match client.call_tool("find_symbols", args).await {
+            Ok(response) => self.process_symbols_response(&response, repo_hash, token_budget),
+            Err(err) => {
+                warn!(
+                    repo = %self.repo_name,
+                    error = %err,
+                    "Symbol fetch via find_symbols failed, entering degraded mode"
+                );
+                self.enter_degraded_mode();
+                self.create_degraded_result(CompressionLevel::SymbolDetail)
+            }
+        }
+    }
+
+    /// Processes an MCP tool response into a symbol [`CompressionResult`].
+    ///
+    /// Separated from [`fetch_symbols`] for testability. Parses the MCP
+    /// response, extracts symbol information, renders it as budget-aware
+    /// Markdown, and caches the result.
+    ///
+    /// # Arguments
+    ///
+    /// * `response` - The raw MCP tool response JSON
+    /// * `repo_hash` - Git commit hash for cache keying
+    /// * `token_budget` - Maximum tokens for the rendered output
+    ///
+    /// # Returns
+    ///
+    /// A `CompressionResult` on success, or a degraded result if the
+    /// response cannot be parsed.
+    pub fn process_symbols_response(
+        &self,
+        response: &serde_json::Value,
+        repo_hash: &str,
+        token_budget: usize,
+    ) -> CompressionResult {
+        match parse_mcp_tool_response(response) {
+            Ok(content) => {
+                let symbols = parse_find_symbols_response(&content);
+                let markdown = render_symbols_within_budget(&symbols, token_budget);
+                let result = self.create_symbol_result(markdown);
+                self.cache_result(CompressionLevel::SymbolDetail, &result, repo_hash);
+                self.exit_degraded_mode();
+                result
+            }
+            Err(err) => {
+                warn!(
+                    repo = %self.repo_name,
+                    error = %err,
+                    "Failed to parse symbols MCP response, entering degraded mode"
+                );
+                self.enter_degraded_mode();
+                self.create_degraded_result(CompressionLevel::SymbolDetail)
+            }
+        }
     }
 }
 
@@ -1878,6 +2012,174 @@ mod tests {
             ContextSource::Constructed,
             "Fallback orchestrator should mark source as Constructed"
         );
+    }
+
+    // =============================================================================
+    // process_symbols_response tests (Task 3.3)
+    // =============================================================================
+
+    #[test]
+    fn test_process_symbols_response_parses_valid_response() {
+        let caps = create_capabilities_without_ccg();
+        let orchestrator = CompressionOrchestrator::new(caps, "test-repo");
+
+        let response = serde_json::json!({
+            "content": [{
+                "type": "text",
+                "text": "# Symbols in test-repo\n\nFound 2 symbols\n\n## Functions\n\n- **main** (`src/main.rs:1`) fn main() {\n- **run** (`src/app/mod.rs:10`) pub fn run() -> Result<()> {"
+            }]
+        });
+
+        let result = orchestrator.process_symbols_response(&response, "abc123", 10000);
+
+        assert_eq!(result.level(), CompressionLevel::SymbolDetail);
+        assert!(
+            result.content().contains("Symbols"),
+            "Should render symbols markdown, got: {}",
+            result.content()
+        );
+        assert!(
+            result.content().contains("main"),
+            "Should include symbol names in rendered output"
+        );
+    }
+
+    #[test]
+    fn test_process_symbols_response_caches_result() {
+        let caps = create_capabilities_without_ccg();
+        let orchestrator = CompressionOrchestrator::new(caps, "test-repo");
+
+        let response = serde_json::json!({
+            "content": [{
+                "type": "text",
+                "text": "## Functions\n\n- **main** (`src/main.rs:1`) fn main() {"
+            }]
+        });
+
+        let _result = orchestrator.process_symbols_response(&response, "hash123", 10000);
+
+        let cached = orchestrator.get_cached(CompressionLevel::SymbolDetail, "hash123");
+        assert!(cached.is_some(), "Result should be cached after processing");
+    }
+
+    #[test]
+    fn test_process_symbols_response_enters_degraded_on_invalid_response() {
+        let caps = create_capabilities_without_ccg();
+        let orchestrator = CompressionOrchestrator::new(caps, "test-repo");
+
+        let response = serde_json::json!({}); // Invalid - missing content
+
+        let result = orchestrator.process_symbols_response(&response, "hash123", 10000);
+
+        assert!(
+            orchestrator.is_degraded(),
+            "Should enter degraded mode on parse failure"
+        );
+        assert!(result.content().contains("Degraded Mode"));
+    }
+
+    #[test]
+    fn test_process_symbols_response_exits_degraded_on_success() {
+        let caps = create_capabilities_without_ccg();
+        let orchestrator = CompressionOrchestrator::new(caps, "test-repo");
+
+        // Enter degraded mode first
+        orchestrator.enter_degraded_mode();
+        assert!(orchestrator.is_degraded());
+
+        let response = serde_json::json!({
+            "content": [{
+                "type": "text",
+                "text": "## Functions\n\n- **main** (`src/main.rs:1`) fn main() {"
+            }]
+        });
+
+        let _result = orchestrator.process_symbols_response(&response, "hash123", 10000);
+
+        assert!(
+            !orchestrator.is_degraded(),
+            "Should exit degraded mode on successful parse"
+        );
+    }
+
+    #[test]
+    fn test_process_symbols_response_respects_token_budget() {
+        let caps = create_capabilities_without_ccg();
+        let orchestrator = CompressionOrchestrator::new(caps, "test-repo");
+
+        // Generate many symbols
+        let mut symbols_text = String::from("## Functions\n\n");
+        for i in 0..100 {
+            symbols_text.push_str(&format!(
+                "- **func_{i}** (`src/module_{i}.rs:{i}`) pub fn func_{i}(x: i32) -> i32 {{\n"
+            ));
+        }
+
+        let response = serde_json::json!({
+            "content": [{
+                "type": "text",
+                "text": symbols_text
+            }]
+        });
+
+        let result = orchestrator.process_symbols_response(&response, "hash123", 50);
+
+        assert!(
+            result.content().contains("token budget reached"),
+            "Should indicate truncation when over budget"
+        );
+    }
+
+    #[test]
+    fn test_process_symbols_response_cache_invalidation_on_hash_change() {
+        let caps = create_capabilities_without_ccg();
+        let orchestrator = CompressionOrchestrator::new(caps, "test-repo");
+
+        let response = serde_json::json!({
+            "content": [{
+                "type": "text",
+                "text": "## Functions\n\n- **main** (`src/main.rs:1`) fn main() {"
+            }]
+        });
+
+        let _result = orchestrator.process_symbols_response(&response, "old_hash", 10000);
+
+        let cached = orchestrator.get_cached(CompressionLevel::SymbolDetail, "new_hash");
+        assert!(
+            cached.is_none(),
+            "Different commit hash should not hit cache"
+        );
+    }
+
+    #[test]
+    fn test_process_symbols_response_uses_direct_tool_source() {
+        let caps = create_capabilities_without_ccg();
+        let orchestrator = CompressionOrchestrator::new(caps, "test-repo");
+
+        let response = serde_json::json!({
+            "content": [{
+                "type": "text",
+                "text": "## Functions\n\n- **main** (`src/main.rs:1`) fn main() {"
+            }]
+        });
+
+        let result = orchestrator.process_symbols_response(&response, "hash", 10000);
+        assert_eq!(
+            result.source(),
+            ContextSource::DirectTool,
+            "Symbol results should use DirectTool source"
+        );
+    }
+
+    #[test]
+    fn test_create_symbol_result() {
+        let caps = create_capabilities_with_ccg();
+        let orchestrator = CompressionOrchestrator::new(caps, "repo");
+
+        let result = orchestrator.create_symbol_result("# Symbols".to_string());
+
+        assert_eq!(result.level(), CompressionLevel::SymbolDetail);
+        assert_eq!(result.source(), ContextSource::DirectTool);
     }
 
     #[test]

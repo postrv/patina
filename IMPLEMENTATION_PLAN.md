@@ -338,9 +338,9 @@ Before marking ANY task `[x]`:
 **Description**: Implement symbol-level context using narsil's `find_symbols`, `search_code`, and `get_export_map` tools for active files.
 
 **TDD Cycle**:
-- [ ] RED: Write tests for `query_symbols()` — builds correct query for active files, parses symbol results, respects token budget, returns truncated results if over budget
-- [ ] GREEN: Implement `query_symbols()` using `McpClient::call_tool("find_symbols", ...)` and `search_code`, parse results into `SymbolResults`
-- [ ] REFACTOR: Add smart symbol prioritization — public API surface first, then internal, then tests
+- [x] RED: Write tests for `query_symbols()` — builds correct query for active files, parses symbol results, respects token budget, returns truncated results if over budget
+- [x] GREEN: Implement `query_symbols()` using `McpClient::call_tool("find_symbols", ...)` and `search_code`, parse results into `SymbolResults`
+- [x] REFACTOR: Add smart symbol prioritization — public API surface first, then internal, then tests
 - Files: `src/context/compression/orchestrator.rs`
 - Acceptance: Symbol context for active files produced from live narsil, budget-respecting
 

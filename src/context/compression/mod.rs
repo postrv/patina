@@ -64,15 +64,15 @@ pub use metrics::{
 };
 pub use orchestrator::{
     CompressionOrchestrator, DEFAULT_ARCHITECTURE_TOKEN_BUDGET, DEFAULT_ORCHESTRATOR_MAX_ENTRIES,
-    DEFAULT_ORCHESTRATOR_TTL,
+    DEFAULT_ORCHESTRATOR_TTL, DEFAULT_SYMBOL_TOKEN_BUDGET,
 };
 pub use render::{
-    looks_like_json, parse_ccg_architecture, parse_ccg_manifest,
+    looks_like_json, parse_ccg_architecture, parse_ccg_manifest, parse_find_symbols_response,
     parse_import_graph_to_architecture, parse_project_structure_to_manifest,
     render_architecture_markdown, render_architecture_within_budget, render_manifest_markdown,
-    render_symbols_markdown, CcgArchitecture, CcgManifest, DependencyEdge, ExportInfo,
-    LanguageInfo, ModuleInfo, ParseError, QualitySummary, SecuritySummary, SymbolDetail,
-    SymbolResults, SymbolSummary,
+    render_symbols_markdown, render_symbols_within_budget, CcgArchitecture, CcgManifest,
+    DependencyEdge, ExportInfo, LanguageInfo, ModuleInfo, ParseError, QualitySummary,
+    SecuritySummary, SymbolDetail, SymbolResults, SymbolSummary,
 };
 pub use types::{estimate_tokens, CompressionLevel, CompressionResult, ContextSource};
 
