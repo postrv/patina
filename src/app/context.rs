@@ -8,8 +8,6 @@
 
 use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
 use futures::StreamExt;
-use ratatui::backend::CrosstermBackend;
-use ratatui::Terminal;
 use std::io;
 
 use std::sync::Arc;
@@ -21,21 +19,22 @@ use crate::session::SessionManager;
 
 /// Bundles shared references needed by event handlers.
 ///
-/// `AppContext` provides a single access point for the terminal, API client,
+/// `AppContext` provides a single access point for the API client,
 /// application state, and session manager. Handlers receive `&mut AppContext`
 /// instead of multiple individual references.
+///
+/// The terminal is intentionally excluded — rendering is handled directly
+/// by the event loop, keeping handlers focused on state mutations.
 ///
 /// # Examples
 ///
 /// ```rust,ignore
 /// use patina::app::context::AppContext;
 ///
-/// let mut ctx = AppContext::new(&mut terminal, Arc::new(client), &mut state, &session_manager);
+/// let mut ctx = AppContext::new(Arc::new(client), &mut state, &session_manager);
 /// assert!(ctx.needs_render() || !ctx.needs_render()); // delegates to state
 /// ```
 pub struct AppContext<'a> {
-    /// The ratatui terminal for drawing.
-    pub terminal: &'a mut Terminal<CrosstermBackend<io::Stdout>>,
     /// The LLM provider for making requests.
     pub client: Arc<dyn LlmProvider>,
     /// Mutable application state.
@@ -49,7 +48,6 @@ impl<'a> AppContext<'a> {
     ///
     /// # Arguments
     ///
-    /// * `terminal` - The ratatui terminal for rendering
     /// * `client` - The LLM provider for API requests
     /// * `state` - Mutable application state
     /// * `session_manager` - Session persistence manager
@@ -57,17 +55,15 @@ impl<'a> AppContext<'a> {
     /// # Examples
     ///
     /// ```rust,ignore
-    /// let mut ctx = AppContext::new(&mut terminal, client.clone(), &mut state, &session_mgr);
+    /// let mut ctx = AppContext::new(client.clone(), &mut state, &session_mgr);
     /// ```
     #[must_use]
     pub fn new(
-        terminal: &'a mut Terminal<CrosstermBackend<io::Stdout>>,
         client: Arc<dyn LlmProvider>,
         state: &'a mut AppState,
         session_manager: &'a SessionManager,
     ) -> Self {
         Self {
-            terminal,
             client,
             state,
             session_manager,
@@ -235,12 +231,6 @@ mod tests {
     use std::time::Duration;
     use tempfile::TempDir;
 
-    /// Helper to create a real terminal for tests.
-    fn test_terminal() -> Terminal<CrosstermBackend<io::Stdout>> {
-        let backend = CrosstermBackend::new(io::stdout());
-        Terminal::new(backend).expect("failed to create test terminal")
-    }
-
     fn test_client() -> AnthropicClient {
         AnthropicClient::new(SecretString::from("test-key"), "claude-test")
     }
@@ -263,22 +253,20 @@ mod tests {
 
     #[test]
     fn context_construction() {
-        let mut terminal = test_terminal();
         let client = test_client();
         let mut state = test_state();
         let session_mgr = test_session_manager();
 
-        let _ctx = AppContext::new(&mut terminal, Arc::new(client), &mut state, &session_mgr);
+        let _ctx = AppContext::new(Arc::new(client), &mut state, &session_mgr);
     }
 
     #[test]
     fn context_exposes_state_accessors() {
-        let mut terminal = test_terminal();
         let client = test_client();
         let mut state = test_state();
         let session_mgr = test_session_manager();
 
-        let ctx = AppContext::new(&mut terminal, Arc::new(client), &mut state, &session_mgr);
+        let ctx = AppContext::new(Arc::new(client), &mut state, &session_mgr);
 
         // Fresh state should not be loading
         assert!(!ctx.is_loading());
@@ -290,7 +278,6 @@ mod tests {
 
     #[test]
     fn needs_render_delegates_to_state() {
-        let mut terminal = test_terminal();
         let client = test_client();
         let mut state = test_state();
         let session_mgr = test_session_manager();
@@ -298,20 +285,19 @@ mod tests {
         // Mark state dirty
         state.mark_full_redraw();
 
-        let ctx = AppContext::new(&mut terminal, Arc::new(client), &mut state, &session_mgr);
+        let ctx = AppContext::new(Arc::new(client), &mut state, &session_mgr);
         assert!(ctx.needs_render());
     }
 
     #[test]
     fn mark_rendered_clears_dirty() {
-        let mut terminal = test_terminal();
         let client = test_client();
         let mut state = test_state();
         let session_mgr = test_session_manager();
 
         state.mark_full_redraw();
 
-        let mut ctx = AppContext::new(&mut terminal, Arc::new(client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::new(client), &mut state, &session_mgr);
         assert!(ctx.needs_render());
 
         ctx.mark_rendered();
@@ -320,12 +306,11 @@ mod tests {
 
     #[test]
     fn context_provides_mutable_state_access() {
-        let mut terminal = test_terminal();
         let client = test_client();
         let mut state = test_state();
         let session_mgr = test_session_manager();
 
-        let ctx = AppContext::new(&mut terminal, Arc::new(client), &mut state, &session_mgr);
+        let ctx = AppContext::new(Arc::new(client), &mut state, &session_mgr);
 
         // Should be able to mutate state through context
         ctx.state.mark_full_redraw();
@@ -334,12 +319,11 @@ mod tests {
 
     #[test]
     fn context_provides_client_access() {
-        let mut terminal = test_terminal();
         let client = test_client();
         let mut state = test_state();
         let session_mgr = test_session_manager();
 
-        let ctx = AppContext::new(&mut terminal, Arc::new(client), &mut state, &session_mgr);
+        let ctx = AppContext::new(Arc::new(client), &mut state, &session_mgr);
 
         // Should be able to access client through context as a trait object
         let _client_ref: &dyn LlmProvider = &*ctx.client;
@@ -347,12 +331,11 @@ mod tests {
 
     #[test]
     fn context_provides_session_manager_access() {
-        let mut terminal = test_terminal();
         let client = test_client();
         let mut state = test_state();
         let session_mgr = test_session_manager();
 
-        let ctx = AppContext::new(&mut terminal, Arc::new(client), &mut state, &session_mgr);
+        let ctx = AppContext::new(Arc::new(client), &mut state, &session_mgr);
 
         // Should be able to access session manager through context
         let _sm_ref: &SessionManager = ctx.session_manager;
@@ -364,7 +347,6 @@ mod tests {
 
     #[tokio::test]
     async fn recv_event_returns_key_from_crossterm() {
-        let mut terminal = test_terminal();
         let client = test_client();
         let mut state = test_state();
         let session_mgr = test_session_manager();
@@ -374,7 +356,7 @@ mod tests {
         let mut interval = tokio::time::interval(Duration::from_secs(60));
         interval.tick().await; // consume first immediate tick
 
-        let mut ctx = AppContext::new(&mut terminal, Arc::new(client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::new(client), &mut state, &session_mgr);
         let event = ctx.recv_event(&mut stream, &mut interval).await;
         assert!(
             matches!(event, AppEvent::Key(k) if k.code == KeyCode::Char('a')),
@@ -384,7 +366,6 @@ mod tests {
 
     #[tokio::test]
     async fn recv_event_returns_mouse_from_crossterm() {
-        let mut terminal = test_terminal();
         let client = test_client();
         let mut state = test_state();
         let session_mgr = test_session_manager();
@@ -399,7 +380,7 @@ mod tests {
         let mut interval = tokio::time::interval(Duration::from_secs(60));
         interval.tick().await;
 
-        let mut ctx = AppContext::new(&mut terminal, Arc::new(client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::new(client), &mut state, &session_mgr);
         let event = ctx.recv_event(&mut stream, &mut interval).await;
         assert!(
             matches!(event, AppEvent::Mouse(_)),
@@ -409,7 +390,6 @@ mod tests {
 
     #[tokio::test]
     async fn recv_event_returns_resize_from_crossterm() {
-        let mut terminal = test_terminal();
         let client = test_client();
         let mut state = test_state();
         let session_mgr = test_session_manager();
@@ -418,7 +398,7 @@ mod tests {
         let mut interval = tokio::time::interval(Duration::from_secs(60));
         interval.tick().await;
 
-        let mut ctx = AppContext::new(&mut terminal, Arc::new(client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::new(client), &mut state, &session_mgr);
         let event = ctx.recv_event(&mut stream, &mut interval).await;
         match event {
             AppEvent::Resize { width, height } => {
@@ -431,7 +411,6 @@ mod tests {
 
     #[tokio::test]
     async fn recv_event_maps_ctrl_c_to_quit() {
-        let mut terminal = test_terminal();
         let client = test_client();
         let mut state = test_state();
         let session_mgr = test_session_manager();
@@ -441,7 +420,7 @@ mod tests {
         let mut interval = tokio::time::interval(Duration::from_secs(60));
         interval.tick().await;
 
-        let mut ctx = AppContext::new(&mut terminal, Arc::new(client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::new(client), &mut state, &session_mgr);
         let event = ctx.recv_event(&mut stream, &mut interval).await;
         assert!(
             matches!(event, AppEvent::Quit),
@@ -451,7 +430,6 @@ mod tests {
 
     #[tokio::test]
     async fn recv_event_maps_ctrl_d_to_quit() {
-        let mut terminal = test_terminal();
         let client = test_client();
         let mut state = test_state();
         let session_mgr = test_session_manager();
@@ -461,7 +439,7 @@ mod tests {
         let mut interval = tokio::time::interval(Duration::from_secs(60));
         interval.tick().await;
 
-        let mut ctx = AppContext::new(&mut terminal, Arc::new(client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::new(client), &mut state, &session_mgr);
         let event = ctx.recv_event(&mut stream, &mut interval).await;
         assert!(
             matches!(event, AppEvent::Quit),
@@ -471,7 +449,6 @@ mod tests {
 
     #[tokio::test]
     async fn recv_event_filters_key_release_events() {
-        let mut terminal = test_terminal();
         let client = test_client();
         let mut state = test_state();
         let session_mgr = test_session_manager();
@@ -489,7 +466,7 @@ mod tests {
         let mut interval = tokio::time::interval(Duration::from_secs(60));
         interval.tick().await;
 
-        let mut ctx = AppContext::new(&mut terminal, Arc::new(client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::new(client), &mut state, &session_mgr);
         let event = ctx.recv_event(&mut stream, &mut interval).await;
         assert!(
             matches!(event, AppEvent::Key(k) if k.code == KeyCode::Char('y')),
@@ -499,7 +476,6 @@ mod tests {
 
     #[tokio::test]
     async fn recv_event_filters_focus_events() {
-        let mut terminal = test_terminal();
         let client = test_client();
         let mut state = test_state();
         let session_mgr = test_session_manager();
@@ -510,7 +486,7 @@ mod tests {
         let mut interval = tokio::time::interval(Duration::from_secs(60));
         interval.tick().await;
 
-        let mut ctx = AppContext::new(&mut terminal, Arc::new(client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::new(client), &mut state, &session_mgr);
         let event = ctx.recv_event(&mut stream, &mut interval).await;
         assert!(
             matches!(event, AppEvent::Key(k) if k.code == KeyCode::Char('z')),
@@ -520,7 +496,6 @@ mod tests {
 
     #[tokio::test]
     async fn recv_event_returns_api_chunk_from_background() {
-        let mut terminal = test_terminal();
         let client = test_client();
         let mut state = test_state();
         let session_mgr = test_session_manager();
@@ -537,7 +512,7 @@ mod tests {
         let mut interval = tokio::time::interval(Duration::from_secs(60));
         interval.tick().await;
 
-        let mut ctx = AppContext::new(&mut terminal, Arc::new(client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::new(client), &mut state, &session_mgr);
         let event = ctx.recv_event(&mut stream, &mut interval).await;
         assert!(
             matches!(&event, AppEvent::ApiChunk(StreamEvent::ContentDelta(s)) if s == "hello"),
@@ -547,7 +522,6 @@ mod tests {
 
     #[tokio::test]
     async fn recv_event_returns_tool_result_from_background() {
-        let mut terminal = test_terminal();
         let client = test_client();
         let mut state = test_state();
         let session_mgr = test_session_manager();
@@ -566,7 +540,7 @@ mod tests {
         let mut interval = tokio::time::interval(Duration::from_secs(60));
         interval.tick().await;
 
-        let mut ctx = AppContext::new(&mut terminal, Arc::new(client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::new(client), &mut state, &session_mgr);
         let event = ctx.recv_event(&mut stream, &mut interval).await;
         assert!(
             matches!(&event, AppEvent::ToolResult { tool_id, .. } if tool_id == "toolu_abc"),
@@ -578,7 +552,6 @@ mod tests {
     async fn recv_event_returns_tick_when_loading() {
         tokio::time::pause();
 
-        let mut terminal = test_terminal();
         let client = test_client();
         let mut state = test_state();
         let session_mgr = test_session_manager();
@@ -591,7 +564,7 @@ mod tests {
 
         tokio::time::advance(Duration::from_millis(100)).await;
 
-        let mut ctx = AppContext::new(&mut terminal, Arc::new(client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::new(client), &mut state, &session_mgr);
         let event = ctx.recv_event(&mut stream, &mut interval).await;
         assert!(
             matches!(event, AppEvent::Tick),
@@ -603,7 +576,6 @@ mod tests {
     async fn recv_event_returns_tick_when_executing_tools() {
         tokio::time::pause();
 
-        let mut terminal = test_terminal();
         let client = test_client();
         let mut state = test_state();
         let session_mgr = test_session_manager();
@@ -617,7 +589,7 @@ mod tests {
 
         tokio::time::advance(Duration::from_millis(100)).await;
 
-        let mut ctx = AppContext::new(&mut terminal, Arc::new(client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::new(client), &mut state, &session_mgr);
         let event = ctx.recv_event(&mut stream, &mut interval).await;
         assert!(
             matches!(event, AppEvent::Tick),
@@ -627,7 +599,6 @@ mod tests {
 
     #[tokio::test]
     async fn recv_event_prioritizes_input_over_background() {
-        let mut terminal = test_terminal();
         let client = test_client();
         let mut state = test_state();
         let session_mgr = test_session_manager();
@@ -645,7 +616,7 @@ mod tests {
         let mut interval = tokio::time::interval(Duration::from_secs(60));
         interval.tick().await;
 
-        let mut ctx = AppContext::new(&mut terminal, Arc::new(client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::new(client), &mut state, &session_mgr);
         // With biased select, input (first branch) should win.
         let event = ctx.recv_event(&mut stream, &mut interval).await;
         assert!(

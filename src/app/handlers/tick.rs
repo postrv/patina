@@ -59,10 +59,7 @@ mod tests {
     use crate::session::SessionManager;
     use crate::types::config::ParallelMode;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-    use ratatui::backend::CrosstermBackend;
-    use ratatui::Terminal;
     use secrecy::SecretString;
-    use std::io;
     use std::path::PathBuf;
     use std::sync::Arc;
     use tempfile::TempDir;
@@ -70,11 +67,6 @@ mod tests {
     // =========================================================================
     // Test helpers
     // =========================================================================
-
-    fn test_terminal() -> Terminal<CrosstermBackend<io::Stdout>> {
-        let backend = CrosstermBackend::new(io::stdout());
-        Terminal::new(backend).expect("failed to create test terminal")
-    }
 
     fn test_client() -> Arc<dyn LlmProvider> {
         Arc::new(AnthropicClient::new(
@@ -100,11 +92,11 @@ mod tests {
     #[tokio::test]
     async fn handle_tick_returns_consumed() {
         let mut handler = TickHandler;
-        let mut terminal = test_terminal();
+
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::Tick;
         let result = handler.handle(&event, &mut ctx).await.unwrap();
@@ -119,7 +111,7 @@ mod tests {
     #[tokio::test]
     async fn handle_tick_advances_throbber_frame() {
         let mut handler = TickHandler;
-        let mut terminal = test_terminal();
+
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
@@ -127,7 +119,7 @@ mod tests {
         // Record initial throbber character (frame 0 = '⠋').
         let before = state.throbber_char();
 
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
         let event = AppEvent::Tick;
         let _ = handler.handle(&event, &mut ctx).await.unwrap();
 
@@ -143,7 +135,7 @@ mod tests {
     #[tokio::test]
     async fn handle_tick_marks_dirty() {
         let mut handler = TickHandler;
-        let mut terminal = test_terminal();
+
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
@@ -151,7 +143,7 @@ mod tests {
         // Clear any initial dirty flags.
         state.mark_rendered();
 
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
         let event = AppEvent::Tick;
         let _ = handler.handle(&event, &mut ctx).await.unwrap();
 
@@ -164,11 +156,11 @@ mod tests {
     #[tokio::test]
     async fn handle_key_returns_ignored() {
         let mut handler = TickHandler;
-        let mut terminal = test_terminal();
+
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::Key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
         let result = handler.handle(&event, &mut ctx).await.unwrap();
@@ -183,11 +175,11 @@ mod tests {
     #[tokio::test]
     async fn handle_quit_returns_ignored() {
         let mut handler = TickHandler;
-        let mut terminal = test_terminal();
+
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::Quit;
         let result = handler.handle(&event, &mut ctx).await.unwrap();
@@ -202,11 +194,11 @@ mod tests {
     #[tokio::test]
     async fn handle_resize_returns_ignored() {
         let mut handler = TickHandler;
-        let mut terminal = test_terminal();
+
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::Resize {
             width: 80,
@@ -224,7 +216,7 @@ mod tests {
     #[tokio::test]
     async fn handle_does_not_modify_state_for_non_tick() {
         let mut handler = TickHandler;
-        let mut terminal = test_terminal();
+
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
@@ -232,7 +224,7 @@ mod tests {
         let before = state.throbber_char();
         state.mark_rendered();
 
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
         let event = AppEvent::Key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
         let _ = handler.handle(&event, &mut ctx).await.unwrap();
 
@@ -273,11 +265,11 @@ mod tests {
 
         let handler = TickHandler;
         let mut dispatcher = EventDispatcher::new(vec![Box::new(handler)]);
-        let mut terminal = test_terminal();
+
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         // Tick event should be consumed.
         let result = dispatcher

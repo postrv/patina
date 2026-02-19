@@ -120,10 +120,7 @@ mod tests {
     use crate::types::config::ParallelMode;
     use crate::types::{StopReason, ToolResultBlock};
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-    use ratatui::backend::CrosstermBackend;
-    use ratatui::Terminal;
     use secrecy::SecretString;
-    use std::io;
     use std::path::PathBuf;
     use std::sync::Arc;
     use tempfile::TempDir;
@@ -131,11 +128,6 @@ mod tests {
     // =========================================================================
     // Test helpers
     // =========================================================================
-
-    fn test_terminal() -> Terminal<CrosstermBackend<io::Stdout>> {
-        let backend = CrosstermBackend::new(io::stdout());
-        Terminal::new(backend).expect("failed to create test terminal")
-    }
 
     fn test_client() -> Arc<dyn LlmProvider> {
         Arc::new(AnthropicClient::new(
@@ -171,11 +163,11 @@ mod tests {
     #[tokio::test]
     async fn handle_api_chunk_content_delta_returns_consumed() {
         let mut handler = StreamHandler;
-        let mut terminal = test_terminal();
+
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::ApiChunk(StreamEvent::ContentDelta("hello".to_string()));
         let result = handler.handle(&event, &mut ctx).await.unwrap();
@@ -190,11 +182,11 @@ mod tests {
     #[tokio::test]
     async fn handle_api_chunk_message_stop_returns_consumed() {
         let mut handler = StreamHandler;
-        let mut terminal = test_terminal();
+
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::ApiChunk(StreamEvent::MessageStop);
         let result = handler.handle(&event, &mut ctx).await.unwrap();
@@ -209,11 +201,11 @@ mod tests {
     #[tokio::test]
     async fn handle_api_chunk_message_complete_end_turn_returns_consumed() {
         let mut handler = StreamHandler;
-        let mut terminal = test_terminal();
+
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::ApiChunk(StreamEvent::MessageComplete {
             stop_reason: StopReason::EndTurn,
@@ -230,11 +222,11 @@ mod tests {
     #[tokio::test]
     async fn handle_api_chunk_error_returns_consumed() {
         let mut handler = StreamHandler;
-        let mut terminal = test_terminal();
+
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::ApiChunk(StreamEvent::Error("test error".to_string()));
         let result = handler.handle(&event, &mut ctx).await.unwrap();
@@ -249,11 +241,11 @@ mod tests {
     #[tokio::test]
     async fn handle_api_chunk_tool_use_start_returns_consumed() {
         let mut handler = StreamHandler;
-        let mut terminal = test_terminal();
+
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::ApiChunk(StreamEvent::ToolUseStart {
             id: "toolu_123".to_string(),
@@ -272,11 +264,11 @@ mod tests {
     #[tokio::test]
     async fn handle_api_chunk_content_block_complete_returns_consumed() {
         let mut handler = StreamHandler;
-        let mut terminal = test_terminal();
+
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::ApiChunk(StreamEvent::ContentBlockComplete { index: 0 });
         let result = handler.handle(&event, &mut ctx).await.unwrap();
@@ -295,7 +287,7 @@ mod tests {
     #[tokio::test]
     async fn handle_tool_result_returns_consumed() {
         let mut handler = StreamHandler;
-        let mut terminal = test_terminal();
+
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
@@ -303,7 +295,7 @@ mod tests {
         // Set up a tool as executing so record_tool_result has something to remove.
         state.mark_tool_executing("toolu_test");
 
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::ToolResult {
             tool_id: "toolu_test".to_string(),
@@ -329,11 +321,11 @@ mod tests {
     #[tokio::test]
     async fn handle_key_returns_ignored() {
         let mut handler = StreamHandler;
-        let mut terminal = test_terminal();
+
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::Key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
         let result = handler.handle(&event, &mut ctx).await.unwrap();
@@ -348,11 +340,11 @@ mod tests {
     #[tokio::test]
     async fn handle_tick_returns_ignored() {
         let mut handler = StreamHandler;
-        let mut terminal = test_terminal();
+
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::Tick;
         let result = handler.handle(&event, &mut ctx).await.unwrap();
@@ -367,11 +359,11 @@ mod tests {
     #[tokio::test]
     async fn handle_quit_returns_ignored() {
         let mut handler = StreamHandler;
-        let mut terminal = test_terminal();
+
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::Quit;
         let result = handler.handle(&event, &mut ctx).await.unwrap();
@@ -386,11 +378,11 @@ mod tests {
     #[tokio::test]
     async fn handle_resize_returns_ignored() {
         let mut handler = StreamHandler;
-        let mut terminal = test_terminal();
+
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::Resize {
             width: 80,
@@ -412,14 +404,14 @@ mod tests {
     #[tokio::test]
     async fn handle_api_chunk_message_stop_clears_loading() {
         let mut handler = StreamHandler;
-        let mut terminal = test_terminal();
+
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
 
         state.set_loading(true);
 
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::ApiChunk(StreamEvent::MessageStop);
         let _result = handler.handle(&event, &mut ctx).await.unwrap();
@@ -433,14 +425,14 @@ mod tests {
     #[tokio::test]
     async fn handle_api_chunk_message_complete_end_turn_clears_loading() {
         let mut handler = StreamHandler;
-        let mut terminal = test_terminal();
+
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
 
         state.set_loading(true);
 
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::ApiChunk(StreamEvent::MessageComplete {
             stop_reason: StopReason::EndTurn,
@@ -456,14 +448,14 @@ mod tests {
     #[tokio::test]
     async fn handle_api_chunk_error_clears_loading() {
         let mut handler = StreamHandler;
-        let mut terminal = test_terminal();
+
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
 
         state.set_loading(true);
 
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::ApiChunk(StreamEvent::Error("test error".to_string()));
         let _result = handler.handle(&event, &mut ctx).await.unwrap();
@@ -474,12 +466,12 @@ mod tests {
     #[tokio::test]
     async fn handle_api_chunk_message_stop_marks_session_dirty() {
         let mut handler = StreamHandler;
-        let mut terminal = test_terminal();
+
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
 
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::ApiChunk(StreamEvent::MessageStop);
         let _result = handler.handle(&event, &mut ctx).await.unwrap();
@@ -493,12 +485,12 @@ mod tests {
     #[tokio::test]
     async fn handle_api_chunk_message_complete_marks_session_dirty() {
         let mut handler = StreamHandler;
-        let mut terminal = test_terminal();
+
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
 
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::ApiChunk(StreamEvent::MessageComplete {
             stop_reason: StopReason::EndTurn,
@@ -518,7 +510,7 @@ mod tests {
     #[tokio::test]
     async fn handle_tool_result_removes_from_executing() {
         let mut handler = StreamHandler;
-        let mut terminal = test_terminal();
+
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
@@ -526,7 +518,7 @@ mod tests {
         state.mark_tool_executing("toolu_abc");
         assert!(state.has_executing_tools());
 
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::ToolResult {
             tool_id: "toolu_abc".to_string(),
@@ -547,13 +539,13 @@ mod tests {
     #[tokio::test]
     async fn handle_tool_result_does_not_crash_without_executing_tool() {
         let mut handler = StreamHandler;
-        let mut terminal = test_terminal();
+
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
 
         // No tools marked as executing — handler must still succeed.
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::ToolResult {
             tool_id: "toolu_orphan".to_string(),
@@ -591,11 +583,11 @@ mod tests {
 
         let handler = StreamHandler;
         let mut dispatcher = EventDispatcher::new(vec![Box::new(handler)]);
-        let mut terminal = test_terminal();
+
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         // ApiChunk should be consumed.
         let event = AppEvent::ApiChunk(StreamEvent::ContentDelta("test".to_string()));

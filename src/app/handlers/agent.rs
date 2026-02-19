@@ -91,10 +91,7 @@ mod tests {
     use crate::session::SessionManager;
     use crate::types::config::ParallelMode;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-    use ratatui::backend::CrosstermBackend;
-    use ratatui::Terminal;
     use secrecy::SecretString;
-    use std::io;
     use std::path::PathBuf;
     use std::sync::Arc;
     use tempfile::TempDir;
@@ -102,11 +99,6 @@ mod tests {
     // =========================================================================
     // Test helpers
     // =========================================================================
-
-    fn test_terminal() -> Terminal<CrosstermBackend<io::Stdout>> {
-        let backend = CrosstermBackend::new(io::stdout());
-        Terminal::new(backend).expect("failed to create test terminal")
-    }
 
     fn test_client() -> Arc<dyn LlmProvider> {
         Arc::new(AnthropicClient::new(
@@ -142,11 +134,10 @@ mod tests {
     #[tokio::test]
     async fn handle_agent_progress_iteration_started_returns_consumed() {
         let mut handler = AgentHandler;
-        let mut terminal = test_terminal();
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::Agent(AgentEvent::Progress {
             agent_id: "agent-1".to_string(),
@@ -168,11 +159,10 @@ mod tests {
     #[tokio::test]
     async fn handle_agent_progress_content_delta_returns_consumed() {
         let mut handler = AgentHandler;
-        let mut terminal = test_terminal();
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         // Start with an iteration so the agent exists in the panel.
         let init_event = AppEvent::Agent(AgentEvent::Progress {
@@ -202,11 +192,10 @@ mod tests {
     #[tokio::test]
     async fn handle_agent_progress_completed_returns_consumed() {
         let mut handler = AgentHandler;
-        let mut terminal = test_terminal();
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::Agent(AgentEvent::Progress {
             agent_id: "agent-1".to_string(),
@@ -228,11 +217,10 @@ mod tests {
     #[tokio::test]
     async fn handle_agent_progress_failed_returns_consumed() {
         let mut handler = AgentHandler;
-        let mut terminal = test_terminal();
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::Agent(AgentEvent::Progress {
             agent_id: "agent-1".to_string(),
@@ -254,11 +242,10 @@ mod tests {
     #[tokio::test]
     async fn handle_conflict_detected_returns_consumed() {
         let mut handler = AgentHandler;
-        let mut terminal = test_terminal();
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::Agent(AgentEvent::ConflictDetected {
             report: ConflictReport::empty(),
@@ -279,11 +266,10 @@ mod tests {
     #[tokio::test]
     async fn handle_key_returns_ignored() {
         let mut handler = AgentHandler;
-        let mut terminal = test_terminal();
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::Key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
         let result = handler.handle(&event, &mut ctx).await.unwrap();
@@ -298,11 +284,10 @@ mod tests {
     #[tokio::test]
     async fn handle_tick_returns_ignored() {
         let mut handler = AgentHandler;
-        let mut terminal = test_terminal();
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::Tick;
         let result = handler.handle(&event, &mut ctx).await.unwrap();
@@ -317,11 +302,10 @@ mod tests {
     #[tokio::test]
     async fn handle_quit_returns_ignored() {
         let mut handler = AgentHandler;
-        let mut terminal = test_terminal();
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::Quit;
         let result = handler.handle(&event, &mut ctx).await.unwrap();
@@ -336,11 +320,10 @@ mod tests {
     #[tokio::test]
     async fn handle_resize_returns_ignored() {
         let mut handler = AgentHandler;
-        let mut terminal = test_terminal();
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         let event = AppEvent::Resize {
             width: 80,
@@ -362,7 +345,6 @@ mod tests {
     #[tokio::test]
     async fn handle_progress_creates_agent_panel_entry() {
         let mut handler = AgentHandler;
-        let mut terminal = test_terminal();
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
@@ -372,7 +354,7 @@ mod tests {
             "No agents before first event"
         );
 
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
         let event = AppEvent::Agent(AgentEvent::Progress {
             agent_id: "agent-1".to_string(),
             agent_name: "explorer".to_string(),
@@ -403,11 +385,10 @@ mod tests {
     #[tokio::test]
     async fn handle_progress_updates_existing_entry() {
         let mut handler = AgentHandler;
-        let mut terminal = test_terminal();
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         // First event creates the entry.
         let event1 = AppEvent::Agent(AgentEvent::Progress {
@@ -448,11 +429,10 @@ mod tests {
     #[tokio::test]
     async fn handle_completion_sets_completed_status() {
         let mut handler = AgentHandler;
-        let mut terminal = test_terminal();
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         // Start agent.
         let event1 = AppEvent::Agent(AgentEvent::Progress {
@@ -489,11 +469,10 @@ mod tests {
     #[tokio::test]
     async fn handle_failure_sets_failed_status() {
         let mut handler = AgentHandler;
-        let mut terminal = test_terminal();
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         // Start agent.
         let event1 = AppEvent::Agent(AgentEvent::Progress {
@@ -528,11 +507,10 @@ mod tests {
     #[tokio::test]
     async fn handle_content_delta_updates_last_content() {
         let mut handler = AgentHandler;
-        let mut terminal = test_terminal();
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         // Start agent.
         let event1 = AppEvent::Agent(AgentEvent::Progress {
@@ -562,7 +540,6 @@ mod tests {
     #[tokio::test]
     async fn handle_conflict_adds_to_pending_reports() {
         let mut handler = AgentHandler;
-        let mut terminal = test_terminal();
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
@@ -572,7 +549,7 @@ mod tests {
             "No conflicts before first event"
         );
 
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
         let event = AppEvent::Agent(AgentEvent::ConflictDetected {
             report: ConflictReport::empty(),
         });
@@ -587,11 +564,10 @@ mod tests {
     #[tokio::test]
     async fn handle_multiple_agents_tracked_separately() {
         let mut handler = AgentHandler;
-        let mut terminal = test_terminal();
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         // Agent 1 starts.
         let event1 = AppEvent::Agent(AgentEvent::Progress {
@@ -623,7 +599,6 @@ mod tests {
     #[tokio::test]
     async fn handle_progress_marks_dirty_for_render() {
         let mut handler = AgentHandler;
-        let mut terminal = test_terminal();
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
@@ -631,7 +606,7 @@ mod tests {
         // Clear dirty flags.
         state.mark_rendered();
 
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
         let event = AppEvent::Agent(AgentEvent::Progress {
             agent_id: "agent-1".to_string(),
             agent_name: "explorer".to_string(),
@@ -668,11 +643,10 @@ mod tests {
 
         let handler = AgentHandler;
         let mut dispatcher = EventDispatcher::new(vec![Box::new(handler)]);
-        let mut terminal = test_terminal();
         let client = test_client();
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
-        let mut ctx = AppContext::new(&mut terminal, Arc::clone(&client), &mut state, &session_mgr);
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
         // Agent event should be consumed.
         let event = AppEvent::Agent(AgentEvent::Progress {
