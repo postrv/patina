@@ -180,9 +180,9 @@ Before marking ANY task `[x]`:
 **Description**: Clean up any remaining dead code from the extraction. Remove unused helper functions, consolidate imports, run narsil `find_dead_code` and `find_unused_exports`.
 
 **TDD Cycle**:
-- [ ] RED: Run `find_dead_code` and `find_unused_exports` on `src/app/` — document any findings as test assertions
-- [ ] GREEN: Remove all dead code identified, fix any broken references
-- [ ] REFACTOR: Final pass — ensure all new modules have doc comments, all public types have `#[must_use]` where appropriate, run full quality gates
+- [x] RED: Run `find_dead_code` and `find_unused_exports` on `src/app/` — document any findings as test assertions
+- [x] GREEN: Remove all dead code identified, fix any broken references
+- [x] REFACTOR: Final pass — ensure all new modules have doc comments, all public types have `#[must_use]` where appropriate, run full quality gates
 - Files: `src/app/mod.rs`, `src/app/state.rs`, all handler files
 - Acceptance: Zero dead code in `src/app/`, all quality gates pass, narsil security scan clean
 
