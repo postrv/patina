@@ -5182,4 +5182,36 @@ mod tests {
         state.clear_tool_result_rx();
         assert!(!state.has_tool_result_rx());
     }
+
+    // ========================================================================
+    // Phase 8.1.2.3: Delegation method tests
+    // ========================================================================
+
+    /// Verifies that AppState delegation methods provide clean access to
+    /// ToolExecutionState fields without exposing the inner struct.
+    #[test]
+    fn test_tool_state_delegation_methods() {
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+
+        // tool_loop() returns immutable reference
+        assert_eq!(state.tool_loop().state(), &ToolLoopState::Idle);
+
+        // tool_loop_mut() returns mutable reference
+        state.tool_loop_mut().reset();
+        assert_eq!(state.tool_loop_state(), &ToolLoopState::Idle);
+
+        // has_executing_tools() delegates correctly (is_tool_executing equivalent)
+        assert!(!state.has_executing_tools());
+        state.mark_tool_executing("t1");
+        assert!(state.has_executing_tools());
+
+        // pending_permission() delegates correctly
+        assert!(state.pending_permission().is_none());
+        state.set_pending_permission(PermissionRequest {
+            tool_name: "read".to_string(),
+            tool_input: None,
+            description: "Read file".to_string(),
+        });
+        assert!(state.pending_permission().is_some());
+    }
 }
