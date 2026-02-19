@@ -214,6 +214,40 @@ pub struct AgentPanelEntry {
     pub last_content: String,
 }
 
+/// Tool execution state extracted from AppState.
+///
+/// Groups all tool-related fields: the tool loop state machine, executor,
+/// permission management, UI tool blocks, async result channels, and
+/// in-flight tracking. This struct owns no behavior — all methods live
+/// on `AppState` and delegate through `self.tool_state`.
+pub struct ToolExecutionState {
+    /// State machine coordinating tool approval, execution, and continuation.
+    pub(crate) tool_loop: ToolLoop,
+
+    /// Shared tool executor with hook integration and parallel support.
+    pub(crate) tool_executor: Arc<HookedToolExecutor>,
+
+    /// Thread-safe permission manager for tool approval decisions.
+    pub(crate) permission_manager: Arc<Mutex<PermissionManager>>,
+
+    /// Current permission request awaiting user response, if any.
+    pub(crate) pending_permission: Option<PermissionRequest>,
+
+    /// Tool blocks for UI display.
+    /// Each block represents a tool execution with its name, input, and result.
+    pub(crate) tool_blocks: Vec<ToolBlockState>,
+
+    /// Channel receiver for async tool results.
+    /// When set, tool execution runs in the background and results
+    /// are streamed back through this channel.
+    pub(crate) tool_result_rx:
+        Option<mpsc::UnboundedReceiver<(String, crate::types::ToolResultBlock)>>,
+
+    /// Set of tool IDs currently being executed.
+    /// Used to track which tools are in-flight for progress display.
+    pub(crate) executing_tool_ids: std::collections::HashSet<String>,
+}
+
 pub struct AppState {
     /// Full API messages with content blocks (tool_use, tool_result).
     /// This is the authoritative conversation history sent to the API.
@@ -249,29 +283,13 @@ pub struct AppState {
     /// Set by `KeyboardHandler` on Ctrl+C / Ctrl+D; checked by the event loop.
     quit_requested: bool,
 
-    // Tool execution state
-    tool_loop: ToolLoop,
-    tool_executor: Arc<HookedToolExecutor>,
-    permission_manager: Arc<Mutex<PermissionManager>>,
-    pending_permission: Option<PermissionRequest>,
-
-    /// Tool blocks for UI display.
-    /// Each block represents a tool execution with its name, input, and result.
-    tool_blocks: Vec<ToolBlockState>,
+    /// All tool execution state grouped together.
+    tool_state: ToolExecutionState,
 
     /// Unified timeline for conversation display.
     /// This is the single source of truth for display ordering, replacing the
     /// dual-system of `messages` + `current_response`.
     timeline: Timeline,
-
-    /// Channel receiver for async tool results.
-    /// When set, tool execution runs in the background and results
-    /// are streamed back through this channel.
-    tool_result_rx: Option<mpsc::UnboundedReceiver<(String, crate::types::ToolResultBlock)>>,
-
-    /// Set of tool IDs currently being executed.
-    /// Used to track which tools are in-flight for progress display.
-    executing_tool_ids: std::collections::HashSet<String>,
 
     /// Text selection state for copy/paste functionality.
     selection: SelectionState,
@@ -526,14 +544,16 @@ impl AppState {
             session_id: None,
             session_dirty: false,
             quit_requested: false,
-            tool_loop: ToolLoop::new(),
-            tool_executor,
-            permission_manager,
-            pending_permission: None,
-            tool_blocks: Vec::new(),
+            tool_state: ToolExecutionState {
+                tool_loop: ToolLoop::new(),
+                tool_executor,
+                permission_manager,
+                pending_permission: None,
+                tool_blocks: Vec::new(),
+                tool_result_rx: None,
+                executing_tool_ids: std::collections::HashSet::new(),
+            },
             timeline: Timeline::new(),
-            tool_result_rx: None,
-            executing_tool_ids: std::collections::HashSet::new(),
             selection: SelectionState::new(),
             copy_pending: false,
             rendered_lines_cache: Vec::new(),
@@ -1725,11 +1745,11 @@ impl AppState {
 
         // Initialize tool loop state machine for streaming
         // This must be called BEFORE the API stream starts so tool events are captured
-        if let Err(e) = self.tool_loop.start_streaming() {
+        if let Err(e) = self.tool_state.tool_loop.start_streaming() {
             tracing::warn!("Failed to start tool loop streaming: {}", e);
             // Reset and try again - the loop might be in an unexpected state
-            self.tool_loop.reset();
-            self.tool_loop.start_streaming().ok();
+            self.tool_state.tool_loop.reset();
+            self.tool_state.tool_loop.start_streaming().ok();
         }
 
         let (tx, rx) = mpsc::channel(STREAMING_CHANNEL_BUFFER);
@@ -1795,7 +1815,7 @@ impl AppState {
     /// Used for guard conditions in the event loop.
     #[must_use]
     pub fn has_background_work(&self) -> bool {
-        self.streaming_rx.is_some() || self.tool_result_rx.is_some()
+        self.streaming_rx.is_some() || self.tool_state.tool_result_rx.is_some()
     }
 
     /// Receives the next background event from either API streaming or tool execution.
@@ -1817,11 +1837,11 @@ impl AppState {
 
             // Prioritize tool results to update UI quickly
             result = async {
-                match &mut self.tool_result_rx {
+                match &mut self.tool_state.tool_result_rx {
                     Some(rx) => rx.recv().await,
                     None => std::future::pending().await,
                 }
-            }, if self.tool_result_rx.is_some() => {
+            }, if self.tool_state.tool_result_rx.is_some() => {
                 result.map(|(id, r)| BackgroundEvent::ToolResult(id, r))
             }
 
@@ -1873,7 +1893,7 @@ impl AppState {
                 // Update timeline streaming entry
                 self.timeline.append_to_streaming(&text);
                 // Also forward to tool loop for tracking assistant text
-                self.tool_loop.append_text(&text);
+                self.tool_state.tool_loop.append_text(&text);
                 self.dirty.messages = true;
             }
             StreamEvent::MessageStop => {
@@ -2409,43 +2429,43 @@ impl AppState {
     /// Returns a reference to the tool loop state.
     #[must_use]
     pub fn tool_loop(&self) -> &ToolLoop {
-        &self.tool_loop
+        &self.tool_state.tool_loop
     }
 
     /// Returns a mutable reference to the tool loop.
     pub fn tool_loop_mut(&mut self) -> &mut ToolLoop {
-        &mut self.tool_loop
+        &mut self.tool_state.tool_loop
     }
 
     /// Returns the current tool loop state.
     #[must_use]
     pub fn tool_loop_state(&self) -> &ToolLoopState {
-        self.tool_loop.state()
+        self.tool_state.tool_loop.state()
     }
 
     /// Returns the pending permission request, if any.
     #[must_use]
     pub fn pending_permission(&self) -> Option<&PermissionRequest> {
-        self.pending_permission.as_ref()
+        self.tool_state.pending_permission.as_ref()
     }
 
     /// Returns true if there's a pending permission prompt.
     #[must_use]
     pub fn has_pending_permission(&self) -> bool {
-        self.pending_permission.is_some()
+        self.tool_state.pending_permission.is_some()
     }
 
     /// Sets a pending permission request.
     ///
     /// The UI should display this as a modal prompt.
     pub fn set_pending_permission(&mut self, request: PermissionRequest) {
-        self.pending_permission = Some(request);
+        self.tool_state.pending_permission = Some(request);
         self.dirty.full = true;
     }
 
     /// Clears the pending permission request.
     pub fn clear_pending_permission(&mut self) {
-        self.pending_permission = None;
+        self.tool_state.pending_permission = None;
         self.dirty.full = true;
     }
 
@@ -2454,8 +2474,8 @@ impl AppState {
     /// This grants or denies permission for the pending tool call and
     /// updates the permission manager accordingly.
     pub async fn handle_permission_response(&mut self, response: PermissionResponse) {
-        if let Some(request) = self.pending_permission.take() {
-            let mut manager = self.permission_manager.lock().await;
+        if let Some(request) = self.tool_state.pending_permission.take() {
+            let mut manager = self.tool_state.permission_manager.lock().await;
             manager.handle_response(&request.tool_name, request.tool_input.as_deref(), response);
             self.dirty.full = true;
         }
@@ -2465,18 +2485,21 @@ impl AppState {
     ///
     /// Routes the event to the tool loop state machine.
     pub fn handle_tool_use_start(&mut self, id: String, name: String, index: usize) {
-        self.tool_loop.start_tool_use(index, id, name);
+        self.tool_state.tool_loop.start_tool_use(index, id, name);
         self.dirty.messages = true;
     }
 
     /// Handles a tool_use input delta.
     pub fn handle_tool_use_input_delta(&mut self, index: usize, partial_json: &str) {
-        self.tool_loop.append_tool_input(index, partial_json);
+        self.tool_state
+            .tool_loop
+            .append_tool_input(index, partial_json);
     }
 
     /// Handles tool_use completion.
     pub fn handle_tool_use_complete(&mut self, index: usize) -> Result<()> {
-        self.tool_loop
+        self.tool_state
+            .tool_loop
             .complete_tool_use(index)
             .map_err(|e| anyhow::anyhow!("{}", e))?;
         Ok(())
@@ -2487,7 +2510,8 @@ impl AppState {
     /// If the stop reason is `ToolUse`, transitions the tool loop to
     /// `PendingApproval` state.
     pub fn handle_message_complete(&mut self, stop_reason: StopReason) -> Result<()> {
-        self.tool_loop
+        self.tool_state
+            .tool_loop
             .message_complete(stop_reason)
             .map_err(|e| anyhow::anyhow!("{}", e))?;
         Ok(())
@@ -2509,6 +2533,7 @@ impl AppState {
 
         // Collect tool info before creating blocks (to avoid borrow issues)
         let tools_to_display: Vec<(String, String, String)> = self
+            .tool_state
             .tool_loop
             .pending_calls()
             .iter()
@@ -2528,8 +2553,9 @@ impl AppState {
 
         // Execute the tools
         let result = self
+            .tool_state
             .tool_loop
-            .execute_pending(&self.tool_executor)
+            .execute_pending(&self.tool_state.tool_executor)
             .await
             .map_err(|e| match e {
                 ToolLoopError::InvalidStateTransition { from, to } => {
@@ -2540,6 +2566,7 @@ impl AppState {
 
         // Collect results (to avoid borrow issues)
         let results: Vec<(String, String, bool)> = self
+            .tool_state
             .tool_loop
             .pending_calls()
             .iter()
@@ -2572,42 +2599,46 @@ impl AppState {
     /// The continuation data contains the messages needed to continue
     /// the conversation with Claude.
     pub fn finish_tool_execution(&mut self) -> Result<ContinuationData> {
-        self.tool_loop
+        self.tool_state
+            .tool_loop
             .finish_execution()
             .map_err(|e| anyhow::anyhow!("{}", e))
     }
 
     /// Approves all pending tools for execution.
     pub fn approve_all_tools(&mut self) -> Result<()> {
-        self.tool_loop
+        self.tool_state
+            .tool_loop
             .approve_all()
             .map_err(|e| anyhow::anyhow!("{}", e))
     }
 
     /// Denies all pending tools.
     pub fn deny_all_tools(&mut self) -> Result<()> {
-        self.tool_loop
+        self.tool_state
+            .tool_loop
             .deny_all()
             .map_err(|e| anyhow::anyhow!("{}", e))
     }
 
     /// Resets the tool loop to idle state.
     pub fn reset_tool_loop(&mut self) {
-        self.tool_loop.reset();
-        self.pending_permission = None;
+        self.tool_state.tool_loop.reset();
+        self.tool_state.pending_permission = None;
         self.dirty.full = true;
     }
 
     /// Returns true if the tool loop is waiting for user action.
     #[must_use]
     pub fn tool_loop_needs_user_action(&self) -> bool {
-        self.tool_loop.state().needs_user_action() || self.pending_permission.is_some()
+        self.tool_state.tool_loop.state().needs_user_action()
+            || self.tool_state.pending_permission.is_some()
     }
 
     /// Returns true if the tool loop is actively processing.
     #[must_use]
     pub fn tool_loop_is_active(&self) -> bool {
-        self.tool_loop.state().is_active()
+        self.tool_state.tool_loop.state().is_active()
     }
 
     // ========================================================================
@@ -2624,9 +2655,9 @@ impl AppState {
     /// * `tool_input` - Input provided to the tool
     pub fn start_tool_block(&mut self, tool_name: &str, tool_input: &str) -> usize {
         let block = ToolBlockState::new(tool_name, tool_input);
-        self.tool_blocks.push(block);
+        self.tool_state.tool_blocks.push(block);
         self.dirty.messages = true;
-        self.tool_blocks.len() - 1
+        self.tool_state.tool_blocks.len() - 1
     }
 
     /// Completes a tool block with its result.
@@ -2637,7 +2668,7 @@ impl AppState {
     /// * `result` - The tool's output
     /// * `is_error` - Whether the result is an error
     pub fn complete_tool_block(&mut self, index: usize, result: &str, is_error: bool) {
-        if let Some(block) = self.tool_blocks.get_mut(index) {
+        if let Some(block) = self.tool_state.tool_blocks.get_mut(index) {
             if is_error {
                 block.set_error(result);
             } else {
@@ -2650,21 +2681,21 @@ impl AppState {
     /// Returns a slice of all tool blocks for rendering.
     #[must_use]
     pub fn tool_blocks(&self) -> &[ToolBlockState] {
-        &self.tool_blocks
+        &self.tool_state.tool_blocks
     }
 
     /// Clears all tool blocks.
     ///
     /// Call this when starting a new conversation turn.
     pub fn clear_tool_blocks(&mut self) {
-        self.tool_blocks.clear();
+        self.tool_state.tool_blocks.clear();
         self.dirty.messages = true;
     }
 
     /// Returns true if there are any tool blocks to display.
     #[must_use]
     pub fn has_tool_blocks(&self) -> bool {
-        !self.tool_blocks.is_empty()
+        !self.tool_state.tool_blocks.is_empty()
     }
 
     // ========================================================================
@@ -2738,7 +2769,7 @@ impl AppState {
         } else {
             block.set_result(output);
         }
-        self.tool_blocks.push(block);
+        self.tool_state.tool_blocks.push(block);
 
         // Add to timeline with message index tracking
         self.timeline.push_tool_after_current_assistant(
@@ -2754,7 +2785,7 @@ impl AppState {
     /// Clears all conversation state (timeline, API messages, tool blocks).
     pub fn clear_conversation(&mut self) {
         self.api_messages.clear();
-        self.tool_blocks.clear();
+        self.tool_state.tool_blocks.clear();
         self.timeline = Timeline::new();
         self.dirty.messages = true;
     }
@@ -2771,13 +2802,13 @@ impl AppState {
         &mut self,
         rx: mpsc::UnboundedReceiver<(String, crate::types::ToolResultBlock)>,
     ) {
-        self.tool_result_rx = Some(rx);
+        self.tool_state.tool_result_rx = Some(rx);
     }
 
     /// Returns true if a tool result channel is currently set.
     #[must_use]
     pub fn has_tool_result_rx(&self) -> bool {
-        self.tool_result_rx.is_some()
+        self.tool_state.tool_result_rx.is_some()
     }
 
     /// Attempts to receive a tool result without blocking.
@@ -2785,7 +2816,7 @@ impl AppState {
     /// Returns `Some((tool_id, result))` if a result is available,
     /// `None` if no result is ready or channel is not set.
     pub fn try_recv_tool_result(&mut self) -> Option<(String, crate::types::ToolResultBlock)> {
-        if let Some(ref mut rx) = self.tool_result_rx {
+        if let Some(ref mut rx) = self.tool_state.tool_result_rx {
             rx.try_recv().ok()
         } else {
             None
@@ -2802,7 +2833,7 @@ impl AppState {
     /// - `Some((tool_id, result))` - A tool completed execution
     /// - `None` - Channel closed or no channel set
     pub async fn recv_tool_result(&mut self) -> Option<(String, crate::types::ToolResultBlock)> {
-        match &mut self.tool_result_rx {
+        match &mut self.tool_state.tool_result_rx {
             Some(rx) => rx.recv().await,
             None => None, // Return immediately - don't block with pending()
         }
@@ -2812,7 +2843,7 @@ impl AppState {
     ///
     /// Called after all tools have completed and results have been processed.
     pub fn clear_tool_result_rx(&mut self) {
-        self.tool_result_rx = None;
+        self.tool_state.tool_result_rx = None;
     }
 
     /// Adds a pending tool to the tool loop.
@@ -2821,7 +2852,7 @@ impl AppState {
     ///
     /// * `tool_use` - The tool use block to add
     pub fn add_pending_tool(&mut self, tool_use: crate::types::ToolUseBlock) {
-        self.tool_loop.add_tool_use(tool_use);
+        self.tool_state.tool_loop.add_tool_use(tool_use);
     }
 
     /// Spawns tool execution in the background.
@@ -2838,10 +2869,11 @@ impl AppState {
     ) -> Option<tokio::task::JoinHandle<Vec<(String, crate::types::ToolResultBlock)>>> {
         // Create channel for results
         let (tx, rx) = mpsc::unbounded_channel();
-        self.tool_result_rx = Some(rx);
+        self.tool_state.tool_result_rx = Some(rx);
 
         // Get pending tools
         let pending: Vec<_> = self
+            .tool_state
             .tool_loop
             .pending_calls()
             .iter()
@@ -2855,10 +2887,10 @@ impl AppState {
 
         // Mark all as executing
         for (id, _) in &pending {
-            self.executing_tool_ids.insert(id.clone());
+            self.tool_state.executing_tool_ids.insert(id.clone());
         }
 
-        let executor = Arc::clone(&self.tool_executor);
+        let executor = Arc::clone(&self.tool_state.tool_executor);
 
         // Spawn background task
         let handle = tokio::spawn(async move {
@@ -2911,7 +2943,7 @@ impl AppState {
     /// Returns true if there are any tools currently executing.
     #[must_use]
     pub fn has_executing_tools(&self) -> bool {
-        !self.executing_tool_ids.is_empty()
+        !self.tool_state.executing_tool_ids.is_empty()
     }
 
     /// Marks a tool as currently executing.
@@ -2920,7 +2952,9 @@ impl AppState {
     ///
     /// * `tool_id` - The ID of the tool to mark as executing
     pub fn mark_tool_executing(&mut self, tool_id: &str) {
-        self.executing_tool_ids.insert(tool_id.to_string());
+        self.tool_state
+            .executing_tool_ids
+            .insert(tool_id.to_string());
     }
 
     /// Records a tool result and removes the tool from executing set.
@@ -2931,10 +2965,13 @@ impl AppState {
     /// * `result` - The result of the tool execution
     pub fn record_tool_result(&mut self, tool_id: &str, result: crate::types::ToolResultBlock) {
         // Remove from executing set
-        self.executing_tool_ids.remove(tool_id);
+        self.tool_state.executing_tool_ids.remove(tool_id);
 
         // Update tool loop with result (ignore error if tool not found)
-        let _ = self.tool_loop.set_tool_result(tool_id, result.clone());
+        let _ = self
+            .tool_state
+            .tool_loop
+            .set_tool_result(tool_id, result.clone());
 
         // Update timeline tool entry if it exists
         self.update_timeline_tool_by_id(tool_id, Some(result.content), result.is_error);
@@ -2945,8 +2982,9 @@ impl AppState {
     /// Returns true if all pending tools have completed execution.
     #[must_use]
     pub fn all_tools_complete(&self) -> bool {
-        self.executing_tool_ids.is_empty()
+        self.tool_state.executing_tool_ids.is_empty()
             && self
+                .tool_state
                 .tool_loop
                 .pending_calls()
                 .values()
@@ -4959,6 +4997,20 @@ mod tests {
     // ========================================================================
     // Phase 8.1.1: Tool state characterization tests (baseline before extraction)
     // ========================================================================
+
+    /// Verifies that ToolExecutionState can be constructed independently
+    /// and that AppState uses it as an inner struct.
+    #[test]
+    fn test_tool_execution_state_construction() {
+        let state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+
+        // Access tool_state sub-struct fields through AppState delegation
+        assert_eq!(state.tool_loop_state(), &ToolLoopState::Idle);
+        assert!(!state.has_pending_permission());
+        assert!(!state.has_tool_blocks());
+        assert!(!state.has_tool_result_rx());
+        assert!(!state.has_executing_tools());
+    }
 
     /// Documents the initial state of all 7 tool-related fields in AppState.
     /// This is a characterization test — it captures current behavior so we
