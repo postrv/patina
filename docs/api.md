@@ -39,7 +39,7 @@ patina "Hello, Claude"
 
 ### OAuth Status
 
-OAuth 2.0 authentication is scaffolded but not yet active. The OAuth flow, PKCE challenge, token refresh, and keychain storage are implemented behind the `oauth` Cargo feature flag. OAuth will be enabled when Anthropic registers a public `client_id` for Patina.
+OAuth 2.0 authentication is implemented behind the `oauth` Cargo feature flag. The OAuth flow, PKCE challenge, token refresh, and keychain storage are fully coded but gated until Anthropic registers a public `client_id` for Patina.
 
 To build with OAuth support (not useful until a client_id is registered):
 

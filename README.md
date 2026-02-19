@@ -6,6 +6,7 @@
 
 [![CI](https://github.com/postrv/patina/actions/workflows/ci.yml/badge.svg)](https://github.com/postrv/patina/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](LICENSE)
+[![Version](https://img.shields.io/badge/version-1.0.0-green.svg)](https://github.com/postrv/patina/releases/tag/v1.0.0)
 [![Rust](https://img.shields.io/badge/rust-1.75%2B-orange.svg)](https://www.rust-lang.org/)
 
 A high-performance terminal client for the Claude API, written in Rust. Designed for developers who want a fast, secure, and extensible AI assistant in their terminal.
@@ -18,7 +19,7 @@ A high-performance terminal client for the Claude API, written in Rust. Designed
 - **Autonomous agent orchestration** - Spawn parallel sub-agents in isolated git worktrees
 - **Continuous coding loop** - Run tasks autonomously with stagnation detection and quality gates
 - **3,500+ tests** with 85%+ code coverage
-- **Zero unsafe code** - Pure safe Rust (~87,000 LOC)
+- **Zero unsafe code** - Pure safe Rust (~89,000 LOC)
 - **Cross-platform** - Linux, macOS, Windows
 - **Security-first** - Defense-in-depth with command filtering, path validation, and session integrity
 
@@ -241,9 +242,6 @@ Plugins extend Patina with custom tools, commands, skills, and hooks.
 # Install from local directory
 patina plugin install ./my-plugin
 
-# Install from GitHub (coming soon)
-patina plugin install gh:user/repo
-
 # List installed plugins
 patina plugin list
 
@@ -343,7 +341,7 @@ src/
 ├── context/          # Context management, compression, token budgeting
 ├── worktree/         # Git worktree management
 ├── permissions/      # Permission management
-├── auth/             # Authentication (API key, OAuth scaffolding)
+├── auth/             # Authentication (API key, optional OAuth)
 ├── enterprise/       # Audit logging, cost tracking
 ├── update/           # Auto-update checking
 └── types/            # Core types
@@ -375,7 +373,7 @@ cargo tarpaulin --out Html
 | Tests | 3,500+ |
 | Coverage | 85%+ |
 | Unsafe | 0 blocks |
-| LOC | ~87,000 |
+| LOC | ~89,000 |
 
 ### Key Dependencies
 
@@ -395,7 +393,7 @@ Patina can be used as a Rust library for building custom AI-powered tools:
 
 ```toml
 [dependencies]
-patina = "0.9"
+patina = "1.0"
 ```
 
 ### Available Modules
@@ -470,4 +468,4 @@ Copyright (c) 2026 Laurence Avent
 
 **Laurence Avent** ([@postrv](https://github.com/postrv))
 
-<!-- METRICS:tests=3500,loc=87000 -->
+<!-- METRICS:tests=3500,loc=89000 -->

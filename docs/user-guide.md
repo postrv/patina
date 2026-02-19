@@ -729,12 +729,11 @@ Or pass it directly:
 patina --api-key sk-ant-...
 ```
 
-### OAuth (Experimental)
+### OAuth (Feature Flag)
 
-Patina supports OAuth 2.0 with PKCE for Claude subscription users.
+Patina supports OAuth 2.0 with PKCE for Claude subscription users. OAuth is available behind the `oauth` Cargo feature flag.
 
-**Note**: OAuth requires a registered client_id with Anthropic. Currently disabled
-pending client registration.
+**Note**: OAuth requires a registered `client_id` from Anthropic. This feature is gated until client registration is available.
 
 #### OAuth Flow
 
