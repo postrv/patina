@@ -10,10 +10,13 @@ use std::future::Future;
 use std::pin::Pin;
 
 use anyhow::Result;
+use tracing::debug;
 
+use crate::api::StreamEvent;
 use crate::app::context::AppContext;
 use crate::app::dispatch::{EventHandler, Handled};
 use crate::app::events::AppEvent;
+use crate::app::tool_loop::ToolLoopState;
 
 /// Handles API streaming chunks and tool execution results.
 ///
@@ -24,10 +27,10 @@ use crate::app::events::AppEvent;
 /// 2. **Message completion** marks the session dirty so
 ///    [`SessionHandler`](super::session::SessionHandler) persists the state.
 /// 3. **Tool-use stop reason** triggers tool execution via
-///    `start_tool_execution`.
+///    [`start_tool_execution`](crate::app::start_tool_execution).
 /// 4. **Tool results** are recorded via [`AppState::record_tool_result`].
 /// 5. **All tools complete** triggers continuation streaming via
-///    `finish_tool_execution_and_continue`.
+///    [`finish_tool_execution_and_continue`](crate::app::finish_tool_execution_and_continue).
 ///
 /// # Examples
 ///
@@ -47,13 +50,62 @@ impl EventHandler for StreamHandler {
     fn handle<'a>(
         &'a mut self,
         event: &'a AppEvent,
-        _ctx: &'a mut AppContext<'_>,
+        ctx: &'a mut AppContext<'_>,
     ) -> Pin<Box<dyn Future<Output = Result<Handled>> + Send + 'a>> {
         Box::pin(async move {
-            // Stub: returns IGNORED for all events.
-            // Tests for ApiChunk and ToolResult will fail until implemented.
-            let _ = event;
-            Ok(Handled::IGNORED)
+            match event {
+                AppEvent::ApiChunk(chunk) => {
+                    // Check completion flags before consuming the chunk.
+                    let is_message_complete = matches!(
+                        chunk,
+                        StreamEvent::MessageStop | StreamEvent::MessageComplete { .. }
+                    );
+                    let is_tool_use_complete = matches!(
+                        chunk,
+                        StreamEvent::MessageComplete { stop_reason }
+                            if stop_reason.needs_tool_execution()
+                    );
+
+                    // Delegate chunk processing to state.
+                    ctx.state.append_chunk(chunk.clone())?;
+
+                    // Mark session dirty after message completion so
+                    // SessionHandler persists the conversation.
+                    if is_message_complete {
+                        ctx.state.mark_session_dirty();
+                    }
+
+                    // Trigger tool execution if the stop reason requires it.
+                    if is_tool_use_complete {
+                        crate::app::start_tool_execution(ctx.state)?;
+                    }
+
+                    Ok(Handled::CONSUMED)
+                }
+                AppEvent::ToolResult { tool_id, result } => {
+                    debug!(tool_id = %tool_id, is_error = result.is_error, "Tool result received");
+
+                    ctx.state.record_tool_result(tool_id, result.clone());
+
+                    // When all tools have completed and the tool loop is in
+                    // Executing state, set up continuation streaming.
+                    let is_executing =
+                        matches!(ctx.state.tool_loop_state(), ToolLoopState::Executing);
+                    if is_executing && ctx.state.all_tools_complete() {
+                        debug!("All tools complete, setting up continuation");
+                        ctx.state.clear_tool_result_rx();
+                        crate::app::finish_tool_execution_and_continue(
+                            ctx.state,
+                            ctx.client,
+                            ctx.session_manager,
+                        )
+                        .await?;
+                    }
+
+                    Ok(Handled::CONSUMED)
+                }
+                _ => Ok(Handled::IGNORED),
+            }
         })
     }
 
