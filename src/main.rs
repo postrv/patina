@@ -138,6 +138,30 @@ struct Args {
     #[arg(long)]
     no_auto_context: bool,
 
+    /// LLM provider to use: "anthropic" (default) or "openrouter".
+    #[arg(long, value_name = "PROVIDER")]
+    provider: Option<String>,
+
+    /// API key for OpenRouter (or set OPENROUTER_API_KEY env var).
+    ///
+    /// Required when --provider=openrouter.
+    #[arg(long, env = "OPENROUTER_API_KEY", hide_env_values = true)]
+    openrouter_key: Option<secrecy::SecretString>,
+
+    /// Model identifier for OpenRouter (e.g., "anthropic/claude-sonnet-4").
+    ///
+    /// Required when --provider=openrouter.
+    #[arg(long, value_name = "MODEL")]
+    openrouter_model: Option<String>,
+
+    /// Site URL sent to OpenRouter for analytics (HTTP-Referer header).
+    #[arg(long, value_name = "URL")]
+    openrouter_site_url: Option<String>,
+
+    /// App name sent to OpenRouter for analytics (X-Title header).
+    #[arg(long, value_name = "NAME")]
+    openrouter_app_name: Option<String>,
+
     /// Subcommand for plugin and other operations.
     #[command(subcommand)]
     command: Option<Command>,
@@ -300,6 +324,42 @@ async fn main() -> Result<()> {
         (None, false) => (None, false), // Pure interactive
     };
 
+    // Determine provider config from CLI flags
+    let provider_config = match args.provider.as_deref() {
+        Some("openrouter") => {
+            let or_key = args
+                .openrouter_key
+                .or_else(|| std::env::var("OPENROUTER_API_KEY").ok().map(Into::into))
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "OpenRouter provider requires an API key.\n\
+                         Set OPENROUTER_API_KEY environment variable or use --openrouter-key flag."
+                    )
+                })?;
+            let or_model = args.openrouter_model.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "OpenRouter provider requires a model.\n\
+                     Use --openrouter-model (e.g., --openrouter-model anthropic/claude-sonnet-4)."
+                )
+            })?;
+            let mut config = patina::types::config::ProviderConfig::openrouter(or_key, &or_model);
+            if let Some(url) = args.openrouter_site_url {
+                config = config.with_site_url(url);
+            }
+            if let Some(name) = args.openrouter_app_name {
+                config = config.with_app_name(name);
+            }
+            config
+        }
+        Some("anthropic") | None => patina::types::config::ProviderConfig::anthropic(),
+        Some(other) => {
+            anyhow::bail!(
+                "Unknown provider '{}'. Supported providers: anthropic, openrouter",
+                other
+            );
+        }
+    };
+
     app::run(app::Config {
         api_key,
         model: args.model,
@@ -318,7 +378,7 @@ async fn main() -> Result<()> {
         ide_port: args.ide_port,
         auto_context_enabled: !args.no_auto_context,
         compression: CompressionConfig::default(),
-        provider: patina::types::config::ProviderConfig::default(),
+        provider: provider_config,
     })
     .await
 }

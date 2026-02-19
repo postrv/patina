@@ -28,7 +28,7 @@ pub mod tool_loop;
 use state::AppState;
 use tool_loop::ToolLoopState;
 
-use crate::api::{AnthropicClient, LlmProvider};
+use crate::api::LlmProvider;
 use crate::ide::controller::IdeController;
 use crate::narsil::NarsilIntegration;
 use crate::plugins::narsil::{has_supported_code_files, is_narsil_available};
@@ -239,7 +239,7 @@ pub async fn run(config: Config) -> Result<()> {
     let mut terminal = Terminal::new(backend)?;
 
     let client: std::sync::Arc<dyn LlmProvider> =
-        std::sync::Arc::new(AnthropicClient::new(config.api_key.clone(), &config.model));
+        std::sync::Arc::from(crate::api::provider::create_provider(&config));
 
     // Start IDE server if port is specified
     if let Some(port) = config.ide_port {
@@ -332,7 +332,7 @@ async fn run_print_mode(config: &Config, prompt: &str) -> Result<()> {
     use crate::api::ToolChoice;
 
     let client: std::sync::Arc<dyn LlmProvider> =
-        std::sync::Arc::new(AnthropicClient::new(config.api_key.clone(), &config.model));
+        std::sync::Arc::from(crate::api::provider::create_provider(config));
     let mut state = AppState::with_options(
         config.working_dir.clone(),
         config.skip_permissions,
