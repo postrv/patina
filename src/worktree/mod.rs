@@ -474,7 +474,10 @@ impl WorktreeManager {
                 }
 
                 // Start new worktree
-                current_path = Some(PathBuf::from(line.strip_prefix("worktree ").unwrap()));
+                current_path = Some(PathBuf::from(
+                    line.strip_prefix("worktree ")
+                        .expect("line starts_with checked above"),
+                ));
             } else if line.starts_with("branch refs/heads/") {
                 current_branch = line.strip_prefix("branch refs/heads/").map(String::from);
             } else if line.starts_with("HEAD ") {

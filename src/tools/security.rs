@@ -232,17 +232,17 @@ pub fn normalize_command(cmd: &str) -> String {
                     // Preserve common escape sequences that don't affect command names
                     'n' | 't' | 'r' | '0' | 'x' => {
                         result.push(c);
-                        result.push(chars.next().unwrap());
+                        result.push(chars.next().expect("peeked char must exist"));
                     }
                     // For letters, the backslash is often used to bypass filters
                     // e.g., r\m -> rm, so we skip the backslash
                     'a'..='z' | 'A'..='Z' => {
-                        result.push(chars.next().unwrap());
+                        result.push(chars.next().expect("peeked char must exist"));
                     }
                     // For other characters, preserve both
                     _ => {
                         result.push(c);
-                        result.push(chars.next().unwrap());
+                        result.push(chars.next().expect("peeked char must exist"));
                     }
                 }
             } else {
