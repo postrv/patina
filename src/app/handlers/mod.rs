@@ -5,4 +5,5 @@
 //! [`EventDispatcher`](super::dispatch::EventDispatcher) in priority order.
 
 pub mod session;
+pub mod stream;
 pub mod tick;
