@@ -166,6 +166,83 @@ pub trait LlmProvider: Send + Sync {
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>>;
 }
 
+/// A provider that tries multiple providers in order, falling back on failure.
+///
+/// When [`stream_message`](LlmProvider::stream_message) is called, the
+/// `FallbackProvider` attempts each inner provider in sequence. If a provider's
+/// `stream_message` returns an error, the next provider is tried. If all
+/// providers fail, a combined error is returned.
+///
+/// Mid-stream errors (delivered as [`StreamEvent::Error`]) do **not** trigger
+/// fallback — only initial connection/request failures do.
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// use patina::api::provider::{FallbackProvider, LlmProvider};
+///
+/// let primary: Box<dyn LlmProvider> = /* ... */;
+/// let backup: Box<dyn LlmProvider> = /* ... */;
+/// let provider = FallbackProvider::new(vec![primary, backup]);
+/// assert_eq!(provider.name(), "fallback");
+/// ```
+pub struct FallbackProvider {
+    providers: Vec<Box<dyn LlmProvider>>,
+}
+
+impl FallbackProvider {
+    /// Creates a new fallback provider from a list of providers.
+    ///
+    /// Providers are tried in order — the first provider is the primary,
+    /// subsequent providers are fallbacks.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `providers` is empty. A fallback chain must have at least
+    /// one provider.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use patina::api::provider::FallbackProvider;
+    ///
+    /// let provider = FallbackProvider::new(vec![primary, backup]);
+    /// ```
+    #[must_use]
+    pub fn new(providers: Vec<Box<dyn LlmProvider>>) -> Self {
+        assert!(!providers.is_empty(), "FallbackProvider requires at least one provider");
+        Self { providers }
+    }
+
+    /// Returns the number of providers in the fallback chain.
+    #[must_use]
+    pub fn provider_count(&self) -> usize {
+        self.providers.len()
+    }
+}
+
+impl LlmProvider for FallbackProvider {
+    fn name(&self) -> &str {
+        "fallback"
+    }
+
+    fn model(&self) -> &str {
+        self.providers[0].model()
+    }
+
+    fn stream_message<'a>(
+        &'a self,
+        _messages: &'a [ApiMessageV2],
+        _tools: Option<&'a [ToolDefinition]>,
+        _tool_choice: Option<&'a ToolChoice>,
+        _tx: mpsc::Sender<StreamEvent>,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
+        Box::pin(async move {
+            anyhow::bail!("FallbackProvider::stream_message not yet implemented")
+        })
+    }
+}
+
 impl LlmProvider for super::AnthropicClient {
     fn name(&self) -> &str {
         "anthropic"
@@ -788,5 +865,306 @@ data: {"type":"message_stop"}
 
         let provider = create_provider(&config);
         assert_eq!(provider.name(), "openrouter");
+    }
+
+    // =========================================================================
+    // Phase 2.7: FallbackProvider tests
+    // =========================================================================
+
+    /// A mock provider that always fails `stream_message` with the given error.
+    struct FailingProvider {
+        provider_name: String,
+        model_name: String,
+        error_msg: String,
+    }
+
+    impl FailingProvider {
+        fn new(name: &str, model: &str, error_msg: &str) -> Self {
+            Self {
+                provider_name: name.to_string(),
+                model_name: model.to_string(),
+                error_msg: error_msg.to_string(),
+            }
+        }
+    }
+
+    impl LlmProvider for FailingProvider {
+        fn name(&self) -> &str {
+            &self.provider_name
+        }
+
+        fn model(&self) -> &str {
+            &self.model_name
+        }
+
+        fn stream_message<'a>(
+            &'a self,
+            _messages: &'a [ApiMessageV2],
+            _tools: Option<&'a [ToolDefinition]>,
+            _tool_choice: Option<&'a ToolChoice>,
+            _tx: mpsc::Sender<StreamEvent>,
+        ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
+            Box::pin(async move { anyhow::bail!("{}", self.error_msg) })
+        }
+    }
+
+    // --- Construction ---
+
+    #[test]
+    fn test_fallback_provider_name() {
+        let providers: Vec<Box<dyn LlmProvider>> = vec![
+            Box::new(MockProvider::new("anthropic", "claude-sonnet-4", vec![])),
+        ];
+        let fallback = FallbackProvider::new(providers);
+        assert_eq!(fallback.name(), "fallback");
+    }
+
+    #[test]
+    fn test_fallback_provider_model_returns_primary() {
+        let providers: Vec<Box<dyn LlmProvider>> = vec![
+            Box::new(MockProvider::new("anthropic", "claude-sonnet-4", vec![])),
+            Box::new(MockProvider::new("openrouter", "anthropic/claude-sonnet-4", vec![])),
+        ];
+        let fallback = FallbackProvider::new(providers);
+        assert_eq!(fallback.model(), "claude-sonnet-4");
+    }
+
+    #[test]
+    fn test_fallback_provider_count() {
+        let providers: Vec<Box<dyn LlmProvider>> = vec![
+            Box::new(MockProvider::new("a", "m1", vec![])),
+            Box::new(MockProvider::new("b", "m2", vec![])),
+        ];
+        let fallback = FallbackProvider::new(providers);
+        assert_eq!(fallback.provider_count(), 2);
+    }
+
+    #[test]
+    #[should_panic(expected = "FallbackProvider requires at least one provider")]
+    fn test_fallback_provider_empty_panics() {
+        let providers: Vec<Box<dyn LlmProvider>> = vec![];
+        let _ = FallbackProvider::new(providers);
+    }
+
+    #[test]
+    fn test_fallback_provider_is_send_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<FallbackProvider>();
+    }
+
+    // --- First provider succeeds (no fallback) ---
+
+    #[tokio::test]
+    async fn test_fallback_first_provider_succeeds() {
+        let events = vec![
+            StreamEvent::ContentDelta("Hello".to_string()),
+            StreamEvent::MessageComplete {
+                stop_reason: StopReason::EndTurn,
+            },
+        ];
+        let providers: Vec<Box<dyn LlmProvider>> = vec![
+            Box::new(MockProvider::new("primary", "model-1", events.clone())),
+            Box::new(MockProvider::new("backup", "model-2", vec![])),
+        ];
+        let fallback = FallbackProvider::new(providers);
+
+        let (tx, mut rx) = mpsc::channel(32);
+        let messages = vec![ApiMessageV2::user("Hi")];
+        fallback
+            .stream_message(&messages, None, None, tx)
+            .await
+            .expect("should succeed with first provider");
+
+        let mut received = Vec::new();
+        while let Some(event) = rx.recv().await {
+            received.push(event);
+        }
+        assert_eq!(received, events);
+    }
+
+    // --- First fails, second succeeds ---
+
+    #[tokio::test]
+    async fn test_fallback_first_fails_second_succeeds() {
+        let events = vec![
+            StreamEvent::ContentDelta("From backup".to_string()),
+            StreamEvent::MessageComplete {
+                stop_reason: StopReason::EndTurn,
+            },
+        ];
+        let providers: Vec<Box<dyn LlmProvider>> = vec![
+            Box::new(FailingProvider::new("primary", "model-1", "connection refused")),
+            Box::new(MockProvider::new("backup", "model-2", events.clone())),
+        ];
+        let fallback = FallbackProvider::new(providers);
+
+        let (tx, mut rx) = mpsc::channel(32);
+        let messages = vec![ApiMessageV2::user("Hi")];
+        fallback
+            .stream_message(&messages, None, None, tx)
+            .await
+            .expect("should succeed with fallback provider");
+
+        let mut received = Vec::new();
+        while let Some(event) = rx.recv().await {
+            received.push(event);
+        }
+        assert_eq!(received, events);
+    }
+
+    // --- All providers fail ---
+
+    #[tokio::test]
+    async fn test_fallback_all_providers_fail() {
+        let providers: Vec<Box<dyn LlmProvider>> = vec![
+            Box::new(FailingProvider::new("primary", "m1", "timeout")),
+            Box::new(FailingProvider::new("backup", "m2", "auth failed")),
+        ];
+        let fallback = FallbackProvider::new(providers);
+
+        let (tx, _rx) = mpsc::channel(32);
+        let messages = vec![ApiMessageV2::user("Hi")];
+        let result = fallback.stream_message(&messages, None, None, tx).await;
+
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("timeout"),
+            "error should mention first failure: {err_msg}"
+        );
+        assert!(
+            err_msg.contains("auth failed"),
+            "error should mention second failure: {err_msg}"
+        );
+    }
+
+    // --- Single provider fallback ---
+
+    #[tokio::test]
+    async fn test_fallback_single_provider_succeeds() {
+        let events = vec![StreamEvent::MessageComplete {
+            stop_reason: StopReason::EndTurn,
+        }];
+        let providers: Vec<Box<dyn LlmProvider>> = vec![
+            Box::new(MockProvider::new("only", "model", events.clone())),
+        ];
+        let fallback = FallbackProvider::new(providers);
+
+        let (tx, mut rx) = mpsc::channel(32);
+        let messages = vec![ApiMessageV2::user("Hi")];
+        fallback
+            .stream_message(&messages, None, None, tx)
+            .await
+            .expect("single provider should succeed");
+
+        let event = rx.recv().await.unwrap();
+        assert_eq!(event, events[0]);
+    }
+
+    #[tokio::test]
+    async fn test_fallback_single_provider_fails() {
+        let providers: Vec<Box<dyn LlmProvider>> = vec![
+            Box::new(FailingProvider::new("only", "model", "network error")),
+        ];
+        let fallback = FallbackProvider::new(providers);
+
+        let (tx, _rx) = mpsc::channel(32);
+        let messages = vec![ApiMessageV2::user("Hi")];
+        let result = fallback.stream_message(&messages, None, None, tx).await;
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("network error"));
+    }
+
+    // --- Fallback as trait object ---
+
+    #[tokio::test]
+    async fn test_fallback_provider_as_boxed_trait_object() {
+        let events = vec![StreamEvent::MessageComplete {
+            stop_reason: StopReason::EndTurn,
+        }];
+        let providers: Vec<Box<dyn LlmProvider>> = vec![
+            Box::new(MockProvider::new("primary", "model", events)),
+        ];
+        let provider: Box<dyn LlmProvider> = Box::new(FallbackProvider::new(providers));
+
+        assert_eq!(provider.name(), "fallback");
+        assert_eq!(provider.model(), "model");
+
+        let (tx, mut rx) = mpsc::channel(32);
+        let messages = vec![ApiMessageV2::user("Hi")];
+        provider
+            .stream_message(&messages, None, None, tx)
+            .await
+            .expect("boxed fallback should work");
+
+        let event = rx.recv().await.unwrap();
+        assert!(event.is_stop());
+    }
+
+    // --- Tools are forwarded ---
+
+    #[tokio::test]
+    async fn test_fallback_forwards_tools_to_provider() {
+        let events = vec![
+            StreamEvent::ToolUseStart {
+                id: "toolu_01".to_string(),
+                name: "bash".to_string(),
+                index: 0,
+            },
+            StreamEvent::MessageComplete {
+                stop_reason: StopReason::ToolUse,
+            },
+        ];
+        let providers: Vec<Box<dyn LlmProvider>> = vec![
+            Box::new(MockProvider::new("primary", "model", events.clone())),
+        ];
+        let fallback = FallbackProvider::new(providers);
+
+        let tools = vec![ToolDefinition::new(
+            "bash",
+            "Run commands",
+            serde_json::json!({"type": "object", "properties": {}}),
+        )];
+        let (tx, mut rx) = mpsc::channel(32);
+        let messages = vec![ApiMessageV2::user("list files")];
+        fallback
+            .stream_message(&messages, Some(&tools), Some(&ToolChoice::Auto), tx)
+            .await
+            .expect("should succeed");
+
+        let mut received = Vec::new();
+        while let Some(event) = rx.recv().await {
+            received.push(event);
+        }
+        assert_eq!(received, events);
+    }
+
+    // --- Three-provider chain ---
+
+    #[tokio::test]
+    async fn test_fallback_skips_to_third_provider() {
+        let events = vec![
+            StreamEvent::ContentDelta("Third provider".to_string()),
+            StreamEvent::MessageComplete {
+                stop_reason: StopReason::EndTurn,
+            },
+        ];
+        let providers: Vec<Box<dyn LlmProvider>> = vec![
+            Box::new(FailingProvider::new("first", "m1", "error 1")),
+            Box::new(FailingProvider::new("second", "m2", "error 2")),
+            Box::new(MockProvider::new("third", "m3", events.clone())),
+        ];
+        let fallback = FallbackProvider::new(providers);
+
+        let (tx, mut rx) = mpsc::channel(32);
+        let messages = vec![ApiMessageV2::user("Hi")];
+        fallback
+            .stream_message(&messages, None, None, tx)
+            .await
+            .expect("should succeed with third provider");
+
+        let first = rx.recv().await.unwrap();
+        assert_eq!(first, StreamEvent::ContentDelta("Third provider".to_string()));
     }
 }
