@@ -210,7 +210,7 @@ impl EventDispatcher {
 
         // Observers always run regardless of consumption.
         for observer in &mut self.observers {
-            observer.handle(event, ctx).await?;
+            let _ = observer.handle(event, ctx).await?;
             trace!(observer = observer.name(), %event, "observer executed");
         }
 
@@ -657,8 +657,7 @@ mod tests {
     #[test]
     fn dispatcher_with_observers_sets_count() {
         let (obs, _) = MockHandler::new("obs", Handled::IGNORED);
-        let dispatcher =
-            EventDispatcher::new(vec![]).with_observers(vec![Box::new(obs)]);
+        let dispatcher = EventDispatcher::new(vec![]).with_observers(vec![Box::new(obs)]);
         assert_eq!(dispatcher.observer_count(), 1);
         assert_eq!(dispatcher.handler_count(), 0);
     }
@@ -680,7 +679,11 @@ mod tests {
         let result = dispatcher.dispatch(&event, &mut ctx).await.unwrap();
 
         assert_eq!(result, Handled::CONSUMED);
-        assert_eq!(h_count.load(Ordering::SeqCst), 1, "handler should be called");
+        assert_eq!(
+            h_count.load(Ordering::SeqCst),
+            1,
+            "handler should be called"
+        );
         assert_eq!(
             o_count.load(Ordering::SeqCst),
             1,
@@ -713,8 +716,7 @@ mod tests {
         // No handlers — event is unhandled. Observer runs but its result
         // does not change the dispatch result to CONSUMED.
         let (obs, _) = MockHandler::new("observer", Handled::CONSUMED);
-        let mut dispatcher =
-            EventDispatcher::new(vec![]).with_observers(vec![Box::new(obs)]);
+        let mut dispatcher = EventDispatcher::new(vec![]).with_observers(vec![Box::new(obs)]);
         let mut terminal = test_terminal();
         let client = test_client();
         let mut state = test_state();
@@ -734,8 +736,7 @@ mod tests {
     #[tokio::test]
     async fn observer_error_propagates() {
         let (obs, _) = ErrorHandler::new("failing_observer");
-        let mut dispatcher =
-            EventDispatcher::new(vec![]).with_observers(vec![Box::new(obs)]);
+        let mut dispatcher = EventDispatcher::new(vec![]).with_observers(vec![Box::new(obs)]);
         let mut terminal = test_terminal();
         let client = test_client();
         let mut state = test_state();
