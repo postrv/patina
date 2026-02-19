@@ -115,9 +115,9 @@ Before marking ANY task `[x]`:
 **Description**: Extract session auto-save logic into `SessionHandler`. Currently auto-save is called inline after message submission, message completion, and before exit.
 
 **TDD Cycle**:
-- [ ] RED: Write tests for `SessionHandler` — auto-saves on `MessageComplete` event, creates session if none exists, updates existing session, handles save errors gracefully (log, don't crash)
-- [ ] GREEN: Implement `SessionHandler` that listens for relevant events and calls session save
-- [ ] REFACTOR: Consolidate the 3 separate `auto_save_session()` call sites into handler logic
+- [x] RED: Write tests for `SessionHandler` — auto-saves on `MessageComplete` event, creates session if none exists, updates existing session, handles save errors gracefully (log, don't crash)
+- [x] GREEN: Implement `SessionHandler` that listens for relevant events and calls session save
+- [x] REFACTOR: Consolidate the 3 separate `auto_save_session()` call sites into handler logic
 - Files: `src/app/handlers/session.rs` (new)
 - Acceptance: Session persistence behavior unchanged, auto-save fires at same trigger points
 
