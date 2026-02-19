@@ -143,6 +143,25 @@ else
 fi
 echo ""
 
+# Documentation version consistency check
+echo "=== Docs Version Consistency ==="
+CARGO_VERSION_MAJOR_MINOR=$(echo "$CARGO_VERSION" | sed 's/\([0-9]*\.[0-9]*\).*/\1/')
+# Pattern matches versions that should have been updated (0.5.x through 0.8.x)
+# Excludes 0.1.x-0.4.x which may be legitimate min-version requirements
+STALE_PATTERN='0\.[5-8]\.[0-9]'
+
+STALE_REFS=$(grep -rn "$STALE_PATTERN" docs/ --include='*.md' --exclude-dir=archive 2>/dev/null || true)
+if [ -n "$STALE_REFS" ]; then
+    echo "WARNING: Stale version references found in docs:"
+    echo "$STALE_REFS" | head -20
+    echo ""
+    echo "  Cargo.toml version: $CARGO_VERSION"
+    echo "  Fix these references to match the current version."
+else
+    echo "OK: No stale version references in docs/"
+fi
+echo ""
+
 if [ $EXIT_CODE -eq 0 ]; then
     echo "=== All validations passed ==="
 else
