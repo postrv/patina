@@ -93,6 +93,26 @@ pub trait LlmProvider: Send + Sync {
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>>;
 }
 
+impl LlmProvider for super::AnthropicClient {
+    fn name(&self) -> &str {
+        "anthropic"
+    }
+
+    fn model(&self) -> &str {
+        super::AnthropicClient::model(self)
+    }
+
+    fn stream_message<'a>(
+        &'a self,
+        messages: &'a [ApiMessageV2],
+        tools: Option<&'a [ToolDefinition]>,
+        tool_choice: Option<&'a ToolChoice>,
+        tx: mpsc::Sender<StreamEvent>,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
+        Box::pin(self.stream_message_v2_with_tools(messages, tools, tool_choice, tx))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -510,7 +530,7 @@ data: {"type":"message_stop"}
 
         // Verify we get the expected events
         let mut events = Vec::new();
-        while let Some(event) = rx.try_recv().ok() {
+        while let Ok(event) = rx.try_recv() {
             events.push(event);
         }
 
@@ -592,7 +612,7 @@ data: {"type":"message_stop"}
             .expect("stream_message with tools should succeed");
 
         let mut events = Vec::new();
-        while let Some(event) = rx.try_recv().ok() {
+        while let Ok(event) = rx.try_recv() {
             events.push(event);
         }
 
