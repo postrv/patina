@@ -860,12 +860,74 @@ pub trait RecoveryExecutor: Send {
 /// A formatted recovery prompt string.
 #[must_use]
 pub fn build_recovery_prompt(
-    _analysis: &RootCauseAnalysis,
-    _attempt: u32,
-    _current_error: &str,
+    analysis: &RootCauseAnalysis,
+    attempt: u32,
+    current_error: &str,
 ) -> String {
-    // Stub: returns empty string. Tests will fail (RED phase).
-    String::new()
+    let mut prompt = String::with_capacity(1024);
+
+    prompt.push_str("## Recovery Attempt\n\n");
+    prompt.push_str(&format!(
+        "Attempt {attempt} to fix a quality gate failure.\n\n"
+    ));
+
+    prompt.push_str("### Error\n\n");
+    prompt.push_str(current_error);
+    prompt.push_str("\n\n");
+
+    if !analysis.error_locations.is_empty() {
+        prompt.push_str("### Error Locations\n\n");
+        for loc in &analysis.error_locations {
+            prompt.push_str(&format!("- {loc}\n"));
+        }
+        prompt.push('\n');
+    }
+
+    if !analysis.relevant_files.is_empty() {
+        prompt.push_str("### Relevant Files\n\n");
+        for file in &analysis.relevant_files {
+            prompt.push_str(&format!("- {file}\n"));
+        }
+        prompt.push('\n');
+    }
+
+    if !analysis.callers.is_empty() {
+        prompt.push_str("### Callers\n\n");
+        for caller in &analysis.callers {
+            prompt.push_str(&format!(
+                "- {}() in {}:{}\n",
+                caller.function, caller.file, caller.line
+            ));
+        }
+        prompt.push('\n');
+    }
+
+    if !analysis.recent_changes.is_empty() {
+        prompt.push_str("### Recent Changes\n\n");
+        for change in &analysis.recent_changes {
+            let hash_prefix = &change.commit_hash[..7.min(change.commit_hash.len())];
+            prompt.push_str(&format!(
+                "- {} ({}): {}\n",
+                hash_prefix, change.author, change.message
+            ));
+        }
+        prompt.push('\n');
+    }
+
+    if attempt > 1 {
+        prompt.push_str(&format!(
+            "### Context\n\nThis is attempt {attempt}. \
+             Previous attempts did not fully resolve the issue. \
+             Try a different approach.\n\n"
+        ));
+    }
+
+    prompt.push_str(
+        "Please fix the issue described above. \
+         Focus on the error locations and make minimal, targeted changes.\n",
+    );
+
+    prompt
 }
 
 /// Attempts to recover from a quality gate failure using LLM-powered fixes.
@@ -887,16 +949,40 @@ pub fn build_recovery_prompt(
 ///
 /// A [`RecoveryOutcome`] indicating success or need for human intervention.
 pub async fn attempt_recovery<E: RecoveryExecutor>(
-    _analysis: &RootCauseAnalysis,
-    _config: &RecoveryConfig,
-    _executor: &mut E,
-    _metrics: &mut RecoveryMetrics,
+    analysis: &RootCauseAnalysis,
+    config: &RecoveryConfig,
+    executor: &mut E,
+    metrics: &mut RecoveryMetrics,
 ) -> RecoveryOutcome {
-    // Stub: always returns NeedsHuman. Tests will fail (RED phase).
-    RecoveryOutcome::NeedsHuman {
-        attempts: 0,
-        last_error: String::new(),
+    let mut last_error = analysis.error_summary.clone();
+
+    for attempt in 1..=config.max_attempts {
+        let prompt = build_recovery_prompt(analysis, attempt, &last_error);
+
+        // Execute the fix via the LLM
+        if let Err(e) = executor.execute_fix(&prompt).await {
+            last_error = e.to_string();
+            continue;
+        }
+
+        // Check if the fix resolved the issue
+        let result = executor.check_gates().await;
+
+        if result.passed {
+            let outcome = RecoveryOutcome::Fixed { attempts: attempt };
+            metrics.record_session(&outcome);
+            return outcome;
+        }
+
+        last_error = result.error_output;
     }
+
+    let outcome = RecoveryOutcome::NeedsHuman {
+        attempts: config.max_attempts,
+        last_error,
+    };
+    metrics.record_session(&outcome);
+    outcome
 }
 
 #[cfg(test)]
