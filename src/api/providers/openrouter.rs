@@ -1,8 +1,15 @@
-//! Message format translation between Anthropic and OpenAI formats.
+//! OpenRouter provider and message format translation.
 //!
-//! This module provides bidirectional translation functions for converting
-//! between Patina's internal Anthropic-style message types and the OpenAI
-//! Chat Completions API format used by OpenRouter and compatible providers.
+//! This module provides the [`OpenRouterProvider`] LLM provider implementation
+//! and bidirectional translation functions for converting between Patina's
+//! internal Anthropic-style message types and the OpenAI Chat Completions API
+//! format used by OpenRouter and compatible providers.
+//!
+//! # Provider
+//!
+//! [`OpenRouterProvider`] implements [`LlmProvider`](crate::api::provider::LlmProvider)
+//! and handles HTTPS request building, SSE streaming with OpenAI format, and
+//! translation to Patina's [`StreamEvent`] protocol.
 //!
 //! # Translation Functions
 //!
@@ -34,12 +41,265 @@
 //! assert_eq!(openai_messages.len(), 3); // system + user + assistant
 //! ```
 
+use std::future::Future;
+use std::pin::Pin;
+use std::time::Duration;
+
+use anyhow::Result;
+use secrecy::{ExposeSecret, SecretString};
+use serde::Serialize;
+use tokio::sync::mpsc;
+
+use crate::api::provider::LlmProvider;
 use crate::api::providers::openai_types::{
-    OpenAiFunctionCall, OpenAiMessage, OpenAiRole, OpenAiStreamChunk, OpenAiToolCall,
+    OpenAiFunctionCall, OpenAiMessage, OpenAiRole, OpenAiStreamChunk, OpenAiTool, OpenAiToolCall,
+    OpenAiToolChoice,
 };
+use crate::api::tools::{ToolChoice, ToolDefinition};
 use crate::types::content::{ContentBlock, StopReason, ToolUseBlock};
 use crate::types::message::{ApiMessageV2, MessageContent, Role};
 use crate::types::stream::StreamEvent;
+
+/// Default OpenRouter API endpoint.
+const DEFAULT_OPENROUTER_URL: &str = "https://openrouter.ai/api/v1";
+
+/// Maximum number of retry attempts for retryable errors.
+const MAX_RETRIES: u32 = 2;
+
+/// Base delay for exponential backoff in milliseconds.
+const BASE_BACKOFF_MS: u64 = 100;
+
+/// OpenAI Chat Completions API request body.
+#[derive(Debug, Serialize)]
+struct OpenAiChatRequest {
+    model: String,
+    messages: Vec<OpenAiMessage>,
+    stream: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tools: Option<Vec<OpenAiTool>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tool_choice: Option<OpenAiToolChoice>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_tokens: Option<u32>,
+}
+
+/// LLM provider for OpenRouter (OpenAI-compatible API).
+///
+/// Translates between Patina's Anthropic-style messages and the OpenAI Chat
+/// Completions format, handling HTTPS request building and SSE stream parsing.
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// use patina::api::providers::openrouter::OpenRouterProvider;
+/// use patina::api::provider::LlmProvider;
+/// use secrecy::SecretString;
+///
+/// let provider = OpenRouterProvider::new(
+///     SecretString::from("sk-or-..."),
+///     "anthropic/claude-sonnet-4",
+/// );
+/// assert_eq!(provider.name(), "openrouter");
+/// ```
+pub struct OpenRouterProvider {
+    client: reqwest::Client,
+    api_key: SecretString,
+    model: String,
+    base_url: String,
+    site_url: Option<String>,
+    app_name: Option<String>,
+}
+
+impl OpenRouterProvider {
+    /// Creates a new OpenRouter provider with the default API endpoint.
+    ///
+    /// # Arguments
+    ///
+    /// * `api_key` - The OpenRouter API key
+    /// * `model` - The model identifier (e.g., "anthropic/claude-sonnet-4")
+    #[must_use]
+    pub fn new(api_key: SecretString, model: &str) -> Self {
+        Self::new_with_base_url(api_key, model, DEFAULT_OPENROUTER_URL)
+    }
+
+    /// Creates a new OpenRouter provider with a custom base URL.
+    ///
+    /// This is primarily useful for testing with mock servers.
+    ///
+    /// # Arguments
+    ///
+    /// * `api_key` - The OpenRouter API key
+    /// * `model` - The model identifier (e.g., "anthropic/claude-sonnet-4")
+    /// * `base_url` - The base URL for the API
+    #[must_use]
+    pub fn new_with_base_url(api_key: SecretString, model: &str, base_url: &str) -> Self {
+        Self {
+            client: reqwest::Client::new(),
+            api_key,
+            model: model.to_string(),
+            base_url: base_url.to_string(),
+            site_url: None,
+            app_name: None,
+        }
+    }
+
+    /// Sets the site URL sent via `HTTP-Referer` header.
+    ///
+    /// OpenRouter uses this for analytics and rate limiting.
+    #[must_use]
+    pub fn with_site_url(mut self, url: impl Into<String>) -> Self {
+        self.site_url = Some(url.into());
+        self
+    }
+
+    /// Sets the app name sent via `X-Title` header.
+    ///
+    /// OpenRouter uses this for analytics.
+    #[must_use]
+    pub fn with_app_name(mut self, name: impl Into<String>) -> Self {
+        self.app_name = Some(name.into());
+        self
+    }
+
+    /// Checks if an HTTP status code should trigger a retry.
+    fn is_retryable_status(status: reqwest::StatusCode) -> bool {
+        status == reqwest::StatusCode::TOO_MANY_REQUESTS || status.is_server_error()
+    }
+
+    /// Processes the OpenAI SSE stream from a successful response.
+    ///
+    /// Parses `data: {...}` lines, deserializes as [`OpenAiStreamChunk`],
+    /// and translates to [`StreamEvent`] using [`translate_stream_event`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if reading the byte stream fails.
+    async fn process_stream(
+        &self,
+        response: reqwest::Response,
+        tx: mpsc::Sender<StreamEvent>,
+    ) -> Result<()> {
+        use futures::StreamExt;
+
+        let mut stream = response.bytes_stream();
+        let mut buffer = String::new();
+
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk?;
+            buffer.push_str(&String::from_utf8_lossy(&chunk));
+
+            while let Some(pos) = buffer.find('\n') {
+                let line = buffer[..pos].trim().to_string();
+                buffer = buffer[pos + 1..].to_string();
+
+                let Some(json) = line.strip_prefix("data: ") else {
+                    continue;
+                };
+
+                if json == "[DONE]" {
+                    return Ok(());
+                }
+
+                let Ok(parsed) = serde_json::from_str::<OpenAiStreamChunk>(json) else {
+                    continue;
+                };
+
+                for event in translate_stream_event(&parsed) {
+                    tx.send(event).await.ok();
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
+
+impl LlmProvider for OpenRouterProvider {
+    fn name(&self) -> &str {
+        "openrouter"
+    }
+
+    fn model(&self) -> &str {
+        &self.model
+    }
+
+    fn stream_message<'a>(
+        &'a self,
+        messages: &'a [ApiMessageV2],
+        tools: Option<&'a [ToolDefinition]>,
+        tool_choice: Option<&'a ToolChoice>,
+        tx: mpsc::Sender<StreamEvent>,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
+        Box::pin(async move {
+            let openai_messages = translate_to_openai(None, messages);
+
+            let openai_tools: Option<Vec<OpenAiTool>> =
+                tools.map(|t| t.iter().map(|td| OpenAiTool::from(td.clone())).collect());
+
+            let openai_tool_choice: Option<OpenAiToolChoice> =
+                tool_choice.map(|tc| OpenAiToolChoice::from(tc.clone()));
+
+            let request_body = OpenAiChatRequest {
+                model: self.model.clone(),
+                messages: openai_messages,
+                stream: true,
+                tools: openai_tools,
+                tool_choice: openai_tool_choice,
+                max_tokens: Some(8192),
+            };
+
+            let url = format!("{}/chat/completions", self.base_url);
+            let mut last_error: Option<(reqwest::StatusCode, String)> = None;
+
+            for attempt in 0..=MAX_RETRIES {
+                let mut req = self
+                    .client
+                    .post(&url)
+                    .header(
+                        "Authorization",
+                        format!("Bearer {}", self.api_key.expose_secret()),
+                    )
+                    .header("Content-Type", "application/json");
+
+                if let Some(ref site_url) = self.site_url {
+                    req = req.header("HTTP-Referer", site_url.as_str());
+                }
+                if let Some(ref app_name) = self.app_name {
+                    req = req.header("X-Title", app_name.as_str());
+                }
+
+                let response = req.json(&request_body).send().await?;
+                let status = response.status();
+
+                if status.is_success() {
+                    return self.process_stream(response, tx).await;
+                }
+
+                if Self::is_retryable_status(status) && attempt < MAX_RETRIES {
+                    let body = response.text().await.unwrap_or_default();
+                    last_error = Some((status, body));
+                    let delay = Duration::from_millis(BASE_BACKOFF_MS * (1 << attempt));
+                    tokio::time::sleep(delay).await;
+                    continue;
+                }
+
+                let body = response.text().await.unwrap_or_default();
+                tx.send(StreamEvent::Error(format!("{status}: {body}")))
+                    .await
+                    .ok();
+                return Ok(());
+            }
+
+            if let Some((status, body)) = last_error {
+                tx.send(StreamEvent::Error(format!("{status}: {body}")))
+                    .await
+                    .ok();
+            }
+
+            Ok(())
+        })
+    }
+}
 
 /// Translates Anthropic-format messages to OpenAI Chat Completions format.
 ///
@@ -337,6 +597,8 @@ mod tests {
     use crate::api::providers::openai_types::*;
     use crate::types::image::ImageSource;
     use serde_json::json;
+    use wiremock::matchers::{header, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     // =========================================================================
     // translate_to_openai: Basic message translation
@@ -1133,5 +1395,497 @@ mod tests {
             }],
             usage: None,
         }
+    }
+
+    // =========================================================================
+    // OpenRouterProvider: Construction and trait contract
+    // =========================================================================
+
+    #[test]
+    fn test_openrouter_provider_name() {
+        let provider =
+            OpenRouterProvider::new(SecretString::from("test-key"), "anthropic/claude-sonnet-4");
+        assert_eq!(provider.name(), "openrouter");
+    }
+
+    #[test]
+    fn test_openrouter_provider_model() {
+        let provider =
+            OpenRouterProvider::new(SecretString::from("test-key"), "anthropic/claude-sonnet-4");
+        assert_eq!(provider.model(), "anthropic/claude-sonnet-4");
+    }
+
+    #[test]
+    fn test_openrouter_provider_implements_llm_provider() {
+        let provider =
+            OpenRouterProvider::new(SecretString::from("test-key"), "anthropic/claude-sonnet-4");
+        let _trait_obj: &dyn LlmProvider = &provider;
+    }
+
+    #[test]
+    fn test_openrouter_provider_as_boxed_trait_object() {
+        let provider =
+            OpenRouterProvider::new(SecretString::from("test-key"), "anthropic/claude-sonnet-4");
+        let boxed: Box<dyn LlmProvider> = Box::new(provider);
+        assert_eq!(boxed.name(), "openrouter");
+        assert_eq!(boxed.model(), "anthropic/claude-sonnet-4");
+    }
+
+    #[test]
+    fn test_openrouter_provider_is_send() {
+        fn assert_send<T: Send>() {}
+        assert_send::<OpenRouterProvider>();
+    }
+
+    #[test]
+    fn test_openrouter_provider_is_sync() {
+        fn assert_sync<T: Sync>() {}
+        assert_sync::<OpenRouterProvider>();
+    }
+
+    #[test]
+    fn test_openrouter_provider_with_site_url() {
+        let provider = OpenRouterProvider::new(SecretString::from("test-key"), "model")
+            .with_site_url("https://patina.dev");
+        assert_eq!(provider.site_url.as_deref(), Some("https://patina.dev"));
+    }
+
+    #[test]
+    fn test_openrouter_provider_with_app_name() {
+        let provider = OpenRouterProvider::new(SecretString::from("test-key"), "model")
+            .with_app_name("Patina");
+        assert_eq!(provider.app_name.as_deref(), Some("Patina"));
+    }
+
+    // =========================================================================
+    // OpenRouterProvider: Integration tests with mock HTTP server
+    // =========================================================================
+
+    /// Helper: create a provider pointing at a mock server.
+    fn test_provider(base_url: &str) -> OpenRouterProvider {
+        OpenRouterProvider::new_with_base_url(
+            SecretString::from("test-key"),
+            "anthropic/claude-sonnet-4",
+            base_url,
+        )
+    }
+
+    /// Helper: collect all stream events from a provider call.
+    async fn collect_provider_events(
+        provider: &OpenRouterProvider,
+        sse_body: &str,
+        mock_server: &MockServer,
+    ) -> Vec<StreamEvent> {
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_raw(sse_body, "text/event-stream")
+                    .append_header("content-type", "text/event-stream"),
+            )
+            .mount(mock_server)
+            .await;
+
+        let messages = vec![ApiMessageV2::user("Hello")];
+        let (tx, mut rx) = mpsc::channel(64);
+
+        provider
+            .stream_message(&messages, None, None, tx)
+            .await
+            .expect("stream should succeed");
+
+        let mut events = Vec::new();
+        while let Ok(event) = rx.try_recv() {
+            events.push(event);
+        }
+        events
+    }
+
+    #[tokio::test]
+    async fn test_openrouter_streams_text_content() {
+        let mock_server = MockServer::start().await;
+        let provider = test_provider(&mock_server.uri());
+
+        let sse_body = "\
+data: {\"id\":\"gen-abc\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"anthropic/claude-sonnet-4\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"\"},\"finish_reason\":null}]}\n\n\
+data: {\"id\":\"gen-abc\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"anthropic/claude-sonnet-4\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hello\"},\"finish_reason\":null}]}\n\n\
+data: {\"id\":\"gen-abc\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"anthropic/claude-sonnet-4\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\" world\"},\"finish_reason\":null}]}\n\n\
+data: {\"id\":\"gen-abc\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"anthropic/claude-sonnet-4\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n\
+data: [DONE]\n\n";
+
+        let events = collect_provider_events(&provider, sse_body, &mock_server).await;
+
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, StreamEvent::ContentDelta(s) if s == "Hello")),
+            "Expected ContentDelta('Hello'), got: {:?}",
+            events
+        );
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, StreamEvent::ContentDelta(s) if s == " world")),
+            "Expected ContentDelta(' world'), got: {:?}",
+            events
+        );
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                StreamEvent::MessageComplete {
+                    stop_reason: StopReason::EndTurn
+                }
+            )),
+            "Expected MessageComplete(EndTurn), got: {:?}",
+            events
+        );
+    }
+
+    #[tokio::test]
+    async fn test_openrouter_streams_tool_use() {
+        let mock_server = MockServer::start().await;
+        let provider = test_provider(&mock_server.uri());
+
+        let sse_body = "\
+data: {\"id\":\"gen-abc\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":null,\"tool_calls\":[{\"index\":0,\"id\":\"call_123\",\"type\":\"function\",\"function\":{\"name\":\"bash\",\"arguments\":\"\"}}]},\"finish_reason\":null}]}\n\n\
+data: {\"id\":\"gen-abc\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"{\\\"command\\\":\"}}]},\"finish_reason\":null}]}\n\n\
+data: {\"id\":\"gen-abc\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"\\\"ls\\\"}\"}}]},\"finish_reason\":null}]}\n\n\
+data: {\"id\":\"gen-abc\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n\
+data: [DONE]\n\n";
+
+        let events = collect_provider_events(&provider, sse_body, &mock_server).await;
+
+        // Should contain ToolUseStart
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                StreamEvent::ToolUseStart { id, name, .. }
+                if id == "call_123" && name == "bash"
+            )),
+            "Expected ToolUseStart, got: {:?}",
+            events
+        );
+
+        // Should contain ToolUseInputDelta fragments
+        let input_deltas: Vec<_> = events
+            .iter()
+            .filter(|e| matches!(e, StreamEvent::ToolUseInputDelta { .. }))
+            .collect();
+        assert!(
+            !input_deltas.is_empty(),
+            "Expected ToolUseInputDelta events, got: {:?}",
+            events
+        );
+
+        // Should end with tool_calls finish reason
+        assert!(
+            events.iter().any(|e| matches!(
+                e,
+                StreamEvent::MessageComplete {
+                    stop_reason: StopReason::ToolUse
+                }
+            )),
+            "Expected MessageComplete(ToolUse), got: {:?}",
+            events
+        );
+    }
+
+    #[tokio::test]
+    async fn test_openrouter_sends_authorization_header() {
+        let mock_server = MockServer::start().await;
+        let provider = OpenRouterProvider::new_with_base_url(
+            SecretString::from("sk-or-test-key-123"),
+            "model",
+            &mock_server.uri(),
+        );
+
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .and(header("Authorization", "Bearer sk-or-test-key-123"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_raw(
+                        "data: {\"id\":\"x\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n",
+                        "text/event-stream",
+                    ),
+            )
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        let (tx, _rx) = mpsc::channel(32);
+        let messages = vec![ApiMessageV2::user("Hi")];
+        provider
+            .stream_message(&messages, None, None, tx)
+            .await
+            .expect("should send with auth header");
+    }
+
+    #[tokio::test]
+    async fn test_openrouter_sends_custom_headers() {
+        let mock_server = MockServer::start().await;
+        let provider = OpenRouterProvider::new_with_base_url(
+            SecretString::from("key"),
+            "model",
+            &mock_server.uri(),
+        )
+        .with_site_url("https://patina.dev")
+        .with_app_name("Patina");
+
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .and(header("HTTP-Referer", "https://patina.dev"))
+            .and(header("X-Title", "Patina"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_raw(
+                        "data: {\"id\":\"x\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n",
+                        "text/event-stream",
+                    ),
+            )
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        let (tx, _rx) = mpsc::channel(32);
+        let messages = vec![ApiMessageV2::user("Hi")];
+        provider
+            .stream_message(&messages, None, None, tx)
+            .await
+            .expect("should send with custom headers");
+    }
+
+    #[tokio::test]
+    async fn test_openrouter_sends_correct_request_body() {
+        let mock_server = MockServer::start().await;
+        let provider = test_provider(&mock_server.uri());
+
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_raw(
+                        "data: {\"id\":\"x\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n",
+                        "text/event-stream",
+                    ),
+            )
+            .mount(&mock_server)
+            .await;
+
+        let tools = vec![ToolDefinition::new(
+            "bash",
+            "Run commands",
+            json!({"type": "object", "properties": {}}),
+        )];
+        let (tx, _rx) = mpsc::channel(32);
+        let messages = vec![ApiMessageV2::user("List files")];
+
+        provider
+            .stream_message(&messages, Some(&tools), Some(&ToolChoice::Auto), tx)
+            .await
+            .expect("should send request with tools");
+
+        // Verify the mock received exactly 1 request
+        let requests = mock_server.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 1);
+
+        let body: serde_json::Value =
+            serde_json::from_slice(&requests[0].body).expect("body should be valid JSON");
+        assert_eq!(body["model"], "anthropic/claude-sonnet-4");
+        assert_eq!(body["stream"], true);
+        assert!(body["messages"].is_array());
+        assert!(body["tools"].is_array());
+    }
+
+    #[tokio::test]
+    async fn test_openrouter_handles_api_error() {
+        let mock_server = MockServer::start().await;
+        let provider = test_provider(&mock_server.uri());
+
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(
+                ResponseTemplate::new(401)
+                    .set_body_string("{\"error\":{\"message\":\"Invalid API key\"}}"),
+            )
+            .mount(&mock_server)
+            .await;
+
+        let (tx, mut rx) = mpsc::channel(32);
+        let messages = vec![ApiMessageV2::user("Hello")];
+        provider
+            .stream_message(&messages, None, None, tx)
+            .await
+            .expect("should not error on API error, sends via channel");
+
+        let event = rx.try_recv().expect("should receive error event");
+        assert!(event.is_error(), "Expected error event, got: {:?}", event);
+        let error_msg = event.error().unwrap();
+        assert!(
+            error_msg.contains("401"),
+            "Error should contain status code, got: {}",
+            error_msg
+        );
+    }
+
+    #[tokio::test]
+    async fn test_openrouter_handles_rate_limit_retry() {
+        let mock_server = MockServer::start().await;
+        let provider = test_provider(&mock_server.uri());
+
+        // First request returns 429, second succeeds
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(ResponseTemplate::new(429).set_body_string("rate limited"))
+            .up_to_n_times(1)
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_raw(
+                        "data: {\"id\":\"x\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Retried!\"},\"finish_reason\":null}]}\n\ndata: {\"id\":\"x\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n",
+                        "text/event-stream",
+                    ),
+            )
+            .mount(&mock_server)
+            .await;
+
+        let (tx, mut rx) = mpsc::channel(32);
+        let messages = vec![ApiMessageV2::user("Hello")];
+        provider
+            .stream_message(&messages, None, None, tx)
+            .await
+            .expect("should succeed after retry");
+
+        let mut events = Vec::new();
+        while let Ok(event) = rx.try_recv() {
+            events.push(event);
+        }
+
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, StreamEvent::ContentDelta(s) if s == "Retried!")),
+            "Expected content after retry, got: {:?}",
+            events
+        );
+    }
+
+    #[tokio::test]
+    async fn test_openrouter_malformed_sse_skipped() {
+        let mock_server = MockServer::start().await;
+        let provider = test_provider(&mock_server.uri());
+
+        let sse_body = "\
+data: {\"id\":\"x\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Before\"},\"finish_reason\":null}]}\n\n\
+data: {invalid json}\n\n\
+data: {\"id\":\"x\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"After\"},\"finish_reason\":null}]}\n\n\
+data: {\"id\":\"x\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n\
+data: [DONE]\n\n";
+
+        let events = collect_provider_events(&provider, sse_body, &mock_server).await;
+
+        let deltas: Vec<_> = events.iter().filter_map(|e| e.content()).collect();
+        assert!(
+            deltas.contains(&"Before"),
+            "Should have content before malformed line"
+        );
+        assert!(
+            deltas.contains(&"After"),
+            "Should have content after malformed line"
+        );
+        assert!(
+            !events.iter().any(|e| e.is_error()),
+            "Malformed JSON should not produce errors"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_openrouter_done_marker_terminates_stream() {
+        let mock_server = MockServer::start().await;
+        let provider = test_provider(&mock_server.uri());
+
+        // [DONE] without a finish_reason chunk before it
+        let sse_body = "\
+data: {\"id\":\"x\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hi\"},\"finish_reason\":null}]}\n\n\
+data: [DONE]\n\n";
+
+        let events = collect_provider_events(&provider, sse_body, &mock_server).await;
+
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, StreamEvent::ContentDelta(s) if s == "Hi")),
+            "Should receive content before [DONE]"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_openrouter_produces_identical_events_for_text_response() {
+        // Verify that OpenRouterProvider produces the same StreamEvent sequence
+        // as AnthropicProvider would for an equivalent text response.
+        let mock_server = MockServer::start().await;
+        let provider = test_provider(&mock_server.uri());
+
+        let sse_body = "\
+data: {\"id\":\"gen-abc\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"\"},\"finish_reason\":null}]}\n\n\
+data: {\"id\":\"gen-abc\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"The answer is 42.\"},\"finish_reason\":null}]}\n\n\
+data: {\"id\":\"gen-abc\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n\
+data: [DONE]\n\n";
+
+        let events = collect_provider_events(&provider, sse_body, &mock_server).await;
+
+        // Should contain exactly: ContentDelta + MessageComplete
+        assert_eq!(events.len(), 2, "Expected 2 events, got: {:?}", events);
+        assert_eq!(
+            events[0],
+            StreamEvent::ContentDelta("The answer is 42.".to_string())
+        );
+        assert_eq!(
+            events[1],
+            StreamEvent::MessageComplete {
+                stop_reason: StopReason::EndTurn,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn test_openrouter_request_body_omits_tools_when_none() {
+        let mock_server = MockServer::start().await;
+        let provider = test_provider(&mock_server.uri());
+
+        Mock::given(method("POST"))
+            .and(path("/chat/completions"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_raw(
+                        "data: {\"id\":\"x\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"m\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n",
+                        "text/event-stream",
+                    ),
+            )
+            .mount(&mock_server)
+            .await;
+
+        let (tx, _rx) = mpsc::channel(32);
+        let messages = vec![ApiMessageV2::user("Hello")];
+        provider
+            .stream_message(&messages, None, None, tx)
+            .await
+            .expect("should send request without tools");
+
+        let requests = mock_server.received_requests().await.unwrap();
+        let body: serde_json::Value =
+            serde_json::from_slice(&requests[0].body).expect("body should be valid JSON");
+        assert!(
+            body.get("tools").is_none(),
+            "tools should be absent when None"
+        );
+        assert!(
+            body.get("tool_choice").is_none(),
+            "tool_choice should be absent when None"
+        );
     }
 }
