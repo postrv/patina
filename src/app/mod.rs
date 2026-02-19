@@ -463,14 +463,16 @@ async fn run_print_mode(config: &Config, prompt: &str) -> Result<()> {
 /// 1. [`PermissionHandler`](handlers::permission::PermissionHandler) — intercepts keys during permission prompts
 /// 2. [`KeyboardHandler`](handlers::keyboard::KeyboardHandler) — user input (keys, mouse, resize)
 /// 3. [`StreamHandler`](handlers::stream::StreamHandler) — API chunks and tool results
-/// 4. [`TickHandler`](handlers::tick::TickHandler) — throbber animation
-/// 5. [`SessionHandler`](handlers::session::SessionHandler) — auto-save observer (always last, never consumes)
+/// 4. [`AgentHandler`](handlers::agent::AgentHandler) — background agent events
+/// 5. [`TickHandler`](handlers::tick::TickHandler) — throbber animation
+/// 6. [`SessionHandler`](handlers::session::SessionHandler) — auto-save observer (always last, never consumes)
 #[must_use]
 fn create_dispatcher() -> dispatch::EventDispatcher {
     dispatch::EventDispatcher::new(vec![
         Box::new(handlers::permission::PermissionHandler),
         Box::new(handlers::keyboard::KeyboardHandler),
         Box::new(handlers::stream::StreamHandler),
+        Box::new(handlers::agent::AgentHandler),
         Box::new(handlers::tick::TickHandler),
     ])
     .with_observers(vec![Box::new(handlers::session::SessionHandler)])
@@ -814,12 +816,12 @@ mod tests {
     // =========================================================================
 
     #[test]
-    fn create_dispatcher_returns_four_handlers_and_one_observer() {
+    fn create_dispatcher_returns_five_handlers_and_one_observer() {
         let dispatcher = create_dispatcher();
         assert_eq!(
             dispatcher.handler_count(),
-            4,
-            "Dispatcher must have 4 handlers: Permission, Keyboard, Stream, Tick"
+            5,
+            "Dispatcher must have 5 handlers: Permission, Keyboard, Stream, Agent, Tick"
         );
         assert_eq!(
             dispatcher.observer_count(),

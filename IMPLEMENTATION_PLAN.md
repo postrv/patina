@@ -443,8 +443,8 @@ Before marking ANY task `[x]`:
 **Description**: Create `AgentHandler` that processes `AppEvent::AgentEvent` for agent progress updates, completion notifications, and conflict alerts in the main event loop.
 
 **TDD Cycle**:
-- [ ] RED: Write tests for `AgentHandler` — processes agent progress events, updates TUI state for agent panel, handles agent completion, handles agent failure
-- [ ] GREEN: Implement `AgentHandler`, add `AgentEvent` variant to `AppEvent`, wire into `EventDispatcher`
+- [x] RED: Write tests for `AgentHandler` — processes agent progress events, updates TUI state for agent panel, handles agent completion, handles agent failure
+- [x] GREEN: Implement `AgentHandler`, add `AgentEvent` variant to `AppEvent`, wire into `EventDispatcher`
 - [ ] REFACTOR: Add agent panel to TUI showing active agents and their status
 - Files: `src/app/handlers/agent.rs` (new), `src/app/events.rs`, `src/app/mod.rs`
 - Acceptance: Agent events flow through dispatcher, TUI shows agent status

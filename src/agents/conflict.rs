@@ -119,6 +119,14 @@ pub struct ConflictReport {
 }
 
 impl ConflictReport {
+    /// Creates an empty conflict report with no conflicts.
+    #[must_use]
+    pub fn empty() -> Self {
+        Self {
+            conflicts: Vec::new(),
+        }
+    }
+
     /// Returns `true` if any conflicts were detected.
     #[must_use]
     pub fn has_conflicts(&self) -> bool {
