@@ -351,9 +351,9 @@ Before marking ANY task `[x]`:
 **Description**: Implement the top-level `build_context()` method that assembles manifest + architecture + symbols within a total token budget.
 
 **TDD Cycle**:
-- [ ] RED: Write tests for `build_context()` — allocates budget across layers (manifest ~500, architecture ~5-12K, symbols remainder), parallel fetching with `tokio::try_join!`, graceful degradation when narsil unavailable
-- [ ] GREEN: Implement `build_context()` with layered budget allocation, parallel fetching, markdown assembly
-- [ ] REFACTOR: Add metrics tracking — cache hit rate, fetch latency, token usage per layer
+- [x] RED: Write tests for `build_context()` — allocates budget across layers (manifest ~500, architecture ~5-12K, symbols remainder), parallel fetching with `tokio::try_join!`, graceful degradation when narsil unavailable
+- [x] GREEN: Implement `build_context()` with layered budget allocation, parallel fetching, markdown assembly
+- [x] REFACTOR: Add metrics tracking — cache hit rate, fetch latency, token usage per layer
 - Files: `src/context/compression/orchestrator.rs`
 - Acceptance: Full context built within budget, parallel fetching measurably faster than sequential
 

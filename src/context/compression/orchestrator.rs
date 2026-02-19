@@ -32,6 +32,11 @@ use std::sync::Arc;
 use std::time::Duration;
 use tracing::warn;
 
+/// Default token budget for manifest layer (~500 tokens).
+///
+/// Manifests are compact summaries (~2KB text) so this budget is generous.
+pub const DEFAULT_MANIFEST_TOKEN_BUDGET: usize = 500;
+
 /// Default TTL for orchestrator cache (5 minutes).
 pub const DEFAULT_ORCHESTRATOR_TTL: Duration = Duration::from_secs(300);
 
@@ -49,6 +54,91 @@ pub const DEFAULT_ORCHESTRATOR_MAX_ENTRIES: usize = 100;
 /// This limits the symbol context to prevent oversized outputs.
 /// Approximately 16KB of text.
 pub const DEFAULT_SYMBOL_TOKEN_BUDGET: usize = 4_000;
+
+/// Token budget allocation across context layers.
+///
+/// Represents how a total token budget is divided among manifest,
+/// architecture, and symbol layers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BudgetAllocation {
+    /// Tokens allocated to the manifest layer
+    pub manifest: usize,
+    /// Tokens allocated to the architecture layer
+    pub architecture: usize,
+    /// Tokens allocated to the symbol layer
+    pub symbols: usize,
+}
+
+/// Result of building context with per-layer token tracking.
+///
+/// Wraps a [`CompressionResult`] with additional metadata about how
+/// tokens were distributed across the manifest, architecture, and symbol
+/// layers.
+#[derive(Debug, Clone)]
+pub struct BuildContextResult {
+    /// The assembled compression result
+    result: CompressionResult,
+    /// Tokens used by the manifest layer
+    manifest_tokens: usize,
+    /// Tokens used by the architecture layer
+    architecture_tokens: usize,
+    /// Tokens used by the symbol layer
+    symbol_tokens: usize,
+}
+
+impl BuildContextResult {
+    /// Creates a new build context result with per-layer token tracking.
+    #[must_use]
+    pub fn new(
+        result: CompressionResult,
+        manifest_tokens: usize,
+        architecture_tokens: usize,
+        symbol_tokens: usize,
+    ) -> Self {
+        Self {
+            result,
+            manifest_tokens,
+            architecture_tokens,
+            symbol_tokens,
+        }
+    }
+
+    /// Returns the assembled compression result.
+    #[must_use]
+    pub fn result(&self) -> &CompressionResult {
+        &self.result
+    }
+
+    /// Consumes self and returns the inner compression result.
+    #[must_use]
+    pub fn into_result(self) -> CompressionResult {
+        self.result
+    }
+
+    /// Returns the tokens used by the manifest layer.
+    #[must_use]
+    pub fn manifest_tokens(&self) -> usize {
+        self.manifest_tokens
+    }
+
+    /// Returns the tokens used by the architecture layer.
+    #[must_use]
+    pub fn architecture_tokens(&self) -> usize {
+        self.architecture_tokens
+    }
+
+    /// Returns the tokens used by the symbol layer.
+    #[must_use]
+    pub fn symbol_tokens(&self) -> usize {
+        self.symbol_tokens
+    }
+
+    /// Returns the total tokens used across all layers.
+    #[must_use]
+    pub fn total_tokens(&self) -> usize {
+        self.manifest_tokens + self.architecture_tokens + self.symbol_tokens
+    }
+}
 
 /// Routes compression requests to CCG or fallback backends.
 ///
@@ -1077,6 +1167,198 @@ impl CompressionOrchestrator {
                 self.create_degraded_result(CompressionLevel::SymbolDetail)
             }
         }
+    }
+
+    // =========================================================================
+    // build_context with Token Budgeting (Phase 3.4)
+    // =========================================================================
+
+    /// Computes how to allocate a total token budget across context layers.
+    ///
+    /// The allocation strategy is:
+    /// 1. Manifest gets up to [`DEFAULT_MANIFEST_TOKEN_BUDGET`] (500 tokens)
+    /// 2. Architecture gets up to [`DEFAULT_ARCHITECTURE_TOKEN_BUDGET`] (12K tokens)
+    /// 3. Symbols get the remainder
+    ///
+    /// When the total budget is smaller than the manifest budget, all tokens
+    /// go to manifest and other layers get zero.
+    ///
+    /// # Arguments
+    ///
+    /// * `total_budget` - Total token budget to allocate
+    ///
+    /// # Returns
+    ///
+    /// A [`BudgetAllocation`] with per-layer token budgets summing to `total_budget`.
+    #[must_use]
+    pub fn compute_budget_allocation(&self, total_budget: usize) -> BudgetAllocation {
+        if total_budget == 0 {
+            return BudgetAllocation {
+                manifest: 0,
+                architecture: 0,
+                symbols: 0,
+            };
+        }
+
+        let manifest = total_budget.min(DEFAULT_MANIFEST_TOKEN_BUDGET);
+        let remaining_after_manifest = total_budget.saturating_sub(manifest);
+
+        let architecture = remaining_after_manifest.min(DEFAULT_ARCHITECTURE_TOKEN_BUDGET);
+        let symbols = remaining_after_manifest.saturating_sub(architecture);
+
+        BudgetAllocation {
+            manifest,
+            architecture,
+            symbols,
+        }
+    }
+
+    /// Assembles pre-fetched context layers into a single result within budget.
+    ///
+    /// Takes already-fetched manifest, architecture, and symbol results and
+    /// combines them progressively, stopping when the token budget is exhausted.
+    ///
+    /// # Arguments
+    ///
+    /// * `token_budget` - Maximum total tokens for the assembled result
+    /// * `manifest` - Pre-fetched manifest result
+    /// * `architecture` - Pre-fetched architecture result
+    /// * `symbols` - Pre-fetched symbol result
+    ///
+    /// # Returns
+    ///
+    /// A [`BuildContextResult`] with the assembled content and per-layer token tracking.
+    #[must_use]
+    pub fn assemble_context(
+        &self,
+        token_budget: usize,
+        manifest: CompressionResult,
+        architecture: CompressionResult,
+        symbols: CompressionResult,
+    ) -> BuildContextResult {
+        let mut parts: Vec<String> = Vec::new();
+        let mut highest_level = CompressionLevel::Manifest;
+
+        // 1. Always include manifest if budget allows
+        let m_tokens = manifest.tokens_approx();
+        if m_tokens > token_budget {
+            // Truncate manifest to fit
+            let truncated = self.truncate_to_budget(&manifest, token_budget);
+            let t_tokens = truncated.tokens_approx();
+            return BuildContextResult::new(
+                CompressionResult::with_tokens(
+                    truncated.content().to_string(),
+                    CompressionLevel::Manifest,
+                    manifest.source(),
+                    t_tokens,
+                ),
+                t_tokens,
+                0,
+                0,
+            );
+        }
+
+        parts.push(manifest.content().to_string());
+        let manifest_tokens = m_tokens;
+        let mut total_tokens = m_tokens;
+
+        // 2. Include architecture if budget allows
+        let mut architecture_tokens: usize = 0;
+        let remaining = token_budget.saturating_sub(total_tokens);
+        if remaining > 0 {
+            let a_tokens = architecture.tokens_approx();
+            if a_tokens <= remaining {
+                parts.push(architecture.content().to_string());
+                total_tokens += a_tokens;
+                architecture_tokens = a_tokens;
+                highest_level = CompressionLevel::Architecture;
+            }
+        }
+
+        // 3. Include symbols if budget allows
+        let mut symbol_tokens: usize = 0;
+        let remaining = token_budget.saturating_sub(total_tokens);
+        if remaining > 0 {
+            let s_tokens = symbols.tokens_approx();
+            if s_tokens <= remaining {
+                parts.push(symbols.content().to_string());
+                total_tokens += s_tokens;
+                symbol_tokens = s_tokens;
+                highest_level = CompressionLevel::SymbolDetail;
+            }
+        }
+
+        let combined = parts.join("\n\n---\n\n");
+        let source = if self.should_use_ccg() {
+            match highest_level {
+                CompressionLevel::Manifest => ContextSource::CcgLayer0,
+                CompressionLevel::Architecture => ContextSource::CcgLayer1,
+                _ => ContextSource::CcgSparql,
+            }
+        } else {
+            ContextSource::Constructed
+        };
+
+        BuildContextResult::new(
+            CompressionResult::with_tokens(combined, highest_level, source, total_tokens),
+            manifest_tokens,
+            architecture_tokens,
+            symbol_tokens,
+        )
+    }
+
+    /// Builds full context by fetching all layers via MCP and assembling
+    /// them within a token budget.
+    ///
+    /// This is the top-level entry point for context building. It:
+    /// 1. Computes budget allocation across layers
+    /// 2. Fetches manifest, architecture, and symbols via MCP
+    /// 3. Assembles them progressively within the total budget
+    /// 4. Records metrics (latency, token usage)
+    ///
+    /// Fetching is currently sequential (Phase 5.1 will add parallelism
+    /// via `tokio::try_join!`).
+    ///
+    /// # Arguments
+    ///
+    /// * `client` - An active MCP client connected to narsil-mcp
+    /// * `repo_hash` - Current git commit hash for cache invalidation
+    /// * `active_files` - Files the user is actively working with
+    /// * `token_budget` - Maximum total tokens for the result
+    ///
+    /// # Returns
+    ///
+    /// A [`BuildContextResult`] with assembled context and per-layer metrics.
+    pub async fn build_context(
+        &self,
+        client: &mut McpClient,
+        repo_hash: &str,
+        active_files: &[String],
+        token_budget: usize,
+    ) -> BuildContextResult {
+        let start = std::time::Instant::now();
+
+        let allocation = self.compute_budget_allocation(token_budget);
+
+        // Fetch all layers sequentially
+        // (Phase 5.1 will refactor to parallel with tokio::try_join!)
+        let manifest = self.fetch_manifest(client, repo_hash).await;
+        let architecture = self.fetch_architecture(client, repo_hash).await;
+        let symbols = self
+            .fetch_symbols(client, repo_hash, active_files, allocation.symbols)
+            .await;
+
+        let result = self.assemble_context(token_budget, manifest, architecture, symbols);
+
+        // Record metrics
+        self.metrics.record_latency(start.elapsed());
+        self.metrics.record_build_context(
+            result.manifest_tokens(),
+            result.architecture_tokens(),
+            result.symbol_tokens(),
+        );
+
+        result
     }
 }
 
@@ -2199,5 +2481,426 @@ mod tests {
         orchestrator.enter_degraded_mode();
 
         assert_eq!(orchestrator.metrics().degradations(), 2);
+    }
+
+    // =============================================================================
+    // build_context tests (Task 3.4 - Token Budgeting)
+    // =============================================================================
+
+    #[test]
+    fn test_build_context_result_creation() {
+        let result = BuildContextResult::new(
+            CompressionResult::new(
+                "# Context".to_string(),
+                CompressionLevel::Architecture,
+                ContextSource::Constructed,
+            ),
+            500,
+            3000,
+            1500,
+        );
+
+        assert_eq!(result.manifest_tokens(), 500);
+        assert_eq!(result.architecture_tokens(), 3000);
+        assert_eq!(result.symbol_tokens(), 1500);
+        assert_eq!(result.total_tokens(), 500 + 3000 + 1500);
+        assert_eq!(result.result().level(), CompressionLevel::Architecture);
+    }
+
+    #[test]
+    fn test_build_context_result_zero_layers() {
+        let result = BuildContextResult::new(
+            CompressionResult::new(
+                String::new(),
+                CompressionLevel::Manifest,
+                ContextSource::Constructed,
+            ),
+            0,
+            0,
+            0,
+        );
+
+        assert_eq!(result.total_tokens(), 0);
+        assert_eq!(result.manifest_tokens(), 0);
+        assert_eq!(result.architecture_tokens(), 0);
+        assert_eq!(result.symbol_tokens(), 0);
+    }
+
+    #[test]
+    fn test_build_context_allocates_manifest_budget() {
+        // Manifest should get ~500 tokens (DEFAULT_MANIFEST_TOKEN_BUDGET)
+        assert_eq!(DEFAULT_MANIFEST_TOKEN_BUDGET, 500);
+    }
+
+    #[test]
+    fn test_build_context_allocates_architecture_budget_up_to_cap() {
+        // Architecture should be capped at DEFAULT_ARCHITECTURE_TOKEN_BUDGET (12K)
+        assert_eq!(DEFAULT_ARCHITECTURE_TOKEN_BUDGET, 12_000);
+    }
+
+    #[test]
+    fn test_build_context_symbols_get_remainder() {
+        // With a 20K token budget:
+        // manifest: 500
+        // architecture: up to 12K
+        // symbols: remainder = 20000 - 500 - 12000 = 7500
+        let caps = create_capabilities_without_ccg();
+        let orchestrator = CompressionOrchestrator::new(caps, "repo");
+
+        let total_budget: usize = 20_000;
+        let allocation = orchestrator.compute_budget_allocation(total_budget);
+
+        assert_eq!(allocation.manifest, DEFAULT_MANIFEST_TOKEN_BUDGET);
+        assert!(allocation.architecture <= DEFAULT_ARCHITECTURE_TOKEN_BUDGET);
+        assert_eq!(
+            allocation.symbols,
+            total_budget - allocation.manifest - allocation.architecture
+        );
+    }
+
+    #[test]
+    fn test_build_context_small_budget_manifest_only() {
+        // Budget too small for architecture
+        let caps = create_capabilities_without_ccg();
+        let orchestrator = CompressionOrchestrator::new(caps, "repo");
+
+        let allocation = orchestrator.compute_budget_allocation(600);
+
+        assert_eq!(allocation.manifest, 500);
+        assert_eq!(allocation.architecture, 100); // Just the remainder
+        assert_eq!(allocation.symbols, 0);
+    }
+
+    #[test]
+    fn test_build_context_very_small_budget_truncates_manifest() {
+        let caps = create_capabilities_without_ccg();
+        let orchestrator = CompressionOrchestrator::new(caps, "repo");
+
+        let allocation = orchestrator.compute_budget_allocation(200);
+
+        // Manifest budget should be clamped to total budget
+        assert_eq!(allocation.manifest, 200);
+        assert_eq!(allocation.architecture, 0);
+        assert_eq!(allocation.symbols, 0);
+    }
+
+    #[test]
+    fn test_build_context_assembles_all_layers_from_responses() {
+        let caps = create_capabilities_without_ccg();
+        let orchestrator = CompressionOrchestrator::new(caps, "test-repo");
+
+        let manifest_response = serde_json::json!({
+            "content": [{"type": "text", "text": "📁 repo/\n  🦀 main.rs (1.0KB)"}]
+        });
+        let arch_response = serde_json::json!({
+            "content": [{"type": "text", "text": "| File | Dependencies | Dependents |\n|------|--------------|------------|\n| src/main.rs | 5 | 0 |"}]
+        });
+        let symbols_response = serde_json::json!({
+            "content": [{"type": "text", "text": "## Functions\n\n- **main** (`src/main.rs:1`) fn main() {"}]
+        });
+
+        let manifest = orchestrator.process_manifest_response(&manifest_response, "hash");
+        let architecture = orchestrator.process_architecture_response(&arch_response, "hash");
+        let symbols = orchestrator.process_symbols_response(&symbols_response, "hash", 4000);
+
+        let result = orchestrator.assemble_context(20_000, manifest, architecture, symbols);
+
+        // Should contain content from all three layers
+        assert!(result.result().content().contains("Repository Manifest"));
+        assert!(result.result().content().contains("Modules"));
+        assert!(result.result().content().contains("Symbols"));
+    }
+
+    #[test]
+    fn test_build_context_assembly_respects_total_budget() {
+        let caps = create_capabilities_without_ccg();
+        let orchestrator = CompressionOrchestrator::new(caps, "test-repo");
+
+        // Create large results that exceed budget
+        let manifest = CompressionResult::new(
+            "A".repeat(2000), // ~500 tokens
+            CompressionLevel::Manifest,
+            ContextSource::Constructed,
+        );
+        let architecture = CompressionResult::new(
+            "B".repeat(48000), // ~12000 tokens
+            CompressionLevel::Architecture,
+            ContextSource::Constructed,
+        );
+        let symbols = CompressionResult::new(
+            "C".repeat(80000), // ~20000 tokens
+            CompressionLevel::SymbolDetail,
+            ContextSource::DirectTool,
+        );
+
+        let result = orchestrator.assemble_context(
+            1000, // Very small budget
+            manifest,
+            architecture,
+            symbols,
+        );
+
+        // Total tokens should not exceed budget
+        assert!(
+            result.result().tokens_approx() <= 1000,
+            "Total tokens {} should not exceed budget 1000",
+            result.result().tokens_approx()
+        );
+    }
+
+    #[test]
+    fn test_build_context_assembly_skips_architecture_when_over_budget() {
+        let caps = create_capabilities_without_ccg();
+        let orchestrator = CompressionOrchestrator::new(caps, "test-repo");
+
+        let manifest = CompressionResult::new(
+            "Manifest data".to_string(),
+            CompressionLevel::Manifest,
+            ContextSource::Constructed,
+        );
+        let architecture = CompressionResult::new(
+            "B".repeat(100_000), // Very large - ~25K tokens
+            CompressionLevel::Architecture,
+            ContextSource::Constructed,
+        );
+        let symbols = CompressionResult::new(
+            "S".repeat(100_000), // Also very large
+            CompressionLevel::SymbolDetail,
+            ContextSource::DirectTool,
+        );
+
+        // Budget that fits manifest but not architecture or symbols
+        let result = orchestrator.assemble_context(100, manifest, architecture, symbols);
+
+        // Should include manifest but skip architecture and symbols
+        assert!(result.result().content().contains("Manifest data"));
+        assert!(!result.result().content().contains("BBB"));
+        assert!(!result.result().content().contains("SSS"));
+        assert_eq!(result.architecture_tokens(), 0);
+        assert_eq!(result.symbol_tokens(), 0);
+    }
+
+    #[test]
+    fn test_build_context_assembly_skips_symbols_when_over_budget() {
+        let caps = create_capabilities_without_ccg();
+        let orchestrator = CompressionOrchestrator::new(caps, "test-repo");
+
+        let manifest = CompressionResult::new(
+            "M".repeat(100), // ~25 tokens
+            CompressionLevel::Manifest,
+            ContextSource::Constructed,
+        );
+        let architecture = CompressionResult::new(
+            "A".repeat(200), // ~50 tokens
+            CompressionLevel::Architecture,
+            ContextSource::Constructed,
+        );
+        let symbols = CompressionResult::new(
+            "S".repeat(10000), // ~2500 tokens
+            CompressionLevel::SymbolDetail,
+            ContextSource::DirectTool,
+        );
+
+        // Budget fits manifest + architecture but not symbols
+        let result = orchestrator.assemble_context(100, manifest, architecture, symbols);
+
+        // Should include manifest and architecture but not symbols
+        assert!(result.result().content().contains("MMM"));
+        assert!(result.result().content().contains("AAA"));
+        assert!(result.manifest_tokens() > 0);
+        assert!(result.architecture_tokens() > 0);
+        assert_eq!(result.symbol_tokens(), 0);
+    }
+
+    #[test]
+    fn test_build_context_assembly_tracks_per_layer_tokens() {
+        let caps = create_capabilities_without_ccg();
+        let orchestrator = CompressionOrchestrator::new(caps, "test-repo");
+
+        let manifest = CompressionResult::new(
+            "Manifest".to_string(),
+            CompressionLevel::Manifest,
+            ContextSource::Constructed,
+        );
+        let architecture = CompressionResult::new(
+            "Architecture".to_string(),
+            CompressionLevel::Architecture,
+            ContextSource::Constructed,
+        );
+        let symbols = CompressionResult::new(
+            "Symbols".to_string(),
+            CompressionLevel::SymbolDetail,
+            ContextSource::DirectTool,
+        );
+
+        let result = orchestrator.assemble_context(
+            10_000,
+            manifest.clone(),
+            architecture.clone(),
+            symbols.clone(),
+        );
+
+        assert_eq!(result.manifest_tokens(), manifest.tokens_approx());
+        assert_eq!(result.architecture_tokens(), architecture.tokens_approx());
+        assert_eq!(result.symbol_tokens(), symbols.tokens_approx());
+    }
+
+    #[test]
+    fn test_build_context_assembly_uses_separator_between_layers() {
+        let caps = create_capabilities_without_ccg();
+        let orchestrator = CompressionOrchestrator::new(caps, "test-repo");
+
+        let manifest = CompressionResult::new(
+            "Manifest".to_string(),
+            CompressionLevel::Manifest,
+            ContextSource::Constructed,
+        );
+        let architecture = CompressionResult::new(
+            "Architecture".to_string(),
+            CompressionLevel::Architecture,
+            ContextSource::Constructed,
+        );
+        let symbols = CompressionResult::new(
+            "Symbols".to_string(),
+            CompressionLevel::SymbolDetail,
+            ContextSource::DirectTool,
+        );
+
+        let result = orchestrator.assemble_context(10_000, manifest, architecture, symbols);
+
+        // Should have separators between layers
+        assert!(result.result().content().contains("---"));
+    }
+
+    #[test]
+    fn test_build_context_graceful_degradation_manifest_failure() {
+        let caps = create_capabilities_without_ccg();
+        let orchestrator = CompressionOrchestrator::new(caps, "test-repo");
+
+        // Simulate degraded manifest
+        let manifest = orchestrator.create_degraded_result(CompressionLevel::Manifest);
+        let architecture = CompressionResult::new(
+            "Architecture".to_string(),
+            CompressionLevel::Architecture,
+            ContextSource::Constructed,
+        );
+        let symbols = CompressionResult::new(
+            "Symbols".to_string(),
+            CompressionLevel::SymbolDetail,
+            ContextSource::DirectTool,
+        );
+
+        let result = orchestrator.assemble_context(10_000, manifest, architecture, symbols);
+
+        // Should still assemble with degraded manifest
+        assert!(result.result().content().contains("Degraded Mode"));
+        assert!(result.result().content().contains("Architecture"));
+    }
+
+    #[test]
+    fn test_build_context_when_fully_degraded() {
+        let caps = create_capabilities_without_ccg();
+        let orchestrator = CompressionOrchestrator::new(caps, "test-repo");
+
+        // All layers degraded
+        let manifest = orchestrator.create_degraded_result(CompressionLevel::Manifest);
+        let architecture = orchestrator.create_degraded_result(CompressionLevel::Architecture);
+        let symbols = orchestrator.create_degraded_result(CompressionLevel::SymbolDetail);
+
+        let result = orchestrator.assemble_context(10_000, manifest, architecture, symbols);
+
+        // Should still return a valid result
+        assert!(result.result().content().contains("Degraded Mode"));
+        assert!(result.result().tokens_approx() > 0);
+    }
+
+    #[test]
+    fn test_build_context_sets_highest_level_achieved() {
+        let caps = create_capabilities_without_ccg();
+        let orchestrator = CompressionOrchestrator::new(caps, "test-repo");
+
+        // All layers fit
+        let manifest = CompressionResult::new(
+            "M".to_string(),
+            CompressionLevel::Manifest,
+            ContextSource::Constructed,
+        );
+        let architecture = CompressionResult::new(
+            "A".to_string(),
+            CompressionLevel::Architecture,
+            ContextSource::Constructed,
+        );
+        let symbols = CompressionResult::new(
+            "S".to_string(),
+            CompressionLevel::SymbolDetail,
+            ContextSource::DirectTool,
+        );
+
+        let result = orchestrator.assemble_context(10_000, manifest, architecture, symbols);
+        assert_eq!(result.result().level(), CompressionLevel::SymbolDetail);
+    }
+
+    #[test]
+    fn test_build_context_sets_manifest_level_when_only_manifest_fits() {
+        let caps = create_capabilities_without_ccg();
+        let orchestrator = CompressionOrchestrator::new(caps, "test-repo");
+
+        let manifest = CompressionResult::new(
+            "M".to_string(),
+            CompressionLevel::Manifest,
+            ContextSource::Constructed,
+        );
+        let architecture = CompressionResult::new(
+            "A".repeat(10000),
+            CompressionLevel::Architecture,
+            ContextSource::Constructed,
+        );
+        let symbols = CompressionResult::new(
+            "S".repeat(10000),
+            CompressionLevel::SymbolDetail,
+            ContextSource::DirectTool,
+        );
+
+        let result = orchestrator.assemble_context(5, manifest, architecture, symbols);
+        assert_eq!(result.result().level(), CompressionLevel::Manifest);
+    }
+
+    #[test]
+    fn test_budget_allocation_defaults() {
+        let caps = create_capabilities_without_ccg();
+        let orchestrator = CompressionOrchestrator::new(caps, "repo");
+
+        // Default total budget of 16K
+        let allocation = orchestrator.compute_budget_allocation(16_000);
+
+        assert_eq!(allocation.manifest, 500);
+        assert!(allocation.architecture <= 12_000);
+        let expected_symbols = 16_000 - allocation.manifest - allocation.architecture;
+        assert_eq!(allocation.symbols, expected_symbols);
+    }
+
+    #[test]
+    fn test_budget_allocation_large_budget_caps_architecture() {
+        let caps = create_capabilities_without_ccg();
+        let orchestrator = CompressionOrchestrator::new(caps, "repo");
+
+        // Very large budget
+        let allocation = orchestrator.compute_budget_allocation(100_000);
+
+        assert_eq!(allocation.manifest, 500);
+        assert_eq!(allocation.architecture, 12_000);
+        assert_eq!(allocation.symbols, 100_000 - 500 - 12_000);
+    }
+
+    #[test]
+    fn test_budget_allocation_zero_budget() {
+        let caps = create_capabilities_without_ccg();
+        let orchestrator = CompressionOrchestrator::new(caps, "repo");
+
+        let allocation = orchestrator.compute_budget_allocation(0);
+
+        assert_eq!(allocation.manifest, 0);
+        assert_eq!(allocation.architecture, 0);
+        assert_eq!(allocation.symbols, 0);
     }
 }

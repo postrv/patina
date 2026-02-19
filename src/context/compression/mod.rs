@@ -63,8 +63,9 @@ pub use metrics::{
     CompactionMetrics, CompactionMetricsSummary, CompressionMetrics, MetricsSummary,
 };
 pub use orchestrator::{
-    CompressionOrchestrator, DEFAULT_ARCHITECTURE_TOKEN_BUDGET, DEFAULT_ORCHESTRATOR_MAX_ENTRIES,
-    DEFAULT_ORCHESTRATOR_TTL, DEFAULT_SYMBOL_TOKEN_BUDGET,
+    BudgetAllocation, BuildContextResult, CompressionOrchestrator,
+    DEFAULT_ARCHITECTURE_TOKEN_BUDGET, DEFAULT_MANIFEST_TOKEN_BUDGET,
+    DEFAULT_ORCHESTRATOR_MAX_ENTRIES, DEFAULT_ORCHESTRATOR_TTL, DEFAULT_SYMBOL_TOKEN_BUDGET,
 };
 pub use render::{
     looks_like_json, parse_ccg_architecture, parse_ccg_manifest, parse_find_symbols_response,

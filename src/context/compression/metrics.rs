@@ -42,6 +42,14 @@ pub struct CompressionMetrics {
     latency_samples: AtomicU64,
     /// Number of times degradation occurred
     degradations: AtomicU64,
+    /// Number of build_context calls
+    build_context_calls: AtomicU64,
+    /// Total tokens used by manifest layer across all builds
+    manifest_tokens_total: AtomicU64,
+    /// Total tokens used by architecture layer across all builds
+    architecture_tokens_total: AtomicU64,
+    /// Total tokens used by symbol layer across all builds
+    symbol_tokens_total: AtomicU64,
 }
 
 impl CompressionMetrics {
@@ -81,6 +89,52 @@ impl CompressionMetrics {
     /// Records a degradation event.
     pub fn record_degradation(&self) {
         self.degradations.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Records a `build_context` call with per-layer token usage.
+    ///
+    /// # Arguments
+    ///
+    /// * `manifest_tokens` - Tokens used by the manifest layer
+    /// * `architecture_tokens` - Tokens used by the architecture layer
+    /// * `symbol_tokens` - Tokens used by the symbol layer
+    pub fn record_build_context(
+        &self,
+        manifest_tokens: usize,
+        architecture_tokens: usize,
+        symbol_tokens: usize,
+    ) {
+        self.build_context_calls.fetch_add(1, Ordering::Relaxed);
+        self.manifest_tokens_total
+            .fetch_add(manifest_tokens as u64, Ordering::Relaxed);
+        self.architecture_tokens_total
+            .fetch_add(architecture_tokens as u64, Ordering::Relaxed);
+        self.symbol_tokens_total
+            .fetch_add(symbol_tokens as u64, Ordering::Relaxed);
+    }
+
+    /// Returns the number of `build_context` calls.
+    #[must_use]
+    pub fn build_context_calls(&self) -> u64 {
+        self.build_context_calls.load(Ordering::Relaxed)
+    }
+
+    /// Returns the total tokens used by the manifest layer.
+    #[must_use]
+    pub fn manifest_tokens_total(&self) -> u64 {
+        self.manifest_tokens_total.load(Ordering::Relaxed)
+    }
+
+    /// Returns the total tokens used by the architecture layer.
+    #[must_use]
+    pub fn architecture_tokens_total(&self) -> u64 {
+        self.architecture_tokens_total.load(Ordering::Relaxed)
+    }
+
+    /// Returns the total tokens used by the symbol layer.
+    #[must_use]
+    pub fn symbol_tokens_total(&self) -> u64 {
+        self.symbol_tokens_total.load(Ordering::Relaxed)
     }
 
     /// Returns the number of degradation events.
@@ -167,6 +221,10 @@ impl CompressionMetrics {
         self.total_latency_us.store(0, Ordering::Relaxed);
         self.latency_samples.store(0, Ordering::Relaxed);
         self.degradations.store(0, Ordering::Relaxed);
+        self.build_context_calls.store(0, Ordering::Relaxed);
+        self.manifest_tokens_total.store(0, Ordering::Relaxed);
+        self.architecture_tokens_total.store(0, Ordering::Relaxed);
+        self.symbol_tokens_total.store(0, Ordering::Relaxed);
     }
 }
 
@@ -622,5 +680,57 @@ mod tests {
         assert_eq!(metrics.compaction_count(), 0);
         assert_eq!(metrics.total_tokens_saved(), 0);
         assert_eq!(metrics.total_time_ms(), 0);
+    }
+
+    // =========================================================================
+    // build_context metrics tests (Task 3.4)
+    // =========================================================================
+
+    #[test]
+    fn test_record_build_context() {
+        let metrics = CompressionMetrics::new();
+
+        metrics.record_build_context(500, 3000, 1500);
+
+        assert_eq!(metrics.build_context_calls(), 1);
+        assert_eq!(metrics.manifest_tokens_total(), 500);
+        assert_eq!(metrics.architecture_tokens_total(), 3000);
+        assert_eq!(metrics.symbol_tokens_total(), 1500);
+    }
+
+    #[test]
+    fn test_record_build_context_accumulates() {
+        let metrics = CompressionMetrics::new();
+
+        metrics.record_build_context(500, 3000, 1500);
+        metrics.record_build_context(400, 2000, 1000);
+
+        assert_eq!(metrics.build_context_calls(), 2);
+        assert_eq!(metrics.manifest_tokens_total(), 900);
+        assert_eq!(metrics.architecture_tokens_total(), 5000);
+        assert_eq!(metrics.symbol_tokens_total(), 2500);
+    }
+
+    #[test]
+    fn test_build_context_metrics_initial_zero() {
+        let metrics = CompressionMetrics::new();
+
+        assert_eq!(metrics.build_context_calls(), 0);
+        assert_eq!(metrics.manifest_tokens_total(), 0);
+        assert_eq!(metrics.architecture_tokens_total(), 0);
+        assert_eq!(metrics.symbol_tokens_total(), 0);
+    }
+
+    #[test]
+    fn test_build_context_metrics_reset() {
+        let metrics = CompressionMetrics::new();
+
+        metrics.record_build_context(500, 3000, 1500);
+        metrics.reset();
+
+        assert_eq!(metrics.build_context_calls(), 0);
+        assert_eq!(metrics.manifest_tokens_total(), 0);
+        assert_eq!(metrics.architecture_tokens_total(), 0);
+        assert_eq!(metrics.symbol_tokens_total(), 0);
     }
 }
