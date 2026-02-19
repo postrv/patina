@@ -591,7 +591,7 @@ Before marking ANY task `[x]`:
 **TDD Cycle**:
 - [x] RED: Write tests for `ContinuousHandler` — processes iteration progress, gate pass/fail display, stagnation warning display, recovery status
 - [x] GREEN: Implement `ContinuousHandler`, add `ContinuousEvent` variant to `AppEvent`, wire into dispatcher
-- [ ] REFACTOR: Add TUI widget for continuous loop progress (iteration count, gate status, recovery attempts), `/continuous start` and `/continuous stop` commands
+- [x] REFACTOR: Add TUI widget for continuous loop progress (iteration count, gate status, recovery attempts), `/continuous start` and `/continuous stop` commands
 - Files: `src/app/handlers/continuous.rs` (new), `src/app/events.rs`, `src/continuous/mod.rs`
 - Acceptance: Continuous loop progress visible in TUI, start/stop commands functional
 
