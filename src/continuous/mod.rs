@@ -41,6 +41,7 @@
 //! - [`recovery`]: Root-cause analysis and recovery for quality gate failures
 
 pub mod events;
+pub mod gates;
 pub mod plugin;
 pub mod recovery;
 pub mod runner;

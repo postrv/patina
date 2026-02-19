@@ -16,6 +16,8 @@
 
 use std::fmt;
 
+use serde::{Deserialize, Serialize};
+
 use super::ContinuousEvent;
 
 /// Quality gates that must pass for an iteration to succeed.
@@ -32,7 +34,7 @@ use super::ContinuousEvent;
 /// assert_eq!(gate.command(), "cargo test");
 /// assert_eq!(format!("{}", gate), "Tests Pass");
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum QualityGate {
     /// All tests must pass (`cargo test`).
     TestsPass,
