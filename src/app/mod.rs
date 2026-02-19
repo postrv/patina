@@ -181,6 +181,19 @@ pub async fn run(config: Config) -> Result<()> {
         }
     }
 
+    // Detect terminal environment for capability adaptation
+    let term_env = terminal::detect_terminal_environment();
+    if term_env.graphics_degraded() {
+        info!(
+            "Running inside {} — image rendering degraded to half-blocks",
+            term_env
+        );
+    }
+    if term_env.is_remote() {
+        info!("Running over SSH — clipboard will use OSC 52 fallback");
+    }
+    debug!("Terminal environment: {}", term_env);
+
     // Initialize session manager for auto-save
     let sessions_dir = default_sessions_dir()?;
     let session_manager = SessionManager::new(sessions_dir);

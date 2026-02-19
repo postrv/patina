@@ -386,10 +386,11 @@ pub fn is_kitty_terminal() -> bool {
 /// This function probes the terminal environment to determine the best available
 /// graphics rendering protocol. Detection is performed in order of preference:
 ///
-/// 1. **Kitty** - Checked via $KITTY_WINDOW_ID or $TERM
-/// 2. **iTerm2** - Checked via $ITERM_SESSION_ID, $TERM_PROGRAM, or $LC_TERMINAL
-/// 3. **Sixel** - Checked via $TERM against known Sixel-capable terminals
-/// 4. **HalfBlock** - Universal Unicode fallback (always available)
+/// 1. **Multiplexer check** - tmux/screen force `HalfBlock` fallback
+/// 2. **Kitty** - Checked via $KITTY_WINDOW_ID or $TERM
+/// 3. **iTerm2** - Checked via $ITERM_SESSION_ID, $TERM_PROGRAM, or $LC_TERMINAL
+/// 4. **Sixel** - Checked via $TERM against known Sixel-capable terminals
+/// 5. **HalfBlock** - Universal Unicode fallback (always available)
 ///
 /// # Returns
 ///
@@ -400,6 +401,10 @@ pub fn is_kitty_terminal() -> bool {
 /// This function does not perform terminal queries that would produce visible output
 /// or require reading from the terminal. It relies only on environment variables
 /// and compile-time platform detection.
+///
+/// When running inside a terminal multiplexer (tmux or GNU screen), advanced
+/// graphics protocols (Sixel, Kitty) are disabled because the multiplexer
+/// intercepts the escape sequences. The function falls back to `HalfBlock`.
 ///
 /// # Example
 ///
@@ -412,6 +417,16 @@ pub fn is_kitty_terminal() -> bool {
 #[must_use]
 pub fn detect_graphics_protocol() -> GraphicsProtocol {
     debug!("Detecting terminal graphics protocol");
+
+    // Multiplexers intercept escape sequences — advanced graphics won't work
+    let term_env = detect_terminal_environment();
+    if term_env.graphics_degraded() {
+        info!(
+            "Running inside {} — image rendering degraded to half-blocks",
+            term_env
+        );
+        return GraphicsProtocol::HalfBlock;
+    }
 
     // Check for Kitty first (highest capability)
     if is_kitty_terminal() {
@@ -980,6 +995,42 @@ mod tests {
         restore_env("SSH_CLIENT", original_ssh_client);
         restore_env("STY", original_sty);
         restore_env("TMUX", original_tmux);
+    }
+
+    #[test]
+    fn test_image_protocol_disabled_in_tmux() {
+        let original_tmux = env::var("TMUX").ok();
+        let original_kitty = env::var("KITTY_WINDOW_ID").ok();
+
+        // Simulate being inside tmux with a Kitty-capable terminal
+        env::set_var("TMUX", "/tmp/tmux-1000/default,12345,0");
+        env::set_var("KITTY_WINDOW_ID", "1");
+
+        let protocol = detect_graphics_protocol();
+        // Even though Kitty is detected, tmux forces HalfBlock
+        assert_eq!(protocol, GraphicsProtocol::HalfBlock);
+
+        restore_env("KITTY_WINDOW_ID", original_kitty);
+        restore_env("TMUX", original_tmux);
+    }
+
+    #[test]
+    fn test_image_protocol_disabled_in_screen() {
+        let original_sty = env::var("STY").ok();
+        let original_tmux = env::var("TMUX").ok();
+        let original_kitty = env::var("KITTY_WINDOW_ID").ok();
+
+        // Simulate being inside screen
+        env::remove_var("TMUX");
+        env::set_var("STY", "12345.pts-0.hostname");
+        env::set_var("KITTY_WINDOW_ID", "1");
+
+        let protocol = detect_graphics_protocol();
+        assert_eq!(protocol, GraphicsProtocol::HalfBlock);
+
+        restore_env("KITTY_WINDOW_ID", original_kitty);
+        restore_env("TMUX", original_tmux);
+        restore_env("STY", original_sty);
     }
 
     #[test]
