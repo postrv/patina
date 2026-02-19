@@ -1307,17 +1307,20 @@ impl CompressionOrchestrator {
         )
     }
 
-    /// Builds full context by fetching all layers via MCP and assembling
-    /// them within a token budget.
+    /// Builds full context by fetching all layers via MCP in parallel and
+    /// assembling them within a token budget.
     ///
     /// This is the top-level entry point for context building. It:
     /// 1. Computes budget allocation across layers
-    /// 2. Fetches manifest, architecture, and symbols via MCP
+    /// 2. Fetches manifest, architecture, and symbols via MCP **in parallel**
+    ///    using `tokio::join!`
     /// 3. Assembles them progressively within the total budget
     /// 4. Records metrics (latency, token usage)
     ///
-    /// Fetching is currently sequential (Phase 5.1 will add parallelism
-    /// via `tokio::try_join!`).
+    /// Each layer's fetch checks the cache first (no lock needed), then
+    /// acquires a mutex only for the actual MCP call. This means cache-hit
+    /// layers complete immediately while cache-miss layers overlap their
+    /// I/O wait with other layers' processing.
     ///
     /// # Arguments
     ///
@@ -1340,13 +1343,21 @@ impl CompressionOrchestrator {
 
         let allocation = self.compute_budget_allocation(token_budget);
 
-        // Fetch all layers sequentially
-        // (Phase 5.1 will refactor to parallel with tokio::try_join!)
-        let manifest = self.fetch_manifest(client, repo_hash).await;
-        let architecture = self.fetch_architecture(client, repo_hash).await;
-        let symbols = self
-            .fetch_symbols(client, repo_hash, active_files, allocation.symbols)
-            .await;
+        // Wrap the client in a mutex so parallel fetches can share it.
+        // Each fetch locks only during the actual MCP call; cache checks
+        // and response parsing happen without holding the lock.
+        let client_mutex = tokio::sync::Mutex::new(client);
+
+        let (manifest, architecture, symbols) = tokio::join!(
+            self.fetch_manifest_parallel(&client_mutex, repo_hash),
+            self.fetch_architecture_parallel(&client_mutex, repo_hash),
+            self.fetch_symbols_parallel(
+                &client_mutex,
+                repo_hash,
+                active_files,
+                allocation.symbols,
+            ),
+        );
 
         let result = self.assemble_context(token_budget, manifest, architecture, symbols);
 
@@ -1359,6 +1370,140 @@ impl CompressionOrchestrator {
         );
 
         result
+    }
+
+    // =========================================================================
+    // Parallel fetch helpers (Phase 5.1)
+    // =========================================================================
+
+    /// Fetches the manifest layer, acquiring the client lock only for the MCP call.
+    ///
+    /// Checks cache first (lock-free), then locks the mutex for the MCP call
+    /// if needed, and processes the response after releasing the lock.
+    async fn fetch_manifest_parallel(
+        &self,
+        client: &tokio::sync::Mutex<&mut McpClient>,
+        repo_hash: &str,
+    ) -> CompressionResult {
+        // Cache check — no lock needed
+        if let Some(cached) = self.get_cached(CompressionLevel::Manifest, repo_hash) {
+            return cached;
+        }
+
+        let args = serde_json::json!({
+            "repo": self.repo_name
+        });
+
+        // Lock client only for the MCP call
+        let response = {
+            let mut guard = client.lock().await;
+            guard.call_tool("get_project_structure", args).await
+        };
+
+        match response {
+            Ok(response) => self.process_manifest_response(&response, repo_hash),
+            Err(err) => {
+                warn!(
+                    repo = %self.repo_name,
+                    error = %err,
+                    "Manifest fetch via get_project_structure failed, entering degraded mode"
+                );
+                self.enter_degraded_mode();
+                self.create_degraded_result(CompressionLevel::Manifest)
+            }
+        }
+    }
+
+    /// Fetches the architecture layer, acquiring the client lock only for the MCP call.
+    ///
+    /// Checks cache first (lock-free), then locks the mutex for the MCP call
+    /// if needed, and processes the response after releasing the lock.
+    async fn fetch_architecture_parallel(
+        &self,
+        client: &tokio::sync::Mutex<&mut McpClient>,
+        repo_hash: &str,
+    ) -> CompressionResult {
+        // Cache check — no lock needed
+        if let Some(cached) = self.get_cached(CompressionLevel::Architecture, repo_hash) {
+            return cached;
+        }
+
+        let args = serde_json::json!({
+            "repo": self.repo_name
+        });
+
+        // Lock client only for the MCP call
+        let response = {
+            let mut guard = client.lock().await;
+            guard.call_tool("get_import_graph", args).await
+        };
+
+        match response {
+            Ok(response) => self.process_architecture_response(&response, repo_hash),
+            Err(err) => {
+                warn!(
+                    repo = %self.repo_name,
+                    error = %err,
+                    "Architecture fetch via get_import_graph failed, entering degraded mode"
+                );
+                self.enter_degraded_mode();
+                self.create_degraded_result(CompressionLevel::Architecture)
+            }
+        }
+    }
+
+    /// Fetches the symbol layer, acquiring the client lock only for the MCP call.
+    ///
+    /// Checks cache first (lock-free), then locks the mutex for the MCP call
+    /// if needed, and processes the response after releasing the lock.
+    async fn fetch_symbols_parallel(
+        &self,
+        client: &tokio::sync::Mutex<&mut McpClient>,
+        repo_hash: &str,
+        active_files: &[String],
+        token_budget: usize,
+    ) -> CompressionResult {
+        // Cache check — no lock needed
+        if let Some(cached) = self.get_cached(CompressionLevel::SymbolDetail, repo_hash) {
+            return cached;
+        }
+
+        let args = if active_files.is_empty() {
+            serde_json::json!({
+                "repo": self.repo_name,
+                "exclude_tests": true
+            })
+        } else {
+            let pattern = active_files
+                .iter()
+                .map(|f| format!("{{{f}}}"))
+                .collect::<Vec<_>>()
+                .join(",");
+            serde_json::json!({
+                "repo": self.repo_name,
+                "file_pattern": pattern,
+                "exclude_tests": true
+            })
+        };
+
+        // Lock client only for the MCP call
+        let response = {
+            let mut guard = client.lock().await;
+            guard.call_tool("find_symbols", args).await
+        };
+
+        match response {
+            Ok(response) => self.process_symbols_response(&response, repo_hash, token_budget),
+            Err(err) => {
+                warn!(
+                    repo = %self.repo_name,
+                    error = %err,
+                    "Symbol fetch via find_symbols failed, entering degraded mode"
+                );
+                self.enter_degraded_mode();
+                self.create_degraded_result(CompressionLevel::SymbolDetail)
+            }
+        }
     }
 }
 
@@ -2902,5 +3047,234 @@ mod tests {
         assert_eq!(allocation.manifest, 0);
         assert_eq!(allocation.architecture, 0);
         assert_eq!(allocation.symbols, 0);
+    }
+
+    // =============================================================================
+    // Parallel context building tests (Phase 5.1)
+    // =============================================================================
+
+    #[tokio::test]
+    async fn test_build_context_parallel_returns_correct_result_with_cached_layers() {
+        let caps = create_capabilities_without_ccg();
+        let orchestrator = CompressionOrchestrator::new(caps, "repo");
+
+        // Pre-populate cache for all three layers
+        let manifest = CompressionResult::new(
+            "# Manifest\n\nProject overview".to_string(),
+            CompressionLevel::Manifest,
+            ContextSource::Constructed,
+        );
+        orchestrator.cache_result(CompressionLevel::Manifest, &manifest, "hash123");
+
+        let arch = CompressionResult::new(
+            "# Architecture\n\nModule structure".to_string(),
+            CompressionLevel::Architecture,
+            ContextSource::Constructed,
+        );
+        orchestrator.cache_result(CompressionLevel::Architecture, &arch, "hash123");
+
+        let symbols = CompressionResult::new(
+            "# Symbols\n\nKey types".to_string(),
+            CompressionLevel::SymbolDetail,
+            ContextSource::DirectTool,
+        );
+        orchestrator.cache_result(CompressionLevel::SymbolDetail, &symbols, "hash123");
+
+        // Create a disconnected client — build_context won't use it since all layers are cached
+        let mut client = McpClient::new("test", "/bin/false", vec![]);
+
+        let result = orchestrator
+            .build_context(&mut client, "hash123", &[], 20_000)
+            .await;
+
+        // All three layers should be present in the assembled result
+        assert!(result.result().content().contains("# Manifest"));
+        assert!(result.result().content().contains("# Architecture"));
+        assert!(result.result().content().contains("# Symbols"));
+        assert_eq!(orchestrator.metrics().cache_hits(), 3);
+    }
+
+    #[tokio::test]
+    async fn test_build_context_parallel_records_latency_metric() {
+        let caps = create_capabilities_without_ccg();
+        let orchestrator = CompressionOrchestrator::new(caps, "repo");
+
+        // Pre-populate cache so MCP calls are skipped
+        for level in [
+            CompressionLevel::Manifest,
+            CompressionLevel::Architecture,
+            CompressionLevel::SymbolDetail,
+        ] {
+            let result =
+                CompressionResult::new("content".to_string(), level, ContextSource::Constructed);
+            orchestrator.cache_result(level, &result, "hash");
+        }
+
+        let mut client = McpClient::new("test", "/bin/false", vec![]);
+        let _result = orchestrator
+            .build_context(&mut client, "hash", &[], 20_000)
+            .await;
+
+        // Latency metric should have been recorded
+        assert!(orchestrator.metrics().average_latency().is_some());
+    }
+
+    #[tokio::test]
+    async fn test_build_context_parallel_records_token_metrics() {
+        let caps = create_capabilities_without_ccg();
+        let orchestrator = CompressionOrchestrator::new(caps, "repo");
+
+        // Pre-populate cache with known content
+        let manifest = CompressionResult::new(
+            "Manifest content".to_string(),
+            CompressionLevel::Manifest,
+            ContextSource::Constructed,
+        );
+        orchestrator.cache_result(CompressionLevel::Manifest, &manifest, "hash");
+
+        let arch = CompressionResult::new(
+            "Architecture content".to_string(),
+            CompressionLevel::Architecture,
+            ContextSource::Constructed,
+        );
+        orchestrator.cache_result(CompressionLevel::Architecture, &arch, "hash");
+
+        let symbols = CompressionResult::new(
+            "Symbols content".to_string(),
+            CompressionLevel::SymbolDetail,
+            ContextSource::DirectTool,
+        );
+        orchestrator.cache_result(CompressionLevel::SymbolDetail, &symbols, "hash");
+
+        let mut client = McpClient::new("test", "/bin/false", vec![]);
+        let result = orchestrator
+            .build_context(&mut client, "hash", &[], 20_000)
+            .await;
+
+        // Per-layer token counts should be non-zero
+        assert!(result.manifest_tokens() > 0);
+        assert!(result.architecture_tokens() > 0);
+        assert!(result.symbol_tokens() > 0);
+        assert_eq!(
+            result.total_tokens(),
+            result.manifest_tokens() + result.architecture_tokens() + result.symbol_tokens()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_build_context_parallel_handles_cache_miss_with_disconnected_client() {
+        let caps = create_capabilities_without_ccg();
+        let orchestrator = CompressionOrchestrator::new(caps, "repo");
+
+        // No cache populated — all layers will miss cache and try MCP calls.
+        // The client is disconnected, so MCP calls will fail and
+        // fetch methods should return degraded results.
+        let mut client = McpClient::new("test", "/bin/false", vec![]);
+
+        let result = orchestrator
+            .build_context(&mut client, "hash", &[], 20_000)
+            .await;
+
+        // Should still produce a result (degraded mode)
+        assert!(!result.result().content().is_empty());
+        // Orchestrator should have entered degraded mode
+        assert!(orchestrator.is_degraded());
+    }
+
+    #[tokio::test]
+    async fn test_build_context_parallel_respects_budget() {
+        let caps = create_capabilities_without_ccg();
+        let orchestrator = CompressionOrchestrator::new(caps, "repo");
+
+        // Pre-populate cache with large and small content
+        let manifest = CompressionResult::new(
+            "M".repeat(80),
+            CompressionLevel::Manifest,
+            ContextSource::Constructed,
+        );
+        orchestrator.cache_result(CompressionLevel::Manifest, &manifest, "hash");
+
+        let arch = CompressionResult::new(
+            "A".repeat(4000),
+            CompressionLevel::Architecture,
+            ContextSource::Constructed,
+        );
+        orchestrator.cache_result(CompressionLevel::Architecture, &arch, "hash");
+
+        let symbols = CompressionResult::new(
+            "S".repeat(4000),
+            CompressionLevel::SymbolDetail,
+            ContextSource::DirectTool,
+        );
+        orchestrator.cache_result(CompressionLevel::SymbolDetail, &symbols, "hash");
+
+        // Small budget: should include manifest but not architecture or symbols
+        let mut client = McpClient::new("test", "/bin/false", vec![]);
+        let result = orchestrator
+            .build_context(&mut client, "hash", &[], 50)
+            .await;
+
+        assert!(result.result().content().contains("MMM"));
+        // Architecture (1000 tokens) shouldn't fit in 50 token budget
+        assert!(!result.result().content().contains("AAA"));
+    }
+
+    #[tokio::test]
+    async fn test_build_context_parallel_same_result_as_sequential_assembly() {
+        let caps = create_capabilities_with_ccg();
+        let orchestrator = CompressionOrchestrator::new(caps, "repo");
+
+        let manifest_content = "# Project Manifest\n\nRust: 50 files".to_string();
+        let arch_content = "# Module Graph\n\nsrc/api → src/mcp".to_string();
+        let symbol_content = "# Symbols\n\npub fn main()".to_string();
+
+        // Pre-populate cache
+        let manifest = CompressionResult::new(
+            manifest_content.clone(),
+            CompressionLevel::Manifest,
+            ContextSource::CcgLayer0,
+        );
+        orchestrator.cache_result(CompressionLevel::Manifest, &manifest, "hash");
+
+        let arch = CompressionResult::new(
+            arch_content.clone(),
+            CompressionLevel::Architecture,
+            ContextSource::CcgLayer1,
+        );
+        orchestrator.cache_result(CompressionLevel::Architecture, &arch, "hash");
+
+        let symbols = CompressionResult::new(
+            symbol_content.clone(),
+            CompressionLevel::SymbolDetail,
+            ContextSource::DirectTool,
+        );
+        orchestrator.cache_result(CompressionLevel::SymbolDetail, &symbols, "hash");
+
+        // Build via parallel build_context
+        let mut client = McpClient::new("test", "/bin/false", vec![]);
+        let parallel_result = orchestrator
+            .build_context(&mut client, "hash", &[], 20_000)
+            .await;
+
+        // Build via direct assemble_context (the sequential assembly path)
+        let sequential_result = orchestrator.assemble_context(20_000, manifest, arch, symbols);
+
+        // Results should be identical
+        assert_eq!(
+            parallel_result.result().content(),
+            sequential_result.result().content()
+        );
+        assert_eq!(
+            parallel_result.manifest_tokens(),
+            sequential_result.manifest_tokens()
+        );
+        assert_eq!(
+            parallel_result.architecture_tokens(),
+            sequential_result.architecture_tokens()
+        );
+        assert_eq!(
+            parallel_result.symbol_tokens(),
+            sequential_result.symbol_tokens()
+        );
     }
 }

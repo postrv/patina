@@ -470,9 +470,9 @@ Before marking ANY task `[x]`:
 **Description**: Fetch manifest, architecture, and symbols concurrently using `tokio::try_join!`.
 
 **TDD Cycle**:
-- [ ] RED: Write benchmark test comparing sequential vs parallel context building — parallel should be measurably faster
-- [ ] GREEN: Refactor `build_context()` to use `tokio::try_join!` for independent fetches
-- [ ] REFACTOR: Add timing metrics, ensure cache hits don't block parallel fetches
+- [x] RED: Write benchmark test comparing sequential vs parallel context building — parallel should be measurably faster
+- [x] GREEN: Refactor `build_context()` to use `tokio::join!` for independent fetches
+- [x] REFACTOR: Add timing metrics, ensure cache hits don't block parallel fetches
 - Files: `src/context/compression/orchestrator.rs`
 - Acceptance: Parallel fetch measurably faster in benchmarks, behavior identical
 
