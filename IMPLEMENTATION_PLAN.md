@@ -220,9 +220,9 @@ Before marking ANY task `[x]`:
 **Description**: Implement `LlmProvider` for `AnthropicClient` (or a thin wrapper). This is a non-breaking change — all existing call sites continue to work via the trait.
 
 **TDD Cycle**:
-- [ ] RED: Write tests verifying `AnthropicProvider` implements `LlmProvider`, `stream_message()` delegates to existing `stream_message_v2_with_tools()`, produces same `StreamEvent` sequence
-- [ ] GREEN: Implement `AnthropicProvider` wrapping `AnthropicClient`, delegate `stream_message()` to existing streaming method
-- [ ] REFACTOR: Update `AppContext` / `AppState` to hold `Box<dyn LlmProvider>` instead of direct `AnthropicClient` reference. Update all call sites
+- [x] RED: Write tests verifying `AnthropicProvider` implements `LlmProvider`, `stream_message()` delegates to existing `stream_message_v2_with_tools()`, produces same `StreamEvent` sequence
+- [x] GREEN: Implement `AnthropicProvider` wrapping `AnthropicClient`, delegate `stream_message()` to existing streaming method
+- [x] REFACTOR: Update `AppContext` / `AppState` to hold `Arc<dyn LlmProvider>` instead of direct `AnthropicClient` reference. Update all call sites
 - Files: `src/api/provider.rs`, `src/api/mod.rs`, `src/app/mod.rs`, `src/app/state.rs`
 - Acceptance: All existing tests pass with zero behavioral changes, client accessed only via trait
 
