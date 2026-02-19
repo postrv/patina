@@ -54,6 +54,7 @@ PROMPT_*.md
 /.archive/patina-strategic-roadmap.md
 /.archive/docs/IMPLEMENTATION_PLAN.md
 /REMEDIATION_PLAN.md
+IMPLEMENTATION_PLAN.md
 
 # Backup files
 .rct_backups/

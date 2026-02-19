@@ -6,7 +6,7 @@
 
 [![CI](https://github.com/postrv/patina/actions/workflows/ci.yml/badge.svg)](https://github.com/postrv/patina/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-1.0.0-green.svg)](https://github.com/postrv/patina/releases/tag/v1.0.0)
+[![Version](https://img.shields.io/badge/version-1.0.0-green.svg)](Cargo.toml)
 [![Rust](https://img.shields.io/badge/rust-1.75%2B-orange.svg)](https://www.rust-lang.org/)
 
 A high-performance terminal client for the Claude API, written in Rust. Designed for developers who want a fast, secure, and extensible AI assistant in their terminal.
@@ -83,18 +83,6 @@ A high-performance terminal client for the Claude API, written in Rust. Designed
 
 ## Installation
 
-### Pre-built Binaries
-
-Download from [GitHub Releases](https://github.com/postrv/patina/releases):
-
-| Platform | Download |
-|----------|----------|
-| Linux x86_64 | `patina-linux-x86_64.tar.gz` |
-| Linux x86_64 (static) | `patina-linux-x86_64-musl.tar.gz` |
-| macOS x86_64 | `patina-macos-x86_64.tar.gz` |
-| macOS Apple Silicon | `patina-macos-aarch64.tar.gz` |
-| Windows x86_64 | `patina-windows-x86_64.zip` |
-
 ### From Source
 
 ```bash
@@ -102,19 +90,6 @@ git clone https://github.com/postrv/patina.git
 cd patina
 cargo build --release
 # Binary at target/release/patina
-```
-
-### Cargo
-
-```bash
-cargo install patina
-```
-
-### Docker
-
-```bash
-docker pull ghcr.io/postrv/patina:latest
-docker run -it -e ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" ghcr.io/postrv/patina
 ```
 
 ## Quick Start
@@ -255,7 +230,7 @@ patina plugin remove my-plugin
 **Example Plugin Manifest:**
 
 ```toml
-# patina-plugin.toml
+# rct-plugin.toml
 name = "my-plugin"
 version = "1.0.0"
 description = "My custom plugin"
@@ -389,12 +364,7 @@ cargo tarpaulin --out Html
 
 ## Library API
 
-Patina can be used as a Rust library for building custom AI-powered tools:
-
-```toml
-[dependencies]
-patina = "1.0"
-```
+Patina can be used as a Rust library for building custom AI-powered tools.
 
 ### Available Modules
 
