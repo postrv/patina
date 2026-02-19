@@ -29,9 +29,13 @@ use std::future::Future;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
+use tracing::warn;
 
 use super::plugin::QualityGate;
 use super::recovery::GateCheckResult;
+
+/// Maximum bytes of output to retain per gate (100 KB).
+const DEFAULT_MAX_OUTPUT_BYTES: usize = 100 * 1024;
 
 /// Output from executing a shell command.
 ///
@@ -341,21 +345,26 @@ pub struct QualityGateRunner<R: CommandRunner> {
     gates: Vec<QualityGate>,
     runner: R,
     timeout: Duration,
+    max_output_bytes: usize,
 }
 
 impl<R: CommandRunner> QualityGateRunner<R> {
     /// Creates a new runner with the given gates and command runner.
     ///
-    /// Uses a default timeout of 5 minutes per gate.
+    /// Uses a default timeout of 5 minutes per gate and 100 KB max output.
     pub fn new(gates: Vec<QualityGate>, runner: R) -> Self {
         Self {
             gates,
             runner,
             timeout: Duration::from_secs(300),
+            max_output_bytes: DEFAULT_MAX_OUTPUT_BYTES,
         }
     }
 
     /// Sets the per-gate timeout.
+    ///
+    /// If a gate exceeds this duration, it is marked as failed with a
+    /// timeout message in the output.
     ///
     /// # Arguments
     ///
@@ -366,10 +375,29 @@ impl<R: CommandRunner> QualityGateRunner<R> {
         self
     }
 
+    /// Sets the maximum output bytes to retain per gate.
+    ///
+    /// Output exceeding this limit is truncated with a marker.
+    ///
+    /// # Arguments
+    ///
+    /// * `max_bytes` - Maximum bytes to retain (0 means unlimited)
+    #[must_use]
+    pub fn with_max_output_bytes(mut self, max_bytes: usize) -> Self {
+        self.max_output_bytes = max_bytes;
+        self
+    }
+
     /// Returns the configured per-gate timeout.
     #[must_use]
     pub fn timeout(&self) -> Duration {
         self.timeout
+    }
+
+    /// Returns the configured max output bytes.
+    #[must_use]
+    pub fn max_output_bytes(&self) -> usize {
+        self.max_output_bytes
     }
 
     /// Returns the list of configured gates.
@@ -378,7 +406,25 @@ impl<R: CommandRunner> QualityGateRunner<R> {
         &self.gates
     }
 
+    /// Truncates output if it exceeds `max_output_bytes`.
+    fn truncate_output(&self, output: String) -> String {
+        if self.max_output_bytes == 0 || output.len() <= self.max_output_bytes {
+            return output;
+        }
+        // Keep the last `max_output_bytes` bytes (tail is most diagnostic)
+        let mut start = output.len() - self.max_output_bytes;
+        // Advance to the next char boundary to avoid splitting a multi-byte character
+        while start < output.len() && !output.is_char_boundary(start) {
+            start += 1;
+        }
+        format!("... [truncated] ...\n{}", &output[start..])
+    }
+
     /// Runs a single quality gate and returns the result.
+    ///
+    /// The gate command is executed with the configured timeout. If the
+    /// timeout is exceeded, the gate is marked as failed with a timeout
+    /// message.
     ///
     /// # Arguments
     ///
@@ -389,14 +435,36 @@ impl<R: CommandRunner> QualityGateRunner<R> {
     /// A [`GateResult`] with pass/fail status, output, and timing.
     pub async fn run_gate(&mut self, gate: QualityGate) -> GateResult {
         let start = std::time::Instant::now();
-        let output = self.runner.run_command(gate.command()).await;
-        let duration = start.elapsed();
 
-        GateResult {
-            gate,
-            passed: output.success(),
-            output: output.combined_output(),
-            duration,
+        match tokio::time::timeout(self.timeout, self.runner.run_command(gate.command())).await {
+            Ok(output) => {
+                let duration = start.elapsed();
+                let combined = self.truncate_output(output.combined_output());
+                GateResult {
+                    gate,
+                    passed: output.success(),
+                    output: combined,
+                    duration,
+                }
+            }
+            Err(_elapsed) => {
+                let duration = start.elapsed();
+                warn!(
+                    gate = gate.name(),
+                    timeout_secs = self.timeout.as_secs(),
+                    "Quality gate timed out"
+                );
+                GateResult {
+                    gate,
+                    passed: false,
+                    output: format!(
+                        "TIMEOUT: gate '{}' exceeded {:.0}s limit",
+                        gate.name(),
+                        self.timeout.as_secs_f64()
+                    ),
+                    duration,
+                }
+            }
         }
     }
 
@@ -1095,5 +1163,175 @@ mod tests {
         // Duration should be non-negative (test runs fast, but > 0)
         assert!(report.results[0].duration >= Duration::ZERO);
         assert!(report.total_duration >= Duration::ZERO);
+    }
+
+    // =========================================================================
+    // QualityGateRunner — timeout
+    // =========================================================================
+
+    /// Mock command runner that sleeps before returning.
+    struct SlowCommandRunner {
+        delay: Duration,
+        output: CommandOutput,
+    }
+
+    impl SlowCommandRunner {
+        fn new(delay: Duration, output: CommandOutput) -> Self {
+            Self { delay, output }
+        }
+    }
+
+    impl CommandRunner for SlowCommandRunner {
+        fn run_command(&mut self, _command: &str) -> impl Future<Output = CommandOutput> + Send {
+            let delay = self.delay;
+            let output = self.output.clone();
+            async move {
+                tokio::time::sleep(delay).await;
+                output
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn runner_timeout_marks_gate_as_failed() {
+        let runner = SlowCommandRunner::new(
+            Duration::from_secs(2),
+            CommandOutput {
+                exit_code: 0,
+                stdout: "ok".to_string(),
+                stderr: String::new(),
+            },
+        );
+
+        let mut gate_runner = QualityGateRunner::new(vec![QualityGate::TestsPass], runner)
+            .with_timeout(Duration::from_millis(50));
+
+        let report = gate_runner.run_all().await;
+
+        assert!(!report.all_passed(), "timed-out gate should fail");
+        assert!(
+            report.results[0].output.contains("TIMEOUT"),
+            "output should mention timeout: {}",
+            report.results[0].output
+        );
+    }
+
+    #[tokio::test]
+    async fn runner_timeout_includes_gate_name() {
+        let runner = SlowCommandRunner::new(
+            Duration::from_secs(2),
+            CommandOutput {
+                exit_code: 0,
+                stdout: String::new(),
+                stderr: String::new(),
+            },
+        );
+
+        let mut gate_runner = QualityGateRunner::new(vec![QualityGate::ClippyClean], runner)
+            .with_timeout(Duration::from_millis(50));
+
+        let report = gate_runner.run_all().await;
+
+        assert!(
+            report.results[0].output.contains("clippy_clean"),
+            "timeout message should include gate name: {}",
+            report.results[0].output
+        );
+    }
+
+    #[tokio::test]
+    async fn runner_fast_gate_passes_within_timeout() {
+        let runner = SlowCommandRunner::new(
+            Duration::from_millis(1),
+            CommandOutput {
+                exit_code: 0,
+                stdout: "ok".to_string(),
+                stderr: String::new(),
+            },
+        );
+
+        let mut gate_runner = QualityGateRunner::new(vec![QualityGate::FormatCheck], runner)
+            .with_timeout(Duration::from_secs(5));
+
+        let report = gate_runner.run_all().await;
+
+        assert!(
+            report.all_passed(),
+            "fast gate should pass within generous timeout"
+        );
+    }
+
+    // =========================================================================
+    // QualityGateRunner — output truncation
+    // =========================================================================
+
+    #[test]
+    fn runner_default_max_output_bytes() {
+        let runner = MockCommandRunner::new();
+        let gate_runner: QualityGateRunner<MockCommandRunner> =
+            QualityGateRunner::new(vec![], runner);
+        assert_eq!(gate_runner.max_output_bytes(), 100 * 1024);
+    }
+
+    #[test]
+    fn runner_custom_max_output_bytes() {
+        let runner = MockCommandRunner::new();
+        let gate_runner: QualityGateRunner<MockCommandRunner> =
+            QualityGateRunner::new(vec![], runner).with_max_output_bytes(1024);
+        assert_eq!(gate_runner.max_output_bytes(), 1024);
+    }
+
+    #[tokio::test]
+    async fn runner_truncates_long_output() {
+        let long_error = "x".repeat(200);
+        let runner = MockCommandRunner::new().failing("cargo test", &long_error);
+
+        let mut gate_runner =
+            QualityGateRunner::new(vec![QualityGate::TestsPass], runner).with_max_output_bytes(50);
+
+        let report = gate_runner.run_all().await;
+
+        assert!(
+            report.results[0].output.len() < 200,
+            "output should be truncated, got {} bytes",
+            report.results[0].output.len()
+        );
+        assert!(
+            report.results[0].output.contains("truncated"),
+            "truncated output should contain marker: {}",
+            report.results[0].output
+        );
+    }
+
+    #[tokio::test]
+    async fn runner_short_output_not_truncated() {
+        let runner = MockCommandRunner::new().passing("cargo test");
+
+        let mut gate_runner = QualityGateRunner::new(vec![QualityGate::TestsPass], runner)
+            .with_max_output_bytes(1024);
+
+        let report = gate_runner.run_all().await;
+
+        assert!(
+            !report.results[0].output.contains("truncated"),
+            "short output should not be truncated"
+        );
+    }
+
+    #[tokio::test]
+    async fn runner_unlimited_output_when_zero() {
+        let long_output = "x".repeat(200_000);
+        let runner = MockCommandRunner::new().failing("cargo test", &long_output);
+
+        let mut gate_runner =
+            QualityGateRunner::new(vec![QualityGate::TestsPass], runner).with_max_output_bytes(0);
+
+        let report = gate_runner.run_all().await;
+
+        assert_eq!(
+            report.results[0].output.len(),
+            200_000,
+            "zero max_output_bytes should mean unlimited"
+        );
     }
 }
