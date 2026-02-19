@@ -205,6 +205,199 @@ pub struct SymbolDetail {
     pub signature: Option<String>,
 }
 
+/// Parses a `find_symbols` MCP response into [`SymbolResults`].
+///
+/// Extracts symbol name, kind, file path, line number, and optional signature
+/// from narsil's `find_symbols` tool output. The response format is:
+///
+/// ```text
+/// # Symbols in <repo>
+///
+/// Found N symbols
+///
+/// ## Functions
+///
+/// - **name** (`file:line`) signature
+/// ```
+///
+/// # Arguments
+///
+/// * `content` - The text output from narsil's `find_symbols` tool
+///
+/// # Returns
+///
+/// A [`SymbolResults`] containing all parsed symbols.
+///
+/// # Examples
+///
+/// ```ignore
+/// let results = parse_find_symbols_response(
+///     "# Symbols in repo\n\nFound 2 symbols\n\n## Functions\n\n- **main** (`src/main.rs:1`) fn main() {"
+/// );
+/// assert_eq!(results.symbols.len(), 1);
+/// ```
+#[must_use]
+pub fn parse_find_symbols_response(content: &str) -> SymbolResults {
+    let mut symbols = Vec::new();
+    let mut current_kind = String::new();
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+
+        // Detect section headers like "## Functions", "## Structs"
+        if let Some(header) = trimmed.strip_prefix("## ") {
+            current_kind = header.trim().trim_end_matches('s').to_lowercase();
+            continue;
+        }
+
+        // Parse symbol lines: - **name** (`file:line`) signature
+        if let Some(rest) = trimmed.strip_prefix("- **") {
+            if let Some(detail) = parse_symbol_line(rest, &current_kind) {
+                symbols.push(detail);
+            }
+        }
+    }
+
+    SymbolResults { symbols }
+}
+
+/// Parses a single symbol line from narsil `find_symbols` output.
+///
+/// Expected format: `name** (\`file:line\`) signature`
+fn parse_symbol_line(rest: &str, current_kind: &str) -> Option<SymbolDetail> {
+    // Split at the first `**` to get the name
+    let (name, after_name) = rest.split_once("**")?;
+    let name = name.trim().to_string();
+
+    if name.is_empty() {
+        return None;
+    }
+
+    // Look for (`file:line`) pattern
+    let after_name = after_name.trim();
+    let (file, line, signature) = if let Some(paren_start) = after_name.find("(`") {
+        let paren_content_start = paren_start + 2;
+        if let Some(paren_end) = after_name[paren_content_start..].find("`)") {
+            let location = &after_name[paren_content_start..paren_content_start + paren_end];
+            let (file, line) = if let Some((f, l)) = location.rsplit_once(':') {
+                (f.to_string(), l.parse::<usize>().unwrap_or(0))
+            } else {
+                (location.to_string(), 0)
+            };
+
+            // Everything after the closing `) ` is the signature
+            let sig_start = paren_content_start + paren_end + 2;
+            let sig = if sig_start < after_name.len() {
+                let s = after_name[sig_start..].trim().to_string();
+                if s.is_empty() {
+                    None
+                } else {
+                    Some(s)
+                }
+            } else {
+                None
+            };
+
+            (file, line, sig)
+        } else {
+            (String::new(), 0, None)
+        }
+    } else {
+        (String::new(), 0, None)
+    };
+
+    let kind = if current_kind.is_empty() {
+        "unknown".to_string()
+    } else {
+        current_kind.to_string()
+    };
+
+    Some(SymbolDetail {
+        name,
+        kind,
+        file,
+        line,
+        signature,
+    })
+}
+
+/// Renders symbol results as Markdown within a token budget.
+///
+/// Prioritizes public API symbols first, then internal, then tests.
+/// Truncates if the output exceeds the budget.
+///
+/// # Arguments
+///
+/// * `results` - The symbol results to render
+/// * `token_budget` - Maximum approximate tokens for the output
+///
+/// # Returns
+///
+/// A Markdown string containing the symbols within budget.
+#[must_use]
+pub fn render_symbols_within_budget(results: &SymbolResults, token_budget: usize) -> String {
+    use super::estimate_tokens;
+
+    if results.symbols.is_empty() {
+        return "# Symbols\n\n_No symbols found._\n".to_string();
+    }
+
+    // Prioritize: public API (pub fn, pub struct) first, then private, then test
+    let (public_symbols, rest): (Vec<_>, Vec<_>) = results
+        .symbols
+        .iter()
+        .partition(|s| s.signature.as_ref().is_some_and(|sig| sig.contains("pub ")));
+
+    let (non_test_symbols, test_symbols): (Vec<_>, Vec<_>) = rest
+        .into_iter()
+        .partition(|s| !s.file.contains("test") && !s.name.starts_with("test_"));
+
+    let prioritized: Vec<&SymbolDetail> = public_symbols
+        .into_iter()
+        .chain(non_test_symbols)
+        .chain(test_symbols)
+        .collect();
+
+    let mut output = String::with_capacity(1024);
+    output.push_str("# Symbols\n\n");
+
+    let mut included = 0;
+    for symbol in &prioritized {
+        let entry = format_symbol_entry(symbol);
+        let candidate = format!("{}{}", output, entry);
+        if estimate_tokens(&candidate) > token_budget {
+            break;
+        }
+        output.push_str(&entry);
+        included += 1;
+    }
+
+    if included < prioritized.len() {
+        output.push_str(&format!(
+            "\n_Showing {}/{} symbols (token budget reached)._\n",
+            included,
+            prioritized.len()
+        ));
+    }
+
+    output
+}
+
+/// Formats a single symbol entry for Markdown output.
+fn format_symbol_entry(symbol: &SymbolDetail) -> String {
+    if let Some(ref sig) = symbol.signature {
+        format!(
+            "- **{}** ({}): `{}`\n  - {}:{}\n",
+            symbol.name, symbol.kind, sig, symbol.file, symbol.line
+        )
+    } else {
+        format!(
+            "- **{}** ({})\n  - {}:{}\n",
+            symbol.name, symbol.kind, symbol.file, symbol.line
+        )
+    }
+}
+
 /// Parses a CCG manifest from JSON response.
 ///
 /// # Errors
@@ -1111,6 +1304,187 @@ mod tests {
         let md = render_symbols_markdown(&results);
 
         assert!(md.contains("_No symbols found._"));
+    }
+
+    // =============================================================================
+    // parse_find_symbols_response tests (Task 3.3)
+    // =============================================================================
+
+    #[test]
+    fn test_parse_find_symbols_response_extracts_functions() {
+        let content = r#"# Symbols in rct
+
+Found 2 symbols
+
+## Functions
+
+- **main** (`src/main.rs:1`) fn main() {
+- **process** (`src/app/mod.rs:42`) pub fn process(input: &str) -> Result<()> {"#;
+
+        let results = parse_find_symbols_response(content);
+
+        assert_eq!(results.symbols.len(), 2);
+        assert_eq!(results.symbols[0].name, "main");
+        assert_eq!(results.symbols[0].kind, "function");
+        assert_eq!(results.symbols[0].file, "src/main.rs");
+        assert_eq!(results.symbols[0].line, 1);
+        assert_eq!(
+            results.symbols[0].signature,
+            Some("fn main() {".to_string())
+        );
+
+        assert_eq!(results.symbols[1].name, "process");
+        assert_eq!(results.symbols[1].file, "src/app/mod.rs");
+        assert_eq!(results.symbols[1].line, 42);
+    }
+
+    #[test]
+    fn test_parse_find_symbols_response_extracts_structs() {
+        let content = r#"# Symbols in rct
+
+Found 1 symbols
+
+## Structs
+
+- **AppState** (`src/app/state.rs:15`) pub struct AppState {"#;
+
+        let results = parse_find_symbols_response(content);
+
+        assert_eq!(results.symbols.len(), 1);
+        assert_eq!(results.symbols[0].name, "AppState");
+        assert_eq!(results.symbols[0].kind, "struct");
+        assert_eq!(results.symbols[0].file, "src/app/state.rs");
+        assert_eq!(results.symbols[0].line, 15);
+    }
+
+    #[test]
+    fn test_parse_find_symbols_response_mixed_kinds() {
+        let content = r#"# Symbols in rct
+
+Found 3 symbols
+
+## Functions
+
+- **run** (`src/main.rs:10`) pub fn run() {
+
+## Structs
+
+- **Config** (`src/types/config.rs:5`) pub struct Config {
+
+## Enums
+
+- **Mode** (`src/types/mode.rs:1`) pub enum Mode {"#;
+
+        let results = parse_find_symbols_response(content);
+
+        assert_eq!(results.symbols.len(), 3);
+        assert_eq!(results.symbols[0].kind, "function");
+        assert_eq!(results.symbols[1].kind, "struct");
+        assert_eq!(results.symbols[2].kind, "enum");
+    }
+
+    #[test]
+    fn test_parse_find_symbols_response_empty_input() {
+        let content = "# Symbols in rct\n\nFound 0 symbols\n";
+
+        let results = parse_find_symbols_response(content);
+
+        assert!(results.symbols.is_empty());
+    }
+
+    #[test]
+    fn test_parse_find_symbols_response_no_signature() {
+        let content = "## Methods\n\n- **fmt** (`src/main.rs:5`)";
+
+        let results = parse_find_symbols_response(content);
+
+        assert_eq!(results.symbols.len(), 1);
+        assert_eq!(results.symbols[0].name, "fmt");
+        assert!(results.symbols[0].signature.is_none());
+    }
+
+    // =============================================================================
+    // render_symbols_within_budget tests (Task 3.3)
+    // =============================================================================
+
+    #[test]
+    fn test_render_symbols_within_budget_fits_all() {
+        let results = SymbolResults {
+            symbols: vec![SymbolDetail {
+                name: "main".to_string(),
+                kind: "function".to_string(),
+                file: "src/main.rs".to_string(),
+                line: 1,
+                signature: Some("fn main()".to_string()),
+            }],
+        };
+
+        let md = render_symbols_within_budget(&results, 10000);
+
+        assert!(md.contains("**main** (function)"));
+        assert!(!md.contains("token budget reached"));
+    }
+
+    #[test]
+    fn test_render_symbols_within_budget_truncates() {
+        let symbols: Vec<SymbolDetail> = (0..100)
+            .map(|i| SymbolDetail {
+                name: format!("function_{i}"),
+                kind: "function".to_string(),
+                file: format!("src/module_{i}.rs"),
+                line: i + 1,
+                signature: Some(format!("pub fn function_{i}(x: i32) -> i32")),
+            })
+            .collect();
+
+        let results = SymbolResults { symbols };
+
+        // Very small budget
+        let md = render_symbols_within_budget(&results, 50);
+
+        assert!(md.contains("Symbols"));
+        assert!(md.contains("token budget reached"));
+    }
+
+    #[test]
+    fn test_render_symbols_within_budget_empty() {
+        let results = SymbolResults { symbols: vec![] };
+
+        let md = render_symbols_within_budget(&results, 10000);
+
+        assert!(md.contains("_No symbols found._"));
+    }
+
+    #[test]
+    fn test_render_symbols_within_budget_prioritizes_public() {
+        let results = SymbolResults {
+            symbols: vec![
+                SymbolDetail {
+                    name: "private_fn".to_string(),
+                    kind: "function".to_string(),
+                    file: "src/lib.rs".to_string(),
+                    line: 10,
+                    signature: Some("fn private_fn()".to_string()),
+                },
+                SymbolDetail {
+                    name: "public_fn".to_string(),
+                    kind: "function".to_string(),
+                    file: "src/lib.rs".to_string(),
+                    line: 20,
+                    signature: Some("pub fn public_fn()".to_string()),
+                },
+            ],
+        };
+
+        let md = render_symbols_within_budget(&results, 10000);
+
+        // Public should come first
+        let pub_pos = md.find("public_fn").expect("should contain public_fn");
+        let priv_pos = md.find("private_fn").expect("should contain private_fn");
+        assert!(
+            pub_pos < priv_pos,
+            "Public symbols should appear before private ones"
+        );
     }
 
     // =============================================================================
