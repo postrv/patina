@@ -169,11 +169,41 @@ fn test_ssh_tty_also_detects_ssh() {
     restore_env("TMUX", orig_tmux);
 }
 
+// ============================================================================
+// Cross-platform clipboard utility tests
+// ============================================================================
+
+#[test]
+fn test_is_headless_returns_bool_on_all_platforms() {
+    // is_headless() must work without panicking on every platform.
+    // On macOS it's always false; on Linux it depends on $DISPLAY / $WAYLAND_DISPLAY.
+    let result = is_headless();
+    if cfg!(target_os = "macos") {
+        assert!(!result, "macOS should never report as headless");
+    }
+    // On Linux CI (headless), this is expected to be true unless a display is set.
+    // Just verify it returns without panic — the value is environment-dependent.
+}
+
+#[test]
+fn test_is_wayland_returns_bool_on_all_platforms() {
+    // is_wayland() should return false unless $WAYLAND_DISPLAY is set.
+    let result = is_wayland();
+    if cfg!(target_os = "macos") || cfg!(target_os = "windows") {
+        assert!(!result, "Wayland should not be detected on macOS/Windows");
+    }
+    // On Linux, the result depends on whether a Wayland session is running.
+}
+
 #[test]
 fn test_wl_copy_detection_returns_bool() {
     // has_wl_copy() should return false on non-Wayland systems without panic
     let _result = has_wl_copy();
 }
+
+// ============================================================================
+// Environment detection edge cases
+// ============================================================================
 
 #[test]
 fn test_native_when_clean_env() {

@@ -61,22 +61,33 @@ pub struct Agent {
     pub system_prompt: String,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Deserialize)]
 pub struct HooksConfig {
+    #[serde(default)]
     pub pre_tool_use: Vec<HookDef>,
+    #[serde(default)]
     pub post_tool_use: Vec<HookDef>,
+    #[serde(default)]
     pub session_start: Vec<HookDef>,
+    #[serde(default)]
     pub session_end: Vec<HookDef>,
+    #[serde(default)]
     pub user_prompt_submit: Vec<HookDef>,
+    #[serde(default)]
     pub notification: Vec<HookDef>,
+    #[serde(default)]
     pub stop: Vec<HookDef>,
+    #[serde(default)]
     pub subagent_stop: Vec<HookDef>,
+    #[serde(default)]
     pub pre_compact: Vec<HookDef>,
+    #[serde(default)]
     pub permission_request: Vec<HookDef>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct HookDef {
+    #[serde(default)]
     pub matcher: Option<String>,
     pub command: String,
 }
@@ -256,7 +267,9 @@ impl PluginRegistry {
     fn load_hooks(&self, plugin_dir: &Path) -> Result<HooksConfig> {
         let hooks_json = plugin_dir.join("hooks/hooks.json");
         if hooks_json.exists() {
-            let _content = std::fs::read_to_string(&hooks_json)?;
+            let content = std::fs::read_to_string(&hooks_json)?;
+            let config: HooksConfig = serde_json::from_str(&content)?;
+            return Ok(config);
         }
         Ok(HooksConfig::default())
     }
