@@ -1,6 +1,6 @@
 //! Application state management
 
-use crate::agents::SubagentSpawner;
+use crate::agents::{AgentProgress, ConflictReport, SubagentSpawner};
 use crate::api::tokens::model_context_limit;
 use crate::api::tools::default_tools;
 use crate::api::{LlmProvider, StreamEvent, TokenBudget, ToolChoice};
@@ -144,6 +144,41 @@ pub enum BackgroundEvent {
     ToolResult(String, crate::types::ToolResultBlock),
 }
 
+/// Status of an agent as displayed in the TUI agent panel.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AgentPanelStatus {
+    /// Agent is actively running.
+    Running {
+        /// Current iteration (1-indexed).
+        iteration: usize,
+        /// Maximum iterations allowed.
+        max_iterations: usize,
+    },
+    /// Agent completed successfully.
+    Completed {
+        /// Number of iterations used.
+        iterations_used: usize,
+    },
+    /// Agent failed with an error.
+    Failed {
+        /// Error description.
+        error: String,
+    },
+}
+
+/// An entry in the TUI agent panel showing an agent's current state.
+#[derive(Debug, Clone)]
+pub struct AgentPanelEntry {
+    /// Unique identifier for the agent instance.
+    pub agent_id: String,
+    /// Human-readable agent name.
+    pub agent_name: String,
+    /// Current status of the agent.
+    pub status: AgentPanelStatus,
+    /// Most recent content snippet from the agent.
+    pub last_content: String,
+}
+
 pub struct AppState {
     /// Full API messages with content blocks (tool_use, tool_result).
     /// This is the authoritative conversation history sent to the API.
@@ -270,6 +305,14 @@ pub struct AppState {
     /// Metrics tracking for compaction operations.
     /// Records number of compactions, tokens saved, and time spent.
     compaction_metrics: Arc<CompactionMetrics>,
+
+    /// Agent panel entries for the TUI agent status display.
+    /// Updated by `AgentHandler` when agent events are received.
+    agent_panel_entries: Vec<AgentPanelEntry>,
+
+    /// Pending conflict reports from cross-agent conflict detection.
+    /// Consumed by the TUI to display conflict alerts.
+    pending_conflict_reports: Vec<ConflictReport>,
 }
 
 #[derive(Default)]
@@ -422,6 +465,8 @@ impl AppState {
             context_token_budget: 10_000,
             context_tokens_injected: 0,
             compaction_metrics: Arc::new(CompactionMetrics::new()),
+            agent_panel_entries: Vec::new(),
+            pending_conflict_reports: Vec::new(),
         }
     }
 
@@ -473,6 +518,110 @@ impl AppState {
     #[must_use]
     pub fn subagent_spawner(&self) -> Option<&SubagentSpawner> {
         self.subagent_spawner.as_ref()
+    }
+
+    // =========================================================================
+    // Agent panel methods (Task 4.5)
+    // =========================================================================
+
+    /// Returns the current agent panel entries for TUI rendering.
+    #[must_use]
+    pub fn agent_panel_entries(&self) -> &[AgentPanelEntry] {
+        &self.agent_panel_entries
+    }
+
+    /// Updates the agent panel with a progress event.
+    ///
+    /// If an entry for the given `agent_id` exists, it is updated in place.
+    /// Otherwise, a new entry is created.
+    ///
+    /// # Panics
+    ///
+    /// Does not panic.
+    pub fn update_agent_progress(
+        &mut self,
+        agent_id: &str,
+        agent_name: &str,
+        progress: &AgentProgress,
+    ) {
+        let status = match progress {
+            AgentProgress::IterationStarted { iteration, max } => AgentPanelStatus::Running {
+                iteration: *iteration,
+                max_iterations: *max,
+            },
+            AgentProgress::ContentDelta(_) => {
+                // Keep existing status for content deltas; just update last_content.
+                if let Some(entry) = self
+                    .agent_panel_entries
+                    .iter_mut()
+                    .find(|e| e.agent_id == agent_id)
+                {
+                    if let AgentProgress::ContentDelta(text) = progress {
+                        entry.last_content = text.chars().take(80).collect();
+                    }
+                    self.dirty.full = true;
+                    return;
+                }
+                // First event for this agent; default to iteration 0.
+                AgentPanelStatus::Running {
+                    iteration: 0,
+                    max_iterations: 0,
+                }
+            }
+            AgentProgress::Completed {
+                iterations_used, ..
+            } => AgentPanelStatus::Completed {
+                iterations_used: *iterations_used,
+            },
+            AgentProgress::Failed { error, .. } => AgentPanelStatus::Failed {
+                error: error.clone(),
+            },
+        };
+
+        if let Some(entry) = self
+            .agent_panel_entries
+            .iter_mut()
+            .find(|e| e.agent_id == agent_id)
+        {
+            entry.status = status;
+            if let AgentProgress::ContentDelta(text) = progress {
+                entry.last_content = text.chars().take(80).collect();
+            }
+            if let AgentProgress::Completed { output, .. } = progress {
+                entry.last_content = output.chars().take(80).collect();
+            }
+        } else {
+            let last_content = match progress {
+                AgentProgress::ContentDelta(text) => text.chars().take(80).collect(),
+                AgentProgress::Completed { output, .. } => output.chars().take(80).collect(),
+                _ => String::new(),
+            };
+            self.agent_panel_entries.push(AgentPanelEntry {
+                agent_id: agent_id.to_string(),
+                agent_name: agent_name.to_string(),
+                status,
+                last_content,
+            });
+        }
+
+        self.dirty.full = true;
+    }
+
+    /// Records a conflict report for display in the TUI.
+    pub fn add_conflict_report(&mut self, report: ConflictReport) {
+        self.pending_conflict_reports.push(report);
+        self.dirty.full = true;
+    }
+
+    /// Takes all pending conflict reports, leaving the internal list empty.
+    pub fn take_conflict_reports(&mut self) -> Vec<ConflictReport> {
+        std::mem::take(&mut self.pending_conflict_reports)
+    }
+
+    /// Returns `true` if there are pending conflict reports.
+    #[must_use]
+    pub fn has_pending_conflicts(&self) -> bool {
+        !self.pending_conflict_reports.is_empty()
     }
 
     // =========================================================================

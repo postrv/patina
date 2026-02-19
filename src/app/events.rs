@@ -8,6 +8,7 @@
 
 use crossterm::event::{KeyEvent, MouseEvent};
 
+use crate::agents::AgentEvent;
 use crate::api::StreamEvent;
 use crate::permissions::PermissionResponse;
 use crate::types::ToolResultBlock;
@@ -63,6 +64,9 @@ pub enum AppEvent {
 
     /// A user response to a permission prompt.
     PermissionResponse(PermissionResponse),
+
+    /// An event from a background agent (progress, completion, conflict).
+    Agent(AgentEvent),
 }
 
 impl AppEvent {
@@ -72,10 +76,13 @@ impl AppEvent {
         matches!(self, Self::Key(_) | Self::Mouse(_) | Self::Resize { .. })
     }
 
-    /// Returns `true` if this is a background event (API chunk or tool result).
+    /// Returns `true` if this is a background event (API chunk, tool result, or agent event).
     #[must_use]
     pub fn is_background(&self) -> bool {
-        matches!(self, Self::ApiChunk(_) | Self::ToolResult { .. })
+        matches!(
+            self,
+            Self::ApiChunk(_) | Self::ToolResult { .. } | Self::Agent(_)
+        )
     }
 
     /// Returns `true` if this event signals application termination.
@@ -96,6 +103,7 @@ impl std::fmt::Display for AppEvent {
             Self::Tick => write!(f, "Tick"),
             Self::Quit => write!(f, "Quit"),
             Self::PermissionResponse(resp) => write!(f, "PermissionResponse({resp:?})"),
+            Self::Agent(agent_event) => write!(f, "Agent({agent_event:?})"),
         }
     }
 }
@@ -125,9 +133,16 @@ impl From<PermissionResponse> for AppEvent {
     }
 }
 
+impl From<AgentEvent> for AppEvent {
+    fn from(event: AgentEvent) -> Self {
+        Self::Agent(event)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agents::AgentProgress;
     use crossterm::event::{
         KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers, MouseButton, MouseEventKind,
     };
@@ -429,6 +444,78 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn from_agent_event() {
+        let agent_evt = AgentEvent::Progress {
+            agent_id: "a1".to_string(),
+            agent_name: "explorer".to_string(),
+            progress: AgentProgress::IterationStarted {
+                iteration: 1,
+                max: 10,
+            },
+        };
+        let app_event = AppEvent::from(agent_evt);
+        assert!(matches!(
+            app_event,
+            AppEvent::Agent(AgentEvent::Progress { .. })
+        ));
+    }
+
+    // =========================================================================
+    // Agent event construction and classification
+    // =========================================================================
+
+    #[test]
+    fn agent_event_construction() {
+        let event = AppEvent::Agent(AgentEvent::Progress {
+            agent_id: "a1".to_string(),
+            agent_name: "explorer".to_string(),
+            progress: AgentProgress::Completed {
+                output: "done".to_string(),
+                iterations_used: 3,
+            },
+        });
+        assert!(matches!(event, AppEvent::Agent(_)));
+    }
+
+    #[test]
+    fn agent_event_is_background() {
+        let event = AppEvent::Agent(AgentEvent::Progress {
+            agent_id: "a1".to_string(),
+            agent_name: "explorer".to_string(),
+            progress: AgentProgress::IterationStarted {
+                iteration: 1,
+                max: 5,
+            },
+        });
+        assert!(event.is_background());
+        assert!(!event.is_input());
+        assert!(!event.is_quit());
+    }
+
+    #[test]
+    fn agent_conflict_event_is_background() {
+        use crate::agents::ConflictReport;
+        let event = AppEvent::Agent(AgentEvent::ConflictDetected {
+            report: ConflictReport::empty(),
+        });
+        assert!(event.is_background());
+    }
+
+    #[test]
+    fn display_agent_event() {
+        let event = AppEvent::Agent(AgentEvent::Progress {
+            agent_id: "a1".to_string(),
+            agent_name: "explorer".to_string(),
+            progress: AgentProgress::IterationStarted {
+                iteration: 2,
+                max: 10,
+            },
+        });
+        let s = format!("{event}");
+        assert!(s.contains("Agent("));
+    }
+
     // =========================================================================
     // Send + Sync assertions
     // =========================================================================
@@ -480,6 +567,14 @@ mod tests {
             AppEvent::Tick,
             AppEvent::Quit,
             AppEvent::PermissionResponse(PermissionResponse::AllowOnce),
+            AppEvent::Agent(AgentEvent::Progress {
+                agent_id: "test".to_string(),
+                agent_name: "test-agent".to_string(),
+                progress: AgentProgress::IterationStarted {
+                    iteration: 1,
+                    max: 10,
+                },
+            }),
         ];
 
         // Every variant should match exactly one arm
@@ -493,6 +588,7 @@ mod tests {
                 AppEvent::Tick => "tick",
                 AppEvent::Quit => "quit",
                 AppEvent::PermissionResponse(_) => "permission",
+                AppEvent::Agent(_) => "agent",
             };
             assert!(!matched.is_empty());
         }

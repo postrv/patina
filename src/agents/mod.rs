@@ -51,6 +51,43 @@ pub use worktree_agent::{
     run_agent_loop, AgentLoopConfig, AgentLoopResult, AgentProgress, WorktreeAgentManager,
 };
 
+/// Events emitted by agents for processing by the main event loop.
+///
+/// Agent events flow from background agent tasks through the event dispatcher
+/// to update the TUI agent panel and trigger completion/failure handling.
+///
+/// # Examples
+///
+/// ```
+/// use patina::agents::{AgentEvent, AgentProgress};
+///
+/// let event = AgentEvent::Progress {
+///     agent_id: "explorer-1".to_string(),
+///     agent_name: "explorer".to_string(),
+///     progress: AgentProgress::IterationStarted { iteration: 1, max: 10 },
+/// };
+///
+/// assert!(matches!(event, AgentEvent::Progress { .. }));
+/// ```
+#[derive(Debug, Clone)]
+pub enum AgentEvent {
+    /// An agent reported progress (iteration start, content, completion, or failure).
+    Progress {
+        /// Unique identifier for the agent instance.
+        agent_id: String,
+        /// Human-readable agent name.
+        agent_name: String,
+        /// The progress update.
+        progress: AgentProgress,
+    },
+
+    /// A conflict was detected between agents operating on overlapping files.
+    ConflictDetected {
+        /// The full conflict report.
+        report: ConflictReport,
+    },
+}
+
 use anyhow::Result;
 use std::collections::HashMap;
 use uuid::Uuid;
