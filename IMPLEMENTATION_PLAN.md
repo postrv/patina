@@ -563,9 +563,9 @@ Before marking ANY task `[x]`:
 **Description**: Implement the self-healing recovery loop — on failure, use root-cause analysis to build recovery prompt, ask LLM to fix, re-run quality gates.
 
 **TDD Cycle**:
-- [ ] RED: Write tests for recovery — single recovery attempt succeeds, multiple attempts with diminishing returns, max attempts respected, `NeedsHuman` returned when recovery fails, `Fixed` returned on success
-- [ ] GREEN: Implement `attempt_recovery()` with recovery prompt building, LLM turn execution, gate re-check
-- [ ] REFACTOR: Add recovery attempt logging, metrics (success rate, avg attempts to fix)
+- [x] RED: Write tests for recovery — single recovery attempt succeeds, multiple attempts with diminishing returns, max attempts respected, `NeedsHuman` returned when recovery fails, `Fixed` returned on success
+- [x] GREEN: Implement `attempt_recovery()` with recovery prompt building, LLM turn execution, gate re-check
+- [x] REFACTOR: Add recovery attempt logging, metrics (success rate, avg attempts to fix)
 - Files: `src/continuous/recovery.rs`
 - Acceptance: Recovery loop can fix simple test failures automatically, gives up gracefully on complex issues
 
