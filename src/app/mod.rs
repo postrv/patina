@@ -23,6 +23,7 @@ pub mod commands;
 pub mod context;
 pub mod dispatch;
 pub mod events;
+pub mod handlers;
 pub mod state;
 pub mod tool_loop;
 
