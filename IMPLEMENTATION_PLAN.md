@@ -167,9 +167,9 @@ Before marking ANY task `[x]`:
 **Description**: Replace the monolithic `tokio::select!` with the unified `recv_event()` + `EventDispatcher`. This is the critical integration step. Use a feature flag or runtime toggle so the old path can be restored if anything breaks.
 
 **TDD Cycle**:
-- [ ] RED: Write integration test that exercises the full dispatched event loop — sends a user message, receives streaming response, handles tool execution, auto-saves session
-- [ ] GREEN: Rewrite `event_loop()` to use `AppContext::recv_event()` + `EventDispatcher::dispatch()` with all handlers registered in correct order: `PermissionHandler` > `KeyboardHandler` > `StreamHandler` > `TickHandler` > `SessionHandler`
-- [ ] REFACTOR: Remove the old `tokio::select!` code, remove helper functions that are now handler methods, clean up dead code. Run `cargo clippy`, `cargo test`, verify zero warnings
+- [x] RED: Write integration test that exercises the full dispatched event loop — sends a user message, receives streaming response, handles tool execution, auto-saves session
+- [x] GREEN: Rewrite `event_loop()` to use `AppContext::recv_event()` + `EventDispatcher::dispatch()` with all handlers registered in correct order: `PermissionHandler` > `KeyboardHandler` > `StreamHandler` > `TickHandler` > `SessionHandler`
+- [x] REFACTOR: Remove the old `tokio::select!` code, remove helper functions that are now handler methods, clean up dead code. Run `cargo clippy`, `cargo test`, verify zero warnings
 - Files: `src/app/mod.rs`
 - Acceptance: `event_loop()` is <30 lines, all 1186+ tests pass, `cargo clippy` clean, no behavioral changes
 
