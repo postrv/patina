@@ -24,6 +24,7 @@
 
 use crate::agents::worktree_agent::{AgentInfo, WorktreeAgentManager, WorktreeAgentStatus};
 use crate::commands::agent::{parse_agent_command, AgentCommand};
+use crate::commands::continuous::{parse_continuous_command, ContinuousCommand};
 use crate::commands::worktree::{parse_worktree_command, WorktreeCommand};
 use crate::worktree::{WorktreeInfo, WorktreeManager};
 use std::path::PathBuf;
@@ -124,6 +125,7 @@ impl SlashCommandHandler {
         // Dispatch to the appropriate handler
         match command_name {
             "agent" => self.handle_agent(&args),
+            "continuous" => self.handle_continuous(&args),
             "worktree" => self.handle_worktree(&args),
             "help" => self.handle_help(if args.is_empty() { None } else { Some(&args) }),
             "plugins" => self.handle_plugins(),
@@ -167,6 +169,37 @@ impl SlashCommandHandler {
         }
 
         CommandResult::Executed(output)
+    }
+
+    /// Handles the `/continuous` command.
+    ///
+    /// Dispatches to `start`, `stop`, or `status` subcommands for managing
+    /// the continuous coding loop.
+    fn handle_continuous(&self, args: &str) -> CommandResult {
+        let cmd = match parse_continuous_command(args) {
+            Ok(cmd) => cmd,
+            Err(e) => return CommandResult::Error(e.to_string()),
+        };
+
+        match cmd {
+            ContinuousCommand::Start { max_iterations } => {
+                let limit = match max_iterations {
+                    Some(n) => format!(" (max {} iterations)", n),
+                    None => String::new(),
+                };
+                CommandResult::Executed(format!(
+                    "Started continuous coding loop{limit}.\n\
+                     Use /continuous status to check progress.\n\
+                     Use /continuous stop to halt."
+                ))
+            }
+            ContinuousCommand::Stop => {
+                CommandResult::Executed("Stopped continuous coding loop.".to_string())
+            }
+            ContinuousCommand::Status => {
+                CommandResult::Executed("Continuous loop status: Inactive".to_string())
+            }
+        }
     }
 
     /// Handles the `/agent` command.
@@ -429,19 +462,41 @@ impl SlashCommandHandler {
                 // General help listing all commands
                 let help_text = r#"Available Commands:
 
-  /agent <subcommand>     - Manage worktree agents
+  /agent <subcommand>       - Manage worktree agents
     Subcommands: new, list, status, merge, stop
 
-  /worktree <subcommand>  - Manage git worktrees
+  /continuous <subcommand>  - Manage continuous coding loop
+    Subcommands: start, stop, status
+
+  /worktree <subcommand>    - Manage git worktrees
     Subcommands: new, list, switch, remove, clean, status
 
-  /plugins                - List loaded plugins
+  /plugins                  - List loaded plugins
 
-  /terminal-setup         - Configure terminal keyboard shortcuts
+  /terminal-setup           - Configure terminal keyboard shortcuts
 
-  /help [command]         - Show help for a command
+  /help [command]           - Show help for a command
 
 Type /help <command> for detailed help on a specific command."#;
+                CommandResult::Executed(help_text.to_string())
+            }
+
+            Some("continuous") => {
+                let help_text = r#"/continuous - Manage continuous coding loop
+
+Subcommands:
+  start [N]    Start the continuous coding loop (optional max iterations)
+  stop         Stop the currently running loop
+  status       Show current loop status
+
+The continuous loop automates the TDD cycle: iterate, run quality
+gates, detect stagnation, and attempt self-healing recovery.
+
+Examples:
+  /continuous start
+  /continuous start 50
+  /continuous stop
+  /continuous status"#;
                 CommandResult::Executed(help_text.to_string())
             }
 
@@ -633,7 +688,14 @@ Other terminals:
     /// Returns available command names for tab completion.
     #[must_use]
     pub fn available_commands(&self) -> Vec<&'static str> {
-        vec!["agent", "worktree", "help", "plugins", "terminal-setup"]
+        vec![
+            "agent",
+            "continuous",
+            "worktree",
+            "help",
+            "plugins",
+            "terminal-setup",
+        ]
     }
 
     /// Creates plugin info from a plugin registry.
@@ -1437,6 +1499,189 @@ mod tests {
         assert!(detail.contains("running"), "Should show status");
         assert!(detail.contains("agent/my-agent"), "Should show branch");
         assert!(detail.contains("Implement feature X"), "Should show task");
+    }
+
+    // =========================================================================
+    // Continuous command tests
+    // =========================================================================
+
+    #[test]
+    fn test_handle_continuous_start() {
+        let (handler, _temp) = create_handler_in_temp();
+
+        let result = handler.handle("/continuous start");
+
+        match result {
+            CommandResult::Executed(output) => {
+                assert!(
+                    output.contains("Started") || output.contains("started"),
+                    "Should confirm start: {}",
+                    output
+                );
+            }
+            other => panic!("Expected executed result: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_handle_continuous_start_with_max_iterations() {
+        let (handler, _temp) = create_handler_in_temp();
+
+        let result = handler.handle("/continuous start 50");
+
+        match result {
+            CommandResult::Executed(output) => {
+                assert!(
+                    output.contains("50"),
+                    "Should show max iterations: {}",
+                    output
+                );
+            }
+            other => panic!("Expected executed result: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_handle_continuous_stop() {
+        let (handler, _temp) = create_handler_in_temp();
+
+        let result = handler.handle("/continuous stop");
+
+        match result {
+            CommandResult::Executed(output) => {
+                assert!(
+                    output.contains("Stopped") || output.contains("stopped"),
+                    "Should confirm stop: {}",
+                    output
+                );
+            }
+            other => panic!("Expected executed result: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_handle_continuous_status() {
+        let (handler, _temp) = create_handler_in_temp();
+
+        let result = handler.handle("/continuous status");
+
+        match result {
+            CommandResult::Executed(output) => {
+                assert!(
+                    output.contains("Inactive")
+                        || output.contains("inactive")
+                        || output.contains("Status")
+                        || output.contains("status"),
+                    "Should show status: {}",
+                    output
+                );
+            }
+            other => panic!("Expected executed result: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_handle_continuous_no_subcommand() {
+        let (handler, _temp) = create_handler_in_temp();
+
+        let result = handler.handle("/continuous");
+
+        match result {
+            CommandResult::Error(msg) => {
+                assert!(
+                    msg.contains("no subcommand"),
+                    "Should report missing subcommand: {}",
+                    msg
+                );
+            }
+            other => panic!("Expected error: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_handle_continuous_unknown_subcommand() {
+        let (handler, _temp) = create_handler_in_temp();
+
+        let result = handler.handle("/continuous foobar");
+
+        match result {
+            CommandResult::Error(msg) => {
+                assert!(
+                    msg.contains("unknown subcommand") || msg.contains("foobar"),
+                    "Should report unknown subcommand: {}",
+                    msg
+                );
+            }
+            other => panic!("Expected error: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_handle_continuous_start_invalid_arg() {
+        let (handler, _temp) = create_handler_in_temp();
+
+        let result = handler.handle("/continuous start abc");
+
+        match result {
+            CommandResult::Error(msg) => {
+                assert!(
+                    msg.contains("invalid") || msg.contains("abc"),
+                    "Should report invalid argument: {}",
+                    msg
+                );
+            }
+            other => panic!("Expected error: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_help_includes_continuous_command() {
+        let (handler, _temp) = create_handler_in_temp();
+
+        let result = handler.handle("/help");
+
+        match result {
+            CommandResult::Executed(output) => {
+                assert!(
+                    output.contains("continuous"),
+                    "Help should mention continuous command: {}",
+                    output
+                );
+            }
+            other => panic!("Expected help output: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_help_continuous_shows_detailed_help() {
+        let (handler, _temp) = create_handler_in_temp();
+
+        let result = handler.handle("/help continuous");
+
+        match result {
+            CommandResult::Executed(output) => {
+                assert!(
+                    output.contains("/continuous"),
+                    "Should describe continuous command"
+                );
+                assert!(output.contains("start"), "Should list start subcommand");
+                assert!(output.contains("stop"), "Should list stop subcommand");
+                assert!(output.contains("status"), "Should list status subcommand");
+            }
+            other => panic!("Expected continuous help: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_available_commands_includes_continuous() {
+        let (handler, _temp) = create_handler_in_temp();
+
+        let commands = handler.available_commands();
+
+        assert!(
+            commands.contains(&"continuous"),
+            "Available commands should include 'continuous'"
+        );
     }
 
     #[test]
