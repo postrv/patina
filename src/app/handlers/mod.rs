@@ -5,6 +5,7 @@
 //! [`EventDispatcher`](super::dispatch::EventDispatcher) in priority order.
 
 pub mod agent;
+pub mod completion;
 pub mod continuous;
 pub mod keyboard;
 pub mod permission;

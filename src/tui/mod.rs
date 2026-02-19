@@ -393,6 +393,13 @@ pub fn render(frame: &mut Frame, state: &mut AppState) {
     render_status_bar(frame, chunks[1], state);
     render_input(frame, chunks[2], state);
 
+    // Render completion popup above the input area if active
+    if let Some(completion) = state.completion() {
+        if !completion.filtered().is_empty() {
+            render_completion_popup(frame, chunks[2], completion);
+        }
+    }
+
     // Render continuous loop status in status bar area if active
     if *state.continuous_status() != ContinuousLoopStatus::Inactive {
         render_continuous_overlay(frame, state);
@@ -477,6 +484,20 @@ pub fn render_continuous_overlay(frame: &mut Frame, state: &AppState) {
 
 /// Renders the permission prompt modal as an overlay.
 ///
+/// Renders the completion popup menu above the input area.
+///
+/// Shows matching slash commands as the user types, with the selected entry
+/// highlighted. The popup is positioned directly above the input box.
+fn render_completion_popup(
+    frame: &mut Frame,
+    input_area: Rect,
+    completion: &crate::app::completion::CompletionState,
+) {
+    let area = widgets::CompletionMenuWidget::popup_area(input_area, completion.filtered().len());
+    let widget = widgets::CompletionMenuWidget::new(completion);
+    frame.render_widget(widget, area);
+}
+
 /// This function renders a modal dialog asking the user to approve or deny
 /// tool execution. The modal appears centered over the main UI.
 ///
