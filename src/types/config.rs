@@ -163,6 +163,9 @@ pub enum ProviderKind {
 
     /// Use OpenRouter (OpenAI-compatible API with message format translation).
     OpenRouter,
+
+    /// Use a fallback chain that tries multiple providers in order.
+    Fallback,
 }
 
 impl ProviderKind {
@@ -181,6 +184,7 @@ impl ProviderKind {
         match self {
             Self::Anthropic => "anthropic",
             Self::OpenRouter => "openrouter",
+            Self::Fallback => "fallback",
         }
     }
 }
@@ -227,6 +231,12 @@ pub struct ProviderConfig {
 
     /// App name sent as `X-Title` to OpenRouter for analytics.
     pub app_name: Option<String>,
+
+    /// Ordered list of provider configs for fallback chains.
+    ///
+    /// Only used when `kind` is [`ProviderKind::Fallback`]. Providers are
+    /// tried in order — the first to succeed handles the request.
+    pub fallback_chain: Vec<ProviderConfig>,
 }
 
 impl Default for ProviderConfig {
@@ -246,6 +256,7 @@ impl std::fmt::Debug for ProviderConfig {
             .field("openrouter_model", &self.openrouter_model)
             .field("site_url", &self.site_url)
             .field("app_name", &self.app_name)
+            .field("fallback_chain", &self.fallback_chain)
             .finish()
     }
 }
@@ -271,6 +282,7 @@ impl ProviderConfig {
             openrouter_model: None,
             site_url: None,
             app_name: None,
+            fallback_chain: Vec::new(),
         }
     }
 
@@ -301,6 +313,42 @@ impl ProviderConfig {
             openrouter_model: Some(model.into()),
             site_url: None,
             app_name: None,
+            fallback_chain: Vec::new(),
+        }
+    }
+
+    /// Creates a fallback provider config from an ordered list of provider configs.
+    ///
+    /// Providers are tried in order — the first to succeed handles the request.
+    ///
+    /// # Arguments
+    ///
+    /// * `chain` - Ordered list of provider configs to try
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use patina::types::config::{ProviderConfig, ProviderKind};
+    /// use secrecy::SecretString;
+    ///
+    /// let config = ProviderConfig::fallback(vec![
+    ///     ProviderConfig::anthropic(),
+    ///     ProviderConfig::openrouter(
+    ///         SecretString::new("sk-or-...".into()),
+    ///         "anthropic/claude-sonnet-4",
+    ///     ),
+    /// ]);
+    /// assert_eq!(config.kind, ProviderKind::Fallback);
+    /// ```
+    #[must_use]
+    pub fn fallback(chain: Vec<ProviderConfig>) -> Self {
+        Self {
+            kind: ProviderKind::Fallback,
+            openrouter_api_key: None,
+            openrouter_model: None,
+            site_url: None,
+            app_name: None,
+            fallback_chain: chain,
         }
     }
 
@@ -356,6 +404,23 @@ impl ProviderConfig {
                 }
                 Ok(())
             }
+            ProviderKind::Fallback => {
+                if self.fallback_chain.is_empty() {
+                    return Err(
+                        "Fallback provider requires at least one provider in the chain."
+                            .to_string(),
+                    );
+                }
+                for (i, provider) in self.fallback_chain.iter().enumerate() {
+                    provider.validate().map_err(|e| {
+                        format!(
+                            "Fallback chain provider {i} ({}) invalid: {e}",
+                            provider.kind.as_str()
+                        )
+                    })?;
+                }
+                Ok(())
+            }
         }
     }
 }
@@ -372,7 +437,7 @@ impl ProviderConfig {
 /// # Examples
 ///
 /// ```no_run
-/// use patina::types::config::{CompressionConfig, Config, NarsilMode, ParallelMode, ResumeMode};
+/// use patina::types::config::{CompressionConfig, Config, NarsilMode, ParallelMode, ProviderConfig, ResumeMode};
 /// use secrecy::SecretString;
 /// use std::path::PathBuf;
 ///
@@ -1426,6 +1491,7 @@ mod tests {
             openrouter_model: Some("model".to_string()),
             site_url: None,
             app_name: None,
+            fallback_chain: Vec::new(),
         };
         assert!(config.validate().is_err());
     }
@@ -1439,6 +1505,7 @@ mod tests {
             openrouter_model: None,
             site_url: None,
             app_name: None,
+            fallback_chain: Vec::new(),
         };
         assert!(config.validate().is_err());
     }
@@ -1450,5 +1517,84 @@ mod tests {
             "anthropic/claude-sonnet-4",
         );
         assert!(config.validate().is_ok());
+    }
+
+    // =========================================================================
+    // Phase 2.7: Fallback provider config tests
+    // =========================================================================
+
+    #[test]
+    fn test_provider_kind_fallback_as_str() {
+        assert_eq!(ProviderKind::Fallback.as_str(), "fallback");
+    }
+
+    #[test]
+    fn test_provider_config_fallback_constructor() {
+        let config = ProviderConfig::fallback(vec![
+            ProviderConfig::anthropic(),
+            ProviderConfig::openrouter(
+                SecretString::new("sk-or-test".into()),
+                "anthropic/claude-sonnet-4",
+            ),
+        ]);
+        assert_eq!(config.kind, ProviderKind::Fallback);
+        assert_eq!(config.fallback_chain.len(), 2);
+    }
+
+    #[test]
+    fn test_provider_config_fallback_validate_ok() {
+        let config = ProviderConfig::fallback(vec![
+            ProviderConfig::anthropic(),
+            ProviderConfig::openrouter(
+                SecretString::new("sk-or-test".into()),
+                "anthropic/claude-sonnet-4",
+            ),
+        ]);
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_provider_config_fallback_validate_empty_chain() {
+        let config = ProviderConfig::fallback(vec![]);
+        assert!(config.validate().is_err());
+        let err = config.validate().unwrap_err();
+        assert!(err.contains("at least one provider"));
+    }
+
+    #[test]
+    fn test_provider_config_fallback_validate_invalid_inner() {
+        let config = ProviderConfig::fallback(vec![
+            ProviderConfig::anthropic(),
+            ProviderConfig {
+                kind: ProviderKind::OpenRouter,
+                openrouter_api_key: None,
+                openrouter_model: None,
+                site_url: None,
+                app_name: None,
+                fallback_chain: Vec::new(),
+            },
+        ]);
+        assert!(config.validate().is_err());
+        let err = config.validate().unwrap_err();
+        assert!(err.contains("Fallback chain provider 1"));
+    }
+
+    #[test]
+    fn test_provider_config_fallback_single_provider() {
+        let config = ProviderConfig::fallback(vec![ProviderConfig::anthropic()]);
+        assert!(config.validate().is_ok());
+        assert_eq!(config.fallback_chain.len(), 1);
+    }
+
+    #[test]
+    fn test_config_with_fallback_provider() {
+        let config = Config::new(
+            SecretString::new("test-key".into()),
+            "test-model",
+            PathBuf::from("/tmp"),
+        )
+        .with_provider(ProviderConfig::fallback(vec![ProviderConfig::anthropic()]));
+
+        assert_eq!(config.provider.kind, ProviderKind::Fallback);
     }
 }

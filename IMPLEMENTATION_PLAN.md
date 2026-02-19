@@ -285,9 +285,9 @@ Before marking ANY task `[x]`:
 **Description**: Provider that tries multiple providers in order, falling back on failure. Wraps a `Vec<Box<dyn LlmProvider>>`.
 
 **TDD Cycle**:
-- [ ] RED: Write tests for fallback behavior — first provider succeeds (no fallback), first fails then second succeeds, all fail returns error, logging on fallback
-- [ ] GREEN: Implement `FallbackProvider` implementing `LlmProvider`, iterates providers, catches errors, tries next
-- [ ] REFACTOR: Add config support for fallback chains (`fallback = ["anthropic", "openrouter"]`), emit warnings on fallback
+- [x] RED: Write tests for fallback behavior — first provider succeeds (no fallback), first fails then second succeeds, all fail returns error, logging on fallback
+- [x] GREEN: Implement `FallbackProvider` implementing `LlmProvider`, iterates providers, catches errors, tries next
+- [x] REFACTOR: Add config support for fallback chains (`fallback = ["anthropic", "openrouter"]`), emit warnings on fallback
 - Files: `src/api/provider.rs`
 - Acceptance: Fallback chain works correctly, tests cover all permutations
 
