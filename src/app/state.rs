@@ -275,6 +275,24 @@ pub struct ContinuousLoopState {
     pub(crate) gate_results: Vec<GateResult>,
 }
 
+/// UI selection and copy state extracted from AppState.
+///
+/// Groups fields related to text selection, clipboard copy operations,
+/// and UI focus tracking.
+pub struct UISelectionState {
+    /// Text selection state for copy/paste functionality.
+    pub(crate) selection: SelectionState,
+
+    /// Flag indicating a copy operation was requested.
+    pub(crate) copy_pending: bool,
+
+    /// Cached rendered lines for copy operations.
+    pub(crate) rendered_lines_cache: Vec<String>,
+
+    /// Which area of the UI currently has focus.
+    pub(crate) focus_area: FocusArea,
+}
+
 /// Tool execution state extracted from AppState.
 ///
 /// Groups all tool-related fields: the tool loop state machine, executor,
@@ -352,20 +370,8 @@ pub struct AppState {
     /// dual-system of `messages` + `current_response`.
     timeline: Timeline,
 
-    /// Text selection state for copy/paste functionality.
-    selection: SelectionState,
-
-    /// Flag indicating a copy operation was requested.
-    /// Set by keyboard handler, consumed during render when lines are available.
-    copy_pending: bool,
-
-    /// Cached rendered lines for copy operations.
-    /// Updated during render to enable copy extraction.
-    rendered_lines_cache: Vec<String>,
-
-    /// Which area of the UI currently has focus.
-    /// Determines how shortcuts like Ctrl+A behave.
-    focus_area: FocusArea,
+    /// All UI selection and copy state grouped together.
+    ui_selection: UISelectionState,
 
     /// All compression, context injection, and compaction state grouped together.
     compression: CompressionState,
@@ -561,10 +567,12 @@ impl AppState {
                 executing_tool_ids: std::collections::HashSet::new(),
             },
             timeline: Timeline::new(),
-            selection: SelectionState::new(),
-            copy_pending: false,
-            rendered_lines_cache: Vec::new(),
-            focus_area: FocusArea::default(),
+            ui_selection: UISelectionState {
+                selection: SelectionState::new(),
+                copy_pending: false,
+                rendered_lines_cache: Vec::new(),
+                focus_area: FocusArea::default(),
+            },
             compression: CompressionState {
                 token_budget: TokenBudget::new(100_000), // Claude's typical context window
                 compaction_state: None,
@@ -1315,7 +1323,7 @@ impl AppState {
             mode = ?self.scroll.mode(),
             content_height = self.scroll.content_height(),
             viewport_height = self.scroll.viewport_height(),
-            cache_size = self.rendered_lines_cache.len(),
+            cache_size = self.ui_selection.rendered_lines_cache.len(),
             timeline_entries = self.timeline.len(),
             "scroll_up"
         );
@@ -1379,18 +1387,18 @@ impl AppState {
     /// Returns the selection state for read access.
     #[must_use]
     pub fn selection(&self) -> &SelectionState {
-        &self.selection
+        &self.ui_selection.selection
     }
 
     /// Returns the selection state for modification.
     pub fn selection_mut(&mut self) -> &mut SelectionState {
-        &mut self.selection
+        &mut self.ui_selection.selection
     }
 
     /// Returns the current focus area.
     #[must_use]
     pub fn focus_area(&self) -> FocusArea {
-        self.focus_area
+        self.ui_selection.focus_area
     }
 
     /// Sets the focus area, clearing selection if focus changes.
@@ -1398,9 +1406,9 @@ impl AppState {
     /// When focus moves between Input and Content areas, any existing
     /// selection is cleared to prevent confusion about what would be copied.
     pub fn set_focus_area(&mut self, area: FocusArea) {
-        if self.focus_area != area {
-            self.selection.clear();
-            self.focus_area = area;
+        if self.ui_selection.focus_area != area {
+            self.ui_selection.selection.clear();
+            self.ui_selection.focus_area = area;
         }
     }
 
@@ -1445,7 +1453,7 @@ impl AppState {
     ///
     /// Returns an error if all clipboard methods fail.
     pub fn copy_selection_to_clipboard(&self, lines: &[ratatui::text::Line<'_>]) -> Result<bool> {
-        let text = self.selection.extract_text(lines);
+        let text = self.ui_selection.selection.extract_text(lines);
         if text.is_empty() {
             return Ok(false);
         }
@@ -1456,14 +1464,14 @@ impl AppState {
 
     /// Requests a copy operation to be performed during the next render.
     pub fn request_copy(&mut self) {
-        self.copy_pending = true;
+        self.ui_selection.copy_pending = true;
     }
 
     /// Checks and clears the copy pending flag.
     ///
     /// Returns `true` if a copy was requested.
     pub fn take_copy_pending(&mut self) -> bool {
-        std::mem::take(&mut self.copy_pending)
+        std::mem::take(&mut self.ui_selection.copy_pending)
     }
 
     /// Returns the total number of rendered lines.
@@ -1473,7 +1481,7 @@ impl AppState {
     /// Used for select-all functionality.
     #[must_use]
     pub fn rendered_line_count(&self) -> usize {
-        self.rendered_lines_cache.len()
+        self.ui_selection.rendered_lines_cache.len()
     }
 
     /// Updates the cached rendered lines for copy operations.
@@ -1487,7 +1495,7 @@ impl AppState {
     /// * `lines` - The logical lines before wrapping
     /// * `width` - The terminal content width (excluding borders)
     pub fn update_rendered_lines_cache(&mut self, lines: &[ratatui::text::Line<'_>], width: usize) {
-        self.rendered_lines_cache = crate::tui::wrap_lines_to_strings(lines, width);
+        self.ui_selection.rendered_lines_cache = crate::tui::wrap_lines_to_strings(lines, width);
     }
 
     /// Copies the current selection to clipboard using cached lines.
@@ -1496,7 +1504,7 @@ impl AppState {
     ///
     /// Returns an error if clipboard access fails.
     pub fn copy_from_cache(&self) -> Result<bool> {
-        let Some((start, end)) = self.selection.range() else {
+        let Some((start, end)) = self.ui_selection.selection.range() else {
             tracing::debug!("copy_from_cache: no selection range");
             return Ok(false);
         };
@@ -1504,18 +1512,18 @@ impl AppState {
         tracing::debug!(
             ?start,
             ?end,
-            cache_len = self.rendered_lines_cache.len(),
+            cache_len = self.ui_selection.rendered_lines_cache.len(),
             "copy_from_cache: extracting"
         );
 
-        if self.rendered_lines_cache.is_empty() {
+        if self.ui_selection.rendered_lines_cache.is_empty() {
             tracing::debug!("copy_from_cache: cache is empty");
             return Ok(false);
         }
 
         // Extract text from cached lines
         let mut result = String::new();
-        for (line_idx, line_text) in self.rendered_lines_cache.iter().enumerate() {
+        for (line_idx, line_text) in self.ui_selection.rendered_lines_cache.iter().enumerate() {
             if line_idx < start.line {
                 continue;
             }
@@ -5301,5 +5309,24 @@ mod tests {
         assert_eq!(state.continuous_last_duration_ms(), None);
         assert_eq!(state.continuous_checking_gate(), None);
         assert!(state.continuous_gate_results().is_empty());
+    }
+
+    // ========================================================================
+    // Phase 8.4: UISelectionState extraction tests
+    // ========================================================================
+
+    /// Verifies that UISelectionState is correctly initialized inside AppState.
+    #[test]
+    fn test_ui_selection_state_construction() {
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+
+        // Selection: starts with no active selection
+        assert!(!state.selection().has_selection());
+
+        // Copy pending: false initially
+        assert!(!state.take_copy_pending());
+
+        // Focus area: default
+        assert_eq!(state.focus_area(), FocusArea::default());
     }
 }
