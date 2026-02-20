@@ -404,7 +404,9 @@ pub struct AppState {
 
     /// Optional MCP server manager for external tool servers.
     /// Set during app startup if `.mcp.json` or `~/.claude.json` contains server entries.
-    mcp_manager: Option<crate::mcp::manager::McpManager>,
+    /// Wrapped in `Arc` so spawned tool-execution tasks can share read access
+    /// (the SDK uses interior mutability — `call_tool` is `&self`).
+    mcp_manager: Option<std::sync::Arc<crate::mcp::manager::McpManager>>,
 }
 
 #[derive(Default)]
@@ -2709,7 +2711,7 @@ impl AppState {
         let result = self
             .tool_state
             .tool_loop
-            .execute_pending(&self.tool_state.tool_executor, self.mcp_manager.as_mut())
+            .execute_pending(&self.tool_state.tool_executor, self.mcp_manager.as_deref())
             .await
             .map_err(|e| match e {
                 ToolLoopError::InvalidStateTransition { from, to } => {
@@ -3045,43 +3047,88 @@ impl AppState {
         }
 
         let executor = Arc::clone(&self.tool_state.tool_executor);
+        let mcp_manager = self.mcp_manager.clone();
 
         // Spawn background task
         let handle = tokio::spawn(async move {
             use crate::app::tool_loop::tool_use_to_call;
+            use crate::mcp::manager::is_mcp_tool;
             use crate::tools::ToolResult as TR;
 
             let mut results = Vec::new();
             for (tool_id, tool_use) in pending {
-                let call = tool_use_to_call(&tool_use);
-                let result = executor.execute(call).await;
-
-                let result_block = match &result {
-                    Ok(TR::Success(output)) => crate::types::ToolResultBlock {
-                        tool_use_id: tool_id.clone(),
-                        content: output.clone(),
-                        is_error: false,
-                    },
-                    Ok(TR::Error(error)) => crate::types::ToolResultBlock {
-                        tool_use_id: tool_id.clone(),
-                        content: error.clone(),
-                        is_error: true,
-                    },
-                    Ok(TR::Cancelled) => crate::types::ToolResultBlock {
-                        tool_use_id: tool_id.clone(),
-                        content: "Tool execution cancelled".to_string(),
-                        is_error: true,
-                    },
-                    Ok(TR::NeedsPermission(perm)) => crate::types::ToolResultBlock {
-                        tool_use_id: tool_id.clone(),
-                        content: format!("Permission required: {perm:?}"),
-                        is_error: true,
-                    },
-                    Err(e) => crate::types::ToolResultBlock {
-                        tool_use_id: tool_id.clone(),
-                        content: e.to_string(),
-                        is_error: true,
-                    },
+                // Route MCP-namespaced tools through the MCP manager
+                let result_block = if is_mcp_tool(&tool_use.name) {
+                    match &mcp_manager {
+                        Some(mgr) => {
+                            match mgr.call_tool(&tool_use.name, tool_use.input.clone()).await {
+                                Ok(TR::Success(output)) => crate::types::ToolResultBlock {
+                                    tool_use_id: tool_id.clone(),
+                                    content: output,
+                                    is_error: false,
+                                },
+                                Ok(TR::Error(msg)) => crate::types::ToolResultBlock {
+                                    tool_use_id: tool_id.clone(),
+                                    content: msg,
+                                    is_error: true,
+                                },
+                                Ok(TR::Cancelled) => crate::types::ToolResultBlock {
+                                    tool_use_id: tool_id.clone(),
+                                    content: "Tool execution cancelled".to_string(),
+                                    is_error: true,
+                                },
+                                Ok(TR::NeedsPermission(perm)) => crate::types::ToolResultBlock {
+                                    tool_use_id: tool_id.clone(),
+                                    content: format!("Permission required: {perm:?}"),
+                                    is_error: true,
+                                },
+                                Err(e) => crate::types::ToolResultBlock {
+                                    tool_use_id: tool_id.clone(),
+                                    content: format!("MCP tool error: {e}"),
+                                    is_error: true,
+                                },
+                            }
+                        }
+                        None => crate::types::ToolResultBlock {
+                            tool_use_id: tool_id.clone(),
+                            content: format!(
+                                "MCP tool '{}' called but no MCP manager available",
+                                tool_use.name
+                            ),
+                            is_error: true,
+                        },
+                    }
+                } else {
+                    // Built-in tool path
+                    let call = tool_use_to_call(&tool_use);
+                    let result = executor.execute(call).await;
+                    match &result {
+                        Ok(TR::Success(output)) => crate::types::ToolResultBlock {
+                            tool_use_id: tool_id.clone(),
+                            content: output.clone(),
+                            is_error: false,
+                        },
+                        Ok(TR::Error(error)) => crate::types::ToolResultBlock {
+                            tool_use_id: tool_id.clone(),
+                            content: error.clone(),
+                            is_error: true,
+                        },
+                        Ok(TR::Cancelled) => crate::types::ToolResultBlock {
+                            tool_use_id: tool_id.clone(),
+                            content: "Tool execution cancelled".to_string(),
+                            is_error: true,
+                        },
+                        Ok(TR::NeedsPermission(perm)) => crate::types::ToolResultBlock {
+                            tool_use_id: tool_id.clone(),
+                            content: format!("Permission required: {perm:?}"),
+                            is_error: true,
+                        },
+                        Err(e) => crate::types::ToolResultBlock {
+                            tool_use_id: tool_id.clone(),
+                            content: e.to_string(),
+                            is_error: true,
+                        },
+                    }
                 };
 
                 // Send through channel (ignore error if receiver dropped)
@@ -3212,18 +3259,21 @@ impl AppState {
 
     /// Sets the MCP server manager.
     pub fn set_mcp_manager(&mut self, manager: crate::mcp::manager::McpManager) {
-        self.mcp_manager = Some(manager);
+        self.mcp_manager = Some(std::sync::Arc::new(manager));
     }
 
     /// Returns a reference to the MCP manager, if set.
     #[must_use]
     pub fn mcp_manager(&self) -> Option<&crate::mcp::manager::McpManager> {
-        self.mcp_manager.as_ref()
+        self.mcp_manager.as_deref()
     }
 
     /// Returns a mutable reference to the MCP manager, if set.
+    ///
+    /// Only succeeds when there is exactly one `Arc` reference (i.e. no
+    /// spawned tasks are still holding a clone).  Used at shutdown.
     pub fn mcp_manager_mut(&mut self) -> Option<&mut crate::mcp::manager::McpManager> {
-        self.mcp_manager.as_mut()
+        self.mcp_manager.as_mut().and_then(std::sync::Arc::get_mut)
     }
 
     /// Returns `true` if an MCP manager is configured.

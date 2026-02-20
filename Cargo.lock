@@ -2183,6 +2183,7 @@ dependencies = [
  "anyhow",
  "arboard",
  "base64",
+ "bytes",
  "clap",
  "criterion",
  "crossterm 0.28.1",

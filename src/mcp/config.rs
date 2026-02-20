@@ -81,6 +81,11 @@ pub struct McpServerEntry {
     #[serde(default)]
     pub headers: Option<HashMap<String, String>>,
 
+    /// Transport type: `"sse"` for legacy SSE, `"streamable-http"` for new protocol.
+    /// If absent, auto-detected from the URL (paths ending in `/sse` use legacy SSE).
+    #[serde(rename = "type", default)]
+    pub transport_type: Option<String>,
+
     /// Whether this server is disabled. Absent means enabled.
     #[serde(default)]
     pub disabled: bool,
@@ -103,6 +108,23 @@ impl McpServerEntry {
     #[must_use]
     pub fn is_stdio(&self) -> bool {
         self.url.is_none()
+    }
+
+    /// Returns `true` if this entry uses legacy SSE transport.
+    ///
+    /// Legacy SSE uses a GET-based SSE stream for server messages and a POST
+    /// endpoint (received via an `endpoint` SSE event) for client messages.
+    /// Detected by explicit `"type": "sse"` or by URL path ending in `/sse`.
+    #[must_use]
+    pub fn is_legacy_sse(&self) -> bool {
+        match self.transport_type.as_deref() {
+            Some("sse") => true,
+            Some(_) => false,
+            None => self
+                .url
+                .as_deref()
+                .is_some_and(|u| u.trim_end_matches('/').ends_with("/sse")),
+        }
     }
 }
 
@@ -331,6 +353,7 @@ mod tests {
                 env: HashMap::new(),
                 url: None,
                 headers: None,
+                transport_type: None,
                 disabled: false,
             },
         );
@@ -344,6 +367,7 @@ mod tests {
                 env: HashMap::new(),
                 url: None,
                 headers: None,
+                transport_type: None,
                 disabled: false,
             },
         );
@@ -364,6 +388,7 @@ mod tests {
                 env: HashMap::new(),
                 url: None,
                 headers: None,
+                transport_type: None,
                 disabled: false,
             },
         );
@@ -377,6 +402,7 @@ mod tests {
                 env: HashMap::new(),
                 url: None,
                 headers: None,
+                transport_type: None,
                 disabled: false,
             },
         );
@@ -398,6 +424,7 @@ mod tests {
                 env: HashMap::new(),
                 url: None,
                 headers: None,
+                transport_type: None,
                 disabled: false,
             },
         );
@@ -418,6 +445,7 @@ mod tests {
                 env: HashMap::new(),
                 url: None,
                 headers: None,
+                transport_type: None,
                 disabled: false,
             },
         );
@@ -431,11 +459,61 @@ mod tests {
                 env: HashMap::new(),
                 url: None,
                 headers: None,
+                transport_type: None,
                 disabled: true,
             },
         );
 
         let merged = merge_configs(project, user_global);
         assert!(merged.is_empty());
+    }
+
+    #[test]
+    fn is_legacy_sse_explicit_type() {
+        let json = r#"{"url":"http://localhost:8080/mcp","type":"sse"}"#;
+        let entry: McpServerEntry = serde_json::from_str(json).unwrap();
+        assert!(entry.is_legacy_sse());
+    }
+
+    #[test]
+    fn is_legacy_sse_auto_detect_from_url() {
+        let json = r#"{"url":"http://localhost:8080/sse"}"#;
+        let entry: McpServerEntry = serde_json::from_str(json).unwrap();
+        assert!(entry.is_legacy_sse());
+    }
+
+    #[test]
+    fn is_legacy_sse_auto_detect_trailing_slash() {
+        let json = r#"{"url":"http://localhost:8080/sse/"}"#;
+        let entry: McpServerEntry = serde_json::from_str(json).unwrap();
+        assert!(entry.is_legacy_sse());
+    }
+
+    #[test]
+    fn is_legacy_sse_explicit_streamable_http_overrides_url() {
+        let json = r#"{"url":"http://localhost:8080/sse","type":"streamable-http"}"#;
+        let entry: McpServerEntry = serde_json::from_str(json).unwrap();
+        assert!(!entry.is_legacy_sse());
+    }
+
+    #[test]
+    fn is_legacy_sse_non_sse_url() {
+        let json = r#"{"url":"http://localhost:8080/mcp"}"#;
+        let entry: McpServerEntry = serde_json::from_str(json).unwrap();
+        assert!(!entry.is_legacy_sse());
+    }
+
+    #[test]
+    fn is_legacy_sse_stdio_entry() {
+        let json = r#"{"command":"mcp-server"}"#;
+        let entry: McpServerEntry = serde_json::from_str(json).unwrap();
+        assert!(!entry.is_legacy_sse());
+    }
+
+    #[test]
+    fn deserialize_transport_type_field() {
+        let json = r#"{"url":"http://localhost:8080/mcp","type":"sse"}"#;
+        let entry: McpServerEntry = serde_json::from_str(json).unwrap();
+        assert_eq!(entry.transport_type.as_deref(), Some("sse"));
     }
 }

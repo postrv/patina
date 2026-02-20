@@ -326,6 +326,8 @@ async fn start_stdio_server(
 }
 
 /// Starts a single HTTP/SSE MCP server via `McpConnection`.
+///
+/// Routes to legacy SSE or streamable HTTP based on the entry's transport type.
 async fn start_http_server(
     name: String,
     entry: McpServerEntry,
@@ -342,13 +344,25 @@ async fn start_http_server(
         }
     };
 
-    match McpConnection::connect_http(&name, &url, &entry.headers, timeout).await {
+    let is_legacy = entry.is_legacy_sse();
+    let result = if is_legacy {
+        tracing::debug!(server = %name, url = %url, "Connecting via legacy SSE transport");
+        McpConnection::connect_legacy_sse(&name, &url, &entry.headers, timeout).await
+    } else {
+        tracing::debug!(server = %name, url = %url, "Connecting via streamable HTTP transport");
+        McpConnection::connect_http(&name, &url, &entry.headers, timeout).await
+    };
+
+    let transport_label = if is_legacy { "legacy SSE" } else { "HTTP" };
+
+    match result {
         Ok(conn) => {
             let tool_count = conn.tools().len();
             tracing::info!(
                 server = %name,
                 tool_count,
-                "HTTP MCP server connected, discovered tools"
+                transport = transport_label,
+                "MCP server connected, discovered tools"
             );
             ManagedServer {
                 name,
@@ -360,7 +374,8 @@ async fn start_http_server(
             tracing::warn!(
                 server = %name,
                 error = %e,
-                "HTTP MCP server failed to start"
+                transport = transport_label,
+                "MCP server failed to start"
             );
             ManagedServer {
                 name,
@@ -530,6 +545,7 @@ mod tests {
                 env: HashMap::new(),
                 url: None,
                 headers: None,
+                transport_type: None,
                 disabled: false,
             },
         );
@@ -553,6 +569,7 @@ mod tests {
                 env: HashMap::new(),
                 url: None,
                 headers: None,
+                transport_type: None,
                 disabled: true,
             },
         );
@@ -572,6 +589,7 @@ mod tests {
                 env: HashMap::new(),
                 url: Some("http://localhost:8080/sse".to_string()),
                 headers: None,
+                transport_type: None,
                 disabled: false,
             },
         );
@@ -594,6 +612,7 @@ mod tests {
                 env: HashMap::new(),
                 url: Some("http://192.0.2.1:1/sse".to_string()),
                 headers: None,
+                transport_type: None,
                 disabled: false,
             },
         );
@@ -701,6 +720,7 @@ mod tests {
                 env: HashMap::new(),
                 url: None,
                 headers: None,
+                transport_type: None,
                 disabled: false,
             },
         );
@@ -712,6 +732,7 @@ mod tests {
                 env: HashMap::new(),
                 url: None,
                 headers: None,
+                transport_type: None,
                 disabled: false,
             },
         );

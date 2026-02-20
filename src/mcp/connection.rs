@@ -127,6 +127,77 @@ impl McpConnection {
         })
     }
 
+    /// Connects to an MCP server via legacy SSE transport.
+    ///
+    /// Uses the legacy SSE protocol where the client GETs an SSE endpoint,
+    /// receives a POST URL via an `endpoint` event, then sends JSON-RPC
+    /// messages via POST while receiving responses on the SSE stream.
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - Server name for identification
+    /// * `url` - URL of the SSE endpoint
+    /// * `headers` - Optional HTTP headers (e.g., Authorization)
+    /// * `timeout` - Maximum time for connection + initialization
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The SSE connection fails
+    /// - The `endpoint` event is not received in time
+    /// - The MCP handshake fails or times out
+    pub async fn connect_legacy_sse(
+        name: &str,
+        url: &str,
+        headers: &Option<HashMap<String, String>>,
+        timeout: Duration,
+    ) -> Result<Self> {
+        use crate::mcp::legacy_sse::LegacySseTransport;
+
+        let transport = LegacySseTransport::connect(url, headers, timeout)
+            .await
+            .with_context(|| format!("Legacy SSE connection to '{}' failed", name))?;
+
+        let tools: Arc<RwLock<Vec<Tool>>> = Arc::new(RwLock::new(Vec::new()));
+        let (event_tx, event_rx) = mpsc::unbounded_channel();
+
+        let handler = PatinaClientHandler::new(name.to_string(), Arc::clone(&tools), event_tx);
+
+        let client = tokio::time::timeout(timeout, handler.serve(transport))
+            .await
+            .map_err(|_| anyhow!("MCP legacy SSE server '{}' handshake timed out", name))?
+            .map_err(|e| {
+                anyhow!(
+                    "MCP legacy SSE server '{}' initialization failed: {}",
+                    name,
+                    e
+                )
+            })?;
+
+        // Fetch initial tool list
+        match client.list_all_tools().await {
+            Ok(initial_tools) => {
+                if let Ok(mut guard) = tools.write() {
+                    *guard = initial_tools;
+                }
+            }
+            Err(e) => {
+                tracing::warn!(
+                    server = %name,
+                    error = %e,
+                    "Failed to fetch initial tool list from legacy SSE server"
+                );
+            }
+        }
+
+        Ok(Self {
+            name: name.to_string(),
+            client: Some(client),
+            tools,
+            event_rx,
+        })
+    }
+
     /// Connects to an MCP server via HTTP (streamable HTTP / SSE).
     ///
     /// # Arguments

@@ -57,6 +57,7 @@ async fn test_manager_startup_skips_disabled() {
             env: HashMap::new(),
             url: None,
             headers: None,
+            transport_type: None,
             disabled: true,
         },
     );
@@ -76,6 +77,7 @@ async fn test_manager_startup_invalid_command_marks_failed() {
             env: HashMap::new(),
             url: None,
             headers: None,
+            transport_type: None,
             disabled: false,
         },
     );
@@ -99,6 +101,7 @@ async fn test_manager_sse_not_yet_supported() {
             env: HashMap::new(),
             url: Some("http://localhost:8080/sse".to_string()),
             headers: None,
+            transport_type: None,
             disabled: false,
         },
     );

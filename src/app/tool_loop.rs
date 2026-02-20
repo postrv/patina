@@ -1024,7 +1024,7 @@ impl std::error::Error for ExecutionError {}
 pub async fn execute_tool(
     tool_use: &ToolUseBlock,
     executor: &crate::tools::HookedToolExecutor,
-    mcp_manager: Option<&mut crate::mcp::manager::McpManager>,
+    mcp_manager: Option<&crate::mcp::manager::McpManager>,
 ) -> Result<ToolResultBlock, ExecutionError> {
     use crate::mcp::manager::is_mcp_tool;
     use crate::tools::ToolResult;
@@ -1105,7 +1105,7 @@ impl ToolLoop {
     pub async fn execute_pending(
         &mut self,
         executor: &crate::tools::HookedToolExecutor,
-        mcp_manager: Option<&mut crate::mcp::manager::McpManager>,
+        mcp_manager: Option<&crate::mcp::manager::McpManager>,
     ) -> Result<Vec<String>, ToolLoopError> {
         if !matches!(self.state, ToolLoopState::Executing) {
             return Err(ToolLoopError::InvalidStateTransition {
@@ -1124,10 +1124,6 @@ impl ToolLoop {
             .map(|c| c.tool_use.id.clone())
             .collect();
 
-        // We need to thread the mcp_manager through each call.
-        // Since execute_tool takes Option<&mut McpManager>, we pass it through.
-        let mut mcp = mcp_manager;
-
         for tool_id in tool_ids {
             // Get the tool_use - we need to clone to avoid borrow issues
             let tool_use = {
@@ -1135,7 +1131,7 @@ impl ToolLoop {
                 call.tool_use.clone()
             };
 
-            match execute_tool(&tool_use, executor, mcp.as_deref_mut()).await {
+            match execute_tool(&tool_use, executor, mcp_manager).await {
                 Ok(result_block) => {
                     if let Some(call) = self.pending_calls.get_mut(&tool_id) {
                         call.set_result(result_block);

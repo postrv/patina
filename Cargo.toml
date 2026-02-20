@@ -66,6 +66,9 @@ base64 = "0.22"
 arboard = "3"
 urlencoding = "2.1"
 
+# Byte buffers (used by legacy SSE transport, already in dep tree via reqwest/tokio)
+bytes = "1"
+
 # MCP SDK
 rmcp = { version = "0.16", features = [
     "client",

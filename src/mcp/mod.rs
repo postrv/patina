@@ -14,6 +14,7 @@
 pub mod config;
 pub mod connection;
 pub mod handler;
+pub mod legacy_sse;
 pub mod manager;
 pub mod security;
 
