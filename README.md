@@ -7,7 +7,7 @@
 [![CI](https://github.com/postrv/patina/actions/workflows/ci.yml/badge.svg)](https://github.com/postrv/patina/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](LICENSE)
 [![Version](https://img.shields.io/badge/version-1.0.0-green.svg)](Cargo.toml)
-[![Rust](https://img.shields.io/badge/rust-1.75%2B-orange.svg)](https://www.rust-lang.org/)
+[![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://www.rust-lang.org/)
 
 A high-performance terminal client for the Claude API, written in Rust. Designed for developers who want a fast, secure, and extensible AI assistant in their terminal.
 
@@ -16,10 +16,11 @@ A high-performance terminal client for the Claude API, written in Rust. Designed
 - **Sub-millisecond rendering** - Full 100-message redraw in <1ms
 - **Multi-provider LLM support** - Claude (Anthropic) and OpenRouter-compatible models with automatic failover
 - **Parallel tool execution** - 5x+ speedup on multi-file operations
+- **Full MCP support** - Connect any MCP server via stdio, streamable HTTP, or legacy SSE transports
 - **Autonomous agent orchestration** - Spawn parallel sub-agents in isolated git worktrees
 - **Continuous coding loop** - Run tasks autonomously with stagnation detection and quality gates
-- **3,500+ tests** with 85%+ code coverage
-- **Zero unsafe code** - Pure safe Rust (~89,000 LOC)
+- **2,800+ tests** with 85%+ code coverage
+- **Zero unsafe code** - Pure safe Rust (~92,000 LOC)
 - **Cross-platform** - Linux, macOS, Windows
 - **Security-first** - Defense-in-depth with command filtering, path validation, and session integrity
 
@@ -37,7 +38,8 @@ A high-performance terminal client for the Claude API, written in Rust. Designed
 | **Session Resume** | Save and restore conversations with full context |
 | **Context Compaction** | Automatic summarization when context window fills |
 | **Context Compression** | Intelligent context building with token budgeting and narsil-mcp integration |
-| **MCP Support** | Model Context Protocol for tool server integration |
+| **MCP Support** | Full Model Context Protocol with stdio, HTTP, and legacy SSE transports |
+| **Slash Command Completion** | Tab-completion popup for slash commands |
 
 ### Autonomous Agents
 
@@ -67,10 +69,11 @@ A high-performance terminal client for the Claude API, written in Rust. Designed
 
 | Feature | Description |
 |---------|-------------|
+| **MCP Servers** | Connect any MCP-compatible tool server (narsil, JetBrains, etc.) |
 | **Plugin System** | TOML-based plugins with auto-discovery |
 | **Skills Engine** | Context-aware suggestions via SKILL.md files |
 | **Hooks** | 11 lifecycle events (PreToolUse, PostToolUse, SessionStart, etc.) |
-| **Slash Commands** | `/worktree`, `/agent`, `/continuous`, `/help`, and user-defined workflows |
+| **Slash Commands** | `/mcp`, `/worktree`, `/agent`, `/continuous`, `/help`, and user-defined workflows |
 
 ### Developer Experience
 
@@ -79,7 +82,7 @@ A high-performance terminal client for the Claude API, written in Rust. Designed
 | **Project Context** | Automatic CLAUDE.md discovery for project instructions |
 | **Git Worktrees** | Parallel AI-assisted development with isolation |
 | **IDE Integration** | TCP server for VS Code and JetBrains extensions |
-| **narsil-mcp** | Optional code intelligence with 90 analysis tools |
+| **narsil-mcp** | Optional code intelligence with 90+ analysis tools |
 
 ## Installation
 
@@ -88,8 +91,7 @@ A high-performance terminal client for the Claude API, written in Rust. Designed
 ```bash
 git clone https://github.com/postrv/patina.git
 cd patina
-cargo build --release
-# Binary at target/release/patina
+cargo install --path .
 ```
 
 ## Quick Start
@@ -135,7 +137,7 @@ patina --provider openrouter --model anthropic/claude-sonnet-4
 | `--no-narsil` | Disable narsil-mcp integration | - |
 | `--no-parallel` | Disable parallel tool execution | - |
 | `--parallel-aggressive` | Parallelize all tools (use with caution) | - |
-| `--debug` | Enable debug logging | `false` |
+| `--debug` | Enable debug logging (writes to `/tmp/patina.log`) | `false` |
 
 ## Key Bindings
 
@@ -169,6 +171,7 @@ patina --provider openrouter --model anthropic/claude-sonnet-4
 
 | Command | Description |
 |---------|-------------|
+| `/mcp` | Show MCP server status and connected tools |
 | `/worktree new <name>` | Create new git worktree |
 | `/worktree list` | List all worktrees |
 | `/worktree switch <name>` | Switch to worktree |
@@ -180,6 +183,59 @@ patina --provider openrouter --model anthropic/claude-sonnet-4
 | `/continuous` | Start autonomous coding loop with quality gates |
 | `/help` | Show available commands |
 
+Slash commands support tab completion -- start typing `/` and press Tab to see available options.
+
+## MCP Support
+
+Patina implements the [Model Context Protocol](https://spec.modelcontextprotocol.io/) for connecting external tool servers, built on the [rmcp SDK](https://github.com/anthropics/rust-sdk) for full spec compliance.
+
+### Transports
+
+| Transport | Use Case | Example |
+|-----------|----------|---------|
+| **stdio** | Local tool servers, CLI tools | narsil-mcp, filesystem servers |
+| **Streamable HTTP** | Remote/cloud MCP servers | POST-based JSON-RPC |
+| **Legacy SSE** | JetBrains, older MCP servers | GET `/sse` + POST endpoint |
+
+### Configuration
+
+MCP servers are configured via `.mcp.json` in your project root (compatible with Claude Code format):
+
+```json
+{
+  "mcpServers": {
+    "narsil": {
+      "command": "narsil-mcp",
+      "args": ["--repo", "."],
+      "env": {}
+    },
+    "jetbrains": {
+      "type": "sse",
+      "url": "http://localhost:63342/api/mcp/sse"
+    },
+    "remote-server": {
+      "url": "https://example.com/mcp"
+    }
+  }
+}
+```
+
+Global servers can be configured in `~/.claude.json` under `"mcpServers"`.
+
+### Transport Detection
+
+- **stdio**: Entries with a `command` field spawn a child process
+- **Legacy SSE**: Entries with `"type": "sse"` or a URL ending in `/sse`
+- **Streamable HTTP**: Entries with a `url` field (default for HTTP)
+
+### Features
+
+- **Namespaced tools**: Each server's tools are prefixed with `servername__` to avoid collisions
+- **Parallel startup**: All servers connect concurrently
+- **Auto-discovery**: Tools from connected servers are automatically available to Claude
+- **Security**: Command validation and interpreter path requirements for stdio servers
+- **Graceful degradation**: Failed servers don't block startup; other servers continue normally
+
 ## Security
 
 Patina implements defense-in-depth security controls:
@@ -190,7 +246,7 @@ Patina implements defense-in-depth security controls:
 | **Path Validation** | Canonicalization + symlink protection |
 | **Permission System** | Explicit approval required for tool execution |
 | **API Key Protection** | SecretString with `[REDACTED]` in logs |
-| **MCP Validation** | Pre-spawn command validation |
+| **MCP Validation** | Pre-spawn command validation for stdio servers |
 | **Session Integrity** | HMAC-SHA256 checksum verification |
 
 See [SECURITY.md](SECURITY.md) for security policy and reporting vulnerabilities.
@@ -246,15 +302,6 @@ mcp = false       # No MCP server
 
 See `plugins/template/` for a minimal plugin template to get started.
 
-## MCP Support
-
-Patina implements the [Model Context Protocol](https://spec.modelcontextprotocol.io/) for tool server integration:
-
-- **Protocol:** JSON-RPC 2.0
-- **Transports:** stdio (default), HTTP SSE
-- **Security:** Command validation, interpreter path requirements
-- **Parallel detection:** Concurrent capability probing across MCP servers
-
 ## Performance
 
 Benchmarks (Criterion, 120x40 terminal):
@@ -306,7 +353,7 @@ src/
 ├── api/              # LLM providers (Anthropic, OpenRouter, fallback)
 ├── tui/              # Terminal UI (ratatui), image display
 ├── tools/            # Tool execution, security, parallel execution
-├── mcp/              # Model Context Protocol client
+├── mcp/              # MCP client (rmcp SDK): config, connection, manager
 ├── hooks/            # Lifecycle events
 ├── skills/           # Context-aware suggestions
 ├── commands/         # Slash command parsing
@@ -336,6 +383,9 @@ cargo fmt -- --check
 
 # Run with coverage
 cargo tarpaulin --out Html
+
+# View debug logs (TUI mode writes to file)
+tail -f /tmp/patina.log
 ```
 
 ## Technical Details
@@ -343,12 +393,12 @@ cargo tarpaulin --out Html
 | Metric | Value |
 |--------|-------|
 | Version | 1.0.0 |
-| MSRV | Rust 1.75 |
+| MSRV | Rust 1.85 |
 | Edition | 2021 |
-| Tests | 3,500+ |
+| Tests | 2,800+ |
 | Coverage | 85%+ |
 | Unsafe | 0 blocks |
-| LOC | ~89,000 |
+| LOC | ~92,000 |
 
 ### Key Dependencies
 
@@ -358,6 +408,7 @@ cargo tarpaulin --out Html
 | ratatui 0.30 | Terminal UI |
 | crossterm 0.28 | Terminal events |
 | reqwest 0.12 | HTTP client (rustls) |
+| rmcp 0.16 | MCP SDK (stdio, HTTP, SSE transports) |
 | secrecy 0.10 | Secret storage |
 | serde 1.0 | Serialization |
 | clap 4.5 | CLI parsing |
@@ -372,7 +423,7 @@ Patina can be used as a Rust library for building custom AI-powered tools.
 |--------|-------------|
 | `patina::api` | Multi-provider LLM client with streaming support |
 | `patina::tools` | Tool execution framework with security policies |
-| `patina::mcp` | Model Context Protocol client |
+| `patina::mcp` | MCP client: config loading, connection management, tool routing |
 | `patina::context` | Context management, compression, and token budgeting |
 | `patina::continuous` | Continuous autonomous coding infrastructure |
 | `patina::agents` | Worktree-based agent orchestration |
@@ -438,4 +489,4 @@ Copyright (c) 2026 Laurence Avent
 
 **Laurence Avent** ([@postrv](https://github.com/postrv))
 
-<!-- METRICS:tests=3500,loc=89000 -->
+<!-- METRICS:tests=2800,loc=92000 -->
