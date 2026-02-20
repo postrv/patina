@@ -82,10 +82,13 @@ impl McpConnection {
         // Validate command security
         validate_mcp_command(command, args)?;
 
-        // Build the tokio Command
+        // Build the tokio Command.
+        // Redirect stderr to null to prevent child process output (e.g. MCP
+        // server logs) from corrupting the TUI alternate screen.
         let mut cmd = tokio::process::Command::new(command);
         cmd.args(args);
         cmd.envs(env);
+        cmd.stderr(std::process::Stdio::null());
 
         // Create transport
         let transport =

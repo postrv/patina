@@ -244,8 +244,10 @@ async fn main() -> Result<()> {
     // TUI mode uses alternate screen which conflicts with stdout logging
     let is_tui_mode = !args.print || args.prompt.is_none();
 
-    if is_tui_mode && args.debug {
-        // TUI mode with debug: write logs to file to avoid corrupting display
+    if is_tui_mode {
+        // TUI mode: ALL logs go to a file to avoid corrupting the alternate screen.
+        // Any stdout/stderr writes corrupt ratatui's display, including tracing
+        // output and child-process stderr (e.g. MCP server logs).
         let log_path = std::env::temp_dir().join("patina.log");
         let file = std::fs::OpenOptions::new()
             .create(true)
@@ -266,16 +268,18 @@ async fn main() -> Result<()> {
                     .with_writer(std::sync::Mutex::new(file)),
             )
             .init();
-
-        eprintln!("Debug logs written to: {}", log_path.display());
     } else {
-        // Print mode or no debug: log to stdout
+        // Print mode: log to stderr (stdout is used for model output)
         tracing_subscriber::registry()
             .with(
                 tracing_subscriber::EnvFilter::try_from_default_env()
                     .unwrap_or_else(|_| filter.into()),
             )
-            .with(tracing_subscriber::fmt::layer().with_target(false))
+            .with(
+                tracing_subscriber::fmt::layer()
+                    .with_target(false)
+                    .with_writer(std::io::stderr),
+            )
             .init();
     }
 
