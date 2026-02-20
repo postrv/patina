@@ -10,7 +10,7 @@ use crate::context::compression::{
     CompactionMetrics, CompactionMetricsSummary, CompressionOrchestrator,
 };
 use crate::hooks::HookManager;
-use crate::mcp::client::McpClient;
+use crate::mcp::connection::McpConnection;
 use crate::narsil::context::ContextSuggestion;
 use crate::permissions::{PermissionManager, PermissionRequest, PermissionResponse};
 use crate::plugins::PluginRegistry;
@@ -229,8 +229,8 @@ pub struct CompressionState {
     /// Cached CCG context content for injection into messages.
     pub(crate) cached_ccg_context: Option<String>,
 
-    /// Optional narsil MCP client for CCG context fetching.
-    pub(crate) narsil_client: Option<McpClient>,
+    /// Optional narsil MCP connection for CCG context fetching.
+    pub(crate) narsil_client: Option<McpConnection>,
 
     /// Maximum tokens to include in auto-injected context.
     pub(crate) context_token_budget: usize,
@@ -977,14 +977,14 @@ impl AppState {
     /// # Example
     ///
     /// ```ignore
-    /// if let Some(context) = state.inject_ccg_context(&mut client, "abc123").await? {
+    /// if let Some(context) = state.inject_ccg_context(&client, "abc123").await? {
     ///     // Prepend context to system message
     ///     system_prompt = format!("{}\n\n{}", context, system_prompt);
     /// }
     /// ```
     pub async fn inject_ccg_context(
         &mut self,
-        client: &mut McpClient,
+        client: &McpConnection,
         repo_hash: &str,
     ) -> anyhow::Result<Option<String>> {
         // Check if orchestrator is available
@@ -998,7 +998,7 @@ impl AppState {
             .compression
             .last_ccg_hash
             .as_ref()
-            .map_or(true, |h| h != repo_hash);
+            .is_none_or(|h| h != repo_hash);
 
         if hash_changed {
             tracing::debug!(
@@ -1090,8 +1090,8 @@ impl AppState {
         self.compression.narsil_client.is_some()
     }
 
-    /// Sets the narsil MCP client for context fetching.
-    pub fn set_narsil_client(&mut self, client: McpClient) {
+    /// Sets the narsil MCP connection for context fetching.
+    pub fn set_narsil_client(&mut self, client: McpConnection) {
         self.compression.narsil_client = Some(client);
     }
 
@@ -1155,15 +1155,22 @@ impl AppState {
             return self.compression.cached_ccg_context.clone();
         }
 
-        // Lazily initialize narsil client
+        // Lazily initialize narsil connection
         if self.compression.narsil_client.is_none() {
             let working_dir = self.working_dir.to_string_lossy().to_string();
-            let mut client =
-                McpClient::new("narsil-mcp", "narsil-mcp", vec!["--repos", &working_dir]);
-            match client.start().await {
-                Ok(()) => {
-                    tracing::info!("Narsil MCP client connected for context injection");
-                    self.compression.narsil_client = Some(client);
+            let timeout = std::time::Duration::from_secs(30);
+            match McpConnection::connect_stdio(
+                "narsil-mcp",
+                "narsil-mcp",
+                &["--repos".to_string(), working_dir],
+                &std::collections::HashMap::new(),
+                timeout,
+            )
+            .await
+            {
+                Ok(conn) => {
+                    tracing::info!("Narsil MCP connection established for context injection");
+                    self.compression.narsil_client = Some(conn);
                 }
                 Err(e) => {
                     tracing::warn!("Failed to connect narsil-mcp for context: {}", e);
@@ -1172,20 +1179,16 @@ impl AppState {
             }
         }
 
-        // Take client to avoid borrow conflict with self
-        let mut client = self.compression.narsil_client.take()?;
+        let client = self.compression.narsil_client.as_ref()?;
 
         let result = orchestrator
             .build_context(
-                &mut client,
+                client,
                 &repo_hash,
                 &[], // active_files: empty = project-wide symbols
                 self.compression.context_token_budget,
             )
             .await;
-
-        // Put client back
-        self.compression.narsil_client = Some(client);
 
         // Update the hash to track what version of the codebase this context is for
         self.compression.last_ccg_hash = Some(repo_hash.clone());
@@ -1724,6 +1727,50 @@ impl AppState {
         truncate_context(&self.api_messages, DEFAULT_MAX_INPUT_TOKENS)
     }
 
+    /// Prepares API messages for sending by compacting and truncating.
+    ///
+    /// This is the canonical method for obtaining the message list before
+    /// any API call (both user-submitted messages and tool continuations).
+    /// It combines two steps:
+    /// 1. `maybe_compact_graceful()` — compresses old messages if context usage
+    ///    exceeds the threshold
+    /// 2. `api_messages_truncated()` — caps the result at `DEFAULT_MAX_INPUT_TOKENS`
+    ///
+    /// Using this method instead of `api_messages().to_vec()` prevents token
+    /// explosion and spiralling costs during tool continuation loops.
+    ///
+    /// # Arguments
+    ///
+    /// * `model` - The model name, used to determine the context window size
+    ///
+    /// # Returns
+    ///
+    /// A truncated, compacted message list safe to send to the API.
+    pub fn prepare_api_messages_for_send(&mut self, model: &str) -> Vec<ApiMessageV2> {
+        let context_limit = model_context_limit(model);
+        if self.maybe_compact_graceful(DEFAULT_COMPACTION_THRESHOLD, context_limit) {
+            tracing::info!(
+                threshold = DEFAULT_COMPACTION_THRESHOLD,
+                context_limit,
+                "Conversation compacted before tool continuation"
+            );
+        }
+
+        let total = self.api_messages.len();
+        let truncated = self.api_messages_truncated();
+        let sent = truncated.len();
+        if sent < total {
+            tracing::info!(
+                total,
+                sending = sent,
+                dropped = total - sent,
+                "Context truncated for tool continuation"
+            );
+        }
+
+        truncated
+    }
+
     /// Builds the final API message list for sending to the LLM.
     ///
     /// This is the single entry point for constructing the message payload
@@ -1784,16 +1831,6 @@ impl AppState {
         let user_msg = ApiMessageV2::user(&api_content);
         self.api_messages.push(user_msg);
 
-        // Auto-compact conversation if approaching context limit
-        let context_limit = model_context_limit(client.model());
-        if self.maybe_compact_graceful(DEFAULT_COMPACTION_THRESHOLD, context_limit) {
-            tracing::info!(
-                threshold = DEFAULT_COMPACTION_THRESHOLD,
-                context_limit,
-                "Conversation compacted before API call"
-            );
-        }
-
         self.loading = true;
         // Start streaming in timeline
         if self.timeline.try_push_streaming().is_err() {
@@ -1812,20 +1849,8 @@ impl AppState {
         let (tx, rx) = mpsc::channel(STREAMING_CHANNEL_BUFFER);
         self.streaming_rx = Some(rx);
 
-        // Use truncated api_messages for the API call to control costs
-        // while preserving content blocks for tool results
-        let total_messages = self.api_messages.len();
-        let api_messages = self.api_messages_truncated();
-        let truncated_messages = api_messages.len();
-
-        if truncated_messages < total_messages {
-            tracing::info!(
-                total = total_messages,
-                sending = truncated_messages,
-                dropped = total_messages - truncated_messages,
-                "Context truncated for API call"
-            );
-        }
+        // Compact + truncate API messages for cost-controlled sending
+        let api_messages = self.prepare_api_messages_for_send(client.model());
 
         let client = std::sync::Arc::clone(client);
         let tools = self.all_tool_definitions();
@@ -3805,6 +3830,76 @@ mod tests {
     }
 
     // =========================================================================
+    // prepare_api_messages_for_send Tests (Phase 10.1)
+    // =========================================================================
+
+    #[test]
+    fn test_prepare_api_messages_truncates_large_conversation() {
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+
+        // Add first message (always preserved)
+        state.api_messages.push(ApiMessageV2::user("System prompt"));
+
+        // Add many large messages that exceed 100k tokens
+        let large_content = "x".repeat(10_000);
+        for _ in 0..60 {
+            state
+                .api_messages
+                .push(ApiMessageV2::assistant(&large_content));
+        }
+
+        let total_before = state.api_messages.len();
+        let prepared = state.prepare_api_messages_for_send("claude-sonnet-4-20250514");
+
+        assert!(
+            prepared.len() < total_before,
+            "Should truncate: prepared={} < total={}",
+            prepared.len(),
+            total_before
+        );
+    }
+
+    #[test]
+    fn test_prepare_api_messages_preserves_first_message() {
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+
+        state
+            .api_messages
+            .push(ApiMessageV2::user("Important system prompt"));
+
+        let large_content = "x".repeat(10_000);
+        for _ in 0..60 {
+            state
+                .api_messages
+                .push(ApiMessageV2::assistant(&large_content));
+        }
+
+        let prepared = state.prepare_api_messages_for_send("claude-sonnet-4-20250514");
+
+        assert_eq!(
+            prepared[0].content.to_text(),
+            "Important system prompt",
+            "First message must always be preserved"
+        );
+    }
+
+    #[test]
+    fn test_prepare_api_messages_identical_for_small_conversation() {
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+
+        state.api_messages.push(ApiMessageV2::user("Hello"));
+        state
+            .api_messages
+            .push(ApiMessageV2::assistant("Hi there!"));
+
+        let prepared = state.prepare_api_messages_for_send("claude-sonnet-4-20250514");
+
+        assert_eq!(prepared.len(), 2, "Small conversation should be unchanged");
+        assert_eq!(prepared[0].content.to_text(), "Hello");
+        assert_eq!(prepared[1].content.to_text(), "Hi there!");
+    }
+
+    // =========================================================================
     // Focus Area Tests
     // =========================================================================
 
@@ -4498,9 +4593,9 @@ mod tests {
             "Default AppState should have no compression orchestrator"
         );
 
-        // The method requires an McpClient, but returns early before using it
+        // The method requires an McpConnection, but returns early before using it
         // when no orchestrator is available. We verify the early return here.
-        // Note: We cannot call inject_ccg_context directly without a real McpClient,
+        // Note: We cannot call inject_ccg_context directly without a real McpConnection,
         // but we can verify the precondition that guarantees the early return.
         assert!(
             state.compression_orchestrator().is_none(),

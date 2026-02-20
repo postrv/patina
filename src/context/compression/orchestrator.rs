@@ -25,7 +25,7 @@ use crate::context::compression::{
     render_manifest_markdown, render_symbols_within_budget, CacheKey, CcgBackend, CcgFetchError,
     CompressionLevel, CompressionMetrics, CompressionResult, ContextSource, ResultCache,
 };
-use crate::mcp::client::McpClient;
+use crate::mcp::connection::McpConnection;
 use crate::narsil::{NarsilCapabilities, NarsilCapability};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -683,7 +683,7 @@ impl CompressionOrchestrator {
     /// the cached result without making an MCP call.
     pub async fn get_manifest_async(
         &self,
-        client: &mut McpClient,
+        client: &McpConnection,
         repo_hash: &str,
     ) -> CompressionResult {
         // Try cache first
@@ -736,7 +736,7 @@ impl CompressionOrchestrator {
     /// A `CompressionResult` containing the architecture, or a degraded result on failure.
     pub async fn get_architecture_async(
         &self,
-        client: &mut McpClient,
+        client: &McpConnection,
         repo_hash: &str,
     ) -> CompressionResult {
         // Try cache first
@@ -796,7 +796,7 @@ impl CompressionOrchestrator {
     /// - The MCP call fails
     pub async fn query_async(
         &self,
-        client: &mut McpClient,
+        client: &McpConnection,
         sparql: &str,
     ) -> Result<CompressionResult, CcgFetchError> {
         // Check if CCG is available
@@ -843,7 +843,7 @@ impl CompressionOrchestrator {
     /// fresh MCP call.
     pub async fn fetch_manifest(
         &self,
-        client: &mut McpClient,
+        client: &McpConnection,
         repo_hash: &str,
     ) -> CompressionResult {
         // 1. Check cache
@@ -856,7 +856,7 @@ impl CompressionOrchestrator {
             "repo": self.repo_name
         });
 
-        match client.call_tool("get_project_structure", args).await {
+        match client.call_tool_json("get_project_structure", args).await {
             Ok(response) => self.process_manifest_response(&response, repo_hash),
             Err(err) => {
                 warn!(
@@ -940,7 +940,7 @@ impl CompressionOrchestrator {
     /// fresh MCP call.
     pub async fn fetch_architecture(
         &self,
-        client: &mut McpClient,
+        client: &McpConnection,
         repo_hash: &str,
     ) -> CompressionResult {
         // 1. Check cache
@@ -953,7 +953,7 @@ impl CompressionOrchestrator {
             "repo": self.repo_name
         });
 
-        match client.call_tool("get_import_graph", args).await {
+        match client.call_tool_json("get_import_graph", args).await {
             Ok(response) => self.process_architecture_response(&response, repo_hash),
             Err(err) => {
                 warn!(
@@ -1026,7 +1026,7 @@ impl CompressionOrchestrator {
     /// A combined compression result with manifest and architecture.
     pub async fn get_default_context_async(
         &self,
-        client: &mut McpClient,
+        client: &McpConnection,
         repo_hash: &str,
     ) -> CompressionResult {
         let manifest = self.get_manifest_async(client, repo_hash).await;
@@ -1082,7 +1082,7 @@ impl CompressionOrchestrator {
     /// fresh MCP call.
     pub async fn fetch_symbols(
         &self,
-        client: &mut McpClient,
+        client: &McpConnection,
         repo_hash: &str,
         active_files: &[String],
         token_budget: usize,
@@ -1112,7 +1112,7 @@ impl CompressionOrchestrator {
             })
         };
 
-        match client.call_tool("find_symbols", args).await {
+        match client.call_tool_json("find_symbols", args).await {
             Ok(response) => self.process_symbols_response(&response, repo_hash, token_budget),
             Err(err) => {
                 warn!(
@@ -1334,7 +1334,7 @@ impl CompressionOrchestrator {
     /// A [`BuildContextResult`] with assembled context and per-layer metrics.
     pub async fn build_context(
         &self,
-        client: &mut McpClient,
+        client: &McpConnection,
         repo_hash: &str,
         active_files: &[String],
         token_budget: usize,
@@ -1382,7 +1382,7 @@ impl CompressionOrchestrator {
     /// if needed, and processes the response after releasing the lock.
     async fn fetch_manifest_parallel(
         &self,
-        client: &tokio::sync::Mutex<&mut McpClient>,
+        client: &tokio::sync::Mutex<&McpConnection>,
         repo_hash: &str,
     ) -> CompressionResult {
         // Cache check — no lock needed
@@ -1396,8 +1396,8 @@ impl CompressionOrchestrator {
 
         // Lock client only for the MCP call
         let response = {
-            let mut guard = client.lock().await;
-            guard.call_tool("get_project_structure", args).await
+            let guard = client.lock().await;
+            guard.call_tool_json("get_project_structure", args).await
         };
 
         match response {
@@ -1420,7 +1420,7 @@ impl CompressionOrchestrator {
     /// if needed, and processes the response after releasing the lock.
     async fn fetch_architecture_parallel(
         &self,
-        client: &tokio::sync::Mutex<&mut McpClient>,
+        client: &tokio::sync::Mutex<&McpConnection>,
         repo_hash: &str,
     ) -> CompressionResult {
         // Cache check — no lock needed
@@ -1434,8 +1434,8 @@ impl CompressionOrchestrator {
 
         // Lock client only for the MCP call
         let response = {
-            let mut guard = client.lock().await;
-            guard.call_tool("get_import_graph", args).await
+            let guard = client.lock().await;
+            guard.call_tool_json("get_import_graph", args).await
         };
 
         match response {
@@ -1458,7 +1458,7 @@ impl CompressionOrchestrator {
     /// if needed, and processes the response after releasing the lock.
     async fn fetch_symbols_parallel(
         &self,
-        client: &tokio::sync::Mutex<&mut McpClient>,
+        client: &tokio::sync::Mutex<&McpConnection>,
         repo_hash: &str,
         active_files: &[String],
         token_budget: usize,
@@ -1488,8 +1488,8 @@ impl CompressionOrchestrator {
 
         // Lock client only for the MCP call
         let response = {
-            let mut guard = client.lock().await;
-            guard.call_tool("find_symbols", args).await
+            let guard = client.lock().await;
+            guard.call_tool_json("find_symbols", args).await
         };
 
         match response {
@@ -3081,10 +3081,10 @@ mod tests {
         orchestrator.cache_result(CompressionLevel::SymbolDetail, &symbols, "hash123");
 
         // Create a disconnected client — build_context won't use it since all layers are cached
-        let mut client = McpClient::new("test", "/bin/false", vec![]);
+        let client = McpConnection::disconnected("test");
 
         let result = orchestrator
-            .build_context(&mut client, "hash123", &[], 20_000)
+            .build_context(&client, "hash123", &[], 20_000)
             .await;
 
         // All three layers should be present in the assembled result
@@ -3110,9 +3110,9 @@ mod tests {
             orchestrator.cache_result(level, &result, "hash");
         }
 
-        let mut client = McpClient::new("test", "/bin/false", vec![]);
+        let client = McpConnection::disconnected("test");
         let _result = orchestrator
-            .build_context(&mut client, "hash", &[], 20_000)
+            .build_context(&client, "hash", &[], 20_000)
             .await;
 
         // Latency metric should have been recorded
@@ -3146,9 +3146,9 @@ mod tests {
         );
         orchestrator.cache_result(CompressionLevel::SymbolDetail, &symbols, "hash");
 
-        let mut client = McpClient::new("test", "/bin/false", vec![]);
+        let client = McpConnection::disconnected("test");
         let result = orchestrator
-            .build_context(&mut client, "hash", &[], 20_000)
+            .build_context(&client, "hash", &[], 20_000)
             .await;
 
         // Per-layer token counts should be non-zero
@@ -3169,10 +3169,10 @@ mod tests {
         // No cache populated — all layers will miss cache and try MCP calls.
         // The client is disconnected, so MCP calls will fail and
         // fetch methods should return degraded results.
-        let mut client = McpClient::new("test", "/bin/false", vec![]);
+        let client = McpConnection::disconnected("test");
 
         let result = orchestrator
-            .build_context(&mut client, "hash", &[], 20_000)
+            .build_context(&client, "hash", &[], 20_000)
             .await;
 
         // Should still produce a result (degraded mode)
@@ -3209,10 +3209,8 @@ mod tests {
         orchestrator.cache_result(CompressionLevel::SymbolDetail, &symbols, "hash");
 
         // Small budget: should include manifest but not architecture or symbols
-        let mut client = McpClient::new("test", "/bin/false", vec![]);
-        let result = orchestrator
-            .build_context(&mut client, "hash", &[], 50)
-            .await;
+        let client = McpConnection::disconnected("test");
+        let result = orchestrator.build_context(&client, "hash", &[], 50).await;
 
         assert!(result.result().content().contains("MMM"));
         // Architecture (1000 tokens) shouldn't fit in 50 token budget
@@ -3251,9 +3249,9 @@ mod tests {
         orchestrator.cache_result(CompressionLevel::SymbolDetail, &symbols, "hash");
 
         // Build via parallel build_context
-        let mut client = McpClient::new("test", "/bin/false", vec![]);
+        let client = McpConnection::disconnected("test");
         let parallel_result = orchestrator
-            .build_context(&mut client, "hash", &[], 20_000)
+            .build_context(&client, "hash", &[], 20_000)
             .await;
 
         // Build via direct assemble_context (the sequential assembly path)

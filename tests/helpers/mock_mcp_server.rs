@@ -221,7 +221,7 @@ fn handle_initialize(id: &serde_json::Value) -> String {
     success_response(
         id,
         serde_json::json!({
-            "protocolVersion": "2025-11-25",
+            "protocolVersion": "2025-03-26",
             "capabilities": {
                 "tools": {}
             },
@@ -398,7 +398,7 @@ mod tests {
         };
         let response = route_request(&request).unwrap();
         assert!(response.contains("protocolVersion"));
-        assert!(response.contains("2025-11-25"));
+        assert!(response.contains("2025-03-26"));
     }
 
     #[test]

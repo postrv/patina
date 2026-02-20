@@ -613,7 +613,7 @@ impl WorktreeAgentManager {
     /// Returns an error if git commands fail in any agent worktree.
     pub async fn check_conflicts(
         &self,
-        mcp_client: Option<&mut crate::mcp::client::McpClient>,
+        mcp_client: Option<&crate::mcp::connection::McpConnection>,
     ) -> Result<super::conflict::ConflictReport> {
         use super::conflict::{AgentFileChanges, ConflictDetector};
 
@@ -711,13 +711,13 @@ impl WorktreeAgentManager {
     /// then uses `git diff` to determine which ones were actually modified.
     /// Falls back to an empty list if MCP calls fail.
     async fn get_modified_symbols(
-        client: &mut crate::mcp::client::McpClient,
+        client: &crate::mcp::connection::McpConnection,
         worktree_path: &Path,
         file: &str,
     ) -> Vec<String> {
         // Query narsil for symbols in this file
         let result = client
-            .call_tool(
+            .call_tool_json(
                 "find_symbols",
                 serde_json::json!({
                     "repo": worktree_path.to_string_lossy(),

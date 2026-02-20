@@ -288,7 +288,7 @@ mod module_integration_tests {
     #[cfg(unix)]
     #[test]
     fn test_mcp_validation_returns_typed_error_for_dangerous_command() {
-        use patina::mcp::client::validate_mcp_command;
+        use patina::mcp::security::validate_mcp_command;
 
         let result = validate_mcp_command("rm", &["-rf".to_string(), "/".to_string()]);
 
@@ -307,7 +307,7 @@ mod module_integration_tests {
     /// Test that MCP validation returns RctError::McpValidation for path traversal.
     #[test]
     fn test_mcp_validation_returns_typed_error_for_path_traversal() {
-        use patina::mcp::client::validate_mcp_command;
+        use patina::mcp::security::validate_mcp_command;
 
         let result = validate_mcp_command("../../../bin/sh", &[]);
 
@@ -327,7 +327,7 @@ mod module_integration_tests {
     /// Test that MCP validation returns RctError::McpValidation for relative paths.
     #[test]
     fn test_mcp_validation_returns_typed_error_for_relative_path() {
-        use patina::mcp::client::validate_mcp_command;
+        use patina::mcp::security::validate_mcp_command;
 
         let result = validate_mcp_command("./malicious", &[]);
 
@@ -345,7 +345,7 @@ mod module_integration_tests {
     #[cfg(unix)]
     #[test]
     fn test_mcp_validation_returns_typed_error_for_interpreter_without_absolute_path() {
-        use patina::mcp::client::validate_mcp_command;
+        use patina::mcp::security::validate_mcp_command;
 
         // 'bash' without absolute path should fail
         let result = validate_mcp_command("bash", &["-c".to_string(), "echo hello".to_string()]);

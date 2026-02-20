@@ -9,9 +9,6 @@ mod state_test;
 #[path = "unit/tui_snapshot_test.rs"]
 mod tui_snapshot_test;
 
-#[path = "unit/mcp_protocol_test.rs"]
-mod mcp_protocol_test;
-
 #[path = "unit/skills_test.rs"]
 mod skills_test;
 

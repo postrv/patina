@@ -22,20 +22,23 @@
 //!
 //! ```ignore
 //! use patina::narsil::{NarsilIntegration, NarsilCapability};
-//! use patina::mcp::client::McpClient;
+//! use patina::mcp::connection::McpConnection;
+//! use std::time::Duration;
 //!
-//! // Connect using an MCP client
-//! let mut client = McpClient::new("narsil", "/path/to/narsil-mcp", vec!["--repos", "."]);
-//! client.start().await?;
+//! // Connect using an MCP connection
+//! let conn = McpConnection::connect_stdio(
+//!     "narsil", "/path/to/narsil-mcp", &[], &Default::default(),
+//!     Duration::from_secs(10),
+//! ).await?;
 //!
-//! let integration = NarsilIntegration::from_mcp_client(&mut client, Path::new(".")).await?;
+//! let integration = NarsilIntegration::from_mcp_client(&conn, Path::new(".")).await?;
 //! if integration.has_capability(NarsilCapability::SecurityScan) {
 //!     println!("Security scanning available!");
 //! }
 //! ```
 
 use crate::context::compression::CompressionOrchestrator;
-use crate::mcp::client::McpClient;
+use crate::mcp::connection::McpConnection;
 use crate::narsil::context::{CodeReference, ContextKind, ContextSuggestion};
 use anyhow::Result;
 use std::collections::HashSet;
@@ -274,39 +277,40 @@ impl NarsilIntegration {
         self.connected
     }
 
-    /// Creates a NarsilIntegration by connecting to an existing MCP client.
+    /// Creates a NarsilIntegration by connecting to an existing MCP connection.
     ///
-    /// This method queries the MCP client for available tools and automatically
+    /// This method reads the connection's tool list and automatically
     /// detects which narsil capabilities are available.
     ///
     /// # Arguments
     ///
-    /// * `client` - An already-started MCP client connected to narsil-mcp
+    /// * `client` - An active `McpConnection` connected to narsil-mcp
     /// * `repo_path` - Path to the repository being analyzed
     ///
     /// # Errors
     ///
     /// Returns an error if:
-    /// - The MCP client is not connected
-    /// - The tools/list request fails
+    /// - The MCP connection is not connected
     ///
     /// # Example
     ///
     /// ```ignore
     /// use patina::narsil::NarsilIntegration;
-    /// use patina::mcp::client::McpClient;
+    /// use patina::mcp::connection::McpConnection;
     /// use std::path::Path;
     ///
-    /// let mut client = McpClient::new("narsil", "/path/to/narsil-mcp", vec![]);
-    /// client.start().await?;
+    /// let conn = McpConnection::connect_stdio(
+    ///     "narsil", "/path/to/narsil-mcp", &[], &Default::default(),
+    ///     Duration::from_secs(10),
+    /// ).await?;
     ///
-    /// let integration = NarsilIntegration::from_mcp_client(&mut client, Path::new(".")).await?;
+    /// let integration = NarsilIntegration::from_mcp_client(&conn, Path::new(".")).await?;
     /// println!("Connected with {} capabilities", integration.capabilities().count());
     /// ```
-    pub async fn from_mcp_client(client: &mut McpClient, repo_path: &Path) -> Result<Self> {
-        // Query available tools from the MCP server
-        let tools = client.list_tools().await?;
-        let tool_names: Vec<String> = tools.iter().map(|t| t.name.clone()).collect();
+    pub async fn from_mcp_client(client: &McpConnection, repo_path: &Path) -> Result<Self> {
+        // Read available tools from the MCP connection
+        let tools = client.tools();
+        let tool_names: Vec<String> = tools.iter().map(|t| t.name.to_string()).collect();
 
         // Detect capabilities from tool list
         let capabilities = NarsilCapabilities::from_tools(&tool_names);
@@ -458,7 +462,7 @@ impl NarsilIntegration {
     ///
     /// # Arguments
     ///
-    /// * `client` - An active MCP client connected to narsil-mcp
+    /// * `client` - An active `McpConnection` connected to narsil-mcp
     /// * `references` - Code references to get context for
     ///
     /// # Returns
@@ -475,11 +479,11 @@ impl NarsilIntegration {
     /// use patina::narsil::{NarsilIntegration, extract_code_references};
     ///
     /// let refs = extract_code_references("Look at the `process_data` function");
-    /// let suggestions = integration.suggest_context(&mut client, &refs).await?;
+    /// let suggestions = integration.suggest_context(&conn, &refs).await?;
     /// ```
     pub async fn suggest_context(
         &self,
-        client: &mut McpClient,
+        client: &McpConnection,
         references: &[CodeReference],
     ) -> Result<Vec<ContextSuggestion>> {
         let mut suggestions = Vec::new();
@@ -490,7 +494,7 @@ impl NarsilIntegration {
                     // Query callers for function references if we have CallGraph capability
                     if self.has_capability(NarsilCapability::CallGraph) {
                         if let Ok(response) = client
-                            .call_tool(
+                            .call_tool_json(
                                 "get_callers",
                                 serde_json::json!({
                                     "repo": self.repo_path.to_string_lossy(),
@@ -510,7 +514,7 @@ impl NarsilIntegration {
                     // Query dependencies for file references if we have DependencyAnalysis capability
                     if self.has_capability(NarsilCapability::DependencyAnalysis) {
                         if let Ok(response) = client
-                            .call_tool(
+                            .call_tool_json(
                                 "get_dependencies",
                                 serde_json::json!({
                                     "repo": self.repo_path.to_string_lossy(),
@@ -777,6 +781,40 @@ pub fn security_verdict_from_findings(
 // Parallel MCP capability detection (Phase 5.2)
 // =============================================================================
 
+/// Result of detecting capabilities from a single MCP server.
+///
+/// Contains the discovered tool names and metadata about the detection process,
+/// including timing and error information for servers that failed or timed out.
+#[derive(Debug, Clone)]
+pub struct ServerCapabilityResult {
+    /// Name of the MCP server that was queried.
+    pub server_name: String,
+    /// Tool names discovered from the server (empty if detection failed).
+    pub tools: Vec<String>,
+    /// Detected narsil capabilities.
+    pub capabilities: NarsilCapabilities,
+    /// Whether capability detection succeeded.
+    pub success: bool,
+    /// Error message if detection failed (timeout, connection error, etc.).
+    pub error: Option<String>,
+    /// Time taken for the detection attempt.
+    pub duration: Duration,
+}
+
+impl ServerCapabilityResult {
+    /// Returns the tool names discovered from this server.
+    #[must_use]
+    pub fn tool_names(&self) -> Vec<String> {
+        self.tools.clone()
+    }
+
+    /// Returns true if the server timed out during detection.
+    #[must_use]
+    pub fn is_timeout(&self) -> bool {
+        self.error.as_ref().is_some_and(|e| e.contains("timed out"))
+    }
+}
+
 /// Result of parallel capability detection across multiple MCP servers.
 ///
 /// Aggregates individual server results and provides convenience methods
@@ -785,7 +823,7 @@ pub fn security_verdict_from_findings(
 /// # Example
 ///
 /// ```ignore
-/// let results = detect_all_capabilities(&mut clients, Duration::from_secs(10)).await;
+/// let results = detect_all_capabilities(&connections, Duration::from_secs(10)).await;
 /// println!("Detected {} servers, {} succeeded", results.total(), results.successful_count());
 ///
 /// let capabilities = results.merged_capabilities();
@@ -796,7 +834,7 @@ pub fn security_verdict_from_findings(
 #[derive(Debug, Clone)]
 pub struct ParallelCapabilityResult {
     /// Per-server results.
-    results: Vec<crate::mcp::client::ServerCapabilityResult>,
+    results: Vec<ServerCapabilityResult>,
 }
 
 impl ParallelCapabilityResult {
@@ -826,7 +864,7 @@ impl ParallelCapabilityResult {
 
     /// Returns the per-server results.
     #[must_use]
-    pub fn server_results(&self) -> &[crate::mcp::client::ServerCapabilityResult] {
+    pub fn server_results(&self) -> &[ServerCapabilityResult] {
         &self.results
     }
 
@@ -862,16 +900,15 @@ impl ParallelCapabilityResult {
     }
 }
 
-/// Detects capabilities from multiple MCP servers in parallel.
+/// Detects capabilities from multiple MCP connections.
 ///
-/// Queries `list_tools()` on all provided clients concurrently, each with
-/// an individual timeout. Servers that fail or timeout are reported in the
-/// result rather than failing the entire operation.
+/// Reads the tool list from each connection and builds capability results.
+/// Connections that are not connected are reported as failures.
 ///
 /// # Arguments
 ///
-/// * `clients` - Mutable slice of already-started MCP clients to query
-/// * `per_server_timeout` - Maximum time to wait for each server to respond
+/// * `connections` - Slice of active `McpConnection` instances to query
+/// * `_per_server_timeout` - Reserved for future use (connections already have tools cached)
 ///
 /// # Returns
 ///
@@ -881,8 +918,7 @@ impl ParallelCapabilityResult {
 /// # Example
 ///
 /// ```ignore
-/// let mut clients = vec![narsil_client, other_mcp_client];
-/// let result = detect_all_capabilities(&mut clients, Duration::from_secs(10)).await;
+/// let result = detect_all_capabilities(&connections, Duration::from_secs(10)).await;
 ///
 /// // Check overall status
 /// tracing::info!(
@@ -896,13 +932,30 @@ impl ParallelCapabilityResult {
 /// let capabilities = result.merged_capabilities();
 /// ```
 pub async fn detect_all_capabilities(
-    clients: &mut [McpClient],
-    per_server_timeout: Duration,
+    connections: &[McpConnection],
+    _per_server_timeout: Duration,
 ) -> ParallelCapabilityResult {
-    let results =
-        crate::mcp::client::detect_all_server_capabilities(clients, per_server_timeout).await;
+    let mut results = Vec::new();
+    for conn in connections {
+        let start = std::time::Instant::now();
+        let tools = conn.tools();
+        let tool_names: Vec<String> = tools.iter().map(|t| t.name.to_string()).collect();
+        let capabilities = NarsilCapabilities::from_tools(&tool_names);
+        let connected = conn.is_connected();
 
-    for result in &results {
+        let result = ServerCapabilityResult {
+            server_name: conn.name().to_string(),
+            tools: tool_names,
+            capabilities,
+            success: connected,
+            error: if connected {
+                None
+            } else {
+                Some("Not connected".to_string())
+            },
+            duration: start.elapsed(),
+        };
+
         if result.success {
             tracing::info!(
                 server = %result.server_name,
@@ -918,6 +971,8 @@ pub async fn detect_all_capabilities(
                 "MCP server capability detection failed"
             );
         }
+
+        results.push(result);
     }
 
     ParallelCapabilityResult { results }
@@ -1564,19 +1619,14 @@ mod tests {
 
     mod parallel_capability_tests {
         use super::*;
-        use crate::mcp::client::{McpTool, ServerCapabilityResult};
 
         fn make_success_result(name: &str, tool_names: &[&str]) -> ServerCapabilityResult {
+            let tools: Vec<String> = tool_names.iter().map(|n| n.to_string()).collect();
+            let capabilities = NarsilCapabilities::from_tools(&tools);
             ServerCapabilityResult {
                 server_name: name.to_string(),
-                tools: tool_names
-                    .iter()
-                    .map(|n| McpTool {
-                        name: n.to_string(),
-                        description: String::new(),
-                        input_schema: serde_json::json!({}),
-                    })
-                    .collect(),
+                tools,
+                capabilities,
                 success: true,
                 error: None,
                 duration: Duration::from_millis(50),
@@ -1587,6 +1637,7 @@ mod tests {
             ServerCapabilityResult {
                 server_name: name.to_string(),
                 tools: Vec::new(),
+                capabilities: NarsilCapabilities::new(),
                 success: false,
                 error: Some(error.to_string()),
                 duration: Duration::from_millis(5),
@@ -1597,6 +1648,7 @@ mod tests {
             ServerCapabilityResult {
                 server_name: name.to_string(),
                 tools: Vec::new(),
+                capabilities: NarsilCapabilities::new(),
                 success: false,
                 error: Some("capability detection timed out after 10s".to_string()),
                 duration: Duration::from_secs(10),

@@ -882,6 +882,48 @@ impl std::error::Error for ToolLoopError {}
 // Tool Execution Bridge
 // =========================================================================
 
+/// Maximum size in bytes for a single tool result content block.
+///
+/// Tool results exceeding this limit are truncated to prevent token explosion
+/// when tool results are sent back to the API. Large results (e.g., file contents,
+/// command output) are capped at this size with a truncation notice appended.
+pub const MAX_TOOL_RESULT_BYTES: usize = 50_000;
+
+/// Truncates tool result content blocks that exceed `MAX_TOOL_RESULT_BYTES`.
+///
+/// Iterates through all content blocks in the message. For `ToolResult` blocks
+/// whose `content` exceeds the byte limit, the content is truncated using
+/// UTF-8 safe truncation and a notice is appended.
+///
+/// This prevents token explosion when large tool outputs (file reads, command
+/// output, etc.) are included in API messages for continuation.
+///
+/// # Arguments
+///
+/// * `msg` - The API message to truncate in-place
+pub fn truncate_tool_results(msg: &mut crate::types::ApiMessageV2) {
+    use crate::types::content::ContentBlock;
+    use crate::types::MessageContent;
+    use crate::util::truncate_string_bytes;
+
+    let blocks = match &mut msg.content {
+        MessageContent::Blocks(blocks) => blocks,
+        MessageContent::Text(_) => return,
+    };
+
+    for block in blocks.iter_mut() {
+        if let ContentBlock::ToolResult(ref mut result) = block {
+            if result.content.len() > MAX_TOOL_RESULT_BYTES {
+                result.content = truncate_string_bytes(
+                    &result.content,
+                    MAX_TOOL_RESULT_BYTES,
+                    "\n\n... [truncated - result exceeded 50KB limit]",
+                );
+            }
+        }
+    }
+}
+
 /// Converts a `ToolUseBlock` to a `tools::ToolCall`.
 ///
 /// This bridges the API types to the executor types.
@@ -2280,5 +2322,121 @@ mod tests {
         assert!(loop_state.pending_calls().get("toolu_1").unwrap().approved);
         assert!(!loop_state.pending_calls().get("toolu_2").unwrap().approved);
         assert!(loop_state.pending_calls().get("toolu_3").unwrap().approved);
+    }
+
+    // =========================================================================
+    // Tool Result Truncation Tests (Phase 10.1)
+    // =========================================================================
+
+    #[test]
+    fn test_truncate_tool_results_caps_large_content() {
+        use crate::types::content::ContentBlock;
+        use crate::types::{ApiMessageV2, MessageContent};
+
+        let large_content = "x".repeat(100_000);
+        let blocks = vec![ContentBlock::ToolResult(
+            crate::types::content::ToolResultBlock {
+                tool_use_id: "toolu_1".to_string(),
+                content: large_content,
+                is_error: false,
+            },
+        )];
+
+        let mut msg = ApiMessageV2::user_with_content(MessageContent::blocks(blocks));
+        super::truncate_tool_results(&mut msg);
+
+        let result = msg.content.as_blocks().unwrap()[0]
+            .as_tool_result()
+            .unwrap();
+        assert!(
+            result.content.len() <= super::MAX_TOOL_RESULT_BYTES + 100, // suffix overhead
+            "Content should be capped near MAX_TOOL_RESULT_BYTES, got {}",
+            result.content.len()
+        );
+        assert!(result.content.contains("truncated"));
+    }
+
+    #[test]
+    fn test_truncate_tool_results_preserves_small_content() {
+        use crate::types::content::ContentBlock;
+        use crate::types::{ApiMessageV2, MessageContent};
+
+        let small_content = "hello world".to_string();
+        let blocks = vec![ContentBlock::ToolResult(
+            crate::types::content::ToolResultBlock {
+                tool_use_id: "toolu_1".to_string(),
+                content: small_content.clone(),
+                is_error: false,
+            },
+        )];
+
+        let mut msg = ApiMessageV2::user_with_content(MessageContent::blocks(blocks));
+        super::truncate_tool_results(&mut msg);
+
+        let result = msg.content.as_blocks().unwrap()[0]
+            .as_tool_result()
+            .unwrap();
+        assert_eq!(result.content, small_content);
+    }
+
+    #[test]
+    fn test_truncate_tool_results_adds_truncation_notice() {
+        use crate::types::content::ContentBlock;
+        use crate::types::{ApiMessageV2, MessageContent};
+
+        let large_content = "a".repeat(60_000);
+        let blocks = vec![ContentBlock::ToolResult(
+            crate::types::content::ToolResultBlock {
+                tool_use_id: "toolu_1".to_string(),
+                content: large_content,
+                is_error: false,
+            },
+        )];
+
+        let mut msg = ApiMessageV2::user_with_content(MessageContent::blocks(blocks));
+        super::truncate_tool_results(&mut msg);
+
+        let result = msg.content.as_blocks().unwrap()[0]
+            .as_tool_result()
+            .unwrap();
+        assert!(result.content.ends_with("50KB limit]"));
+    }
+
+    #[test]
+    fn test_truncate_tool_results_handles_error_blocks() {
+        use crate::types::content::ContentBlock;
+        use crate::types::{ApiMessageV2, MessageContent};
+
+        let large_error = "e".repeat(100_000);
+        let blocks = vec![ContentBlock::ToolResult(
+            crate::types::content::ToolResultBlock {
+                tool_use_id: "toolu_err".to_string(),
+                content: large_error,
+                is_error: true,
+            },
+        )];
+
+        let mut msg = ApiMessageV2::user_with_content(MessageContent::blocks(blocks));
+        super::truncate_tool_results(&mut msg);
+
+        let result = msg.content.as_blocks().unwrap()[0]
+            .as_tool_result()
+            .unwrap();
+        assert!(result.is_error, "Error flag should be preserved");
+        assert!(
+            result.content.len() <= super::MAX_TOOL_RESULT_BYTES + 100,
+            "Error content should also be capped"
+        );
+        assert!(result.content.contains("truncated"));
+    }
+
+    #[test]
+    fn test_truncate_tool_results_handles_text_message() {
+        use crate::types::ApiMessageV2;
+
+        // Text messages should be left untouched
+        let mut msg = ApiMessageV2::user("hello world");
+        super::truncate_tool_results(&mut msg);
+        assert_eq!(msg.content.as_text().unwrap(), "hello world");
     }
 }

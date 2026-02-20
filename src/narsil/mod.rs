@@ -29,6 +29,6 @@ pub use integration::{
     detect_all_capabilities, parse_callers_response, parse_dependencies_response,
     parse_security_findings, security_verdict_from_findings, CallerInfo, DependencyInfo,
     NarsilCapabilities, NarsilCapability, NarsilIntegration, ParallelCapabilityResult,
-    SecurityFinding,
+    SecurityFinding, ServerCapabilityResult,
 };
 pub use security::SecurityVerdict;

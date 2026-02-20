@@ -1,10 +1,7 @@
 //! Tests for MCP Manager
 
-use patina::mcp::client::McpTool;
 use patina::mcp::config::McpServerEntry;
-use patina::mcp::manager::{
-    is_mcp_tool, mcp_tool_to_definition, namespace_tool_name, parse_namespaced_tool, McpManager,
-};
+use patina::mcp::manager::{is_mcp_tool, namespace_tool_name, parse_namespaced_tool, McpManager};
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -34,42 +31,6 @@ fn test_is_mcp_tool() {
     assert!(is_mcp_tool("fs__read"));
     assert!(!is_mcp_tool("bash"));
     assert!(!is_mcp_tool("read_file"));
-}
-
-// =============================================================================
-// Tool definition conversion tests
-// =============================================================================
-
-#[test]
-fn test_mcp_tool_to_definition_converts_correctly() {
-    let tool = McpTool {
-        name: "echo".to_string(),
-        description: "Echo text back".to_string(),
-        input_schema: serde_json::json!({
-            "type": "object",
-            "properties": {
-                "text": {"type": "string"}
-            },
-            "required": ["text"]
-        }),
-    };
-
-    let def = mcp_tool_to_definition("mock", &tool);
-    assert_eq!(def.name, "mock__echo");
-    assert_eq!(def.description, "Echo text back");
-    assert_eq!(def.input_schema["type"], "object");
-    assert!(def.input_schema["properties"]["text"].is_object());
-}
-
-#[test]
-fn test_mcp_tool_to_definition_uses_namespaced_name() {
-    let tool = McpTool {
-        name: "scan_security".to_string(),
-        description: "Scan for issues".to_string(),
-        input_schema: serde_json::json!({"type": "object"}),
-    };
-    let def = mcp_tool_to_definition("narsil", &tool);
-    assert_eq!(def.name, "narsil__scan_security");
 }
 
 // =============================================================================
@@ -152,7 +113,7 @@ async fn test_manager_sse_not_yet_supported() {
 
 #[tokio::test]
 async fn test_call_tool_no_double_underscore_returns_error() {
-    let mut manager = McpManager::start_all(HashMap::new(), Duration::from_secs(1)).await;
+    let manager = McpManager::start_all(HashMap::new(), Duration::from_secs(1)).await;
     let result = manager
         .call_tool("bash", serde_json::json!({"command": "ls"}))
         .await;
@@ -161,7 +122,7 @@ async fn test_call_tool_no_double_underscore_returns_error() {
 
 #[tokio::test]
 async fn test_call_tool_unknown_namespace_returns_error() {
-    let mut manager = McpManager::start_all(HashMap::new(), Duration::from_secs(1)).await;
+    let manager = McpManager::start_all(HashMap::new(), Duration::from_secs(1)).await;
     let result = manager
         .call_tool("nonexistent__tool", serde_json::json!({}))
         .await;
@@ -183,29 +144,4 @@ async fn test_shutdown_handles_empty_manager() {
 async fn test_is_empty_after_no_startup() {
     let manager = McpManager::start_all(HashMap::new(), Duration::from_secs(1)).await;
     assert!(manager.is_empty());
-}
-
-// =============================================================================
-// McpTool serialization tests
-// =============================================================================
-
-#[test]
-fn test_mcp_tool_serialization() {
-    let tool = McpTool {
-        name: "test-tool".to_string(),
-        description: "A test tool".to_string(),
-        input_schema: serde_json::json!({
-            "type": "object",
-            "properties": {
-                "input": {"type": "string"}
-            }
-        }),
-    };
-
-    let json = serde_json::to_string(&tool).unwrap();
-    assert!(json.contains("test-tool"));
-    assert!(json.contains("A test tool"));
-
-    let deserialized: McpTool = serde_json::from_str(&json).unwrap();
-    assert_eq!(deserialized.name, "test-tool");
 }

@@ -501,13 +501,16 @@ async fn run_print_mode(config: &Config, prompt: &str) -> Result<()> {
         let continuation = state.finish_tool_execution()?;
 
         // Build the messages for the conversation
-        let (assistant_msg, user_msg) = continuation.build_messages();
+        let (assistant_msg, mut user_msg) = continuation.build_messages();
 
         // Add to API message history for conversation continuation
         // Note: The assistant message is NOT added to the timeline here because
         // finalize_streaming_for_tool_use() already converted the streaming entry
         // to an AssistantMessage. Adding it again would cause duplicate messages.
         state.api_messages_mut().push(assistant_msg);
+
+        // Truncate large tool result content blocks before adding to conversation
+        crate::app::tool_loop::truncate_tool_results(&mut user_msg);
 
         // Add tool results to both timeline (for display) and API (for continuation)
         let tool_result_summary = format_tool_results_for_display(&user_msg);
@@ -520,7 +523,7 @@ async fn run_print_mode(config: &Config, prompt: &str) -> Result<()> {
         state.tool_loop_mut().start_streaming()?;
 
         let (tx, mut rx) = tokio::sync::mpsc::channel(STREAMING_CHANNEL_BUFFER);
-        let api_messages = state.build_api_messages();
+        let api_messages = state.prepare_api_messages_for_send(client.model());
         let client_clone = std::sync::Arc::clone(&client);
         let tools = state.all_tool_definitions();
 
@@ -690,7 +693,7 @@ pub(crate) async fn finish_tool_execution_and_continue(
     let continuation = state.finish_tool_execution()?;
 
     // Build the messages for the conversation
-    let (assistant_msg, user_msg) = continuation.build_messages();
+    let (assistant_msg, mut user_msg) = continuation.build_messages();
 
     // P0-2: Debug logging to verify tool results reach API
     if let Some(blocks) = assistant_msg.content.as_blocks() {
@@ -716,6 +719,11 @@ pub(crate) async fn finish_tool_execution_and_continue(
     // to an AssistantMessage. Adding it again would cause duplicate messages.
     state.api_messages_mut().push(assistant_msg);
 
+    // Truncate large tool result content blocks before adding to conversation
+    // history. This prevents token explosion when tool results are very large
+    // (e.g., file reads, command output).
+    crate::app::tool_loop::truncate_tool_results(&mut user_msg);
+
     // Add tool results to both timeline (for display) and API (for continuation)
     let tool_result_summary = format_tool_results_for_display(&user_msg);
     state.add_message(Message {
@@ -727,7 +735,7 @@ pub(crate) async fn finish_tool_execution_and_continue(
     // SessionHandler observer saves when it sees the dirty flag.
     state.mark_session_dirty();
 
-    // Continue the conversation with Claude using the full API messages
+    // Continue the conversation with Claude using truncated API messages
     debug!("Continuing conversation with tool results");
 
     // Start streaming the continuation - this sets state to Streaming
@@ -741,7 +749,10 @@ pub(crate) async fn finish_tool_execution_and_continue(
     state.set_loading(true);
     state.set_current_response(String::new());
 
-    let api_messages = state.api_messages().to_vec();
+    // Use prepare_api_messages_for_send() which compacts + truncates,
+    // instead of api_messages().to_vec() which sends the FULL untruncated
+    // conversation and causes token exhaustion on large codebases.
+    let api_messages = state.prepare_api_messages_for_send(client.model());
     let client_clone = std::sync::Arc::clone(client);
     let tools = state.all_tool_definitions();
 

@@ -263,6 +263,7 @@ impl CompletionProvider for BuiltinCommandProvider {
                 CompletionSource::Builtin,
             ),
             CompletionEntry::new("help", "Show help information", CompletionSource::Builtin),
+            CompletionEntry::new("mcp", "Show MCP server status", CompletionSource::Builtin),
             CompletionEntry::new("plugins", "List loaded plugins", CompletionSource::Builtin),
             CompletionEntry::new(
                 "terminal-setup",
@@ -461,6 +462,7 @@ mod tests {
             CompletionEntry::new("agent", "Manage agents", CompletionSource::Builtin),
             CompletionEntry::new("continuous", "Continuous loop", CompletionSource::Builtin),
             CompletionEntry::new("help", "Show help", CompletionSource::Builtin),
+            CompletionEntry::new("mcp", "Show MCP server status", CompletionSource::Builtin),
             CompletionEntry::new("plugins", "List plugins", CompletionSource::Builtin),
             CompletionEntry::new(
                 "terminal-setup",
@@ -474,7 +476,7 @@ mod tests {
     #[test]
     fn state_new_shows_all_candidates() {
         let state = CompletionState::new(sample_candidates());
-        assert_eq!(state.filtered().len(), 6);
+        assert_eq!(state.filtered().len(), 7);
         assert_eq!(state.selected_index(), 0);
     }
 
@@ -505,7 +507,7 @@ mod tests {
     fn state_select_next_wraps() {
         let mut state = CompletionState::new(sample_candidates());
         assert_eq!(state.selected_index(), 0);
-        for _ in 0..6 {
+        for _ in 0..7 {
             state.select_next();
         }
         assert_eq!(state.selected_index(), 0); // wrapped back
@@ -514,8 +516,8 @@ mod tests {
     #[test]
     fn state_select_previous_wraps() {
         let mut state = CompletionState::new(sample_candidates());
-        state.select_previous(); // 0 -> 5
-        assert_eq!(state.selected_index(), 5);
+        state.select_previous(); // 0 -> 6
+        assert_eq!(state.selected_index(), 6);
     }
 
     #[test]
@@ -560,10 +562,10 @@ mod tests {
     // --- BuiltinCommandProvider tests (8.2.1) ---
 
     #[test]
-    fn builtin_provider_returns_six_commands() {
+    fn builtin_provider_returns_seven_commands() {
         let provider = BuiltinCommandProvider;
         let candidates = provider.candidates();
-        assert_eq!(candidates.len(), 6);
+        assert_eq!(candidates.len(), 7);
         for entry in &candidates {
             assert_eq!(entry.source, CompletionSource::Builtin);
             assert!(!entry.description.is_empty());
@@ -578,6 +580,7 @@ mod tests {
         assert!(names.contains(&"agent"));
         assert!(names.contains(&"continuous"));
         assert!(names.contains(&"help"));
+        assert!(names.contains(&"mcp"));
         assert!(names.contains(&"plugins"));
         assert!(names.contains(&"terminal-setup"));
         assert!(names.contains(&"worktree"));
@@ -630,6 +633,6 @@ mod tests {
         let builtin = BuiltinCommandProvider;
         let mcp = McpToolProvider::new(vec![("tool1".to_string(), "srv".to_string())]);
         let all = collect_candidates(&[&builtin, &mcp]);
-        assert_eq!(all.len(), 7); // 6 builtin + 1 mcp
+        assert_eq!(all.len(), 8); // 7 builtin + 1 mcp
     }
 }

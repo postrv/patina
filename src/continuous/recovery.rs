@@ -500,7 +500,7 @@ pub fn parse_file_history_into_changes(response: &serde_json::Value) -> Vec<Rece
 /// This function does not return errors; it degrades gracefully.
 /// MCP call failures are logged but do not propagate.
 pub async fn narsil_root_cause(
-    client: Option<&mut crate::mcp::client::McpClient>,
+    client: Option<&crate::mcp::connection::McpConnection>,
     repo_name: &str,
     error_output: &str,
 ) -> RootCauseAnalysis {
@@ -541,7 +541,7 @@ pub async fn narsil_root_cause(
     for loc in &error_locations {
         if let Some(ref func_name) = loc.function {
             if let Ok(response) = client
-                .call_tool(
+                .call_tool_json(
                     "get_callers",
                     serde_json::json!({
                         "repo": repo_name,
@@ -566,7 +566,7 @@ pub async fn narsil_root_cause(
         .collect::<Vec<_>>()
     {
         if let Ok(response) = client
-            .call_tool(
+            .call_tool_json(
                 "get_file_history",
                 serde_json::json!({
                     "repo": repo_name,

@@ -239,7 +239,10 @@ fn handle_slash_command(ctx: &mut AppContext<'_>, input: &str) {
     use crate::app::commands::{CommandResult, SlashCommandHandler};
 
     let plugin_info = SlashCommandHandler::build_plugin_info(ctx.state.plugins());
-    let handler = SlashCommandHandler::new(ctx.state.working_dir.clone()).with_plugins(plugin_info);
+    let mcp_info = build_mcp_server_info(ctx.state);
+    let handler = SlashCommandHandler::new(ctx.state.working_dir.clone())
+        .with_plugins(plugin_info)
+        .with_mcp_info(mcp_info);
     let result = handler.handle(input);
 
     // Display the user's command in timeline
@@ -268,6 +271,36 @@ fn handle_slash_command(ctx: &mut AppContext<'_>, input: &str) {
     });
 
     ctx.state.mark_full_redraw();
+}
+
+/// Builds MCP server info from the current application state.
+fn build_mcp_server_info(
+    state: &crate::app::state::AppState,
+) -> Vec<crate::app::commands::McpServerInfo> {
+    use crate::app::commands::McpServerInfo;
+    use crate::mcp::manager::ServerStatus;
+
+    let Some(manager) = state.mcp_manager() else {
+        return Vec::new();
+    };
+
+    manager
+        .server_details()
+        .into_iter()
+        .map(|(name, status, tool_count)| {
+            let status_str = match status {
+                ServerStatus::Starting => "Starting".to_string(),
+                ServerStatus::Connected => "Connected".to_string(),
+                ServerStatus::Failed(reason) => format!("Failed: {reason}"),
+                ServerStatus::Stopped => "Stopped".to_string(),
+            };
+            McpServerInfo {
+                name: name.to_string(),
+                status: status_str,
+                tool_count,
+            }
+        })
+        .collect()
 }
 
 /// Selects all content and sets focus to the content area.

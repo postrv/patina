@@ -23,7 +23,7 @@
 //! // Get all tool definitions for the API
 //! let tools = manager.tool_definitions();
 //!
-//! // Route a tool call
+//! // Route a tool call (note: &self, not &mut self)
 //! let result = manager.call_tool("server__echo", serde_json::json!({"text": "hi"})).await?;
 //!
 //! // Clean shutdown
@@ -33,12 +33,15 @@
 //! ```
 
 use crate::api::tools::ToolDefinition;
-use crate::mcp::client::{validate_mcp_command, McpClient, McpTool};
 use crate::mcp::config::McpServerEntry;
+use crate::mcp::connection::McpConnection;
 use crate::tools::ToolResult;
 use anyhow::{anyhow, Result};
+use rmcp::model::{CallToolResult as SdkCallToolResult, Tool};
 use serde_json::Value;
 use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
 use std::time::Duration;
 
 /// The double-underscore separator used for tool namespacing.
@@ -65,18 +68,30 @@ impl ServerStatus {
     }
 }
 
-/// A managed MCP server with its client, status, and discovered tools.
+/// A managed MCP server with its connection, status, and tool count.
 struct ManagedServer {
     name: String,
-    client: McpClient,
+    connection: Option<McpConnection>,
     status: ServerStatus,
-    tools: Vec<McpTool>,
+}
+
+impl ManagedServer {
+    /// Returns the tool count from the connection's shared tool list.
+    fn tool_count(&self) -> usize {
+        self.connection
+            .as_ref()
+            .map(|c| c.tools().len())
+            .unwrap_or(0)
+    }
 }
 
 /// Manages multiple MCP server connections.
 ///
 /// Handles server lifecycle (start, discover tools, route calls, shutdown),
 /// tool namespacing, and graceful error handling.
+///
+/// Tool calls use `&self` (not `&mut self`) because the SDK uses interior
+/// mutability via `RunningService`.
 pub struct McpManager {
     servers: Vec<ManagedServer>,
 }
@@ -106,11 +121,7 @@ impl McpManager {
     /// # }
     /// ```
     pub async fn start_all(configs: HashMap<String, McpServerEntry>, timeout: Duration) -> Self {
-        let mut servers = Vec::new();
-
-        // Build startup futures for all servers
-        let mut futures = Vec::new();
-        let mut names = Vec::new();
+        let mut futures: Vec<Pin<Box<dyn Future<Output = ManagedServer> + Send>>> = Vec::new();
 
         for (name, entry) in configs {
             if entry.is_disabled() {
@@ -119,30 +130,13 @@ impl McpManager {
             }
 
             if entry.is_sse() {
-                tracing::warn!(
-                    server = %name,
-                    url = ?entry.url,
-                    "SSE MCP transport not yet supported, skipping"
-                );
-                servers.push(ManagedServer {
-                    name: name.clone(),
-                    client: McpClient::new(&name, "unused", vec![]),
-                    status: ServerStatus::Failed("SSE transport not yet supported".to_string()),
-                    tools: Vec::new(),
-                });
-                continue;
+                futures.push(Box::pin(start_http_server(name, entry, timeout)));
+            } else {
+                futures.push(Box::pin(start_stdio_server(name, entry, timeout)));
             }
-
-            names.push(name.clone());
-            futures.push(start_single_server(name, entry, timeout));
         }
 
-        // Run all startups in parallel
-        let results = futures::future::join_all(futures).await;
-
-        for result in results {
-            servers.push(result);
-        }
+        let servers = futures::future::join_all(futures).await;
 
         Self { servers }
     }
@@ -158,8 +152,10 @@ impl McpManager {
             if !server.status.is_connected() {
                 continue;
             }
-            for tool in &server.tools {
-                defs.push(mcp_tool_to_definition(&server.name, tool));
+            if let Some(conn) = &server.connection {
+                for tool in conn.tools() {
+                    defs.push(sdk_tool_to_definition(&server.name, &tool));
+                }
             }
         }
         defs
@@ -169,6 +165,8 @@ impl McpManager {
     ///
     /// Parses the namespace from the tool name, finds the matching server,
     /// and forwards the call with the original (non-namespaced) tool name.
+    ///
+    /// Uses `&self` instead of `&mut self` because the SDK uses interior mutability.
     ///
     /// # Arguments
     ///
@@ -182,14 +180,14 @@ impl McpManager {
     /// - The server namespace is not found
     /// - The server is not connected
     /// - The underlying tool call fails
-    pub async fn call_tool(&mut self, namespaced_name: &str, input: Value) -> Result<ToolResult> {
+    pub async fn call_tool(&self, namespaced_name: &str, input: Value) -> Result<ToolResult> {
         let (server_name, tool_name) = parse_namespaced_tool(namespaced_name).ok_or_else(|| {
             anyhow!("Not an MCP tool (no namespace separator): {namespaced_name}")
         })?;
 
         let server = self
             .servers
-            .iter_mut()
+            .iter()
             .find(|s| s.name == server_name)
             .ok_or_else(|| anyhow!("MCP server not found: {server_name}"))?;
 
@@ -201,8 +199,13 @@ impl McpManager {
             ));
         }
 
-        match server.client.call_tool(tool_name, input).await {
-            Ok(result) => Ok(convert_mcp_result(&result)),
+        let conn = server
+            .connection
+            .as_ref()
+            .ok_or_else(|| anyhow!("MCP server '{}' has no active connection", server_name))?;
+
+        match conn.call_tool(tool_name, input).await {
+            Ok(result) => Ok(convert_sdk_result(&result)),
             Err(e) => {
                 tracing::warn!(
                     server = %server_name,
@@ -230,18 +233,8 @@ impl McpManager {
 
             tracing::debug!(server = %server.name, "Shutting down MCP server");
 
-            match tokio::time::timeout(Duration::from_secs(5), server.client.stop()).await {
-                Ok(Ok(())) => {
-                    tracing::debug!(server = %server.name, "MCP server stopped cleanly");
-                }
-                Ok(Err(e)) => {
-                    tracing::warn!(server = %server.name, error = %e, "Error stopping MCP server");
-                    server.client.force_stop().await;
-                }
-                Err(_) => {
-                    tracing::warn!(server = %server.name, "MCP server stop timed out, force-stopping");
-                    server.client.force_stop().await;
-                }
+            if let Some(mut conn) = server.connection.take() {
+                conn.close().await;
             }
 
             server.status = ServerStatus::Stopped;
@@ -278,119 +271,127 @@ impl McpManager {
         self.servers
             .iter()
             .filter(|s| s.status.is_connected())
-            .map(|s| s.tools.len())
+            .map(|s| s.tool_count())
             .sum()
+    }
+
+    /// Returns per-server details: name, status, and tool count.
+    ///
+    /// Useful for building the `/mcp` command output. Returns all servers
+    /// regardless of status.
+    #[must_use]
+    pub fn server_details(&self) -> Vec<(&str, &ServerStatus, usize)> {
+        self.servers
+            .iter()
+            .map(|s| (s.name.as_str(), &s.status, s.tool_count()))
+            .collect()
     }
 }
 
-/// Starts a single MCP server: validates command, starts client, discovers tools.
-async fn start_single_server(
+/// Starts a single stdio MCP server via `McpConnection`.
+async fn start_stdio_server(
     name: String,
     entry: McpServerEntry,
     timeout: Duration,
 ) -> ManagedServer {
-    let args_refs: Vec<&str> = entry.args.iter().map(String::as_str).collect();
-
-    // Validate the command before attempting to start
-    if let Err(e) = validate_mcp_command(&entry.command, &entry.args) {
-        tracing::warn!(
-            server = %name,
-            command = %entry.command,
-            error = %e,
-            "MCP server command validation failed"
-        );
-        return ManagedServer {
-            name: name.clone(),
-            client: McpClient::new(&name, &entry.command, args_refs),
-            status: ServerStatus::Failed(format!("validation failed: {e}")),
-            tools: Vec::new(),
-        };
-    }
-
-    let mut client = McpClient::new_with_env(&name, &entry.command, args_refs, entry.env.clone());
-
-    // Start client with timeout
-    match tokio::time::timeout(timeout, client.start()).await {
-        Ok(Ok(())) => {
-            tracing::debug!(server = %name, "MCP server started");
-        }
-        Ok(Err(e)) => {
-            tracing::warn!(server = %name, error = %e, "MCP server failed to start");
-            return ManagedServer {
-                name,
-                client,
-                status: ServerStatus::Failed(format!("start failed: {e}")),
-                tools: Vec::new(),
-            };
-        }
-        Err(_) => {
-            tracing::warn!(server = %name, "MCP server start timed out");
-            client.force_stop().await;
-            return ManagedServer {
-                name,
-                client,
-                status: ServerStatus::Failed("start timed out".to_string()),
-                tools: Vec::new(),
-            };
-        }
-    }
-
-    // Discover tools with timeout
-    match tokio::time::timeout(timeout, client.list_tools()).await {
-        Ok(Ok(tools)) => {
+    match McpConnection::connect_stdio(&name, &entry.command, &entry.args, &entry.env, timeout)
+        .await
+    {
+        Ok(conn) => {
+            let tool_count = conn.tools().len();
             tracing::info!(
                 server = %name,
-                tool_count = tools.len(),
+                tool_count,
                 "MCP server connected, discovered tools"
             );
             ManagedServer {
                 name,
-                client,
+                connection: Some(conn),
                 status: ServerStatus::Connected,
-                tools,
             }
         }
-        Ok(Err(e)) => {
-            tracing::warn!(server = %name, error = %e, "Failed to discover MCP tools");
+        Err(e) => {
+            tracing::warn!(
+                server = %name,
+                error = %e,
+                "MCP server failed to start"
+            );
             ManagedServer {
                 name,
-                client,
-                status: ServerStatus::Failed(format!("tool discovery failed: {e}")),
-                tools: Vec::new(),
-            }
-        }
-        Err(_) => {
-            tracing::warn!(server = %name, "MCP tool discovery timed out");
-            ManagedServer {
-                name,
-                client,
-                status: ServerStatus::Failed("tool discovery timed out".to_string()),
-                tools: Vec::new(),
+                connection: None,
+                status: ServerStatus::Failed(format!("{e}")),
             }
         }
     }
 }
 
-/// Converts an MCP tool result (JSON) to a `ToolResult`.
+/// Starts a single HTTP/SSE MCP server via `McpConnection`.
+async fn start_http_server(
+    name: String,
+    entry: McpServerEntry,
+    timeout: Duration,
+) -> ManagedServer {
+    let url = match &entry.url {
+        Some(url) => url.clone(),
+        None => {
+            return ManagedServer {
+                name,
+                connection: None,
+                status: ServerStatus::Failed("SSE entry missing url".to_string()),
+            };
+        }
+    };
+
+    match McpConnection::connect_http(&name, &url, &entry.headers, timeout).await {
+        Ok(conn) => {
+            let tool_count = conn.tools().len();
+            tracing::info!(
+                server = %name,
+                tool_count,
+                "HTTP MCP server connected, discovered tools"
+            );
+            ManagedServer {
+                name,
+                connection: Some(conn),
+                status: ServerStatus::Connected,
+            }
+        }
+        Err(e) => {
+            tracing::warn!(
+                server = %name,
+                error = %e,
+                "HTTP MCP server failed to start"
+            );
+            ManagedServer {
+                name,
+                connection: None,
+                status: ServerStatus::Failed(format!("{e}")),
+            }
+        }
+    }
+}
+
+/// Converts an SDK `CallToolResult` to a `ToolResult`.
 ///
-/// Extracts text from the MCP `content` array. If `isError` is true in the
-/// response, returns `ToolResult::Error`.
-fn convert_mcp_result(result: &Value) -> ToolResult {
-    let is_error = result
-        .get("isError")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
+/// Extracts text from the SDK's typed `Content` items. If `is_error` is true,
+/// returns `ToolResult::Error`.
+fn convert_sdk_result(result: &SdkCallToolResult) -> ToolResult {
+    let is_error = result.is_error.unwrap_or(false);
 
     let text = result
-        .get("content")
-        .and_then(|c| c.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|item| item.get("text").and_then(|t| t.as_str()))
-                .collect::<Vec<_>>()
-                .join("\n")
+        .content
+        .iter()
+        .filter_map(|c| match c.raw.as_text() {
+            Some(t) => Some(t.text.as_str()),
+            None => c.raw.as_resource().and_then(|r| match &r.resource {
+                rmcp::model::ResourceContents::TextResourceContents { text, .. } => {
+                    Some(text.as_str())
+                }
+                rmcp::model::ResourceContents::BlobResourceContents { .. } => None,
+            }),
         })
-        .unwrap_or_else(|| result.to_string());
+        .collect::<Vec<_>>()
+        .join("\n");
 
     if is_error {
         ToolResult::Error(text)
@@ -399,35 +400,18 @@ fn convert_mcp_result(result: &Value) -> ToolResult {
     }
 }
 
-/// Converts an MCP tool to an API `ToolDefinition` with a namespaced name.
-///
-/// # Arguments
-///
-/// * `server_name` - The server name for namespacing
-/// * `tool` - The MCP tool from the server
-///
-/// # Examples
-///
-/// ```
-/// use patina::mcp::manager::mcp_tool_to_definition;
-/// use patina::mcp::client::McpTool;
-/// use serde_json::json;
-///
-/// let tool = McpTool {
-///     name: "read".to_string(),
-///     description: "Read a file".to_string(),
-///     input_schema: json!({"type": "object"}),
-/// };
-/// let def = mcp_tool_to_definition("fs", &tool);
-/// assert_eq!(def.name, "fs__read");
-/// assert_eq!(def.description, "Read a file");
-/// ```
-#[must_use]
-pub fn mcp_tool_to_definition(server_name: &str, tool: &McpTool) -> ToolDefinition {
+/// Converts an SDK `Tool` to an API `ToolDefinition` with a namespaced name.
+fn sdk_tool_to_definition(server_name: &str, tool: &Tool) -> ToolDefinition {
+    let description = tool.description.as_deref().unwrap_or("");
+
+    // Convert Arc<JsonObject> to serde_json::Value
+    let schema = serde_json::to_value(tool.input_schema.as_ref())
+        .unwrap_or_else(|_| serde_json::json!({"type": "object"}));
+
     ToolDefinition::new(
         namespace_tool_name(server_name, &tool.name),
-        &tool.description,
-        tool.input_schema.clone(),
+        description,
+        schema,
     )
 }
 
@@ -578,7 +562,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn manager_sse_not_supported_marks_failed() {
+    async fn manager_sse_attempts_connection() {
         let mut configs = HashMap::new();
         configs.insert(
             "sse-server".to_string(),
@@ -592,7 +576,29 @@ mod tests {
             },
         );
 
-        let manager = McpManager::start_all(configs, Duration::from_secs(1)).await;
+        let manager = McpManager::start_all(configs, Duration::from_secs(2)).await;
+        assert_eq!(manager.connected_count(), 0);
+        let statuses = manager.server_statuses();
+        assert_eq!(statuses.len(), 1);
+        assert!(matches!(statuses[0].1, ServerStatus::Failed(_)));
+    }
+
+    #[tokio::test]
+    async fn manager_sse_invalid_url_marks_failed() {
+        let mut configs = HashMap::new();
+        configs.insert(
+            "bad-sse".to_string(),
+            McpServerEntry {
+                command: String::new(),
+                args: vec![],
+                env: HashMap::new(),
+                url: Some("http://192.0.2.1:1/sse".to_string()),
+                headers: None,
+                disabled: false,
+            },
+        );
+
+        let manager = McpManager::start_all(configs, Duration::from_secs(2)).await;
         assert_eq!(manager.connected_count(), 0);
         let statuses = manager.server_statuses();
         assert_eq!(statuses.len(), 1);
@@ -601,7 +607,7 @@ mod tests {
 
     #[tokio::test]
     async fn call_tool_no_double_underscore_returns_error() {
-        let mut manager = McpManager::start_all(HashMap::new(), Duration::from_secs(1)).await;
+        let manager = McpManager::start_all(HashMap::new(), Duration::from_secs(1)).await;
         let result = manager
             .call_tool("bash", serde_json::json!({"command": "ls"}))
             .await;
@@ -611,7 +617,7 @@ mod tests {
 
     #[tokio::test]
     async fn call_tool_unknown_namespace_returns_error() {
-        let mut manager = McpManager::start_all(HashMap::new(), Duration::from_secs(1)).await;
+        let manager = McpManager::start_all(HashMap::new(), Duration::from_secs(1)).await;
         let result = manager
             .call_tool("nonexistent__tool", serde_json::json!({}))
             .await;
@@ -623,87 +629,65 @@ mod tests {
     async fn shutdown_handles_empty_manager() {
         let mut manager = McpManager::start_all(HashMap::new(), Duration::from_secs(1)).await;
         manager.shutdown_all().await;
-        // No panic
     }
 
     #[test]
-    fn convert_mcp_result_text_success() {
-        let result = serde_json::json!({
-            "content": [
-                {"type": "text", "text": "hello world"}
-            ]
-        });
-        match convert_mcp_result(&result) {
+    fn convert_sdk_result_text_success() {
+        use rmcp::model::Content;
+        let result = SdkCallToolResult {
+            content: vec![Content::text("hello world")],
+            is_error: None,
+            meta: None,
+            structured_content: None,
+        };
+        match convert_sdk_result(&result) {
             ToolResult::Success(text) => assert_eq!(text, "hello world"),
-            _ => panic!("Expected Success"),
+            other => panic!("Expected Success, got {:?}", other),
         }
     }
 
     #[test]
-    fn convert_mcp_result_error() {
-        let result = serde_json::json!({
-            "isError": true,
-            "content": [
-                {"type": "text", "text": "something went wrong"}
-            ]
-        });
-        match convert_mcp_result(&result) {
+    fn convert_sdk_result_error() {
+        use rmcp::model::Content;
+        let result = SdkCallToolResult {
+            content: vec![Content::text("something went wrong")],
+            is_error: Some(true),
+            meta: None,
+            structured_content: None,
+        };
+        match convert_sdk_result(&result) {
             ToolResult::Error(text) => assert_eq!(text, "something went wrong"),
-            _ => panic!("Expected Error"),
+            other => panic!("Expected Error, got {:?}", other),
         }
     }
 
     #[test]
-    fn convert_mcp_result_multiple_content() {
-        let result = serde_json::json!({
-            "content": [
-                {"type": "text", "text": "line 1"},
-                {"type": "text", "text": "line 2"}
-            ]
-        });
-        match convert_mcp_result(&result) {
+    fn convert_sdk_result_multiple_content() {
+        use rmcp::model::Content;
+        let result = SdkCallToolResult {
+            content: vec![Content::text("line 1"), Content::text("line 2")],
+            is_error: None,
+            meta: None,
+            structured_content: None,
+        };
+        match convert_sdk_result(&result) {
             ToolResult::Success(text) => assert_eq!(text, "line 1\nline 2"),
-            _ => panic!("Expected Success"),
+            other => panic!("Expected Success, got {:?}", other),
         }
     }
 
     #[test]
-    fn convert_mcp_result_empty_content() {
-        let result = serde_json::json!({"content": []});
-        match convert_mcp_result(&result) {
+    fn convert_sdk_result_empty_content() {
+        let result = SdkCallToolResult {
+            content: vec![],
+            is_error: None,
+            meta: None,
+            structured_content: None,
+        };
+        match convert_sdk_result(&result) {
             ToolResult::Success(text) => assert!(text.is_empty()),
-            _ => panic!("Expected Success"),
+            other => panic!("Expected Success, got {:?}", other),
         }
-    }
-
-    #[test]
-    fn mcp_tool_to_definition_converts_correctly() {
-        let tool = McpTool {
-            name: "echo".to_string(),
-            description: "Echo text back".to_string(),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "text": {"type": "string"}
-                },
-                "required": ["text"]
-            }),
-        };
-        let def = mcp_tool_to_definition("mock", &tool);
-        assert_eq!(def.name, "mock__echo");
-        assert_eq!(def.description, "Echo text back");
-        assert_eq!(def.input_schema["type"], "object");
-    }
-
-    #[test]
-    fn mcp_tool_to_definition_uses_namespaced_name() {
-        let tool = McpTool {
-            name: "scan_security".to_string(),
-            description: "Scan for issues".to_string(),
-            input_schema: serde_json::json!({"type": "object"}),
-        };
-        let def = mcp_tool_to_definition("narsil", &tool);
-        assert_eq!(def.name, "narsil__scan_security");
     }
 
     #[tokio::test]
@@ -741,5 +725,13 @@ mod tests {
     async fn tool_definitions_empty_when_no_servers() {
         let manager = McpManager::start_all(HashMap::new(), Duration::from_secs(1)).await;
         assert!(manager.tool_definitions().is_empty());
+    }
+
+    /// Verify that `call_tool` works with `&self` (not `&mut self`).
+    #[tokio::test]
+    async fn call_tool_takes_shared_ref() {
+        let manager = McpManager::start_all(HashMap::new(), Duration::from_secs(1)).await;
+        // This compiles only if call_tool takes &self
+        let _result = manager.call_tool("a__b", serde_json::json!({})).await;
     }
 }

@@ -11,7 +11,7 @@
 //! The CCG tools require narsil-mcp to be started with `--graph` flag.
 
 use crate::context::compression::{CompressionLevel, CompressionResult, ContextSource};
-use crate::mcp::client::McpClient;
+use crate::mcp::connection::McpConnection;
 use std::fmt;
 
 /// Default SPARQL result limit to prevent context flooding.
@@ -289,11 +289,11 @@ LIMIT {}"#,
     /// Returns an error if the MCP call fails or the response cannot be parsed.
     pub async fn fetch_manifest(
         &self,
-        client: &mut McpClient,
+        client: &McpConnection,
     ) -> Result<CompressionResult, CcgFetchError> {
         let args = self.manifest_args();
         let response = client
-            .call_tool("get_ccg_manifest", args)
+            .call_tool_json("get_ccg_manifest", args)
             .await
             .map_err(CcgFetchError::mcp_error)?;
 
@@ -320,11 +320,11 @@ LIMIT {}"#,
     /// Returns an error if the MCP call fails or the response cannot be parsed.
     pub async fn fetch_architecture(
         &self,
-        client: &mut McpClient,
+        client: &McpConnection,
     ) -> Result<CompressionResult, CcgFetchError> {
         let args = self.architecture_args();
         let response = client
-            .call_tool("export_ccg_architecture", args)
+            .call_tool_json("export_ccg_architecture", args)
             .await
             .map_err(CcgFetchError::mcp_error)?;
 
@@ -355,7 +355,7 @@ LIMIT {}"#,
     /// - The response cannot be parsed
     pub async fn execute_query(
         &self,
-        client: &mut McpClient,
+        client: &McpConnection,
         sparql: &str,
     ) -> Result<CompressionResult, CcgFetchError> {
         // Safety: ensure LIMIT clause is present
@@ -365,7 +365,7 @@ LIMIT {}"#,
 
         let args = self.query_args(sparql);
         let response = client
-            .call_tool("query_ccg", args)
+            .call_tool_json("query_ccg", args)
             .await
             .map_err(CcgFetchError::mcp_error)?;
 

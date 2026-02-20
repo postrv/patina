@@ -29,6 +29,17 @@ use crate::commands::worktree::{parse_worktree_command, WorktreeCommand};
 use crate::worktree::{WorktreeInfo, WorktreeManager};
 use std::path::PathBuf;
 
+/// Information about an MCP server for display purposes.
+#[derive(Debug, Clone)]
+pub struct McpServerInfo {
+    /// The server name.
+    pub name: String,
+    /// The server status (e.g., "Connected", "Failed: reason").
+    pub status: String,
+    /// The number of tools discovered from this server.
+    pub tool_count: usize,
+}
+
 /// Information about a loaded plugin for display purposes.
 #[derive(Debug, Clone, Default)]
 pub struct PluginInfo {
@@ -69,6 +80,8 @@ pub struct SlashCommandHandler {
     working_dir: PathBuf,
     /// Information about loaded plugins.
     plugins: Vec<PluginInfo>,
+    /// Information about MCP servers.
+    mcp_servers: Vec<McpServerInfo>,
 }
 
 impl SlashCommandHandler {
@@ -78,6 +91,7 @@ impl SlashCommandHandler {
         Self {
             working_dir,
             plugins: Vec::new(),
+            mcp_servers: Vec::new(),
         }
     }
 
@@ -87,6 +101,15 @@ impl SlashCommandHandler {
     #[must_use]
     pub fn with_plugins(mut self, plugins: Vec<PluginInfo>) -> Self {
         self.plugins = plugins;
+        self
+    }
+
+    /// Adds MCP server information to the handler.
+    ///
+    /// Use this to enable the `/mcp` command to display server status.
+    #[must_use]
+    pub fn with_mcp_info(mut self, mcp_servers: Vec<McpServerInfo>) -> Self {
+        self.mcp_servers = mcp_servers;
         self
     }
 
@@ -126,6 +149,7 @@ impl SlashCommandHandler {
         match command_name {
             "agent" => self.handle_agent(&args),
             "continuous" => self.handle_continuous(&args),
+            "mcp" => self.handle_mcp(),
             "worktree" => self.handle_worktree(&args),
             "help" => self.handle_help(if args.is_empty() { None } else { Some(&args) }),
             "plugins" => self.handle_plugins(),
@@ -167,6 +191,38 @@ impl SlashCommandHandler {
                 ));
             }
         }
+
+        CommandResult::Executed(output)
+    }
+
+    /// Handles the `/mcp` command.
+    fn handle_mcp(&self) -> CommandResult {
+        if self.mcp_servers.is_empty() {
+            return CommandResult::Executed("No MCP servers configured.".to_string());
+        }
+
+        let mut output = String::from("MCP Servers:\n");
+
+        for server in &self.mcp_servers {
+            output.push_str(&format!("\n  {} - {}", server.name, server.status));
+            if server.tool_count > 0 {
+                output.push_str(&format!(" ({} tools)", server.tool_count));
+            }
+        }
+
+        let connected = self
+            .mcp_servers
+            .iter()
+            .filter(|s| s.status == "Connected")
+            .count();
+        let total_tools: usize = self.mcp_servers.iter().map(|s| s.tool_count).sum();
+
+        output.push_str(&format!(
+            "\n\nSummary: {}/{} connected, {} tools available",
+            connected,
+            self.mcp_servers.len(),
+            total_tools
+        ));
 
         CommandResult::Executed(output)
     }
@@ -468,6 +524,8 @@ impl SlashCommandHandler {
   /continuous <subcommand>  - Manage continuous coding loop
     Subcommands: start, stop, status
 
+  /mcp                      - Show MCP server status
+
   /worktree <subcommand>    - Manage git worktrees
     Subcommands: new, list, switch, remove, clean, status
 
@@ -550,6 +608,22 @@ Usage:
 Examples:
   /help
   /help worktree"#;
+                CommandResult::Executed(help_text.to_string())
+            }
+
+            Some("mcp") => {
+                let help_text = r#"/mcp - Show MCP server status
+
+Usage:
+  /mcp       Show all configured MCP servers with connection status
+
+Displays:
+  - Server name and connection status
+  - Number of tools discovered per server
+  - Summary of connected servers and total tools
+
+MCP servers are configured in .mcp.json (project) or ~/.claude.json (user).
+Servers connect automatically at startup using stdio or SSE transport."#;
                 CommandResult::Executed(help_text.to_string())
             }
 
@@ -691,6 +765,7 @@ Other terminals:
         vec![
             "agent",
             "continuous",
+            "mcp",
             "worktree",
             "help",
             "plugins",
@@ -1683,6 +1758,158 @@ mod tests {
             "Available commands should include 'continuous'"
         );
     }
+
+    // =========================================================================
+    // MCP command tests (Phase 10.2)
+    // =========================================================================
+
+    #[test]
+    fn test_handle_mcp_no_servers() {
+        let (handler, _temp) = create_handler_in_temp();
+
+        let result = handler.handle("/mcp");
+
+        match result {
+            CommandResult::Executed(output) => {
+                assert!(
+                    output.contains("No MCP servers configured"),
+                    "Should indicate no servers: {}",
+                    output
+                );
+            }
+            other => panic!("Expected executed result: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_handle_mcp_with_connected_server() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let handler = SlashCommandHandler::new(temp_dir.path().to_path_buf()).with_mcp_info(vec![
+            McpServerInfo {
+                name: "narsil".to_string(),
+                status: "Connected".to_string(),
+                tool_count: 69,
+            },
+        ]);
+
+        let result = handler.handle("/mcp");
+
+        match result {
+            CommandResult::Executed(output) => {
+                assert!(output.contains("narsil"), "Should show server name");
+                assert!(output.contains("Connected"), "Should show status");
+                assert!(output.contains("69 tools"), "Should show tool count");
+            }
+            other => panic!("Expected executed result: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_handle_mcp_with_failed_server() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let handler = SlashCommandHandler::new(temp_dir.path().to_path_buf()).with_mcp_info(vec![
+            McpServerInfo {
+                name: "broken".to_string(),
+                status: "Failed: connection refused".to_string(),
+                tool_count: 0,
+            },
+        ]);
+
+        let result = handler.handle("/mcp");
+
+        match result {
+            CommandResult::Executed(output) => {
+                assert!(output.contains("broken"), "Should show server name");
+                assert!(
+                    output.contains("Failed: connection refused"),
+                    "Should show failure reason"
+                );
+            }
+            other => panic!("Expected executed result: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_handle_mcp_mixed_statuses() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let handler = SlashCommandHandler::new(temp_dir.path().to_path_buf()).with_mcp_info(vec![
+            McpServerInfo {
+                name: "narsil".to_string(),
+                status: "Connected".to_string(),
+                tool_count: 69,
+            },
+            McpServerInfo {
+                name: "sse-server".to_string(),
+                status: "Failed: timeout".to_string(),
+                tool_count: 0,
+            },
+        ]);
+
+        let result = handler.handle("/mcp");
+
+        match result {
+            CommandResult::Executed(output) => {
+                assert!(output.contains("narsil"), "Should show first server");
+                assert!(output.contains("sse-server"), "Should show second server");
+                assert!(output.contains("1/2 connected"), "Should show summary");
+                assert!(output.contains("69 tools"), "Should show total tools");
+            }
+            other => panic!("Expected executed result: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_help_includes_mcp() {
+        let (handler, _temp) = create_handler_in_temp();
+
+        let result = handler.handle("/help");
+
+        match result {
+            CommandResult::Executed(output) => {
+                assert!(
+                    output.contains("mcp"),
+                    "Help should mention mcp command: {}",
+                    output
+                );
+            }
+            other => panic!("Expected help output: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_help_mcp_detailed() {
+        let (handler, _temp) = create_handler_in_temp();
+
+        let result = handler.handle("/help mcp");
+
+        match result {
+            CommandResult::Executed(output) => {
+                assert!(output.contains("/mcp"), "Should describe mcp command");
+                assert!(
+                    output.contains("MCP server") || output.contains("server status"),
+                    "Should explain what it does: {}",
+                    output
+                );
+            }
+            other => panic!("Expected mcp help: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_available_commands_includes_mcp() {
+        let (handler, _temp) = create_handler_in_temp();
+
+        let commands = handler.available_commands();
+
+        assert!(
+            commands.contains(&"mcp"),
+            "Available commands should include 'mcp'"
+        );
+    }
+
+    // =========================================================================
+    // Agent command tests (continued)
+    // =========================================================================
 
     #[test]
     fn test_format_agent_detail_failed_status() {

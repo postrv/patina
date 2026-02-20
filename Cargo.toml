@@ -2,7 +2,7 @@
 name = "patina"
 version = "1.0.0"
 edition = "2021"
-rust-version = "1.75"
+rust-version = "1.85"
 description = "Patina - High-performance terminal client for Claude API"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/postrv/patina"
@@ -65,6 +65,13 @@ base64 = "0.22"
 # Clipboard support for copy/paste
 arboard = "3"
 urlencoding = "2.1"
+
+# MCP SDK
+rmcp = { version = "0.16", features = [
+    "client",
+    "transport-child-process",
+    "transport-streamable-http-client-reqwest",
+] }
 
 [features]
 default = []
