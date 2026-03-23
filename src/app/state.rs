@@ -327,6 +327,74 @@ pub struct ToolExecutionState {
     pub(crate) executing_tool_ids: std::collections::HashSet<String>,
 }
 
+/// Worktree status bar state extracted from AppState.
+///
+/// Groups all fields related to the git worktree status display:
+/// branch name, modified file count, and ahead/behind indicators.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WorktreeStatus {
+    /// Current branch name, if known.
+    branch: Option<String>,
+    /// Number of modified (dirty) files.
+    modified: usize,
+    /// Number of commits ahead of upstream.
+    ahead: usize,
+    /// Number of commits behind upstream.
+    behind: usize,
+}
+
+impl WorktreeStatus {
+    /// Creates a new `WorktreeStatus` with all fields at their defaults.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Sets the current branch name.
+    pub fn set_branch(&mut self, branch: String) {
+        self.branch = Some(branch);
+    }
+
+    /// Returns the current branch name, if set.
+    #[must_use]
+    pub fn branch(&self) -> Option<&str> {
+        self.branch.as_deref()
+    }
+
+    /// Sets the number of modified files.
+    pub fn set_modified(&mut self, count: usize) {
+        self.modified = count;
+    }
+
+    /// Returns the number of modified files.
+    #[must_use]
+    pub fn modified(&self) -> usize {
+        self.modified
+    }
+
+    /// Sets the number of commits ahead of upstream.
+    pub fn set_ahead(&mut self, count: usize) {
+        self.ahead = count;
+    }
+
+    /// Returns the number of commits ahead of upstream.
+    #[must_use]
+    pub fn ahead(&self) -> usize {
+        self.ahead
+    }
+
+    /// Sets the number of commits behind upstream.
+    pub fn set_behind(&mut self, count: usize) {
+        self.behind = count;
+    }
+
+    /// Returns the number of commits behind upstream.
+    #[must_use]
+    pub fn behind(&self) -> usize {
+        self.behind
+    }
+}
+
 pub struct AppState {
     /// Full API messages with content blocks (tool_use, tool_result).
     /// This is the authoritative conversation history sent to the API.
@@ -345,11 +413,8 @@ pub struct AppState {
 
     dirty: DirtyFlags,
 
-    // Worktree status bar state
-    worktree_branch: Option<String>,
-    worktree_modified: usize,
-    worktree_ahead: usize,
-    worktree_behind: usize,
+    /// Git worktree status (branch, modified, ahead/behind).
+    worktree: WorktreeStatus,
 
     // Session tracking for auto-save
     session_id: Option<String>,
@@ -559,10 +624,7 @@ impl AppState {
                 full: true,
                 ..Default::default()
             },
-            worktree_branch: None,
-            worktree_modified: 0,
-            worktree_ahead: 0,
-            worktree_behind: 0,
+            worktree: WorktreeStatus::new(),
             session_id: None,
             session_dirty: false,
             quit_requested: false,
@@ -2055,57 +2117,61 @@ impl AppState {
     }
 
     // ========================================================================
-    // Worktree Status Bar State
+    // Worktree Status Bar State (delegates to WorktreeStatus)
     // ========================================================================
 
+    /// Returns a reference to the worktree status.
+    #[must_use]
+    pub fn worktree(&self) -> &WorktreeStatus {
+        &self.worktree
+    }
+
     /// Sets the current worktree branch name.
-    ///
-    /// This is displayed in the status bar.
     pub fn set_worktree_branch(&mut self, branch: String) {
-        self.worktree_branch = Some(branch);
+        self.worktree.set_branch(branch);
         self.dirty.full = true;
     }
 
     /// Returns the current worktree branch name, if set.
     #[must_use]
     pub fn worktree_branch(&self) -> Option<&str> {
-        self.worktree_branch.as_deref()
+        self.worktree.branch()
     }
 
     /// Sets the number of modified files in the worktree.
     pub fn set_worktree_modified(&mut self, count: usize) {
-        self.worktree_modified = count;
+        self.worktree.set_modified(count);
         self.dirty.full = true;
     }
 
     /// Returns the number of modified files in the worktree.
     #[must_use]
     pub fn worktree_modified(&self) -> usize {
-        self.worktree_modified
+        self.worktree.modified()
     }
 
     /// Sets the number of commits ahead of upstream.
     pub fn set_worktree_ahead(&mut self, count: usize) {
-        self.worktree_ahead = count;
+        self.worktree.set_ahead(count);
         self.dirty.full = true;
     }
 
     /// Returns the number of commits ahead of upstream.
     #[must_use]
     pub fn worktree_ahead(&self) -> usize {
-        self.worktree_ahead
+        self.worktree.ahead()
     }
 
     /// Sets the number of commits behind upstream.
     pub fn set_worktree_behind(&mut self, count: usize) {
-        self.worktree_behind = count;
+        self.worktree.set_behind(count);
         self.dirty.full = true;
     }
 
     /// Returns the number of commits behind upstream.
     #[must_use]
     pub fn worktree_behind(&self) -> usize {
-        self.worktree_behind
+        self.worktree.behind()
     }
 
     // ========================================================================
@@ -5728,5 +5794,89 @@ mod tests {
         state.dirty.clear();
         state.show_completion();
         assert!(state.dirty.input);
+    }
+
+    // ========================================================================
+    // WorktreeStatus tests
+    // ========================================================================
+
+    #[test]
+    fn test_worktree_status_default() {
+        let wt = WorktreeStatus::new();
+        assert_eq!(wt.branch(), None);
+        assert_eq!(wt.modified(), 0);
+        assert_eq!(wt.ahead(), 0);
+        assert_eq!(wt.behind(), 0);
+    }
+
+    #[test]
+    fn test_worktree_status_set_branch() {
+        let mut wt = WorktreeStatus::new();
+        wt.set_branch("main".to_string());
+        assert_eq!(wt.branch(), Some("main"));
+    }
+
+    #[test]
+    fn test_worktree_status_set_modified() {
+        let mut wt = WorktreeStatus::new();
+        wt.set_modified(5);
+        assert_eq!(wt.modified(), 5);
+    }
+
+    #[test]
+    fn test_worktree_status_set_ahead_behind() {
+        let mut wt = WorktreeStatus::new();
+        wt.set_ahead(3);
+        wt.set_behind(2);
+        assert_eq!(wt.ahead(), 3);
+        assert_eq!(wt.behind(), 2);
+    }
+
+    #[test]
+    fn test_worktree_status_clone_eq() {
+        let mut wt = WorktreeStatus::new();
+        wt.set_branch("feature/x".to_string());
+        wt.set_modified(1);
+        let wt2 = wt.clone();
+        assert_eq!(wt, wt2);
+    }
+
+    #[test]
+    fn test_app_state_worktree_delegation() {
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+        state.set_worktree_branch("main".to_string());
+        assert_eq!(state.worktree_branch(), Some("main"));
+        assert_eq!(state.worktree().branch(), Some("main"));
+
+        state.set_worktree_modified(3);
+        assert_eq!(state.worktree_modified(), 3);
+        assert_eq!(state.worktree().modified(), 3);
+
+        state.set_worktree_ahead(1);
+        assert_eq!(state.worktree_ahead(), 1);
+
+        state.set_worktree_behind(2);
+        assert_eq!(state.worktree_behind(), 2);
+    }
+
+    #[test]
+    fn test_worktree_setters_set_dirty_flag() {
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+
+        state.dirty.clear();
+        state.set_worktree_branch("main".to_string());
+        assert!(state.dirty.full);
+
+        state.dirty.clear();
+        state.set_worktree_modified(1);
+        assert!(state.dirty.full);
+
+        state.dirty.clear();
+        state.set_worktree_ahead(1);
+        assert!(state.dirty.full);
+
+        state.dirty.clear();
+        state.set_worktree_behind(1);
+        assert!(state.dirty.full);
     }
 }
