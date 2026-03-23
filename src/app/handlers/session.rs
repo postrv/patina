@@ -471,7 +471,7 @@ mod tests {
         let id = state.session_id().unwrap().to_string();
 
         // Modify state and save again.
-        state.input = "updated input".to_string();
+        *state.input_mut() = "updated input".to_string();
         auto_save(&mut state, &session_mgr).await;
 
         // ID should remain the same.

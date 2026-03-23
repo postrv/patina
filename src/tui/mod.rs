@@ -844,7 +844,7 @@ fn render_status_bar(frame: &mut Frame, area: Rect, state: &AppState) {
 }
 
 fn render_input(frame: &mut Frame, area: Rect, state: &AppState) {
-    let input = Paragraph::new(state.input.as_str())
+    let input = Paragraph::new(state.input())
         .block(
             Block::default()
                 .borders(Borders::ALL)
@@ -855,7 +855,7 @@ fn render_input(frame: &mut Frame, area: Rect, state: &AppState) {
 
     frame.render_widget(input, area);
 
-    frame.set_cursor_position((area.x + state.input.len() as u16 + 1, area.y + 1));
+    frame.set_cursor_position((area.x + state.input().len() as u16 + 1, area.y + 1));
 }
 
 #[cfg(test)]

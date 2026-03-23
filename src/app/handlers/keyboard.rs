@@ -112,7 +112,7 @@ async fn handle_key(
         }
 
         // Submit input
-        (KeyCode::Enter, KeyModifiers::NONE) if !ctx.state.input.is_empty() => {
+        (KeyCode::Enter, KeyModifiers::NONE) if !ctx.state.input().is_empty() => {
             handle_submit(ctx).await?;
             Ok(Handled::CONSUMED)
         }
@@ -696,7 +696,8 @@ mod tests {
 
         assert_eq!(result, Handled::CONSUMED);
         assert_eq!(
-            ctx.state.input, "x",
+            ctx.state.input(),
+            "x",
             "Character key must insert into the input buffer"
         );
     }
@@ -715,7 +716,8 @@ mod tests {
 
         assert_eq!(result, Handled::CONSUMED);
         assert_eq!(
-            ctx.state.input, "X",
+            ctx.state.input(),
+            "X",
             "Shifted character key must insert into the input buffer"
         );
     }
@@ -735,7 +737,7 @@ mod tests {
         // Pre-populate input
         state.insert_char('a');
         state.insert_char('b');
-        assert_eq!(state.input, "ab");
+        assert_eq!(state.input(), "ab");
 
         let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
@@ -744,7 +746,8 @@ mod tests {
 
         assert_eq!(result, Handled::CONSUMED);
         assert_eq!(
-            ctx.state.input, "a",
+            ctx.state.input(),
+            "a",
             "Backspace must delete the last character"
         );
     }
@@ -936,7 +939,7 @@ mod tests {
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
 
-        assert!(state.input.is_empty());
+        assert!(state.input().is_empty());
 
         let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 

@@ -258,7 +258,7 @@ mod tests {
         let result = handler.handle(&event, &mut ctx).await.unwrap();
         assert!(result.is_consumed());
         assert!(!ctx.state.has_completion());
-        assert_eq!(ctx.state.input, format!("/{expected_name} "));
+        assert_eq!(ctx.state.input(), format!("/{expected_name} "));
     }
 
     #[tokio::test]
@@ -279,7 +279,7 @@ mod tests {
         let result = handler.handle(&event, &mut ctx).await.unwrap();
         assert!(result.is_consumed());
         assert!(!ctx.state.has_completion());
-        assert!(ctx.state.input.starts_with('/'));
+        assert!(ctx.state.input().starts_with('/'));
     }
 
     #[tokio::test]

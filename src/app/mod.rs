@@ -980,7 +980,8 @@ mod tests {
 
         assert_eq!(result, Handled::CONSUMED);
         assert_eq!(
-            ctx.state.input, "x",
+            ctx.state.input(),
+            "x",
             "Character input must flow through to KeyboardHandler and insert into input"
         );
     }
@@ -1077,7 +1078,8 @@ mod tests {
             "Key must be consumed by PermissionHandler when permission is pending"
         );
         assert_eq!(
-            ctx.state.input, "",
+            ctx.state.input(),
+            "",
             "Key must NOT reach KeyboardHandler when permission is pending"
         );
     }
@@ -1202,6 +1204,6 @@ mod tests {
             assert_eq!(result, Handled::CONSUMED, "Event {event} must be consumed");
         }
 
-        assert_eq!(state.input, "hi", "Both characters must be inserted");
+        assert_eq!(state.input(), "hi", "Both characters must be inserted");
     }
 }

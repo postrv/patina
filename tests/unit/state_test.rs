@@ -20,12 +20,12 @@ fn new_state() -> AppState {
 #[test]
 fn test_input_insert_char() {
     let mut state = new_state();
-    assert!(state.input.is_empty());
+    assert!(state.input().is_empty());
 
     state.insert_char('H');
     state.insert_char('i');
 
-    assert_eq!(state.input, "Hi");
+    assert_eq!(state.input(), "Hi");
 }
 
 /// Tests character deletion from the input buffer.
@@ -39,22 +39,22 @@ fn test_input_delete_char() {
     state.insert_char('o');
 
     state.delete_char();
-    assert_eq!(state.input, "Hell");
+    assert_eq!(state.input(), "Hell");
 
     state.delete_char();
     state.delete_char();
-    assert_eq!(state.input, "He");
+    assert_eq!(state.input(), "He");
 }
 
 /// Tests that delete_char on empty input doesn't panic.
 #[test]
 fn test_input_delete_char_empty() {
     let mut state = new_state();
-    assert!(state.input.is_empty());
+    assert!(state.input().is_empty());
 
     // Should not panic
     state.delete_char();
-    assert!(state.input.is_empty());
+    assert!(state.input().is_empty());
 }
 
 /// Tests that take_input returns the content and clears the buffer.
@@ -68,7 +68,7 @@ fn test_input_take() {
 
     let taken = state.take_input();
     assert_eq!(taken, "Test");
-    assert!(state.input.is_empty());
+    assert!(state.input().is_empty());
 }
 
 /// Tests that take_input on empty buffer returns empty string.
@@ -77,7 +77,7 @@ fn test_input_take_empty() {
     let mut state = new_state();
     let taken = state.take_input();
     assert!(taken.is_empty());
-    assert!(state.input.is_empty());
+    assert!(state.input().is_empty());
 }
 
 /// Tests unicode character handling in input.
@@ -88,10 +88,10 @@ fn test_input_unicode() {
     state.insert_char('好');
     state.insert_char('🦀');
 
-    assert_eq!(state.input, "你好🦀");
+    assert_eq!(state.input(), "你好🦀");
 
     state.delete_char();
-    assert_eq!(state.input, "你好");
+    assert_eq!(state.input(), "你好");
 }
 
 // ============================================================================
@@ -354,7 +354,7 @@ fn test_insert_at_cursor() {
     state.cursor_left(); // cursor at 1
     state.insert_char('b'); // insert 'b' at position 1
 
-    assert_eq!(state.input, "abc");
+    assert_eq!(state.input(), "abc");
     assert_eq!(state.cursor_position(), 2); // cursor moves after inserted char
 }
 
@@ -370,7 +370,7 @@ fn test_delete_at_cursor() {
     state.cursor_left(); // cursor at 2
     state.delete_char(); // delete 'b' (char before cursor)
 
-    assert_eq!(state.input, "ac");
+    assert_eq!(state.input(), "ac");
     assert_eq!(state.cursor_position(), 1);
 }
 

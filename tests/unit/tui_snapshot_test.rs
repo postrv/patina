@@ -236,7 +236,7 @@ fn test_tui_unicode_input() {
     }
 
     // Verify input state
-    assert_eq!(state.input, "你好世界");
+    assert_eq!(state.input(), "你好世界");
     assert_eq!(state.cursor_position(), 4); // 4 unicode characters
 
     // Cursor navigation should work on characters, not bytes
@@ -245,7 +245,7 @@ fn test_tui_unicode_input() {
 
     // Backspace deletes character BEFORE cursor (at position 2, which is "世")
     state.delete_char();
-    assert_eq!(state.input, "你好界"); // "世" was deleted, "界" remains
+    assert_eq!(state.input(), "你好界"); // "世" was deleted, "界" remains
 
     // Render - should not panic
     let output = render_to_string(&mut state, 60, 10);
@@ -370,27 +370,27 @@ fn test_tui_key_events() {
 
     // Test character insertion
     state.insert_char('A');
-    assert_eq!(state.input, "A");
+    assert_eq!(state.input(), "A");
 
     state.insert_char('B');
-    assert_eq!(state.input, "AB");
+    assert_eq!(state.input(), "AB");
 
     state.insert_char('C');
-    assert_eq!(state.input, "ABC");
+    assert_eq!(state.input(), "ABC");
 
     // Test backspace
     state.delete_char();
-    assert_eq!(state.input, "AB");
+    assert_eq!(state.input(), "AB");
 
     // Test cursor movement and insert in middle
     state.cursor_left();
     state.insert_char('X');
-    assert_eq!(state.input, "AXB");
+    assert_eq!(state.input(), "AXB");
 
     // Test take_input (simulates Enter)
     let taken = state.take_input();
     assert_eq!(taken, "AXB");
-    assert_eq!(state.input, "");
+    assert_eq!(state.input(), "");
     assert_eq!(state.cursor_position(), 0);
 }
 
@@ -442,7 +442,7 @@ fn test_tui_paste_event() {
         state.insert_char(c);
     }
 
-    assert_eq!(state.input, pasted_text);
+    assert_eq!(state.input(), pasted_text);
     assert_eq!(state.cursor_position(), pasted_text.chars().count());
 
     // Render should work after paste
