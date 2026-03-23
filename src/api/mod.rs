@@ -469,73 +469,67 @@ impl AnthropicClient {
             buffer.push_str(&String::from_utf8_lossy(&chunk));
 
             while let Some(pos) = buffer.find('\n') {
-                let line = buffer[..pos].trim();
+                let line = buffer[..pos].trim().to_string();
+                buffer = buffer[pos + 1..].to_string();
 
-                if let Some(json) = line.strip_prefix("data: ") {
-                    if json != "[DONE]" {
-                        if let Ok(parsed) = serde_json::from_str::<StreamLine>(json) {
-                            match parsed.event_type.as_str() {
-                                // A content block is starting
-                                "content_block_start" => {
-                                    if let Some(ref content_block) = parsed.content_block {
-                                        current_block_index = parsed.index.unwrap_or(0);
-                                        in_tool_use_block = content_block.block_type == "tool_use";
+                let Some(json) = line.strip_prefix("data: ") else {
+                    continue;
+                };
+                if json == "[DONE]" {
+                    continue;
+                }
+                let Ok(parsed) = serde_json::from_str::<StreamLine>(json) else {
+                    continue;
+                };
 
-                                        if let Some(event) = Self::handle_content_block_start(
-                                            content_block,
-                                            current_block_index,
-                                        ) {
-                                            tx.send(event).await.ok();
-                                        }
-                                    }
-                                }
+                match parsed.event_type.as_str() {
+                    "content_block_start" => {
+                        let Some(ref content_block) = parsed.content_block else {
+                            continue;
+                        };
+                        current_block_index = parsed.index.unwrap_or(0);
+                        in_tool_use_block = content_block.block_type == "tool_use";
 
-                                // Content is being streamed
-                                "content_block_delta" => {
-                                    if let Some(ref delta) = parsed.delta {
-                                        let block_index =
-                                            parsed.index.unwrap_or(current_block_index);
-                                        if let Some(event) =
-                                            Self::handle_content_block_delta(delta, block_index)
-                                        {
-                                            tx.send(event).await.ok();
-                                        }
-                                    }
-                                }
-
-                                // A content block has completed
-                                "content_block_stop" => {
-                                    let block_index = parsed.index.unwrap_or(current_block_index);
-                                    let event = Self::handle_content_block_stop(
-                                        block_index,
-                                        in_tool_use_block,
-                                    );
-                                    tx.send(event).await.ok();
-                                    in_tool_use_block = false;
-                                }
-
-                                // Message metadata update (includes stop_reason)
-                                "message_delta" => {
-                                    if let Some(ref delta) = parsed.delta {
-                                        if let Some(event) = Self::handle_message_delta(delta) {
-                                            tx.send(event).await.ok();
-                                        }
-                                    }
-                                }
-
-                                // Message stream complete (legacy)
-                                "message_stop" => {
-                                    tx.send(StreamEvent::MessageStop).await.ok();
-                                }
-
-                                // Ignore other event types (message_start, ping, etc.)
-                                _ => {}
-                            }
+                        if let Some(event) =
+                            Self::handle_content_block_start(content_block, current_block_index)
+                        {
+                            tx.send(event).await.ok();
                         }
                     }
-                }
 
-                buffer = buffer[pos + 1..].to_string();
+                    "content_block_delta" => {
+                        let Some(ref delta) = parsed.delta else {
+                            continue;
+                        };
+                        let block_index = parsed.index.unwrap_or(current_block_index);
+                        if let Some(event) = Self::handle_content_block_delta(delta, block_index) {
+                            tx.send(event).await.ok();
+                        }
+                    }
+
+                    "content_block_stop" => {
+                        let block_index = parsed.index.unwrap_or(current_block_index);
+                        let event = Self::handle_content_block_stop(block_index, in_tool_use_block);
+                        tx.send(event).await.ok();
+                        in_tool_use_block = false;
+                    }
+
+                    "message_delta" => {
+                        let Some(ref delta) = parsed.delta else {
+                            continue;
+                        };
+                        if let Some(event) = Self::handle_message_delta(delta) {
+                            tx.send(event).await.ok();
+                        }
+                    }
+
+                    "message_stop" => {
+                        tx.send(StreamEvent::MessageStop).await.ok();
+                    }
+
+                    // Ignore other event types (message_start, ping, etc.)
+                    _ => {}
+                }
             }
         }
 
