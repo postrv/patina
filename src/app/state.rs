@@ -377,6 +377,149 @@ pub struct UISelectionState {
     pub(crate) focus_area: FocusArea,
 }
 
+impl UISelectionState {
+    /// Returns the selection state for read access.
+    #[must_use]
+    pub fn selection(&self) -> &SelectionState {
+        &self.selection
+    }
+
+    /// Returns the selection state for modification.
+    pub fn selection_mut(&mut self) -> &mut SelectionState {
+        &mut self.selection
+    }
+
+    /// Returns the current focus area.
+    #[must_use]
+    pub fn focus_area(&self) -> FocusArea {
+        self.focus_area
+    }
+
+    /// Sets the focus area, clearing selection if focus changes.
+    pub fn set_focus_area(&mut self, area: FocusArea) {
+        if self.focus_area != area {
+            self.selection.clear();
+            self.focus_area = area;
+        }
+    }
+
+    /// Requests a copy operation to be performed during the next render.
+    pub fn request_copy(&mut self) {
+        self.copy_pending = true;
+    }
+
+    /// Checks and clears the copy pending flag. Returns `true` if a copy was requested.
+    pub fn take_copy_pending(&mut self) -> bool {
+        std::mem::take(&mut self.copy_pending)
+    }
+
+    /// Returns the total number of rendered lines in the cache.
+    #[must_use]
+    pub fn rendered_line_count(&self) -> usize {
+        self.rendered_lines_cache.len()
+    }
+
+    /// Updates the cached rendered lines for copy operations.
+    pub fn update_rendered_lines_cache(&mut self, lines: &[ratatui::text::Line<'_>], width: usize) {
+        self.rendered_lines_cache = crate::tui::wrap_lines_to_strings(lines, width);
+    }
+
+    /// Extracts the selected text from the cached rendered lines.
+    ///
+    /// Returns `None` if there is no selection or the cache is empty.
+    #[must_use]
+    pub fn extract_selected_text(&self) -> Option<String> {
+        let (start, end) = self.selection.range()?;
+
+        if self.rendered_lines_cache.is_empty() {
+            return None;
+        }
+
+        let mut result = String::new();
+        for (line_idx, line_text) in self.rendered_lines_cache.iter().enumerate() {
+            if line_idx < start.line {
+                continue;
+            }
+            if line_idx > end.line {
+                break;
+            }
+
+            let (col_start, col_end) = if line_idx == start.line && line_idx == end.line {
+                (start.col, end.col.min(line_text.len()))
+            } else if line_idx == start.line {
+                (start.col, line_text.len())
+            } else if line_idx == end.line {
+                (0, end.col.min(line_text.len()))
+            } else {
+                (0, line_text.len())
+            };
+
+            let col_start = col_start.min(line_text.len());
+            let col_end = col_end.min(line_text.len());
+
+            if col_start <= col_end {
+                if !result.is_empty() {
+                    result.push('\n');
+                }
+                result.push_str(&line_text[col_start..col_end]);
+            }
+        }
+
+        if result.is_empty() {
+            None
+        } else {
+            Some(result)
+        }
+    }
+
+    /// Copies the current selection to clipboard using cached lines.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if clipboard access fails.
+    pub fn copy_from_cache(&self) -> Result<bool> {
+        let Some(text) = self.extract_selected_text() else {
+            tracing::debug!("copy_from_cache: no text to copy");
+            return Ok(false);
+        };
+
+        tracing::debug!(
+            result_len = text.len(),
+            result_lines = text.lines().count(),
+            "copy_from_cache: copying to clipboard"
+        );
+
+        crate::tui::clipboard::copy_to_clipboard(&text)?;
+        Ok(true)
+    }
+
+    /// Copies the current selection to the system clipboard from live lines.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if all clipboard methods fail.
+    pub fn copy_selection_to_clipboard(&self, lines: &[ratatui::text::Line<'_>]) -> Result<bool> {
+        let text = self.selection.extract_text(lines);
+        if text.is_empty() {
+            return Ok(false);
+        }
+
+        crate::tui::clipboard::copy_to_clipboard(&text)?;
+        Ok(true)
+    }
+
+    /// Determines which focus area a screen row belongs to.
+    #[must_use]
+    pub fn focus_area_for_row(row: u16, terminal_height: u16) -> FocusArea {
+        let input_start = terminal_height.saturating_sub(3);
+        if row >= input_start {
+            FocusArea::Input
+        } else {
+            FocusArea::Content
+        }
+    }
+}
+
 /// Tool execution state extracted from AppState.
 ///
 /// Groups all tool-related fields: the tool loop state machine, executor,
@@ -1643,118 +1786,68 @@ impl AppState {
         &self.scroll
     }
 
+    /// Returns a reference to the UI selection state.
+    #[must_use]
+    pub fn ui_selection(&self) -> &UISelectionState {
+        &self.ui_selection
+    }
+
     /// Returns the selection state for read access.
     #[must_use]
     pub fn selection(&self) -> &SelectionState {
-        &self.ui_selection.selection
+        self.ui_selection.selection()
     }
 
     /// Returns the selection state for modification.
     pub fn selection_mut(&mut self) -> &mut SelectionState {
-        &mut self.ui_selection.selection
+        self.ui_selection.selection_mut()
     }
 
     /// Returns the current focus area.
     #[must_use]
     pub fn focus_area(&self) -> FocusArea {
-        self.ui_selection.focus_area
+        self.ui_selection.focus_area()
     }
 
     /// Sets the focus area, clearing selection if focus changes.
-    ///
-    /// When focus moves between Input and Content areas, any existing
-    /// selection is cleared to prevent confusion about what would be copied.
     pub fn set_focus_area(&mut self, area: FocusArea) {
-        if self.ui_selection.focus_area != area {
-            self.ui_selection.selection.clear();
-            self.ui_selection.focus_area = area;
-        }
+        self.ui_selection.set_focus_area(area);
     }
 
     /// Determines which focus area a screen row belongs to.
-    ///
-    /// Layout (from top to bottom):
-    /// - Messages/Content: rows 0 to (terminal_height - 5)
-    /// - Status bar: row (terminal_height - 4)
-    /// - Input: rows (terminal_height - 3) to (terminal_height - 1)
-    ///
-    /// # Arguments
-    ///
-    /// * `row` - The screen row (0-indexed, 0 = top)
-    /// * `terminal_height` - Total terminal height in rows
-    ///
-    /// # Returns
-    ///
-    /// The `FocusArea` that the row belongs to.
     #[must_use]
     pub fn focus_area_for_row(row: u16, terminal_height: u16) -> FocusArea {
-        // Input area is the bottom 3 rows
-        // Status bar is 1 row above input
-        // Content area is everything else
-        let input_start = terminal_height.saturating_sub(3);
-        if row >= input_start {
-            FocusArea::Input
-        } else {
-            FocusArea::Content
-        }
+        UISelectionState::focus_area_for_row(row, terminal_height)
     }
 
     /// Copies the current selection to the system clipboard.
-    ///
-    /// Uses multiple clipboard backends:
-    /// 1. Native clipboard (arboard) - works on desktop
-    /// 2. OSC 52 escape sequence - works in iTerm2, kitty, tmux, SSH, etc.
-    ///
-    /// Returns `Ok(true)` if text was copied, `Ok(false)` if no selection,
-    /// or an error if clipboard access fails.
     ///
     /// # Errors
     ///
     /// Returns an error if all clipboard methods fail.
     pub fn copy_selection_to_clipboard(&self, lines: &[ratatui::text::Line<'_>]) -> Result<bool> {
-        let text = self.ui_selection.selection.extract_text(lines);
-        if text.is_empty() {
-            return Ok(false);
-        }
-
-        crate::tui::clipboard::copy_to_clipboard(&text)?;
-        Ok(true)
+        self.ui_selection.copy_selection_to_clipboard(lines)
     }
 
     /// Requests a copy operation to be performed during the next render.
     pub fn request_copy(&mut self) {
-        self.ui_selection.copy_pending = true;
+        self.ui_selection.request_copy();
     }
 
     /// Checks and clears the copy pending flag.
-    ///
-    /// Returns `true` if a copy was requested.
     pub fn take_copy_pending(&mut self) -> bool {
-        std::mem::take(&mut self.ui_selection.copy_pending)
+        self.ui_selection.take_copy_pending()
     }
 
     /// Returns the total number of rendered lines.
-    ///
-    /// This is the count from the cached rendered lines, which represents
-    /// the actual number of visual lines in the conversation display.
-    /// Used for select-all functionality.
     #[must_use]
     pub fn rendered_line_count(&self) -> usize {
-        self.ui_selection.rendered_lines_cache.len()
+        self.ui_selection.rendered_line_count()
     }
 
     /// Updates the cached rendered lines for copy operations.
-    ///
-    /// This stores the **wrapped** visual lines, accounting for terminal width.
-    /// Selection and copy operations use visual line indices, so we must cache
-    /// the post-wrapping content.
-    ///
-    /// # Arguments
-    ///
-    /// * `lines` - The logical lines before wrapping
-    /// * `width` - The terminal content width (excluding borders)
     pub fn update_rendered_lines_cache(&mut self, lines: &[ratatui::text::Line<'_>], width: usize) {
-        self.ui_selection.rendered_lines_cache = crate::tui::wrap_lines_to_strings(lines, width);
+        self.ui_selection.update_rendered_lines_cache(lines, width);
     }
 
     /// Copies the current selection to clipboard using cached lines.
@@ -1763,67 +1856,7 @@ impl AppState {
     ///
     /// Returns an error if clipboard access fails.
     pub fn copy_from_cache(&self) -> Result<bool> {
-        let Some((start, end)) = self.ui_selection.selection.range() else {
-            tracing::debug!("copy_from_cache: no selection range");
-            return Ok(false);
-        };
-
-        tracing::debug!(
-            ?start,
-            ?end,
-            cache_len = self.ui_selection.rendered_lines_cache.len(),
-            "copy_from_cache: extracting"
-        );
-
-        if self.ui_selection.rendered_lines_cache.is_empty() {
-            tracing::debug!("copy_from_cache: cache is empty");
-            return Ok(false);
-        }
-
-        // Extract text from cached lines
-        let mut result = String::new();
-        for (line_idx, line_text) in self.ui_selection.rendered_lines_cache.iter().enumerate() {
-            if line_idx < start.line {
-                continue;
-            }
-            if line_idx > end.line {
-                break;
-            }
-
-            let (col_start, col_end) = if line_idx == start.line && line_idx == end.line {
-                (start.col, end.col.min(line_text.len()))
-            } else if line_idx == start.line {
-                (start.col, line_text.len())
-            } else if line_idx == end.line {
-                (0, end.col.min(line_text.len()))
-            } else {
-                (0, line_text.len())
-            };
-
-            let col_start = col_start.min(line_text.len());
-            let col_end = col_end.min(line_text.len());
-
-            if col_start <= col_end {
-                if !result.is_empty() {
-                    result.push('\n');
-                }
-                result.push_str(&line_text[col_start..col_end]);
-            }
-        }
-
-        if result.is_empty() {
-            tracing::debug!("copy_from_cache: extracted empty result");
-            return Ok(false);
-        }
-
-        tracing::debug!(
-            result_len = result.len(),
-            result_lines = result.lines().count(),
-            "copy_from_cache: copying to clipboard"
-        );
-
-        crate::tui::clipboard::copy_to_clipboard(&result)?;
-        Ok(true)
+        self.ui_selection.copy_from_cache()
     }
 
     pub fn is_loading(&self) -> bool {
@@ -6303,5 +6336,156 @@ mod tests {
         state.reset_continuous();
         assert!(state.dirty.full);
         assert_eq!(*state.continuous_status(), ContinuousLoopStatus::Inactive);
+    }
+
+    // ========================================================================
+    // UISelectionState tests
+    // ========================================================================
+
+    #[test]
+    fn test_ui_selection_state_focus_area() {
+        let mut ui = UISelectionState {
+            selection: SelectionState::new(),
+            copy_pending: false,
+            rendered_lines_cache: Vec::new(),
+            focus_area: FocusArea::Content,
+        };
+        assert_eq!(ui.focus_area(), FocusArea::Content);
+
+        ui.set_focus_area(FocusArea::Input);
+        assert_eq!(ui.focus_area(), FocusArea::Input);
+    }
+
+    #[test]
+    fn test_ui_selection_state_focus_area_clears_selection() {
+        let mut ui = UISelectionState {
+            selection: SelectionState::new(),
+            copy_pending: false,
+            rendered_lines_cache: Vec::new(),
+            focus_area: FocusArea::Content,
+        };
+
+        use crate::tui::selection::ContentPosition;
+        ui.selection.start(ContentPosition::new(0, 0));
+        ui.selection.update(ContentPosition::new(1, 5));
+        ui.selection.end();
+        assert!(ui.selection.has_selection());
+
+        // Changing focus should clear selection
+        ui.set_focus_area(FocusArea::Input);
+        assert!(!ui.selection.has_selection());
+    }
+
+    #[test]
+    fn test_ui_selection_state_copy_pending() {
+        let mut ui = UISelectionState {
+            selection: SelectionState::new(),
+            copy_pending: false,
+            rendered_lines_cache: Vec::new(),
+            focus_area: FocusArea::Content,
+        };
+        assert!(!ui.take_copy_pending());
+
+        ui.request_copy();
+        assert!(ui.take_copy_pending());
+        assert!(!ui.take_copy_pending()); // cleared
+    }
+
+    #[test]
+    fn test_ui_selection_state_rendered_line_count() {
+        let ui = UISelectionState {
+            selection: SelectionState::new(),
+            copy_pending: false,
+            rendered_lines_cache: vec!["line 1".to_string(), "line 2".to_string()],
+            focus_area: FocusArea::Content,
+        };
+        assert_eq!(ui.rendered_line_count(), 2);
+    }
+
+    #[test]
+    fn test_ui_selection_extract_text_no_selection() {
+        let ui = UISelectionState {
+            selection: SelectionState::new(),
+            copy_pending: false,
+            rendered_lines_cache: vec!["hello".to_string()],
+            focus_area: FocusArea::Content,
+        };
+        assert_eq!(ui.extract_selected_text(), None);
+    }
+
+    #[test]
+    fn test_ui_selection_extract_text_single_line() {
+        use crate::tui::selection::ContentPosition;
+        let mut ui = UISelectionState {
+            selection: SelectionState::new(),
+            copy_pending: false,
+            rendered_lines_cache: vec!["hello world".to_string()],
+            focus_area: FocusArea::Content,
+        };
+        ui.selection.start(ContentPosition::new(0, 0));
+        ui.selection.update(ContentPosition::new(0, 5));
+        ui.selection.end();
+
+        assert_eq!(ui.extract_selected_text(), Some("hello".to_string()));
+    }
+
+    #[test]
+    fn test_ui_selection_extract_text_multi_line() {
+        use crate::tui::selection::ContentPosition;
+        let mut ui = UISelectionState {
+            selection: SelectionState::new(),
+            copy_pending: false,
+            rendered_lines_cache: vec![
+                "line one".to_string(),
+                "line two".to_string(),
+                "line three".to_string(),
+            ],
+            focus_area: FocusArea::Content,
+        };
+        ui.selection.start(ContentPosition::new(0, 5));
+        ui.selection.update(ContentPosition::new(2, 4));
+        ui.selection.end();
+
+        assert_eq!(
+            ui.extract_selected_text(),
+            Some("one\nline two\nline".to_string())
+        );
+    }
+
+    #[test]
+    fn test_ui_selection_extract_text_empty_cache() {
+        use crate::tui::selection::ContentPosition;
+        let mut ui = UISelectionState {
+            selection: SelectionState::new(),
+            copy_pending: false,
+            rendered_lines_cache: Vec::new(),
+            focus_area: FocusArea::Content,
+        };
+        ui.selection.start(ContentPosition::new(0, 0));
+        ui.selection.update(ContentPosition::new(0, 5));
+        ui.selection.end();
+
+        assert_eq!(ui.extract_selected_text(), None);
+    }
+
+    #[test]
+    fn test_focus_area_for_row() {
+        // Terminal height 24: input starts at row 21
+        assert_eq!(
+            UISelectionState::focus_area_for_row(0, 24),
+            FocusArea::Content
+        );
+        assert_eq!(
+            UISelectionState::focus_area_for_row(20, 24),
+            FocusArea::Content
+        );
+        assert_eq!(
+            UISelectionState::focus_area_for_row(21, 24),
+            FocusArea::Input
+        );
+        assert_eq!(
+            UISelectionState::focus_area_for_row(23, 24),
+            FocusArea::Input
+        );
     }
 }
