@@ -254,6 +254,198 @@ pub struct CompressionState {
     pub(crate) token_budget: TokenBudget,
 }
 
+impl CompressionState {
+    /// Returns whether auto-context injection is enabled.
+    #[must_use]
+    pub fn auto_context_enabled(&self) -> bool {
+        self.auto_context_enabled
+    }
+
+    /// Sets whether auto-context injection is enabled.
+    pub fn set_auto_context_enabled(&mut self, enabled: bool) {
+        self.auto_context_enabled = enabled;
+    }
+
+    /// Returns whether there are pending context suggestions.
+    #[must_use]
+    pub fn has_pending_context(&self) -> bool {
+        !self.pending_context.is_empty()
+    }
+
+    /// Returns a reference to the pending context suggestions.
+    #[must_use]
+    pub fn pending_context(&self) -> &[ContextSuggestion] {
+        &self.pending_context
+    }
+
+    /// Sets the pending context suggestions.
+    pub fn set_pending_context(&mut self, suggestions: Vec<ContextSuggestion>) {
+        self.pending_context = suggestions;
+    }
+
+    /// Takes and returns the pending context suggestions, clearing them.
+    #[must_use]
+    pub fn take_pending_context(&mut self) -> Vec<ContextSuggestion> {
+        std::mem::take(&mut self.pending_context)
+    }
+
+    /// Clears the pending context suggestions.
+    pub fn clear_pending_context(&mut self) {
+        self.pending_context.clear();
+    }
+
+    /// Returns the last CCG hash used for context injection.
+    #[must_use]
+    pub fn last_ccg_hash(&self) -> Option<&str> {
+        self.last_ccg_hash.as_deref()
+    }
+
+    /// Sets the last CCG hash.
+    pub fn set_last_ccg_hash(&mut self, hash: String) {
+        self.last_ccg_hash = Some(hash);
+    }
+
+    /// Returns whether there is cached CCG context.
+    #[must_use]
+    pub fn has_cached_ccg_context(&self) -> bool {
+        self.cached_ccg_context.is_some()
+    }
+
+    /// Takes the cached CCG context.
+    pub fn take_cached_ccg_context(&mut self) -> Option<String> {
+        self.cached_ccg_context.take()
+    }
+
+    /// Returns context for injection if auto-context is enabled.
+    #[must_use]
+    pub fn context_for_injection(&self) -> Option<&str> {
+        if self.auto_context_enabled {
+            self.cached_ccg_context.as_deref()
+        } else {
+            None
+        }
+    }
+
+    /// Returns whether a narsil MCP client is available.
+    #[must_use]
+    pub fn has_narsil_client(&self) -> bool {
+        self.narsil_client.is_some()
+    }
+
+    /// Sets the narsil MCP connection.
+    pub fn set_narsil_client(&mut self, client: McpConnection) {
+        self.narsil_client = Some(client);
+    }
+
+    /// Returns the maximum token budget for auto-injected context.
+    #[must_use]
+    pub fn context_token_budget(&self) -> usize {
+        self.context_token_budget
+    }
+
+    /// Sets the maximum token budget for auto-injected context.
+    pub fn set_context_token_budget(&mut self, budget: usize) {
+        self.context_token_budget = budget;
+    }
+
+    /// Returns the number of tokens injected in the most recent context injection.
+    #[must_use]
+    pub fn context_tokens_injected(&self) -> usize {
+        self.context_tokens_injected
+    }
+
+    /// Sets the number of tokens injected.
+    pub fn set_context_tokens_injected(&mut self, tokens: usize) {
+        self.context_tokens_injected = tokens;
+    }
+
+    /// Returns the compression orchestrator if available.
+    #[must_use]
+    pub fn compression_orchestrator(&self) -> Option<&Arc<CompressionOrchestrator>> {
+        self.compression_orchestrator.as_ref()
+    }
+
+    /// Sets the compression orchestrator.
+    pub fn set_compression_orchestrator(&mut self, orchestrator: Arc<CompressionOrchestrator>) {
+        self.compression_orchestrator = Some(orchestrator);
+    }
+
+    /// Returns true if the compression orchestrator supports CCG.
+    #[must_use]
+    pub fn has_ccg_support(&self) -> bool {
+        self.compression_orchestrator
+            .as_ref()
+            .is_some_and(|o| o.should_use_ccg())
+    }
+
+    /// Returns a reference to the token budget.
+    #[must_use]
+    pub fn token_budget(&self) -> &TokenBudget {
+        &self.token_budget
+    }
+
+    /// Returns a mutable reference to the token budget.
+    pub fn token_budget_mut(&mut self) -> &mut TokenBudget {
+        &mut self.token_budget
+    }
+
+    /// Returns the compaction progress state.
+    #[must_use]
+    pub fn compaction_state(&self) -> Option<&CompactionProgressState> {
+        self.compaction_state.as_ref()
+    }
+
+    /// Returns a mutable reference to the compaction progress state.
+    pub fn compaction_state_mut(&mut self) -> Option<&mut CompactionProgressState> {
+        self.compaction_state.as_mut()
+    }
+
+    /// Starts a compaction operation.
+    pub fn start_compaction(&mut self, target_tokens: usize, before_tokens: usize, is_auto: bool) {
+        let mut state = if is_auto {
+            CompactionProgressState::new_auto(target_tokens, before_tokens)
+        } else {
+            CompactionProgressState::new(target_tokens, before_tokens)
+        };
+        state.set_status(crate::tui::widgets::CompactionStatus::Compacting);
+        self.compaction_state = Some(state);
+    }
+
+    /// Updates the compaction progress (0.0 to 1.0).
+    pub fn update_compaction_progress(&mut self, progress: f64) {
+        if let Some(state) = &mut self.compaction_state {
+            state.set_progress(progress);
+        }
+    }
+
+    /// Completes the compaction operation with the final token count.
+    pub fn complete_compaction(&mut self, after_tokens: usize) {
+        if let Some(state) = &mut self.compaction_state {
+            state.set_after_tokens(after_tokens);
+            state.set_status(crate::tui::widgets::CompactionStatus::Complete);
+            state.set_progress(1.0);
+        }
+    }
+
+    /// Marks the compaction operation as failed.
+    pub fn fail_compaction(&mut self) {
+        if let Some(state) = &mut self.compaction_state {
+            state.set_status(crate::tui::widgets::CompactionStatus::Failed);
+        }
+    }
+
+    /// Clears the compaction state (closes the overlay).
+    pub fn clear_compaction(&mut self) {
+        self.compaction_state = None;
+    }
+
+    /// Returns a reference to the compaction metrics.
+    #[must_use]
+    pub fn compaction_metrics(&self) -> &CompactionMetrics {
+        &self.compaction_metrics
+    }
+}
+
 /// Continuous coding loop state extracted from AppState.
 ///
 /// Groups all fields related to the continuous (Ralph-style) coding loop:
@@ -1428,92 +1620,74 @@ impl AppState {
     // Auto-context methods (Task 2.2.4)
     // =========================================================================
 
+    // =========================================================================
+    // Context & Compression methods (delegates to CompressionState)
+    // =========================================================================
+
+    /// Returns a reference to the compression state.
+    #[must_use]
+    pub fn compression(&self) -> &CompressionState {
+        &self.compression
+    }
+
     /// Returns whether auto-context injection is enabled.
-    ///
-    /// When enabled, context suggestions from narsil are injected into
-    /// user messages before API calls.
     #[must_use]
     pub fn auto_context_enabled(&self) -> bool {
-        self.compression.auto_context_enabled
+        self.compression.auto_context_enabled()
     }
 
     /// Sets whether auto-context injection is enabled.
-    ///
-    /// # Arguments
-    ///
-    /// * `enabled` - Whether to enable auto-context injection
     pub fn set_auto_context_enabled(&mut self, enabled: bool) {
-        self.compression.auto_context_enabled = enabled;
+        self.compression.set_auto_context_enabled(enabled);
     }
 
     /// Returns whether there are pending context suggestions.
     #[must_use]
     pub fn has_pending_context(&self) -> bool {
-        !self.compression.pending_context.is_empty()
+        self.compression.has_pending_context()
     }
 
     /// Returns a reference to the pending context suggestions.
     #[must_use]
     pub fn pending_context(&self) -> &[ContextSuggestion] {
-        &self.compression.pending_context
+        self.compression.pending_context()
     }
 
-    /// Sets the pending context suggestions to be injected into the next message.
-    ///
-    /// These suggestions will be cleared after being consumed by `take_pending_context`.
-    ///
-    /// # Arguments
-    ///
-    /// * `suggestions` - Context suggestions from narsil
+    /// Sets the pending context suggestions.
     pub fn set_pending_context(&mut self, suggestions: Vec<ContextSuggestion>) {
-        self.compression.pending_context = suggestions;
+        self.compression.set_pending_context(suggestions);
     }
 
     /// Takes and returns the pending context suggestions, clearing them.
-    ///
-    /// After calling this method, `has_pending_context()` will return false.
     #[must_use]
     pub fn take_pending_context(&mut self) -> Vec<ContextSuggestion> {
-        std::mem::take(&mut self.compression.pending_context)
+        self.compression.take_pending_context()
     }
 
-    /// Clears the pending context suggestions without returning them.
+    /// Clears the pending context suggestions.
     pub fn clear_pending_context(&mut self) {
-        self.compression.pending_context.clear();
+        self.compression.clear_pending_context();
     }
 
     // =========================================================================
-    // Compression Orchestrator Methods (Phase 4.3)
+    // Compression Orchestrator Methods (delegates to CompressionState)
     // =========================================================================
 
-    /// Sets the compression orchestrator for CCG context management.
-    ///
-    /// The orchestrator is typically created from `NarsilIntegration::create_compression_orchestrator()`
-    /// when narsil-mcp is available.
-    ///
-    /// # Arguments
-    ///
-    /// * `orchestrator` - The compression orchestrator (wrapped in Arc)
+    /// Sets the compression orchestrator.
     pub fn set_compression_orchestrator(&mut self, orchestrator: Arc<CompressionOrchestrator>) {
-        self.compression.compression_orchestrator = Some(orchestrator);
+        self.compression.set_compression_orchestrator(orchestrator);
     }
 
     /// Returns a reference to the compression orchestrator if available.
     #[must_use]
     pub fn compression_orchestrator(&self) -> Option<&Arc<CompressionOrchestrator>> {
-        self.compression.compression_orchestrator.as_ref()
+        self.compression.compression_orchestrator()
     }
 
-    /// Returns true if the compression orchestrator supports CCG (Code Context Graph).
-    ///
-    /// CCG support enables advanced context compression features like manifest
-    /// and architecture extraction. Returns false if no orchestrator is set.
+    /// Returns true if the compression orchestrator supports CCG.
     #[must_use]
     pub fn has_ccg_support(&self) -> bool {
-        self.compression
-            .compression_orchestrator
-            .as_ref()
-            .is_some_and(|o| o.should_use_ccg())
+        self.compression.has_ccg_support()
     }
 
     /// Injects CCG context by fetching the default context (manifest + architecture).
@@ -1592,87 +1766,64 @@ impl AppState {
     }
 
     /// Returns the last CCG hash used for context injection.
-    ///
-    /// This can be used to check if the repository state has changed since
-    /// the last context injection.
     #[must_use]
     pub fn last_ccg_hash(&self) -> Option<&str> {
-        self.compression.last_ccg_hash.as_deref()
+        self.compression.last_ccg_hash()
     }
 
-    /// Sets the last CCG hash (for testing and manual cache management).
+    /// Sets the last CCG hash.
     pub fn set_last_ccg_hash(&mut self, hash: String) {
-        self.compression.last_ccg_hash = Some(hash);
+        self.compression.set_last_ccg_hash(hash);
     }
 
-    /// Returns whether there is cached CCG context available for injection.
+    /// Returns whether there is cached CCG context.
     #[must_use]
     pub fn has_cached_ccg_context(&self) -> bool {
-        self.compression.cached_ccg_context.is_some()
+        self.compression.has_cached_ccg_context()
     }
 
-    /// Takes the cached CCG context, returning it and clearing the cache.
-    ///
-    /// This is typically called in the message send flow to inject context
-    /// into the first user message.
-    ///
-    /// # Returns
-    ///
-    /// The cached CCG context if available, `None` otherwise.
+    /// Takes the cached CCG context.
     pub fn take_cached_ccg_context(&mut self) -> Option<String> {
-        self.compression.cached_ccg_context.take()
+        self.compression.take_cached_ccg_context()
     }
 
-    /// Returns the context to inject before sending a message.
-    ///
-    /// This method checks if auto-context is enabled and returns the
-    /// CCG context if available. The context is NOT consumed (use
-    /// `take_cached_ccg_context` to consume it).
-    ///
-    /// # Returns
-    ///
-    /// A reference to the CCG context if auto-context is enabled and context
-    /// is available, `None` otherwise.
+    /// Returns context for injection if auto-context is enabled.
     #[must_use]
     pub fn context_for_injection(&self) -> Option<&str> {
-        if self.compression.auto_context_enabled {
-            self.compression.cached_ccg_context.as_deref()
-        } else {
-            None
-        }
+        self.compression.context_for_injection()
     }
 
     /// Returns whether a narsil MCP client is available.
     #[must_use]
     pub fn has_narsil_client(&self) -> bool {
-        self.compression.narsil_client.is_some()
+        self.compression.has_narsil_client()
     }
 
-    /// Sets the narsil MCP connection for context fetching.
+    /// Sets the narsil MCP connection.
     pub fn set_narsil_client(&mut self, client: McpConnection) {
-        self.compression.narsil_client = Some(client);
+        self.compression.set_narsil_client(client);
     }
 
     /// Returns the maximum token budget for auto-injected context.
     #[must_use]
     pub fn context_token_budget(&self) -> usize {
-        self.compression.context_token_budget
+        self.compression.context_token_budget()
     }
 
     /// Sets the maximum token budget for auto-injected context.
     pub fn set_context_token_budget(&mut self, budget: usize) {
-        self.compression.context_token_budget = budget;
+        self.compression.set_context_token_budget(budget);
     }
 
     /// Returns the number of tokens injected in the most recent context injection.
     #[must_use]
     pub fn context_tokens_injected(&self) -> usize {
-        self.compression.context_tokens_injected
+        self.compression.context_tokens_injected()
     }
 
-    /// Sets the number of tokens injected (used by tests and status bar display).
+    /// Sets the number of tokens injected.
     pub fn set_context_tokens_injected(&mut self, tokens: usize) {
-        self.compression.context_tokens_injected = tokens;
+        self.compression.set_context_tokens_injected(tokens);
     }
 
     /// Refreshes the cached CCG context by calling `build_context()`.
@@ -2543,102 +2694,76 @@ impl AppState {
     /// Returns a reference to the token budget for display.
     #[must_use]
     pub fn token_budget(&self) -> &TokenBudget {
-        &self.compression.token_budget
+        self.compression.token_budget()
     }
 
     /// Returns a mutable reference to the token budget.
     pub fn token_budget_mut(&mut self) -> &mut TokenBudget {
-        &mut self.compression.token_budget
+        self.compression.token_budget_mut()
     }
 
     /// Adds token usage to the budget.
-    ///
-    /// Call this after each API request to track cumulative usage.
     pub fn add_token_usage(&mut self, tokens: usize) {
-        self.compression.token_budget.add_usage(tokens);
+        self.compression.token_budget_mut().add_usage(tokens);
         self.dirty.full = true;
     }
 
     /// Resets the token budget for a new conversation.
     pub fn reset_token_budget(&mut self) {
-        self.compression.token_budget.reset();
+        self.compression.token_budget_mut().reset();
         self.dirty.full = true;
     }
 
     // ========================================================================
-    // Compaction Progress
+    // Compaction Progress (delegates to CompressionState)
     // ========================================================================
 
-    /// Returns the compaction progress state, if compaction is active.
+    /// Returns the compaction progress state.
     #[must_use]
     pub fn compaction_state(&self) -> Option<&CompactionProgressState> {
-        self.compression.compaction_state.as_ref()
+        self.compression.compaction_state()
     }
 
     /// Returns a mutable reference to the compaction progress state.
     pub fn compaction_state_mut(&mut self) -> Option<&mut CompactionProgressState> {
-        self.compression.compaction_state.as_mut()
+        self.compression.compaction_state_mut()
     }
 
-    /// Starts a compaction operation with the given target and before tokens.
-    ///
-    /// This will display the compaction progress overlay in the UI.
-    ///
-    /// # Arguments
-    ///
-    /// * `target_tokens` - Target token count after compaction
-    /// * `before_tokens` - Current token count before compaction
-    /// * `is_auto` - Whether this is auto-triggered compaction (vs manual)
+    /// Starts a compaction operation.
     pub fn start_compaction(&mut self, target_tokens: usize, before_tokens: usize, is_auto: bool) {
-        let mut state = if is_auto {
-            CompactionProgressState::new_auto(target_tokens, before_tokens)
-        } else {
-            CompactionProgressState::new(target_tokens, before_tokens)
-        };
-        state.set_status(crate::tui::widgets::CompactionStatus::Compacting);
-        self.compression.compaction_state = Some(state);
+        self.compression
+            .start_compaction(target_tokens, before_tokens, is_auto);
         self.dirty.full = true;
     }
 
     /// Updates the compaction progress (0.0 to 1.0).
     pub fn update_compaction_progress(&mut self, progress: f64) {
-        if let Some(state) = &mut self.compression.compaction_state {
-            state.set_progress(progress);
-            self.dirty.full = true;
-        }
+        self.compression.update_compaction_progress(progress);
+        self.dirty.full = true;
     }
 
     /// Completes the compaction operation with the final token count.
     pub fn complete_compaction(&mut self, after_tokens: usize) {
-        if let Some(state) = &mut self.compression.compaction_state {
-            state.set_after_tokens(after_tokens);
-            state.set_status(crate::tui::widgets::CompactionStatus::Complete);
-            state.set_progress(1.0);
-            self.dirty.full = true;
-        }
+        self.compression.complete_compaction(after_tokens);
+        self.dirty.full = true;
     }
 
     /// Marks the compaction operation as failed.
     pub fn fail_compaction(&mut self) {
-        if let Some(state) = &mut self.compression.compaction_state {
-            state.set_status(crate::tui::widgets::CompactionStatus::Failed);
-            self.dirty.full = true;
-        }
+        self.compression.fail_compaction();
+        self.dirty.full = true;
     }
 
     /// Clears the compaction state (closes the overlay).
     pub fn clear_compaction(&mut self) {
-        self.compression.compaction_state = None;
+        self.compression.clear_compaction();
         self.dirty.full = true;
     }
 
     /// Returns a reference to the compaction metrics.
-    ///
-    /// Metrics track the number of compactions performed, total tokens saved,
-    /// and total time spent compacting across the session.
     #[must_use]
     pub fn compaction_metrics(&self) -> &CompactionMetrics {
-        &self.compression.compaction_metrics
+        self.compression.compaction_metrics()
     }
 
     /// Returns a summary of compaction metrics.
