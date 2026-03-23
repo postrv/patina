@@ -275,6 +275,90 @@ pub struct ContinuousLoopState {
     pub(crate) gate_results: Vec<GateResult>,
 }
 
+impl ContinuousLoopState {
+    /// Returns the current status of the continuous coding loop.
+    #[must_use]
+    pub fn status(&self) -> &ContinuousLoopStatus {
+        &self.status
+    }
+
+    /// Returns the number of completed iterations.
+    #[must_use]
+    pub fn iterations_completed(&self) -> u32 {
+        self.iterations_completed
+    }
+
+    /// Returns the duration of the last completed iteration in milliseconds.
+    #[must_use]
+    pub fn last_duration_ms(&self) -> Option<u64> {
+        self.last_duration_ms
+    }
+
+    /// Returns the name of the quality gate currently being checked.
+    #[must_use]
+    pub fn checking_gate(&self) -> Option<&str> {
+        self.checking_gate.as_deref()
+    }
+
+    /// Returns accumulated quality gate results for the current iteration.
+    #[must_use]
+    pub fn gate_results(&self) -> &[GateResult] {
+        &self.gate_results
+    }
+
+    /// Updates state for a new continuous iteration starting.
+    pub fn update_iteration(&mut self, iteration: u32) {
+        self.status = ContinuousLoopStatus::Running { iteration };
+        self.checking_gate = None;
+        self.gate_results.clear();
+    }
+
+    /// Records the completion of a continuous iteration.
+    pub fn complete_iteration(&mut self, duration_ms: u64) {
+        self.iterations_completed += 1;
+        self.last_duration_ms = Some(duration_ms);
+    }
+
+    /// Records that a quality gate check is starting.
+    pub fn set_gate_checking(&mut self, gate: &str) {
+        self.checking_gate = Some(gate.to_string());
+    }
+
+    /// Records the result of a quality gate check.
+    pub fn record_gate_result(&mut self, gate: &str, passed: bool, message: Option<&str>) {
+        self.checking_gate = None;
+        self.gate_results.push(GateResult {
+            gate: gate.to_string(),
+            passed,
+            message: message.map(String::from),
+        });
+    }
+
+    /// Records that stagnation was detected.
+    pub fn set_stagnation(&mut self, iterations_without_progress: u32, threshold: u32) {
+        self.status = ContinuousLoopStatus::Stagnated {
+            iterations_without_progress,
+            threshold,
+        };
+    }
+
+    /// Records that human intervention is required.
+    pub fn set_human_checkpoint(&mut self, reason: &str) {
+        self.status = ContinuousLoopStatus::HumanRequired {
+            reason: reason.to_string(),
+        };
+    }
+
+    /// Resets all continuous loop state to inactive.
+    pub fn reset(&mut self) {
+        self.status = ContinuousLoopStatus::Inactive;
+        self.iterations_completed = 0;
+        self.last_duration_ms = None;
+        self.checking_gate = None;
+        self.gate_results.clear();
+    }
+}
+
 /// UI selection and copy state extracted from AppState.
 ///
 /// Groups fields related to text selection, clipboard copy operations,
@@ -918,59 +1002,60 @@ impl AppState {
     }
 
     // =========================================================================
-    // Continuous loop panel methods (Task 6.6)
+    // Continuous loop panel methods (delegates to ContinuousLoopState)
     // =========================================================================
+
+    /// Returns a reference to the continuous loop state.
+    #[must_use]
+    pub fn continuous(&self) -> &ContinuousLoopState {
+        &self.continuous
+    }
 
     /// Returns the current status of the continuous coding loop.
     #[must_use]
     pub fn continuous_status(&self) -> &ContinuousLoopStatus {
-        &self.continuous.status
+        self.continuous.status()
     }
 
     /// Returns the number of completed iterations in the current session.
     #[must_use]
     pub fn continuous_iterations_completed(&self) -> u32 {
-        self.continuous.iterations_completed
+        self.continuous.iterations_completed()
     }
 
     /// Returns the duration of the last completed iteration in milliseconds.
     #[must_use]
     pub fn continuous_last_duration_ms(&self) -> Option<u64> {
-        self.continuous.last_duration_ms
+        self.continuous.last_duration_ms()
     }
 
     /// Returns the name of the quality gate currently being checked.
     #[must_use]
     pub fn continuous_checking_gate(&self) -> Option<&str> {
-        self.continuous.checking_gate.as_deref()
+        self.continuous.checking_gate()
     }
 
     /// Returns accumulated quality gate results for the current iteration.
     #[must_use]
     pub fn continuous_gate_results(&self) -> &[GateResult] {
-        &self.continuous.gate_results
+        self.continuous.gate_results()
     }
 
     /// Updates state for a new continuous iteration starting.
-    ///
-    /// Clears gate results from the previous iteration and sets status to Running.
     pub fn update_continuous_iteration(&mut self, iteration: u32) {
-        self.continuous.status = ContinuousLoopStatus::Running { iteration };
-        self.continuous.checking_gate = None;
-        self.continuous.gate_results.clear();
+        self.continuous.update_iteration(iteration);
         self.dirty.full = true;
     }
 
     /// Records the completion of a continuous iteration.
     pub fn complete_continuous_iteration(&mut self, _iteration: u32, duration_ms: u64) {
-        self.continuous.iterations_completed += 1;
-        self.continuous.last_duration_ms = Some(duration_ms);
+        self.continuous.complete_iteration(duration_ms);
         self.dirty.full = true;
     }
 
     /// Records that a quality gate check is starting.
     pub fn set_continuous_gate_checking(&mut self, gate: &str) {
-        self.continuous.checking_gate = Some(gate.to_string());
+        self.continuous.set_gate_checking(gate);
         self.dirty.full = true;
     }
 
@@ -981,41 +1066,26 @@ impl AppState {
         passed: bool,
         message: Option<&str>,
     ) {
-        self.continuous.checking_gate = None;
-        self.continuous.gate_results.push(GateResult {
-            gate: gate.to_string(),
-            passed,
-            message: message.map(String::from),
-        });
+        self.continuous.record_gate_result(gate, passed, message);
         self.dirty.full = true;
     }
 
     /// Records that stagnation was detected.
     pub fn set_continuous_stagnation(&mut self, iterations_without_progress: u32, threshold: u32) {
-        self.continuous.status = ContinuousLoopStatus::Stagnated {
-            iterations_without_progress,
-            threshold,
-        };
+        self.continuous
+            .set_stagnation(iterations_without_progress, threshold);
         self.dirty.full = true;
     }
 
     /// Records that human intervention is required.
     pub fn set_continuous_human_checkpoint(&mut self, reason: &str) {
-        self.continuous.status = ContinuousLoopStatus::HumanRequired {
-            reason: reason.to_string(),
-        };
+        self.continuous.set_human_checkpoint(reason);
         self.dirty.full = true;
     }
 
     /// Resets all continuous loop state to inactive.
-    ///
-    /// Call this when stopping the continuous loop to clear the TUI display.
     pub fn reset_continuous(&mut self) {
-        self.continuous.status = ContinuousLoopStatus::Inactive;
-        self.continuous.iterations_completed = 0;
-        self.continuous.last_duration_ms = None;
-        self.continuous.checking_gate = None;
-        self.continuous.gate_results.clear();
+        self.continuous.reset();
         self.dirty.full = true;
     }
 
@@ -6094,5 +6164,144 @@ mod tests {
         state.update_agent_progress("a1", "Agent", &progress);
         assert_eq!(state.agent_panel_entries().len(), 1);
         assert!(state.dirty.full);
+    }
+
+    // ========================================================================
+    // ContinuousLoopState tests
+    // ========================================================================
+
+    #[test]
+    fn test_continuous_loop_state_initial() {
+        let cls = ContinuousLoopState {
+            status: ContinuousLoopStatus::Inactive,
+            iterations_completed: 0,
+            last_duration_ms: None,
+            checking_gate: None,
+            gate_results: Vec::new(),
+        };
+        assert_eq!(*cls.status(), ContinuousLoopStatus::Inactive);
+        assert_eq!(cls.iterations_completed(), 0);
+        assert_eq!(cls.last_duration_ms(), None);
+        assert_eq!(cls.checking_gate(), None);
+        assert!(cls.gate_results().is_empty());
+    }
+
+    #[test]
+    fn test_continuous_loop_update_iteration() {
+        let mut cls = ContinuousLoopState {
+            status: ContinuousLoopStatus::Inactive,
+            iterations_completed: 0,
+            last_duration_ms: None,
+            checking_gate: Some("clippy".to_string()),
+            gate_results: vec![GateResult {
+                gate: "old".to_string(),
+                passed: true,
+                message: None,
+            }],
+        };
+        cls.update_iteration(1);
+        assert_eq!(
+            *cls.status(),
+            ContinuousLoopStatus::Running { iteration: 1 }
+        );
+        assert!(cls.checking_gate().is_none());
+        assert!(cls.gate_results().is_empty());
+    }
+
+    #[test]
+    fn test_continuous_loop_complete_iteration() {
+        let mut cls = ContinuousLoopState {
+            status: ContinuousLoopStatus::Running { iteration: 1 },
+            iterations_completed: 0,
+            last_duration_ms: None,
+            checking_gate: None,
+            gate_results: Vec::new(),
+        };
+        cls.complete_iteration(5000);
+        assert_eq!(cls.iterations_completed(), 1);
+        assert_eq!(cls.last_duration_ms(), Some(5000));
+    }
+
+    #[test]
+    fn test_continuous_loop_gate_checking() {
+        let mut cls = ContinuousLoopState {
+            status: ContinuousLoopStatus::Running { iteration: 1 },
+            iterations_completed: 0,
+            last_duration_ms: None,
+            checking_gate: None,
+            gate_results: Vec::new(),
+        };
+        cls.set_gate_checking("clippy");
+        assert_eq!(cls.checking_gate(), Some("clippy"));
+
+        cls.record_gate_result("clippy", true, Some("0 warnings"));
+        assert!(cls.checking_gate().is_none());
+        assert_eq!(cls.gate_results().len(), 1);
+        assert!(cls.gate_results()[0].passed);
+    }
+
+    #[test]
+    fn test_continuous_loop_stagnation_and_reset() {
+        let mut cls = ContinuousLoopState {
+            status: ContinuousLoopStatus::Running { iteration: 5 },
+            iterations_completed: 5,
+            last_duration_ms: Some(3000),
+            checking_gate: None,
+            gate_results: Vec::new(),
+        };
+        cls.set_stagnation(3, 5);
+        assert_eq!(
+            *cls.status(),
+            ContinuousLoopStatus::Stagnated {
+                iterations_without_progress: 3,
+                threshold: 5,
+            }
+        );
+
+        cls.reset();
+        assert_eq!(*cls.status(), ContinuousLoopStatus::Inactive);
+        assert_eq!(cls.iterations_completed(), 0);
+        assert_eq!(cls.last_duration_ms(), None);
+    }
+
+    #[test]
+    fn test_continuous_loop_human_checkpoint() {
+        let mut cls = ContinuousLoopState {
+            status: ContinuousLoopStatus::Running { iteration: 3 },
+            iterations_completed: 2,
+            last_duration_ms: None,
+            checking_gate: None,
+            gate_results: Vec::new(),
+        };
+        cls.set_human_checkpoint("needs review");
+        assert_eq!(
+            *cls.status(),
+            ContinuousLoopStatus::HumanRequired {
+                reason: "needs review".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn test_app_state_continuous_delegation() {
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+        state.dirty.clear();
+
+        state.update_continuous_iteration(1);
+        assert!(state.dirty.full);
+        assert_eq!(
+            *state.continuous_status(),
+            ContinuousLoopStatus::Running { iteration: 1 }
+        );
+
+        state.dirty.clear();
+        state.complete_continuous_iteration(1, 2000);
+        assert!(state.dirty.full);
+        assert_eq!(state.continuous_iterations_completed(), 1);
+
+        state.dirty.clear();
+        state.reset_continuous();
+        assert!(state.dirty.full);
+        assert_eq!(*state.continuous_status(), ContinuousLoopStatus::Inactive);
     }
 }
