@@ -5,8 +5,8 @@
 //! - Vision model routing logic works correctly
 //! - Token estimation for images is accurate
 
-use patina::api::multi_model::{contains_images, select_model_for_content};
 use patina::api::tokens::{estimate_image_tokens, DEFAULT_IMAGE_TOKENS};
+use patina::types::image::{contains_images, select_model_for_content};
 use patina::types::image::{ImageContent, ImageSource, MediaType};
 use patina::types::{ApiMessageV2, ContentBlock, MessageContent};
 

@@ -361,6 +361,107 @@ fn infer_media_type_from_url(url: &str) -> Option<MediaType> {
     MediaType::from_extension(ext)
 }
 
+// ---------------------------------------------------------------------------
+// Message-level image utilities
+// ---------------------------------------------------------------------------
+
+use super::message::{ApiMessageV2, MessageContent};
+
+/// Checks if any message in the conversation contains image content.
+///
+/// This is used for vision model routing - when images are present,
+/// the request may need to be routed to a vision-capable model.
+///
+/// # Arguments
+///
+/// * `messages` - The conversation messages to check
+///
+/// # Returns
+///
+/// `true` if any message contains an image content block
+///
+/// # Examples
+///
+/// ```rust
+/// use patina::types::image::contains_images;
+/// use patina::types::{ApiMessageV2, ContentBlock, MessageContent};
+/// use patina::types::image::ImageSource;
+///
+/// // Messages without images
+/// let text_only = vec![
+///     ApiMessageV2::user("Hello"),
+///     ApiMessageV2::assistant("Hi there!"),
+/// ];
+/// assert!(!contains_images(&text_only));
+///
+/// // Messages with images
+/// let source = ImageSource::Base64 {
+///     media_type: "image/png".to_string(),
+///     data: "iVBORw0KGgo=".to_string(),
+/// };
+/// let with_image = vec![
+///     ApiMessageV2::user_with_content(MessageContent::blocks(vec![
+///         ContentBlock::text("What's in this image?"),
+///         ContentBlock::image(source),
+///     ])),
+/// ];
+/// assert!(contains_images(&with_image));
+/// ```
+#[must_use]
+pub fn contains_images(messages: &[ApiMessageV2]) -> bool {
+    messages.iter().any(message_contains_images)
+}
+
+/// Checks if a single message contains image content.
+#[must_use]
+fn message_contains_images(message: &ApiMessageV2) -> bool {
+    match &message.content {
+        MessageContent::Text(_) => false,
+        MessageContent::Blocks(blocks) => blocks.iter().any(|block| block.is_image()),
+    }
+}
+
+/// Selects the appropriate model for a request based on content.
+///
+/// If the messages contain images and a vision model is configured,
+/// returns the vision model. Otherwise, returns the default model.
+///
+/// # Arguments
+///
+/// * `messages` - The conversation messages
+/// * `default_model` - The default model to use
+/// * `vision_model` - Optional vision model for image requests
+///
+/// # Returns
+///
+/// The model identifier to use for the request
+///
+/// # Examples
+///
+/// ```rust
+/// use patina::types::image::select_model_for_content;
+/// use patina::types::ApiMessageV2;
+///
+/// // No images - use default model
+/// let messages = vec![ApiMessageV2::user("Hello")];
+/// let model = select_model_for_content(&messages, "claude-sonnet-4", Some("claude-opus-4"));
+/// assert_eq!(model, "claude-sonnet-4");
+/// ```
+#[must_use]
+pub fn select_model_for_content<'a>(
+    messages: &[ApiMessageV2],
+    default_model: &'a str,
+    vision_model: Option<&'a str>,
+) -> &'a str {
+    if contains_images(messages) {
+        // Use vision model if configured, otherwise fall back to default
+        // (all Claude 3+ models support vision)
+        vision_model.unwrap_or(default_model)
+    } else {
+        default_model
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -26,7 +26,9 @@ pub mod stream;
 // Re-export common types for convenience
 pub use config::Config;
 pub use content::{ContentBlock, StopReason, ToolResultBlock, ToolUseBlock};
-pub use image::{ImageContent, ImageError, ImageSource, MediaType};
+pub use image::{
+    contains_images, select_model_for_content, ImageContent, ImageError, ImageSource, MediaType,
+};
 pub use message::{ApiMessageV2, Message, MessageContent, Role};
 #[allow(deprecated)]
 pub use stream::{

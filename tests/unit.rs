@@ -33,6 +33,7 @@ mod mcp_config_test;
 #[path = "unit/ide_test.rs"]
 mod ide_test;
 
+#[cfg(feature = "multi-model")]
 #[path = "unit/multi_model_test.rs"]
 mod multi_model_test;
 

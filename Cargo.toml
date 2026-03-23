@@ -79,6 +79,7 @@ rmcp = { version = "0.16", features = [
 [features]
 default = []
 oauth = ["dep:keyring", "dep:webbrowser", "dep:tiny_http", "dep:rand"]
+multi-model = []
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports", "async_tokio"] }
