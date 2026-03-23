@@ -28,7 +28,7 @@
 //!     ..Default::default()
 //! };
 //!
-//! let result = compactor.compact(&messages, &config)?;
+//! let result = compactor.compact(&messages, &config).await?;
 //! println!("Saved {} tokens", result.saved_tokens);
 //! ```
 
@@ -114,7 +114,7 @@ Previous conversation to summarize:
 /// let summarizer = MockSummarizer;
 /// let messages = vec![ApiMessageV2::user("Hello")];
 /// let config = CompactionConfig::default();
-/// let summary = summarizer.summarize(&messages, &config);
+/// let summary = summarizer.summarize(&messages, &config).await;
 /// ```
 pub trait Summarizer: Send + Sync {
     /// Generate a summary of the given messages.

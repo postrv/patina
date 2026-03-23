@@ -2277,7 +2277,7 @@ impl AppState {
     ///
     /// ```ignore
     /// // Trigger compaction at 80% of 200k context
-    /// let compacted = state.maybe_compact(0.8, 200_000)?;
+    /// let compacted = state.maybe_compact(0.8, 200_000).await?;
     /// if compacted {
     ///     println!("Conversation was compacted");
     /// }
