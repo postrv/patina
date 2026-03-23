@@ -43,7 +43,6 @@
 
 use std::future::Future;
 use std::pin::Pin;
-use std::time::Duration;
 
 use anyhow::Result;
 use secrecy::{ExposeSecret, SecretString};
@@ -62,12 +61,6 @@ use crate::types::stream::StreamEvent;
 
 /// Default OpenRouter API endpoint.
 const DEFAULT_OPENROUTER_URL: &str = "https://openrouter.ai/api/v1";
-
-/// Maximum number of retry attempts for retryable errors.
-const MAX_RETRIES: u32 = 2;
-
-/// Base delay for exponential backoff in milliseconds.
-const BASE_BACKOFF_MS: u64 = 100;
 
 /// OpenAI Chat Completions API request body.
 #[derive(Debug, Serialize)]
@@ -161,11 +154,6 @@ impl OpenRouterProvider {
         self
     }
 
-    /// Checks if an HTTP status code should trigger a retry.
-    fn is_retryable_status(status: reqwest::StatusCode) -> bool {
-        status == reqwest::StatusCode::TOO_MANY_REQUESTS || status.is_server_error()
-    }
-
     /// Processes the OpenAI SSE stream from a successful response.
     ///
     /// Parses `data: {...}` lines, deserializes as [`OpenAiStreamChunk`],
@@ -249,54 +237,31 @@ impl LlmProvider for OpenRouterProvider {
             };
 
             let url = format!("{}/chat/completions", self.base_url);
-            let mut last_error: Option<(reqwest::StatusCode, String)> = None;
 
-            for attempt in 0..=MAX_RETRIES {
-                let mut req = self
-                    .client
-                    .post(&url)
-                    .header(
-                        "Authorization",
-                        format!("Bearer {}", self.api_key.expose_secret()),
-                    )
-                    .header("Content-Type", "application/json");
+            crate::api::retry::send_with_retry(
+                || async {
+                    let mut req = self
+                        .client
+                        .post(&url)
+                        .header(
+                            "Authorization",
+                            format!("Bearer {}", self.api_key.expose_secret()),
+                        )
+                        .header("Content-Type", "application/json");
 
-                if let Some(ref site_url) = self.site_url {
-                    req = req.header("HTTP-Referer", site_url.as_str());
-                }
-                if let Some(ref app_name) = self.app_name {
-                    req = req.header("X-Title", app_name.as_str());
-                }
+                    if let Some(ref site_url) = self.site_url {
+                        req = req.header("HTTP-Referer", site_url.as_str());
+                    }
+                    if let Some(ref app_name) = self.app_name {
+                        req = req.header("X-Title", app_name.as_str());
+                    }
 
-                let response = req.json(&request_body).send().await?;
-                let status = response.status();
-
-                if status.is_success() {
-                    return self.process_stream(response, tx).await;
-                }
-
-                if Self::is_retryable_status(status) && attempt < MAX_RETRIES {
-                    let body = response.text().await.unwrap_or_default();
-                    last_error = Some((status, body));
-                    let delay = Duration::from_millis(BASE_BACKOFF_MS * (1 << attempt));
-                    tokio::time::sleep(delay).await;
-                    continue;
-                }
-
-                let body = response.text().await.unwrap_or_default();
-                tx.send(StreamEvent::Error(format!("{status}: {body}")))
-                    .await
-                    .ok();
-                return Ok(());
-            }
-
-            if let Some((status, body)) = last_error {
-                tx.send(StreamEvent::Error(format!("{status}: {body}")))
-                    .await
-                    .ok();
-            }
-
-            Ok(())
+                    req.json(&request_body).send().await.map_err(Into::into)
+                },
+                |response, tx| async move { self.process_stream(response, tx).await },
+                &tx,
+            )
+            .await
         })
     }
 }

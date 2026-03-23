@@ -6,6 +6,7 @@ pub mod context;
 pub mod multi_model;
 pub mod provider;
 pub mod providers;
+pub mod retry;
 pub mod tokens;
 pub mod tools;
 
@@ -25,8 +26,6 @@ pub use compaction::{
     CompactionConfig, CompactionResult, ContextCompactor, MockSummarizer, Summarizer, SummaryStyle,
 };
 
-use std::time::Duration;
-
 use anyhow::Result;
 use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
@@ -45,12 +44,6 @@ pub use crate::types::StreamEvent;
 
 /// Default Anthropic API endpoint.
 const DEFAULT_BASE_URL: &str = "https://api.anthropic.com";
-
-/// Maximum number of retry attempts for retryable errors.
-const MAX_RETRIES: u32 = 2;
-
-/// Base delay for exponential backoff in milliseconds.
-const BASE_BACKOFF_MS: u64 = 100;
 
 #[derive(Clone)]
 pub struct AnthropicClient {
@@ -244,59 +237,23 @@ impl AnthropicClient {
         };
 
         let url = format!("{}/v1/messages", self.base_url);
-        let mut last_error: Option<(reqwest::StatusCode, String)> = None;
 
-        for attempt in 0..=MAX_RETRIES {
-            let response = self
-                .client
-                .post(&url)
-                .header("x-api-key", self.api_key.expose_secret())
-                .header("anthropic-version", "2023-06-01")
-                .header("content-type", "application/json")
-                .json(&request)
-                .send()
-                .await?;
-
-            let status = response.status();
-
-            if status.is_success() {
-                // Success - process the stream
-                return self.process_stream(response, tx).await;
-            }
-
-            // Check if this is a retryable error
-            if Self::is_retryable_status(status) && attempt < MAX_RETRIES {
-                let body = response.text().await.unwrap_or_default();
-                last_error = Some((status, body));
-
-                // Exponential backoff: 100ms, 200ms, 400ms...
-                let delay = Duration::from_millis(BASE_BACKOFF_MS * (1 << attempt));
-                tokio::time::sleep(delay).await;
-                continue;
-            }
-
-            // Non-retryable error or exhausted retries
-            let body = response.text().await.unwrap_or_default();
-            tx.send(StreamEvent::Error(format!("{}: {}", status, body)))
-                .await
-                .ok();
-            return Ok(());
-        }
-
-        // Exhausted retries - send the last error
-        if let Some((status, body)) = last_error {
-            tx.send(StreamEvent::Error(format!("{}: {}", status, body)))
-                .await
-                .ok();
-        }
-
-        Ok(())
-    }
-
-    /// Checks if an HTTP status code should trigger a retry.
-    fn is_retryable_status(status: reqwest::StatusCode) -> bool {
-        status == reqwest::StatusCode::TOO_MANY_REQUESTS  // 429
-            || status.is_server_error() // 5xx
+        retry::send_with_retry(
+            || async {
+                self.client
+                    .post(&url)
+                    .header("x-api-key", self.api_key.expose_secret())
+                    .header("anthropic-version", "2023-06-01")
+                    .header("content-type", "application/json")
+                    .json(&request)
+                    .send()
+                    .await
+                    .map_err(Into::into)
+            },
+            |response, tx| async move { self.process_stream(response, tx).await },
+            &tx,
+        )
+        .await
     }
 
     /// Sends a streaming message request using V2 messages (supports content blocks).
@@ -330,47 +287,23 @@ impl AnthropicClient {
         };
 
         let url = format!("{}/v1/messages", self.base_url);
-        let mut last_error: Option<(reqwest::StatusCode, String)> = None;
 
-        for attempt in 0..=MAX_RETRIES {
-            let response = self
-                .client
-                .post(&url)
-                .header("x-api-key", self.api_key.expose_secret())
-                .header("anthropic-version", "2023-06-01")
-                .header("content-type", "application/json")
-                .json(&request)
-                .send()
-                .await?;
-
-            let status = response.status();
-
-            if status.is_success() {
-                return self.process_stream(response, tx).await;
-            }
-
-            if Self::is_retryable_status(status) && attempt < MAX_RETRIES {
-                let body = response.text().await.unwrap_or_default();
-                last_error = Some((status, body));
-                let delay = Duration::from_millis(BASE_BACKOFF_MS * (1 << attempt));
-                tokio::time::sleep(delay).await;
-                continue;
-            }
-
-            let body = response.text().await.unwrap_or_default();
-            tx.send(StreamEvent::Error(format!("{}: {}", status, body)))
-                .await
-                .ok();
-            return Ok(());
-        }
-
-        if let Some((status, body)) = last_error {
-            tx.send(StreamEvent::Error(format!("{}: {}", status, body)))
-                .await
-                .ok();
-        }
-
-        Ok(())
+        retry::send_with_retry(
+            || async {
+                self.client
+                    .post(&url)
+                    .header("x-api-key", self.api_key.expose_secret())
+                    .header("anthropic-version", "2023-06-01")
+                    .header("content-type", "application/json")
+                    .json(&request)
+                    .send()
+                    .await
+                    .map_err(Into::into)
+            },
+            |response, tx| async move { self.process_stream(response, tx).await },
+            &tx,
+        )
+        .await
     }
 
     /// Sends a streaming message request using V2 messages with custom tools.
@@ -405,47 +338,23 @@ impl AnthropicClient {
         };
 
         let url = format!("{}/v1/messages", self.base_url);
-        let mut last_error: Option<(reqwest::StatusCode, String)> = None;
 
-        for attempt in 0..=MAX_RETRIES {
-            let response = self
-                .client
-                .post(&url)
-                .header("x-api-key", self.api_key.expose_secret())
-                .header("anthropic-version", "2023-06-01")
-                .header("content-type", "application/json")
-                .json(&request)
-                .send()
-                .await?;
-
-            let status = response.status();
-
-            if status.is_success() {
-                return self.process_stream(response, tx).await;
-            }
-
-            if Self::is_retryable_status(status) && attempt < MAX_RETRIES {
-                let body = response.text().await.unwrap_or_default();
-                last_error = Some((status, body));
-                let delay = Duration::from_millis(BASE_BACKOFF_MS * (1 << attempt));
-                tokio::time::sleep(delay).await;
-                continue;
-            }
-
-            let body = response.text().await.unwrap_or_default();
-            tx.send(StreamEvent::Error(format!("{}: {}", status, body)))
-                .await
-                .ok();
-            return Ok(());
-        }
-
-        if let Some((status, body)) = last_error {
-            tx.send(StreamEvent::Error(format!("{}: {}", status, body)))
-                .await
-                .ok();
-        }
-
-        Ok(())
+        retry::send_with_retry(
+            || async {
+                self.client
+                    .post(&url)
+                    .header("x-api-key", self.api_key.expose_secret())
+                    .header("anthropic-version", "2023-06-01")
+                    .header("content-type", "application/json")
+                    .json(&request)
+                    .send()
+                    .await
+                    .map_err(Into::into)
+            },
+            |response, tx| async move { self.process_stream(response, tx).await },
+            &tx,
+        )
+        .await
     }
 
     /// Handles a content_block_start event for tool_use blocks.
