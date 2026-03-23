@@ -523,7 +523,7 @@ async fn run_print_mode(config: &Config, prompt: &str) -> Result<()> {
         state.tool_loop_mut().start_streaming()?;
 
         let (tx, mut rx) = tokio::sync::mpsc::channel(STREAMING_CHANNEL_BUFFER);
-        let api_messages = state.prepare_api_messages_for_send(client.model());
+        let api_messages = state.prepare_api_messages_for_send(client.model()).await;
         let client_clone = std::sync::Arc::clone(&client);
         let tools = state.all_tool_definitions();
 
@@ -752,7 +752,7 @@ pub(crate) async fn finish_tool_execution_and_continue(
     // Use prepare_api_messages_for_send() which compacts + truncates,
     // instead of api_messages().to_vec() which sends the FULL untruncated
     // conversation and causes token exhaustion on large codebases.
-    let api_messages = state.prepare_api_messages_for_send(client.model());
+    let api_messages = state.prepare_api_messages_for_send(client.model()).await;
     let client_clone = std::sync::Arc::clone(client);
     let tools = state.all_tool_definitions();
 

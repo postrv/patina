@@ -19,8 +19,8 @@ use serde_json::json;
 // ============================================================================
 
 /// Verifies complete compaction workflow from input to output.
-#[test]
-fn test_compaction_end_to_end() {
+#[tokio::test]
+async fn test_compaction_end_to_end() {
     // Create a realistic conversation that needs compaction
     let long_response = "I have completed the task. This response contains detailed information about what was done, including implementation details, code changes, and next steps. The implementation follows best practices and includes proper error handling.";
 
@@ -52,7 +52,7 @@ fn test_compaction_end_to_end() {
         ..Default::default()
     };
 
-    let result = compactor.compact(&messages, &config).unwrap();
+    let result = compactor.compact(&messages, &config).await.unwrap();
 
     // Verify compaction results
     assert!(
@@ -86,8 +86,8 @@ fn test_compaction_end_to_end() {
 }
 
 /// Verifies compaction works correctly via the context module integration.
-#[test]
-fn test_compaction_via_context_module() {
+#[tokio::test]
+async fn test_compaction_via_context_module() {
     let padding = "x".repeat(200);
     let mut messages = vec![ApiMessageV2::user(format!("System prompt {}", padding))];
 
@@ -99,7 +99,7 @@ fn test_compaction_via_context_module() {
     let original_count = messages.len();
 
     // Use the integrated compact_or_truncate_context function
-    let result = compact_or_truncate_context(&messages, 200, 2);
+    let result = compact_or_truncate_context(&messages, 200, 2).await;
 
     // Should have compacted
     assert!(
@@ -126,8 +126,8 @@ fn test_compaction_via_context_module() {
 // ============================================================================
 
 /// Verifies tool use blocks are handled correctly during compaction.
-#[test]
-fn test_compaction_with_tool_use() {
+#[tokio::test]
+async fn test_compaction_with_tool_use() {
     let messages =
         vec![
             ApiMessageV2::user("System prompt with project context"),
@@ -164,7 +164,7 @@ fn test_compaction_with_tool_use() {
         ..Default::default()
     };
 
-    let result = compactor.compact(&messages, &config).unwrap();
+    let result = compactor.compact(&messages, &config).await.unwrap();
 
     // Verify role alternation is maintained
     for window in result.messages.windows(2) {
@@ -182,8 +182,8 @@ fn test_compaction_with_tool_use() {
 }
 
 /// Verifies tool pairs are kept together when they're in the recent messages.
-#[test]
-fn test_compaction_preserves_tool_pairs_in_recent() {
+#[tokio::test]
+async fn test_compaction_preserves_tool_pairs_in_recent() {
     let messages = vec![
         ApiMessageV2::user("System prompt"),
         ApiMessageV2::assistant("Ready."),
@@ -209,7 +209,7 @@ fn test_compaction_preserves_tool_pairs_in_recent() {
         ..Default::default()
     };
 
-    let result = compactor.compact(&messages, &config).unwrap();
+    let result = compactor.compact(&messages, &config).await.unwrap();
 
     // Check if tool_use is in recent messages
     let has_tool_use = result.messages.iter().any(|m| {
@@ -245,8 +245,8 @@ fn test_compaction_preserves_tool_pairs_in_recent() {
 // ============================================================================
 
 /// Verifies timeline-style summary has proper structure.
-#[test]
-fn test_compaction_summary_quality_timeline() {
+#[tokio::test]
+async fn test_compaction_summary_quality_timeline() {
     let messages = vec![
         ApiMessageV2::user("System prompt for development project"),
         ApiMessageV2::assistant("Ready to help with development."),
@@ -268,7 +268,7 @@ fn test_compaction_summary_quality_timeline() {
         ..Default::default()
     };
 
-    let result = compactor.compact(&messages, &config).unwrap();
+    let result = compactor.compact(&messages, &config).await.unwrap();
 
     // Find the summary message (should be after first message)
     assert!(
@@ -328,8 +328,8 @@ fn test_summarization_request_format() {
 }
 
 /// Verifies different summary styles produce appropriate output.
-#[test]
-fn test_summary_styles() {
+#[tokio::test]
+async fn test_summary_styles() {
     let messages = vec![
         ApiMessageV2::user("Project setup"),
         ApiMessageV2::assistant("Ready."),
@@ -350,7 +350,7 @@ fn test_summary_styles() {
             ..Default::default()
         };
 
-        let result = compactor.compact(&messages, &config);
+        let result = compactor.compact(&messages, &config).await;
         assert!(result.is_ok(), "Should succeed with style {:?}", style);
 
         let result = result.unwrap();
@@ -363,25 +363,25 @@ fn test_summary_styles() {
 // ============================================================================
 
 /// Verifies compaction handles empty conversations.
-#[test]
-fn test_compaction_empty_conversation() {
+#[tokio::test]
+async fn test_compaction_empty_conversation() {
     let messages: Vec<ApiMessageV2> = vec![];
-    let result = compact_or_truncate_context(&messages, 1000, 2);
+    let result = compact_or_truncate_context(&messages, 1000, 2).await;
     assert!(result.is_empty());
 }
 
 /// Verifies compaction handles single message.
-#[test]
-fn test_compaction_single_message() {
+#[tokio::test]
+async fn test_compaction_single_message() {
     let messages = vec![ApiMessageV2::user("Just the system prompt")];
-    let result = compact_or_truncate_context(&messages, 1000, 2);
+    let result = compact_or_truncate_context(&messages, 1000, 2).await;
     assert_eq!(result.len(), 1);
     assert_eq!(result[0].content.to_text(), "Just the system prompt");
 }
 
 /// Verifies compaction with very low token budget.
-#[test]
-fn test_compaction_very_low_budget() {
+#[tokio::test]
+async fn test_compaction_very_low_budget() {
     let padding = "x".repeat(500);
     let messages = vec![
         ApiMessageV2::user(format!("System {}", padding)),
@@ -391,7 +391,7 @@ fn test_compaction_very_low_budget() {
     ];
 
     // Even with very low budget, should still produce valid output
-    let result = compact_or_truncate_context(&messages, 10, 1);
+    let result = compact_or_truncate_context(&messages, 10, 1).await;
 
     // Should have at least the first message
     assert!(!result.is_empty(), "Should produce some output");

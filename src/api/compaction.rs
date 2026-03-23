@@ -116,7 +116,7 @@ Previous conversation to summarize:
 /// let config = CompactionConfig::default();
 /// let summary = summarizer.summarize(&messages, &config);
 /// ```
-pub trait Summarizer {
+pub trait Summarizer: Send + Sync {
     /// Generate a summary of the given messages.
     ///
     /// # Arguments
@@ -127,7 +127,11 @@ pub trait Summarizer {
     /// # Returns
     ///
     /// A string containing the summary
-    fn summarize(&self, messages: &[ApiMessageV2], config: &CompactionConfig) -> String;
+    fn summarize(
+        &self,
+        messages: &[ApiMessageV2],
+        config: &CompactionConfig,
+    ) -> impl std::future::Future<Output = String> + Send;
 }
 
 /// Mock summarizer for testing.
@@ -138,7 +142,7 @@ pub trait Summarizer {
 pub struct MockSummarizer;
 
 impl Summarizer for MockSummarizer {
-    fn summarize(&self, messages: &[ApiMessageV2], config: &CompactionConfig) -> String {
+    async fn summarize(&self, messages: &[ApiMessageV2], config: &CompactionConfig) -> String {
         generate_mock_summary(messages, config)
     }
 }
@@ -207,6 +211,8 @@ impl ClaudeSummarizer {
         messages: &[ApiMessageV2],
         config: &CompactionConfig,
     ) -> Result<String> {
+        tracing::debug!(model = %self.model, message_count = messages.len(), "Starting Claude summarization");
+
         // Build the summarization prompt
         let formatted_messages = format_messages_for_summary(messages);
         let prompt = format!(
@@ -253,36 +259,15 @@ impl ClaudeSummarizer {
 impl Summarizer for ClaudeSummarizer {
     /// Generates a summary using the Claude API.
     ///
-    /// This is a synchronous wrapper around the async API call.
-    /// Falls back to mock summarization if the API call fails.
-    fn summarize(&self, messages: &[ApiMessageV2], config: &CompactionConfig) -> String {
-        // Use the current tokio runtime to run the async summarization
-        let result = tokio::runtime::Handle::try_current()
-            .ok()
-            .and_then(|_handle| {
-                // We're in an async context - use block_in_place to avoid blocking
-                let messages = messages.to_vec();
-                let config = config.clone();
-                let client = self.client.clone();
-                let model = self.model.clone();
-
-                std::thread::scope(|s| {
-                    s.spawn(|| {
-                        let rt = tokio::runtime::Runtime::new().ok()?;
-                        let summarizer = ClaudeSummarizer { client, model };
-                        rt.block_on(summarizer.summarize_async(&messages, &config))
-                            .ok()
-                    })
-                    .join()
-                    .ok()
-                    .flatten()
-                })
-            });
-
-        match result {
-            Some(summary) => summary,
-            None => {
-                warn!("Failed to generate Claude summary, falling back to mock summarization");
+    /// Falls back to mock summarization if the API call fails (graceful degradation).
+    async fn summarize(&self, messages: &[ApiMessageV2], config: &CompactionConfig) -> String {
+        match self.summarize_async(messages, config).await {
+            Ok(summary) => summary,
+            Err(e) => {
+                warn!(
+                    error = %e,
+                    "Failed to generate Claude summary, falling back to mock summarization"
+                );
                 generate_mock_summary(messages, config)
             }
         }
@@ -643,7 +628,7 @@ impl<S: Summarizer> ContextCompactor<S> {
     /// # Errors
     ///
     /// Returns an error if summarization fails (API error, etc.)
-    pub fn compact(
+    pub async fn compact(
         &self,
         messages: &[ApiMessageV2],
         config: &CompactionConfig,
@@ -682,7 +667,7 @@ impl<S: Summarizer> ContextCompactor<S> {
         }
 
         // Generate summary of middle messages using the configured summarizer
-        let summary = self.summarizer.summarize(middle_messages, config);
+        let summary = self.summarizer.summarize(middle_messages, config).await;
 
         // Build compacted message list
         let mut compacted = Vec::with_capacity(3 + recent_messages.len());
@@ -745,13 +730,17 @@ fn fix_role_alternation(messages: &mut Vec<ApiMessageV2>) {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_summarizer_trait_exists() {
+    #[tokio::test]
+    async fn test_summarizer_trait_exists() {
         // Verify the Summarizer trait can be implemented
         struct TestSummarizer;
 
         impl Summarizer for TestSummarizer {
-            fn summarize(&self, _messages: &[ApiMessageV2], _config: &CompactionConfig) -> String {
+            async fn summarize(
+                &self,
+                _messages: &[ApiMessageV2],
+                _config: &CompactionConfig,
+            ) -> String {
                 "Test summary".to_string()
             }
         }
@@ -759,19 +748,19 @@ mod tests {
         let summarizer = TestSummarizer;
         let messages = vec![ApiMessageV2::user("Test")];
         let config = CompactionConfig::default();
-        let result = summarizer.summarize(&messages, &config);
+        let result = summarizer.summarize(&messages, &config).await;
         assert_eq!(result, "Test summary");
     }
 
-    #[test]
-    fn test_mock_summarizer_implements_trait() {
+    #[tokio::test]
+    async fn test_mock_summarizer_implements_trait() {
         let summarizer = MockSummarizer;
         let messages = vec![
             ApiMessageV2::user("Hello"),
             ApiMessageV2::assistant("Hi there!"),
         ];
         let config = CompactionConfig::default();
-        let result = summarizer.summarize(&messages, &config);
+        let result = summarizer.summarize(&messages, &config).await;
         assert!(result.contains("Previous conversation"));
     }
 
@@ -783,29 +772,29 @@ mod tests {
         assert_eq!(config.summary_style, SummaryStyle::Timeline);
     }
 
-    #[test]
-    fn test_context_compactor_new_mock() {
+    #[tokio::test]
+    async fn test_context_compactor_new_mock() {
         // Verify mock compactor can be created and used
         let compactor = ContextCompactor::new_mock();
         let messages = vec![ApiMessageV2::user("Test")];
         let config = CompactionConfig::default();
         // Should not panic
-        let _ = compactor.compact(&messages, &config);
+        let _ = compactor.compact(&messages, &config).await;
     }
 
-    #[test]
-    fn test_context_compactor_with_summarizer() {
+    #[tokio::test]
+    async fn test_context_compactor_with_summarizer() {
         // Verify compactor can be created with custom summarizer
         struct CustomSummarizer;
         impl Summarizer for CustomSummarizer {
-            fn summarize(&self, _: &[ApiMessageV2], _: &CompactionConfig) -> String {
+            async fn summarize(&self, _: &[ApiMessageV2], _: &CompactionConfig) -> String {
                 "Custom summary".to_string()
             }
         }
         let compactor = ContextCompactor::with_summarizer(CustomSummarizer);
         let messages = vec![ApiMessageV2::user("Test")];
         let config = CompactionConfig::default();
-        let _ = compactor.compact(&messages, &config);
+        let _ = compactor.compact(&messages, &config).await;
     }
 
     #[test]
@@ -855,18 +844,18 @@ mod tests {
         assert_eq!(messages[1].role, Role::Assistant);
     }
 
-    #[test]
-    fn test_compact_empty_messages() {
+    #[tokio::test]
+    async fn test_compact_empty_messages() {
         let compactor = ContextCompactor::new_mock();
         let messages: Vec<ApiMessageV2> = vec![];
         let config = CompactionConfig::default();
-        let result = compactor.compact(&messages, &config).unwrap();
+        let result = compactor.compact(&messages, &config).await.unwrap();
         assert!(result.messages.is_empty());
         assert_eq!(result.saved_tokens, 0);
     }
 
-    #[test]
-    fn test_compact_short_conversation() {
+    #[tokio::test]
+    async fn test_compact_short_conversation() {
         let compactor = ContextCompactor::new_mock();
         let messages = vec![
             ApiMessageV2::user("System"),
@@ -876,7 +865,7 @@ mod tests {
             preserve_recent: 4,
             ..Default::default()
         };
-        let result = compactor.compact(&messages, &config).unwrap();
+        let result = compactor.compact(&messages, &config).await.unwrap();
         assert_eq!(result.messages.len(), 2);
         assert_eq!(result.saved_tokens, 0);
     }

@@ -1748,9 +1748,12 @@ impl AppState {
     /// # Returns
     ///
     /// A truncated, compacted message list safe to send to the API.
-    pub fn prepare_api_messages_for_send(&mut self, model: &str) -> Vec<ApiMessageV2> {
+    pub async fn prepare_api_messages_for_send(&mut self, model: &str) -> Vec<ApiMessageV2> {
         let context_limit = model_context_limit(model);
-        if self.maybe_compact_graceful(DEFAULT_COMPACTION_THRESHOLD, context_limit) {
+        if self
+            .maybe_compact_graceful(DEFAULT_COMPACTION_THRESHOLD, context_limit)
+            .await
+        {
             tracing::info!(
                 threshold = DEFAULT_COMPACTION_THRESHOLD,
                 context_limit,
@@ -1852,7 +1855,7 @@ impl AppState {
         self.streaming_rx = Some(rx);
 
         // Compact + truncate API messages for cost-controlled sending
-        let api_messages = self.prepare_api_messages_for_send(client.model());
+        let api_messages = self.prepare_api_messages_for_send(client.model()).await;
 
         let client = std::sync::Arc::clone(client);
         let tools = self.all_tool_definitions();
@@ -2279,7 +2282,7 @@ impl AppState {
     ///     println!("Conversation was compacted");
     /// }
     /// ```
-    pub fn maybe_compact(&mut self, threshold: f32, context_limit: usize) -> Result<bool> {
+    pub async fn maybe_compact(&mut self, threshold: f32, context_limit: usize) -> Result<bool> {
         use crate::api::compaction::{CompactionConfig, ContextCompactor, MockSummarizer};
         use std::time::Instant;
 
@@ -2321,7 +2324,7 @@ impl AppState {
         let start_time = Instant::now();
 
         // Perform compaction
-        match compactor.compact(&self.api_messages, &config) {
+        match compactor.compact(&self.api_messages, &config).await {
             Ok(result) => {
                 let duration = start_time.elapsed();
                 let after_tokens = crate::api::tokens::estimate_messages_tokens(&result.messages);
@@ -2378,8 +2381,8 @@ impl AppState {
     /// # Returns
     ///
     /// `true` if compaction was performed successfully, `false` otherwise.
-    pub fn maybe_compact_graceful(&mut self, threshold: f32, context_limit: usize) -> bool {
-        match self.maybe_compact(threshold, context_limit) {
+    pub async fn maybe_compact_graceful(&mut self, threshold: f32, context_limit: usize) -> bool {
+        match self.maybe_compact(threshold, context_limit).await {
             Ok(compacted) => compacted,
             Err(e) => {
                 tracing::warn!(
@@ -3883,8 +3886,8 @@ mod tests {
     // prepare_api_messages_for_send Tests (Phase 10.1)
     // =========================================================================
 
-    #[test]
-    fn test_prepare_api_messages_truncates_large_conversation() {
+    #[tokio::test]
+    async fn test_prepare_api_messages_truncates_large_conversation() {
         let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
 
         // Add first message (always preserved)
@@ -3899,7 +3902,9 @@ mod tests {
         }
 
         let total_before = state.api_messages.len();
-        let prepared = state.prepare_api_messages_for_send("claude-sonnet-4-20250514");
+        let prepared = state
+            .prepare_api_messages_for_send("claude-sonnet-4-20250514")
+            .await;
 
         assert!(
             prepared.len() < total_before,
@@ -3909,8 +3914,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_prepare_api_messages_preserves_first_message() {
+    #[tokio::test]
+    async fn test_prepare_api_messages_preserves_first_message() {
         let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
 
         state
@@ -3924,7 +3929,9 @@ mod tests {
                 .push(ApiMessageV2::assistant(&large_content));
         }
 
-        let prepared = state.prepare_api_messages_for_send("claude-sonnet-4-20250514");
+        let prepared = state
+            .prepare_api_messages_for_send("claude-sonnet-4-20250514")
+            .await;
 
         assert_eq!(
             prepared[0].content.to_text(),
@@ -3933,8 +3940,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_prepare_api_messages_identical_for_small_conversation() {
+    #[tokio::test]
+    async fn test_prepare_api_messages_identical_for_small_conversation() {
         let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
 
         state.api_messages.push(ApiMessageV2::user("Hello"));
@@ -3942,7 +3949,9 @@ mod tests {
             .api_messages
             .push(ApiMessageV2::assistant("Hi there!"));
 
-        let prepared = state.prepare_api_messages_for_send("claude-sonnet-4-20250514");
+        let prepared = state
+            .prepare_api_messages_for_send("claude-sonnet-4-20250514")
+            .await;
 
         assert_eq!(prepared.len(), 2, "Small conversation should be unchanged");
         assert_eq!(prepared[0].content.to_text(), "Hello");
@@ -5069,8 +5078,8 @@ mod tests {
         assert!(state.token_budget().used() > 0, "Budget should have usage");
     }
 
-    #[test]
-    fn test_maybe_compact_below_threshold() {
+    #[tokio::test]
+    async fn test_maybe_compact_below_threshold() {
         let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
 
         // Add a small message
@@ -5078,25 +5087,25 @@ mod tests {
 
         // Try to compact at 80% threshold of 200k tokens
         // With minimal messages, we're well below threshold
-        let result = state.maybe_compact(0.8, 200_000);
+        let result = state.maybe_compact(0.8, 200_000).await;
 
         assert!(result.is_ok());
         assert!(!result.unwrap(), "Should not compact below threshold");
     }
 
-    #[test]
-    fn test_maybe_compact_graceful_handles_small_conversation() {
+    #[tokio::test]
+    async fn test_maybe_compact_graceful_handles_small_conversation() {
         let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
 
         state.api_messages_mut().push(ApiMessageV2::user("Hello"));
 
-        let compacted = state.maybe_compact_graceful(0.8, 200_000);
+        let compacted = state.maybe_compact_graceful(0.8, 200_000).await;
 
         assert!(!compacted, "Should not compact small conversation");
     }
 
-    #[test]
-    fn test_maybe_compact_triggers_above_threshold() {
+    #[tokio::test]
+    async fn test_maybe_compact_triggers_above_threshold() {
         let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
 
         // Add many large messages to exceed threshold
@@ -5118,7 +5127,7 @@ mod tests {
 
         // Compact at 80% of 200k = 160k tokens
         // We have >100k tokens, so use a lower context limit to trigger
-        let result = state.maybe_compact(0.5, before_tokens);
+        let result = state.maybe_compact(0.5, before_tokens).await;
 
         assert!(result.is_ok());
         // Whether it actually compacted depends on the compactor behavior
@@ -5179,8 +5188,8 @@ mod tests {
         assert_eq!(summary.average_tokens_saved, 0);
     }
 
-    #[test]
-    fn test_compaction_metrics_record_on_compact() {
+    #[tokio::test]
+    async fn test_compaction_metrics_record_on_compact() {
         let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
 
         // Add many large messages to exceed threshold
@@ -5196,7 +5205,7 @@ mod tests {
         assert!(before_tokens > 100_000);
 
         // Trigger compaction
-        let _ = state.maybe_compact(0.5, before_tokens);
+        let _ = state.maybe_compact(0.5, before_tokens).await;
 
         // Metrics should be recorded (if compaction ran)
         // We can at least verify the accessor works

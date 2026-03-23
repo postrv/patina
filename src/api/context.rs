@@ -118,7 +118,8 @@ pub fn truncate_context(messages: &[ApiMessageV2], max_tokens: usize) -> Vec<Api
 /// # Example
 ///
 /// ```rust
-/// use patina::api::context::compact_or_truncate_context;
+/// # tokio_test::block_on(async {
+/// use patina::api::compact_or_truncate_context;
 /// use patina::types::ApiMessageV2;
 ///
 /// let messages = vec![
@@ -128,11 +129,11 @@ pub fn truncate_context(messages: &[ApiMessageV2], max_tokens: usize) -> Vec<Api
 ///     ApiMessageV2::assistant("Response 2"),
 /// ];
 ///
-/// let result = compact_or_truncate_context(&messages, 1000, 2);
+/// let result = compact_or_truncate_context(&messages, 1000, 2).await;
 /// assert!(!result.is_empty());
+/// # });
 /// ```
-#[must_use]
-pub fn compact_or_truncate_context(
+pub async fn compact_or_truncate_context(
     messages: &[ApiMessageV2],
     max_tokens: usize,
     preserve_recent: usize,
@@ -145,7 +146,7 @@ pub fn compact_or_truncate_context(
         ..Default::default()
     };
 
-    match compactor.compact(messages, &config) {
+    match compactor.compact(messages, &config).await {
         Ok(result) => {
             if result.saved_tokens > 0 {
                 tracing::info!(
@@ -498,32 +499,32 @@ mod tests {
     // compact_or_truncate_context tests
     // =========================================================================
 
-    #[test]
-    fn test_compact_or_truncate_empty() {
+    #[tokio::test]
+    async fn test_compact_or_truncate_empty() {
         let messages: Vec<ApiMessageV2> = vec![];
-        let result = compact_or_truncate_context(&messages, 1000, 2);
+        let result = compact_or_truncate_context(&messages, 1000, 2).await;
         assert!(result.is_empty());
     }
 
-    #[test]
-    fn test_compact_or_truncate_under_budget_unchanged() {
+    #[tokio::test]
+    async fn test_compact_or_truncate_under_budget_unchanged() {
         let messages = vec![
             make_message("user", "Hello"),
             make_message("assistant", "Hi there!"),
         ];
-        let result = compact_or_truncate_context(&messages, 10_000, 2);
+        let result = compact_or_truncate_context(&messages, 10_000, 2).await;
         assert_eq!(result.len(), 2);
     }
 
-    #[test]
-    fn test_compact_or_truncate_preserves_first_message() {
+    #[tokio::test]
+    async fn test_compact_or_truncate_preserves_first_message() {
         let messages = vec![
             make_message("user", "System prompt with project context"),
             make_message("assistant", "Ready to help"),
             make_message("user", "Task 1"),
             make_message("assistant", "Done 1"),
         ];
-        let result = compact_or_truncate_context(&messages, 100, 2);
+        let result = compact_or_truncate_context(&messages, 100, 2).await;
         assert!(!result.is_empty());
         assert_eq!(
             result[0].content.to_text(),
@@ -531,8 +532,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_compact_or_truncate_preserves_recent() {
+    #[tokio::test]
+    async fn test_compact_or_truncate_preserves_recent() {
         // Create a long conversation that needs compaction
         let long_padding = "x".repeat(200);
         let mut messages = vec![make_message("user", &format!("System {}", long_padding))];
@@ -544,7 +545,7 @@ mod tests {
             ));
         }
 
-        let result = compact_or_truncate_context(&messages, 200, 2);
+        let result = compact_or_truncate_context(&messages, 200, 2).await;
 
         // Last message should be preserved
         let last_original = messages.last().unwrap().content.to_text();

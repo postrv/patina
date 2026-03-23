@@ -42,8 +42,8 @@ fn user_with_tool_result(tool_id: &str, result: &str) -> ApiMessageV2 {
 
 /// The first message (system/project context) must always be preserved.
 /// This is critical for maintaining conversation coherence.
-#[test]
-fn test_compact_preserves_system_message() {
+#[tokio::test]
+async fn test_compact_preserves_system_message() {
     let compactor = ContextCompactor::new_mock();
     let messages = vec![
         user("You are a helpful assistant for project X..."),
@@ -53,7 +53,7 @@ fn test_compact_preserves_system_message() {
     ];
 
     let config = CompactionConfig::default();
-    let result = compactor.compact(&messages, &config);
+    let result = compactor.compact(&messages, &config).await;
 
     assert!(result.is_ok());
     let result = result.unwrap();
@@ -76,8 +76,8 @@ fn test_compact_preserves_system_message() {
 
 /// Old messages should be summarized into a timeline summary,
 /// not just dropped like truncation does.
-#[test]
-fn test_compact_summarizes_old_messages() {
+#[tokio::test]
+async fn test_compact_summarizes_old_messages() {
     let compactor = ContextCompactor::new_mock();
 
     // Create a long conversation with substantial content that exceeds token budget
@@ -103,7 +103,7 @@ fn test_compact_summarizes_old_messages() {
         ..Default::default()
     };
 
-    let result = compactor.compact(&messages, &config).unwrap();
+    let result = compactor.compact(&messages, &config).await.unwrap();
 
     // Should have fewer messages than original
     assert!(
@@ -139,8 +139,8 @@ fn test_compact_summarizes_old_messages() {
 
 /// Recent messages should be preserved verbatim, not summarized.
 /// This ensures the model has immediate context for the current task.
-#[test]
-fn test_compact_preserves_recent_messages() {
+#[tokio::test]
+async fn test_compact_preserves_recent_messages() {
     let compactor = ContextCompactor::new_mock();
 
     let messages = vec![
@@ -160,7 +160,7 @@ fn test_compact_preserves_recent_messages() {
         ..Default::default()
     };
 
-    let result = compactor.compact(&messages, &config).unwrap();
+    let result = compactor.compact(&messages, &config).await.unwrap();
 
     // Last 4 messages should be preserved exactly
     let last_four: Vec<_> = messages.iter().rev().take(4).rev().collect();
@@ -180,8 +180,8 @@ fn test_compact_preserves_recent_messages() {
 // =============================================================================
 
 /// Compacted output must respect the configured token budget.
-#[test]
-fn test_compact_respects_token_budget() {
+#[tokio::test]
+async fn test_compact_respects_token_budget() {
     let compactor = ContextCompactor::new_mock();
 
     // Create a very long conversation
@@ -204,7 +204,7 @@ fn test_compact_respects_token_budget() {
         ..Default::default()
     };
 
-    let result = compactor.compact(&messages, &config).unwrap();
+    let result = compactor.compact(&messages, &config).await.unwrap();
 
     let actual_tokens = estimate_messages_tokens(&result.messages);
     assert!(
@@ -220,8 +220,8 @@ fn test_compact_respects_token_budget() {
 // =============================================================================
 
 /// The compacted conversation must maintain alternating user/assistant roles.
-#[test]
-fn test_compact_maintains_conversation_coherence() {
+#[tokio::test]
+async fn test_compact_maintains_conversation_coherence() {
     let compactor = ContextCompactor::new_mock();
 
     let messages = vec![
@@ -241,7 +241,7 @@ fn test_compact_maintains_conversation_coherence() {
         ..Default::default()
     };
 
-    let result = compactor.compact(&messages, &config).unwrap();
+    let result = compactor.compact(&messages, &config).await.unwrap();
 
     // Check role alternation (first should be user)
     for window in result.messages.windows(2) {
@@ -265,8 +265,8 @@ fn test_compact_maintains_conversation_coherence() {
 
 /// Tool use and tool result blocks must be kept together.
 /// Separating them would break the conversation structure.
-#[test]
-fn test_compact_handles_tool_use_pairs() {
+#[tokio::test]
+async fn test_compact_handles_tool_use_pairs() {
     let compactor = ContextCompactor::new_mock();
 
     let messages = vec![
@@ -286,7 +286,7 @@ fn test_compact_handles_tool_use_pairs() {
         ..Default::default()
     };
 
-    let result = compactor.compact(&messages, &config).unwrap();
+    let result = compactor.compact(&messages, &config).await.unwrap();
 
     // If tool_use block is included, its corresponding tool_result must also be included
     let has_tool_use = result.messages.iter().any(|m| {
@@ -321,8 +321,8 @@ fn test_compact_handles_tool_use_pairs() {
 // =============================================================================
 
 /// The summary should be structured as a timeline with key decisions/outcomes.
-#[test]
-fn test_compact_generates_timeline_summary() {
+#[tokio::test]
+async fn test_compact_generates_timeline_summary() {
     let compactor = ContextCompactor::new_mock();
 
     // Use longer messages to ensure we exceed the token budget
@@ -345,7 +345,7 @@ fn test_compact_generates_timeline_summary() {
         ..Default::default()
     };
 
-    let result = compactor.compact(&messages, &config).unwrap();
+    let result = compactor.compact(&messages, &config).await.unwrap();
 
     // The result should contain a summary message
     // Look for timeline-like content
@@ -379,8 +379,8 @@ fn test_compact_generates_timeline_summary() {
 
 /// If the input already contains summary messages, they should be merged
 /// rather than creating nested summaries.
-#[test]
-fn test_compact_merges_adjacent_summaries() {
+#[tokio::test]
+async fn test_compact_merges_adjacent_summaries() {
     let compactor = ContextCompactor::new_mock();
 
     // Simulate a conversation that was already compacted once
@@ -400,7 +400,7 @@ fn test_compact_merges_adjacent_summaries() {
         ..Default::default()
     };
 
-    let result = compactor.compact(&messages, &config).unwrap();
+    let result = compactor.compact(&messages, &config).await.unwrap();
 
     // Count how many "summary" messages we have
     let summary_count = result
@@ -426,8 +426,8 @@ fn test_compact_merges_adjacent_summaries() {
 
 /// If the conversation is already under the token budget,
 /// compaction should return it unchanged.
-#[test]
-fn test_compact_idempotent_when_under_budget() {
+#[tokio::test]
+async fn test_compact_idempotent_when_under_budget() {
     let compactor = ContextCompactor::new_mock();
 
     let messages = vec![
@@ -443,7 +443,7 @@ fn test_compact_idempotent_when_under_budget() {
         ..Default::default()
     };
 
-    let result = compactor.compact(&messages, &config).unwrap();
+    let result = compactor.compact(&messages, &config).await.unwrap();
 
     // Should return messages unchanged
     assert_eq!(
@@ -472,8 +472,8 @@ fn test_compact_idempotent_when_under_budget() {
 // =============================================================================
 
 /// Compaction should report how many tokens were saved.
-#[test]
-fn test_compact_reports_token_savings() {
+#[tokio::test]
+async fn test_compact_reports_token_savings() {
     let compactor = ContextCompactor::new_mock();
 
     // Create a conversation with significant content that definitely exceeds budget
@@ -498,7 +498,7 @@ fn test_compact_reports_token_savings() {
         ..Default::default()
     };
 
-    let result = compactor.compact(&messages, &config).unwrap();
+    let result = compactor.compact(&messages, &config).await.unwrap();
 
     // Should report positive token savings
     assert!(
