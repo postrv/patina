@@ -395,6 +395,54 @@ impl WorktreeStatus {
     }
 }
 
+/// Session tracking state extracted from AppState.
+///
+/// Groups the session ID and dirty flag for auto-save functionality.
+#[derive(Debug, Clone, Default)]
+pub struct SessionTracking {
+    /// Current session ID, assigned on first save or restore.
+    id: Option<String>,
+    /// Whether the session needs to be saved.
+    dirty: bool,
+}
+
+impl SessionTracking {
+    /// Creates a new `SessionTracking` with no session ID and clean state.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Returns the current session ID, if one has been assigned.
+    #[must_use]
+    pub fn id(&self) -> Option<&str> {
+        self.id.as_deref()
+    }
+
+    /// Sets the session ID.
+    pub fn set_id(&mut self, id: String) {
+        self.id = Some(id);
+    }
+
+    /// Marks the session as needing to be saved.
+    pub fn mark_dirty(&mut self) {
+        self.dirty = true;
+    }
+
+    /// Returns `true` and clears the dirty flag if the session needs saving.
+    ///
+    /// This is an atomic check-and-clear to prevent double saves.
+    pub fn take_dirty(&mut self) -> bool {
+        std::mem::take(&mut self.dirty)
+    }
+
+    /// Returns whether the session is dirty without clearing.
+    #[must_use]
+    pub fn is_dirty(&self) -> bool {
+        self.dirty
+    }
+}
+
 pub struct AppState {
     /// Full API messages with content blocks (tool_use, tool_result).
     /// This is the authoritative conversation history sent to the API.
@@ -416,12 +464,8 @@ pub struct AppState {
     /// Git worktree status (branch, modified, ahead/behind).
     worktree: WorktreeStatus,
 
-    // Session tracking for auto-save
-    session_id: Option<String>,
-
-    /// Whether the session needs to be saved.
-    /// Set by handlers/code that modify conversation state; cleared by `SessionHandler`.
-    session_dirty: bool,
+    /// Session tracking for auto-save (ID + dirty flag).
+    session: SessionTracking,
 
     /// Whether the application should exit the event loop.
     /// Set by `KeyboardHandler` on Ctrl+C / Ctrl+D; checked by the event loop.
@@ -625,8 +669,7 @@ impl AppState {
                 ..Default::default()
             },
             worktree: WorktreeStatus::new(),
-            session_id: None,
-            session_dirty: false,
+            session: SessionTracking::new(),
             quit_requested: false,
             tool_state: ToolExecutionState {
                 tool_loop: ToolLoop::new(),
@@ -2463,39 +2506,34 @@ impl AppState {
     }
 
     // ========================================================================
-    // Session Restoration and Auto-Save
+    // Session Restoration and Auto-Save (delegates to SessionTracking)
     // ========================================================================
 
+    /// Returns a reference to the session tracking state.
+    #[must_use]
+    pub fn session_tracking(&self) -> &SessionTracking {
+        &self.session
+    }
+
     /// Returns the current session ID, if one has been assigned.
-    ///
-    /// A session ID is assigned when the session is first saved, or when
-    /// restoring from a previous session.
     #[must_use]
     pub fn session_id(&self) -> Option<&str> {
-        self.session_id.as_deref()
+        self.session.id()
     }
 
     /// Sets the session ID.
-    ///
-    /// This is called after saving a session or when restoring from one.
     pub fn set_session_id(&mut self, id: String) {
-        self.session_id = Some(id);
+        self.session.set_id(id);
     }
 
     /// Marks the session as needing to be saved.
-    ///
-    /// Called by handlers or event-processing code after modifying conversation
-    /// state (e.g., message submission, message completion, tool results).
-    /// The `SessionHandler` checks this flag and performs the actual save.
     pub fn mark_session_dirty(&mut self) {
-        self.session_dirty = true;
+        self.session.mark_dirty();
     }
 
     /// Returns `true` and clears the dirty flag if the session needs saving.
-    ///
-    /// This is an atomic check-and-clear to prevent double saves.
     pub fn take_session_dirty(&mut self) -> bool {
-        std::mem::take(&mut self.session_dirty)
+        self.session.take_dirty()
     }
 
     /// Creates a `Session` from the current application state.
@@ -2569,7 +2607,7 @@ impl AppState {
 
         // Restore session ID if available
         if let Some(id) = session.id() {
-            self.session_id = Some(id.to_string());
+            self.session.set_id(id.to_string());
         }
 
         // Mark for full redraw
@@ -5878,5 +5916,53 @@ mod tests {
         state.dirty.clear();
         state.set_worktree_behind(1);
         assert!(state.dirty.full);
+    }
+
+    // ========================================================================
+    // SessionTracking tests
+    // ========================================================================
+
+    #[test]
+    fn test_session_tracking_default() {
+        let st = SessionTracking::new();
+        assert_eq!(st.id(), None);
+        assert!(!st.is_dirty());
+    }
+
+    #[test]
+    fn test_session_tracking_set_id() {
+        let mut st = SessionTracking::new();
+        st.set_id("abc-123".to_string());
+        assert_eq!(st.id(), Some("abc-123"));
+    }
+
+    #[test]
+    fn test_session_tracking_dirty_cycle() {
+        let mut st = SessionTracking::new();
+        assert!(!st.is_dirty());
+
+        st.mark_dirty();
+        assert!(st.is_dirty());
+
+        // take_dirty returns true and clears
+        assert!(st.take_dirty());
+        assert!(!st.is_dirty());
+
+        // second take returns false
+        assert!(!st.take_dirty());
+    }
+
+    #[test]
+    fn test_app_state_session_delegation() {
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+        assert_eq!(state.session_id(), None);
+
+        state.set_session_id("sess-1".to_string());
+        assert_eq!(state.session_id(), Some("sess-1"));
+        assert_eq!(state.session_tracking().id(), Some("sess-1"));
+
+        state.mark_session_dirty();
+        assert!(state.take_session_dirty());
+        assert!(!state.take_session_dirty());
     }
 }
