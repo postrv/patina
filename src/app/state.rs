@@ -395,6 +395,122 @@ impl WorktreeStatus {
     }
 }
 
+/// Agent panel state extracted from AppState.
+///
+/// Groups the subagent spawner, agent panel entries for TUI display,
+/// and pending conflict reports.
+pub struct AgentPanelState {
+    /// Optional subagent spawner for creating subagent sessions.
+    spawner: Option<SubagentSpawner>,
+    /// Agent panel entries for the TUI agent status display.
+    entries: Vec<AgentPanelEntry>,
+    /// Pending conflict reports from cross-agent conflict detection.
+    pending_conflicts: Vec<ConflictReport>,
+}
+
+impl AgentPanelState {
+    /// Creates a new `AgentPanelState` with the given spawner.
+    #[must_use]
+    pub fn new(spawner: Option<SubagentSpawner>) -> Self {
+        Self {
+            spawner,
+            entries: Vec::new(),
+            pending_conflicts: Vec::new(),
+        }
+    }
+
+    /// Returns whether subagent orchestration is enabled.
+    #[must_use]
+    pub fn subagents_enabled(&self) -> bool {
+        self.spawner.is_some()
+    }
+
+    /// Returns a reference to the subagent spawner if enabled.
+    #[must_use]
+    pub fn spawner(&self) -> Option<&SubagentSpawner> {
+        self.spawner.as_ref()
+    }
+
+    /// Returns the current agent panel entries for TUI rendering.
+    #[must_use]
+    pub fn entries(&self) -> &[AgentPanelEntry] {
+        &self.entries
+    }
+
+    /// Updates the agent panel with a progress event.
+    ///
+    /// If an entry for the given `agent_id` exists, it is updated in place.
+    /// Otherwise, a new entry is created. Returns `true` if state changed.
+    pub fn update_progress(&mut self, agent_id: &str, agent_name: &str, progress: &AgentProgress) {
+        let status = match progress {
+            AgentProgress::IterationStarted { iteration, max } => AgentPanelStatus::Running {
+                iteration: *iteration,
+                max_iterations: *max,
+            },
+            AgentProgress::ContentDelta(_) => {
+                // Keep existing status for content deltas; just update last_content.
+                if let Some(entry) = self.entries.iter_mut().find(|e| e.agent_id == agent_id) {
+                    if let AgentProgress::ContentDelta(text) = progress {
+                        entry.last_content = text.chars().take(80).collect();
+                    }
+                    return;
+                }
+                // First event for this agent; default to iteration 0.
+                AgentPanelStatus::Running {
+                    iteration: 0,
+                    max_iterations: 0,
+                }
+            }
+            AgentProgress::Completed {
+                iterations_used, ..
+            } => AgentPanelStatus::Completed {
+                iterations_used: *iterations_used,
+            },
+            AgentProgress::Failed { error, .. } => AgentPanelStatus::Failed {
+                error: error.clone(),
+            },
+        };
+
+        if let Some(entry) = self.entries.iter_mut().find(|e| e.agent_id == agent_id) {
+            entry.status = status;
+            if let AgentProgress::ContentDelta(text) = progress {
+                entry.last_content = text.chars().take(80).collect();
+            }
+            if let AgentProgress::Completed { output, .. } = progress {
+                entry.last_content = output.chars().take(80).collect();
+            }
+        } else {
+            let last_content = match progress {
+                AgentProgress::ContentDelta(text) => text.chars().take(80).collect(),
+                AgentProgress::Completed { output, .. } => output.chars().take(80).collect(),
+                _ => String::new(),
+            };
+            self.entries.push(AgentPanelEntry {
+                agent_id: agent_id.to_string(),
+                agent_name: agent_name.to_string(),
+                status,
+                last_content,
+            });
+        }
+    }
+
+    /// Records a conflict report.
+    pub fn add_conflict(&mut self, report: ConflictReport) {
+        self.pending_conflicts.push(report);
+    }
+
+    /// Takes all pending conflict reports, leaving the internal list empty.
+    pub fn take_conflicts(&mut self) -> Vec<ConflictReport> {
+        std::mem::take(&mut self.pending_conflicts)
+    }
+
+    /// Returns `true` if there are pending conflict reports.
+    #[must_use]
+    pub fn has_pending_conflicts(&self) -> bool {
+        !self.pending_conflicts.is_empty()
+    }
+}
+
 /// Session tracking state extracted from AppState.
 ///
 /// Groups the session ID and dirty flag for auto-save functionality.
@@ -489,17 +605,8 @@ pub struct AppState {
     /// Loaded from `~/.config/patina/plugins/` on startup unless disabled.
     plugin_registry: PluginRegistry,
 
-    /// Optional subagent spawner for creating subagent sessions.
-    /// Only initialized when subagent orchestration is enabled via `--enable-subagents`.
-    subagent_spawner: Option<SubagentSpawner>,
-
-    /// Agent panel entries for the TUI agent status display.
-    /// Updated by `AgentHandler` when agent events are received.
-    agent_panel_entries: Vec<AgentPanelEntry>,
-
-    /// Pending conflict reports from cross-agent conflict detection.
-    /// Consumed by the TUI to display conflict alerts.
-    pending_conflict_reports: Vec<ConflictReport>,
+    /// Agent panel state (entries, conflict reports, spawner).
+    agent_panel: AgentPanelState,
 
     /// All continuous coding loop state grouped together.
     continuous: ContinuousLoopState,
@@ -701,9 +808,7 @@ impl AppState {
                 compaction_metrics: Arc::new(CompactionMetrics::new()),
             },
             plugin_registry,
-            subagent_spawner,
-            agent_panel_entries: Vec::new(),
-            pending_conflict_reports: Vec::new(),
+            agent_panel: AgentPanelState::new(subagent_spawner),
             continuous: ContinuousLoopState {
                 status: ContinuousLoopStatus::Inactive,
                 iterations_completed: 0,
@@ -755,120 +860,61 @@ impl AppState {
         &self.plugin_registry
     }
 
+    /// Returns a reference to the agent panel state.
+    #[must_use]
+    pub fn agent_panel(&self) -> &AgentPanelState {
+        &self.agent_panel
+    }
+
     /// Returns whether subagent orchestration is enabled.
     #[must_use]
     pub fn subagents_enabled(&self) -> bool {
-        self.subagent_spawner.is_some()
+        self.agent_panel.subagents_enabled()
     }
 
     /// Returns a reference to the subagent spawner if enabled.
     #[must_use]
     pub fn subagent_spawner(&self) -> Option<&SubagentSpawner> {
-        self.subagent_spawner.as_ref()
+        self.agent_panel.spawner()
     }
 
     // =========================================================================
-    // Agent panel methods (Task 4.5)
+    // Agent panel methods (delegates to AgentPanelState)
     // =========================================================================
 
     /// Returns the current agent panel entries for TUI rendering.
     #[must_use]
     pub fn agent_panel_entries(&self) -> &[AgentPanelEntry] {
-        &self.agent_panel_entries
+        self.agent_panel.entries()
     }
 
     /// Updates the agent panel with a progress event.
-    ///
-    /// If an entry for the given `agent_id` exists, it is updated in place.
-    /// Otherwise, a new entry is created.
-    ///
-    /// # Panics
-    ///
-    /// Does not panic.
     pub fn update_agent_progress(
         &mut self,
         agent_id: &str,
         agent_name: &str,
         progress: &AgentProgress,
     ) {
-        let status = match progress {
-            AgentProgress::IterationStarted { iteration, max } => AgentPanelStatus::Running {
-                iteration: *iteration,
-                max_iterations: *max,
-            },
-            AgentProgress::ContentDelta(_) => {
-                // Keep existing status for content deltas; just update last_content.
-                if let Some(entry) = self
-                    .agent_panel_entries
-                    .iter_mut()
-                    .find(|e| e.agent_id == agent_id)
-                {
-                    if let AgentProgress::ContentDelta(text) = progress {
-                        entry.last_content = text.chars().take(80).collect();
-                    }
-                    self.dirty.full = true;
-                    return;
-                }
-                // First event for this agent; default to iteration 0.
-                AgentPanelStatus::Running {
-                    iteration: 0,
-                    max_iterations: 0,
-                }
-            }
-            AgentProgress::Completed {
-                iterations_used, ..
-            } => AgentPanelStatus::Completed {
-                iterations_used: *iterations_used,
-            },
-            AgentProgress::Failed { error, .. } => AgentPanelStatus::Failed {
-                error: error.clone(),
-            },
-        };
-
-        if let Some(entry) = self
-            .agent_panel_entries
-            .iter_mut()
-            .find(|e| e.agent_id == agent_id)
-        {
-            entry.status = status;
-            if let AgentProgress::ContentDelta(text) = progress {
-                entry.last_content = text.chars().take(80).collect();
-            }
-            if let AgentProgress::Completed { output, .. } = progress {
-                entry.last_content = output.chars().take(80).collect();
-            }
-        } else {
-            let last_content = match progress {
-                AgentProgress::ContentDelta(text) => text.chars().take(80).collect(),
-                AgentProgress::Completed { output, .. } => output.chars().take(80).collect(),
-                _ => String::new(),
-            };
-            self.agent_panel_entries.push(AgentPanelEntry {
-                agent_id: agent_id.to_string(),
-                agent_name: agent_name.to_string(),
-                status,
-                last_content,
-            });
-        }
-
+        self.agent_panel
+            .update_progress(agent_id, agent_name, progress);
         self.dirty.full = true;
     }
 
     /// Records a conflict report for display in the TUI.
     pub fn add_conflict_report(&mut self, report: ConflictReport) {
-        self.pending_conflict_reports.push(report);
+        self.agent_panel.add_conflict(report);
         self.dirty.full = true;
     }
 
     /// Takes all pending conflict reports, leaving the internal list empty.
     pub fn take_conflict_reports(&mut self) -> Vec<ConflictReport> {
-        std::mem::take(&mut self.pending_conflict_reports)
+        self.agent_panel.take_conflicts()
     }
 
     /// Returns `true` if there are pending conflict reports.
     #[must_use]
     pub fn has_pending_conflicts(&self) -> bool {
-        !self.pending_conflict_reports.is_empty()
+        self.agent_panel.has_pending_conflicts()
     }
 
     // =========================================================================
@@ -5964,5 +6010,89 @@ mod tests {
         state.mark_session_dirty();
         assert!(state.take_session_dirty());
         assert!(!state.take_session_dirty());
+    }
+
+    // ========================================================================
+    // AgentPanelState tests
+    // ========================================================================
+
+    #[test]
+    fn test_agent_panel_state_new() {
+        let panel = AgentPanelState::new(None);
+        assert!(!panel.subagents_enabled());
+        assert!(panel.spawner().is_none());
+        assert!(panel.entries().is_empty());
+        assert!(!panel.has_pending_conflicts());
+    }
+
+    #[test]
+    fn test_agent_panel_state_with_spawner() {
+        let panel = AgentPanelState::new(Some(SubagentSpawner::new()));
+        assert!(panel.subagents_enabled());
+        assert!(panel.spawner().is_some());
+    }
+
+    #[test]
+    fn test_agent_panel_update_progress_new_agent() {
+        let mut panel = AgentPanelState::new(None);
+        let progress = AgentProgress::IterationStarted {
+            iteration: 1,
+            max: 5,
+        };
+        panel.update_progress("agent-1", "Test Agent", &progress);
+        assert_eq!(panel.entries().len(), 1);
+        assert_eq!(panel.entries()[0].agent_id, "agent-1");
+        assert_eq!(panel.entries()[0].agent_name, "Test Agent");
+    }
+
+    #[test]
+    fn test_agent_panel_update_progress_existing_agent() {
+        let mut panel = AgentPanelState::new(None);
+        let p1 = AgentProgress::IterationStarted {
+            iteration: 1,
+            max: 5,
+        };
+        panel.update_progress("agent-1", "Test", &p1);
+
+        let p2 = AgentProgress::IterationStarted {
+            iteration: 2,
+            max: 5,
+        };
+        panel.update_progress("agent-1", "Test", &p2);
+
+        // Should still be 1 entry, updated in place
+        assert_eq!(panel.entries().len(), 1);
+        match &panel.entries()[0].status {
+            AgentPanelStatus::Running { iteration, .. } => assert_eq!(*iteration, 2),
+            _ => panic!("Expected Running status"),
+        }
+    }
+
+    #[test]
+    fn test_agent_panel_conflict_reports() {
+        let mut panel = AgentPanelState::new(None);
+        assert!(!panel.has_pending_conflicts());
+
+        panel.add_conflict(ConflictReport::empty());
+        assert!(panel.has_pending_conflicts());
+
+        let reports = panel.take_conflicts();
+        assert_eq!(reports.len(), 1);
+        assert!(!panel.has_pending_conflicts());
+    }
+
+    #[test]
+    fn test_app_state_agent_panel_delegation() {
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+        assert!(!state.subagents_enabled());
+        assert!(state.agent_panel_entries().is_empty());
+
+        let progress = AgentProgress::IterationStarted {
+            iteration: 1,
+            max: 3,
+        };
+        state.update_agent_progress("a1", "Agent", &progress);
+        assert_eq!(state.agent_panel_entries().len(), 1);
+        assert!(state.dirty.full);
     }
 }
