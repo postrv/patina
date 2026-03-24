@@ -130,6 +130,22 @@ impl WebFetchTool {
         // Make the request
         let response = self.client.get(parsed_url.as_str()).send().await?;
 
+        // Post-connect DNS rebinding protection: validate the resolved IP address
+        // even if the hostname passed pre-connect validation. A malicious DNS server
+        // could return a public IP during validation and a private IP at connect time.
+        if !self.config.allow_localhost {
+            if let Some(remote_addr) = response.remote_addr() {
+                let ip = remote_addr.ip();
+                if ip.is_loopback() || Self::is_private_ip_addr(ip) {
+                    bail!(
+                        "DNS rebinding detected: {} resolved to private IP {}",
+                        parsed_url.host_str().unwrap_or("unknown"),
+                        ip
+                    );
+                }
+            }
+        }
+
         let status = response.status().as_u16();
         let content_type = response
             .headers()
@@ -258,6 +274,27 @@ impl WebFetchTool {
         }
     }
 
+    /// Checks if a resolved IP address is in a private/reserved range.
+    ///
+    /// Operates on `std::net::IpAddr` directly (unlike `is_private_ip` which
+    /// parses a string). Used for post-connect DNS rebinding validation.
+    fn is_private_ip_addr(ip: IpAddr) -> bool {
+        match ip {
+            IpAddr::V4(ipv4) => {
+                let octets = ipv4.octets();
+                octets[0] == 10
+                    || (octets[0] == 172 && (16..=31).contains(&octets[1]))
+                    || (octets[0] == 192 && octets[1] == 168)
+                    || (octets[0] == 169 && octets[1] == 254)
+            }
+            IpAddr::V6(ipv6) => {
+                ipv6.is_loopback()
+                    || ((ipv6.segments()[0] & 0xffc0) == 0xfe80) // link-local
+                    || ((ipv6.segments()[0] & 0xfe00) == 0xfc00) // unique local
+            }
+        }
+    }
+
     /// Checks if a content type indicates HTML content.
     fn is_html_content_type(content_type: &str) -> bool {
         let ct_lower = content_type.to_lowercase();
@@ -337,5 +374,67 @@ mod tests {
     fn test_web_fetch_tool_new_returns_ok() {
         let result = WebFetchTool::new(WebFetchConfig::default());
         assert!(result.is_ok(), "Default config should produce Ok");
+    }
+
+    #[test]
+    fn test_is_private_ip_addr_v4_ranges() {
+        use std::net::{IpAddr, Ipv4Addr};
+
+        // Private ranges
+        assert!(WebFetchTool::is_private_ip_addr(IpAddr::V4(Ipv4Addr::new(
+            10, 0, 0, 1
+        ))));
+        assert!(WebFetchTool::is_private_ip_addr(IpAddr::V4(Ipv4Addr::new(
+            172, 16, 0, 1
+        ))));
+        assert!(WebFetchTool::is_private_ip_addr(IpAddr::V4(Ipv4Addr::new(
+            192, 168, 1, 1
+        ))));
+        assert!(WebFetchTool::is_private_ip_addr(IpAddr::V4(Ipv4Addr::new(
+            169, 254, 0, 1
+        ))));
+
+        // Public
+        assert!(!WebFetchTool::is_private_ip_addr(IpAddr::V4(
+            Ipv4Addr::new(8, 8, 8, 8)
+        )));
+        assert!(!WebFetchTool::is_private_ip_addr(IpAddr::V4(
+            Ipv4Addr::new(1, 1, 1, 1)
+        )));
+    }
+
+    #[test]
+    fn test_is_private_ip_addr_v6_ranges() {
+        use std::net::{IpAddr, Ipv6Addr};
+
+        // Loopback
+        assert!(WebFetchTool::is_private_ip_addr(IpAddr::V6(
+            Ipv6Addr::LOCALHOST
+        )));
+        // Link-local (fe80::/10)
+        assert!(WebFetchTool::is_private_ip_addr(IpAddr::V6(Ipv6Addr::new(
+            0xfe80, 0, 0, 0, 0, 0, 0, 1
+        ))));
+        // Unique local (fc00::/7)
+        assert!(WebFetchTool::is_private_ip_addr(IpAddr::V6(Ipv6Addr::new(
+            0xfc00, 0, 0, 0, 0, 0, 0, 1
+        ))));
+
+        // Public
+        assert!(!WebFetchTool::is_private_ip_addr(IpAddr::V6(
+            Ipv6Addr::new(0x2001, 0x4860, 0x4860, 0, 0, 0, 0, 0x8888)
+        )));
+    }
+
+    #[test]
+    fn test_is_private_ip_addr_public() {
+        use std::net::{IpAddr, Ipv4Addr};
+
+        assert!(!WebFetchTool::is_private_ip_addr(IpAddr::V4(
+            Ipv4Addr::new(8, 8, 8, 8)
+        )));
+        assert!(!WebFetchTool::is_private_ip_addr(IpAddr::V4(
+            Ipv4Addr::new(93, 184, 216, 34)
+        )));
     }
 }
