@@ -14,7 +14,8 @@
 //! async fn send_message(provider: &dyn LlmProvider) {
 //!     let messages = vec![ApiMessageV2::user("Hello!")];
 //!     let (tx, mut rx) = mpsc::channel(32);
-//!     provider.stream_message(&messages, None, None, tx).await.unwrap();
+//!     let options = RequestOptions::default();
+//!     provider.stream_message(&messages, None, None, &options, tx).await.unwrap();
 //!     while let Some(event) = rx.recv().await {
 //!         println!("{:?}", event);
 //!     }
@@ -28,7 +29,23 @@ use anyhow::Result;
 use tokio::sync::mpsc;
 
 use crate::api::tools::{ToolChoice, ToolDefinition};
+use crate::api::{SystemBlock, ThinkingConfig};
 use crate::types::{ApiMessageV2, StreamEvent};
+
+/// Additional options for a streaming message request.
+///
+/// Aggregates optional parameters that not all providers support,
+/// keeping the trait method signature stable as new features are added.
+///
+/// Providers that do not support a given option (e.g., OpenRouter for
+/// `thinking`) should log a warning and ignore the unsupported field.
+#[derive(Debug, Clone, Default)]
+pub struct RequestOptions {
+    /// Extended thinking configuration (budget_tokens).
+    pub thinking: Option<ThinkingConfig>,
+    /// System message blocks with optional cache control.
+    pub system: Option<Vec<SystemBlock>>,
+}
 
 /// Trait abstracting over LLM API providers.
 ///
@@ -163,7 +180,7 @@ pub trait LlmProvider: Send + Sync {
     /// Returns the model identifier (e.g., "claude-sonnet-4-20250514").
     fn model(&self) -> &str;
 
-    /// Sends a streaming message request with optional tools.
+    /// Sends a streaming message request with optional tools and options.
     ///
     /// Events are sent through `tx` as they arrive from the provider.
     /// The channel is dropped when streaming completes (success or failure).
@@ -173,6 +190,7 @@ pub trait LlmProvider: Send + Sync {
     /// * `messages` - The conversation history
     /// * `tools` - Optional tool definitions the model can use
     /// * `tool_choice` - Optional constraint on tool selection
+    /// * `options` - Additional request options (thinking, caching, etc.)
     /// * `tx` - Channel sender for streaming events
     ///
     /// # Errors
@@ -184,6 +202,7 @@ pub trait LlmProvider: Send + Sync {
         messages: &'a [ApiMessageV2],
         tools: Option<&'a [ToolDefinition]>,
         tool_choice: Option<&'a ToolChoice>,
+        options: &'a RequestOptions,
         tx: mpsc::Sender<StreamEvent>,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>>;
 }
@@ -260,6 +279,7 @@ impl LlmProvider for FallbackProvider {
         messages: &'a [ApiMessageV2],
         tools: Option<&'a [ToolDefinition]>,
         tool_choice: Option<&'a ToolChoice>,
+        options: &'a RequestOptions,
         tx: mpsc::Sender<StreamEvent>,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         Box::pin(async move {
@@ -267,7 +287,7 @@ impl LlmProvider for FallbackProvider {
 
             for (i, provider) in self.providers.iter().enumerate() {
                 match provider
-                    .stream_message(messages, tools, tool_choice, tx.clone())
+                    .stream_message(messages, tools, tool_choice, options, tx.clone())
                     .await
                 {
                     Ok(()) => return Ok(()),
@@ -310,8 +330,10 @@ impl LlmProvider for super::AnthropicClient {
         messages: &'a [ApiMessageV2],
         tools: Option<&'a [ToolDefinition]>,
         tool_choice: Option<&'a ToolChoice>,
+        _options: &'a RequestOptions,
         tx: mpsc::Sender<StreamEvent>,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
+        // TODO(phase-8.1): Pass thinking/system options through to request building
         Box::pin(self.stream_message_v2_with_tools(messages, tools, tool_choice, tx))
     }
 }
@@ -353,6 +375,7 @@ mod tests {
             _messages: &'a [ApiMessageV2],
             _tools: Option<&'a [ToolDefinition]>,
             _tool_choice: Option<&'a ToolChoice>,
+            _options: &'a RequestOptions,
             tx: mpsc::Sender<StreamEvent>,
         ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
             Box::pin(async move {
@@ -364,6 +387,48 @@ mod tests {
                 Ok(())
             })
         }
+    }
+
+    // =========================================================================
+    // RequestOptions tests
+    // =========================================================================
+
+    #[test]
+    fn test_request_options_default_is_empty() {
+        let opts = RequestOptions::default();
+        assert!(opts.thinking.is_none());
+        assert!(opts.system.is_none());
+    }
+
+    #[test]
+    fn test_request_options_with_thinking() {
+        let opts = RequestOptions {
+            thinking: Some(crate::api::ThinkingConfig {
+                config_type: "enabled".to_string(),
+                budget_tokens: 10_000,
+            }),
+            system: None,
+        };
+        assert!(opts.thinking.is_some());
+        assert_eq!(opts.thinking.unwrap().budget_tokens, 10_000);
+    }
+
+    #[test]
+    fn test_request_options_with_system_blocks() {
+        let opts = RequestOptions {
+            thinking: None,
+            system: Some(vec![crate::api::SystemBlock {
+                block_type: "text".to_string(),
+                text: "You are helpful.".to_string(),
+                cache_control: Some(crate::api::CacheControl {
+                    cache_type: "ephemeral".to_string(),
+                }),
+            }]),
+        };
+        assert!(opts.system.is_some());
+        let blocks = opts.system.unwrap();
+        assert_eq!(blocks.len(), 1);
+        assert!(blocks[0].cache_control.is_some());
     }
 
     // =========================================================================
@@ -406,7 +471,7 @@ mod tests {
         let (tx, mut rx) = mpsc::channel(32);
         let messages = vec![ApiMessageV2::user("Hi")];
         provider
-            .stream_message(&messages, None, None, tx)
+            .stream_message(&messages, None, None, &RequestOptions::default(), tx)
             .await
             .expect("stream should succeed");
 
@@ -446,7 +511,7 @@ mod tests {
         let (tx, mut rx) = mpsc::channel(32);
         let messages = vec![ApiMessageV2::user("List files")];
         provider
-            .stream_message(&messages, None, None, tx)
+            .stream_message(&messages, None, None, &RequestOptions::default(), tx)
             .await
             .expect("stream should succeed");
 
@@ -479,7 +544,13 @@ mod tests {
         let (tx, mut rx) = mpsc::channel(32);
         let messages = vec![ApiMessageV2::user("Hello")];
         provider
-            .stream_message(&messages, Some(&tools), Some(&ToolChoice::Auto), tx)
+            .stream_message(
+                &messages,
+                Some(&tools),
+                Some(&ToolChoice::Auto),
+                &RequestOptions::default(),
+                tx,
+            )
             .await
             .expect("stream should succeed");
 
@@ -495,7 +566,7 @@ mod tests {
         let (tx, mut rx) = mpsc::channel(32);
         let messages = vec![ApiMessageV2::user("Hello")];
         provider
-            .stream_message(&messages, None, None, tx)
+            .stream_message(&messages, None, None, &RequestOptions::default(), tx)
             .await
             .expect("stream should succeed even when sending error events");
 
@@ -539,7 +610,7 @@ mod tests {
         let (tx, mut rx) = mpsc::channel(32);
         let messages = vec![ApiMessageV2::user("Hello")];
         provider
-            .stream_message(&messages, None, None, tx)
+            .stream_message(&messages, None, None, &RequestOptions::default(), tx)
             .await
             .expect("boxed provider should work");
 
@@ -556,7 +627,7 @@ mod tests {
 
         let (tx, mut rx) = mpsc::channel(32);
         provider
-            .stream_message(&[], None, None, tx)
+            .stream_message(&[], None, None, &RequestOptions::default(), tx)
             .await
             .expect("empty messages should not panic");
 
@@ -588,7 +659,7 @@ mod tests {
         let (tx, mut rx) = mpsc::channel(32);
         let messages = vec![ApiMessageV2::user("Where am I?")];
         provider
-            .stream_message(&messages, None, None, tx)
+            .stream_message(&messages, None, None, &RequestOptions::default(), tx)
             .await
             .expect("stream should succeed");
 
@@ -726,7 +797,7 @@ data: {"type":"message_stop"}
         let messages = vec![ApiMessageV2::user("Hello")];
 
         provider
-            .stream_message(&messages, None, None, tx)
+            .stream_message(&messages, None, None, &RequestOptions::default(), tx)
             .await
             .expect("stream_message should succeed via trait");
 
@@ -812,7 +883,13 @@ data: {"type":"message_stop"}
         let messages = vec![ApiMessageV2::user("List files")];
 
         provider
-            .stream_message(&messages, Some(&tools), Some(&ToolChoice::Auto), tx)
+            .stream_message(
+                &messages,
+                Some(&tools),
+                Some(&ToolChoice::Auto),
+                &RequestOptions::default(),
+                tx,
+            )
             .await
             .expect("stream_message with tools should succeed");
 
@@ -979,6 +1056,7 @@ data: {"type":"message_stop"}
             _messages: &'a [ApiMessageV2],
             _tools: Option<&'a [ToolDefinition]>,
             _tool_choice: Option<&'a ToolChoice>,
+            _options: &'a RequestOptions,
             _tx: mpsc::Sender<StreamEvent>,
         ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
             Box::pin(async move { anyhow::bail!("{}", self.error_msg) })
@@ -1054,7 +1132,7 @@ data: {"type":"message_stop"}
         let (tx, mut rx) = mpsc::channel(32);
         let messages = vec![ApiMessageV2::user("Hi")];
         fallback
-            .stream_message(&messages, None, None, tx)
+            .stream_message(&messages, None, None, &RequestOptions::default(), tx)
             .await
             .expect("should succeed with first provider");
 
@@ -1088,7 +1166,7 @@ data: {"type":"message_stop"}
         let (tx, mut rx) = mpsc::channel(32);
         let messages = vec![ApiMessageV2::user("Hi")];
         fallback
-            .stream_message(&messages, None, None, tx)
+            .stream_message(&messages, None, None, &RequestOptions::default(), tx)
             .await
             .expect("should succeed with fallback provider");
 
@@ -1111,7 +1189,9 @@ data: {"type":"message_stop"}
 
         let (tx, _rx) = mpsc::channel(32);
         let messages = vec![ApiMessageV2::user("Hi")];
-        let result = fallback.stream_message(&messages, None, None, tx).await;
+        let result = fallback
+            .stream_message(&messages, None, None, &RequestOptions::default(), tx)
+            .await;
 
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
@@ -1139,7 +1219,7 @@ data: {"type":"message_stop"}
         let (tx, mut rx) = mpsc::channel(32);
         let messages = vec![ApiMessageV2::user("Hi")];
         fallback
-            .stream_message(&messages, None, None, tx)
+            .stream_message(&messages, None, None, &RequestOptions::default(), tx)
             .await
             .expect("single provider should succeed");
 
@@ -1158,7 +1238,9 @@ data: {"type":"message_stop"}
 
         let (tx, _rx) = mpsc::channel(32);
         let messages = vec![ApiMessageV2::user("Hi")];
-        let result = fallback.stream_message(&messages, None, None, tx).await;
+        let result = fallback
+            .stream_message(&messages, None, None, &RequestOptions::default(), tx)
+            .await;
 
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("network error"));
@@ -1181,7 +1263,7 @@ data: {"type":"message_stop"}
         let (tx, mut rx) = mpsc::channel(32);
         let messages = vec![ApiMessageV2::user("Hi")];
         provider
-            .stream_message(&messages, None, None, tx)
+            .stream_message(&messages, None, None, &RequestOptions::default(), tx)
             .await
             .expect("boxed fallback should work");
 
@@ -1218,7 +1300,13 @@ data: {"type":"message_stop"}
         let (tx, mut rx) = mpsc::channel(32);
         let messages = vec![ApiMessageV2::user("list files")];
         fallback
-            .stream_message(&messages, Some(&tools), Some(&ToolChoice::Auto), tx)
+            .stream_message(
+                &messages,
+                Some(&tools),
+                Some(&ToolChoice::Auto),
+                &RequestOptions::default(),
+                tx,
+            )
             .await
             .expect("should succeed");
 
@@ -1249,7 +1337,7 @@ data: {"type":"message_stop"}
         let (tx, mut rx) = mpsc::channel(32);
         let messages = vec![ApiMessageV2::user("Hi")];
         fallback
-            .stream_message(&messages, None, None, tx)
+            .stream_message(&messages, None, None, &RequestOptions::default(), tx)
             .await
             .expect("should succeed with third provider");
 

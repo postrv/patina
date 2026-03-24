@@ -10,6 +10,7 @@ use anyhow::Result;
 use tokio::sync::mpsc;
 use tracing::warn;
 
+use crate::api::provider::RequestOptions;
 use crate::api::{LlmProvider, StreamEvent, ToolChoice};
 use crate::types::{ApiMessageV2, Message, Role};
 
@@ -88,7 +89,13 @@ async fn setup_initial_stream(
 
     tokio::spawn(async move {
         if let Err(e) = client_clone
-            .stream_message(&api_messages, Some(&tools), Some(&ToolChoice::Auto), tx)
+            .stream_message(
+                &api_messages,
+                Some(&tools),
+                Some(&ToolChoice::Auto),
+                &RequestOptions::default(),
+                tx,
+            )
             .await
         {
             tracing::error!("API error: {}", e);
@@ -132,7 +139,13 @@ async fn run_tool_continuation_cycle(
 
         tokio::spawn(async move {
             if let Err(e) = client_clone
-                .stream_message(&api_messages, Some(&tools), Some(&ToolChoice::Auto), tx)
+                .stream_message(
+                    &api_messages,
+                    Some(&tools),
+                    Some(&ToolChoice::Auto),
+                    &RequestOptions::default(),
+                    tx,
+                )
                 .await
             {
                 tracing::error!("API error during tool continuation: {}", e);

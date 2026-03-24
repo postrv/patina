@@ -507,6 +507,7 @@ impl SubagentRunner {
         session: &SubagentSession,
         task: &str,
     ) -> Result<SubagentExecutionResult> {
+        use crate::api::provider::RequestOptions;
         use crate::api::tools::ToolChoice;
         use crate::types::{ApiMessageV2, StreamEvent};
         use tokio::sync::mpsc;
@@ -541,7 +542,13 @@ impl SubagentRunner {
             };
 
             if let Err(e) = client
-                .stream_message(&messages_clone, tools_ref, tool_choice.as_ref(), tx)
+                .stream_message(
+                    &messages_clone,
+                    tools_ref,
+                    tool_choice.as_ref(),
+                    &RequestOptions::default(),
+                    tx,
+                )
                 .await
             {
                 tracing::error!("Subagent API error: {}", e);

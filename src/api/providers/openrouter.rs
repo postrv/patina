@@ -216,9 +216,18 @@ impl LlmProvider for OpenRouterProvider {
         messages: &'a [ApiMessageV2],
         tools: Option<&'a [ToolDefinition]>,
         tool_choice: Option<&'a ToolChoice>,
+        options: &'a crate::api::provider::RequestOptions,
         tx: mpsc::Sender<StreamEvent>,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         Box::pin(async move {
+            if options.thinking.is_some() {
+                tracing::warn!(
+                    "OpenRouter does not support extended thinking; ignoring thinking config"
+                );
+            }
+            if options.system.is_some() {
+                tracing::warn!("OpenRouter does not support cache_control system blocks; ignoring");
+            }
             let openai_messages = translate_to_openai(None, messages);
 
             let openai_tools: Option<Vec<OpenAiTool>> =
@@ -553,6 +562,7 @@ pub fn translate_stream_event(chunk: &OpenAiStreamChunk) -> Vec<StreamEvent> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::api::provider::RequestOptions;
     use crate::api::providers::openai_types::*;
     use crate::types::image::ImageSource;
     use serde_json::json;
@@ -1449,7 +1459,7 @@ mod tests {
         let (tx, mut rx) = mpsc::channel(64);
 
         provider
-            .stream_message(&messages, None, None, tx)
+            .stream_message(&messages, None, None, &RequestOptions::default(), tx)
             .await
             .expect("stream should succeed");
 
@@ -1575,7 +1585,7 @@ data: [DONE]\n\n";
         let (tx, _rx) = mpsc::channel(32);
         let messages = vec![ApiMessageV2::user("Hi")];
         provider
-            .stream_message(&messages, None, None, tx)
+            .stream_message(&messages, None, None, &RequestOptions::default(), tx)
             .await
             .expect("should send with auth header");
     }
@@ -1609,7 +1619,7 @@ data: [DONE]\n\n";
         let (tx, _rx) = mpsc::channel(32);
         let messages = vec![ApiMessageV2::user("Hi")];
         provider
-            .stream_message(&messages, None, None, tx)
+            .stream_message(&messages, None, None, &RequestOptions::default(), tx)
             .await
             .expect("should send with custom headers");
     }
@@ -1640,7 +1650,13 @@ data: [DONE]\n\n";
         let messages = vec![ApiMessageV2::user("List files")];
 
         provider
-            .stream_message(&messages, Some(&tools), Some(&ToolChoice::Auto), tx)
+            .stream_message(
+                &messages,
+                Some(&tools),
+                Some(&ToolChoice::Auto),
+                &RequestOptions::default(),
+                tx,
+            )
             .await
             .expect("should send request with tools");
 
@@ -1673,7 +1689,7 @@ data: [DONE]\n\n";
         let (tx, mut rx) = mpsc::channel(32);
         let messages = vec![ApiMessageV2::user("Hello")];
         provider
-            .stream_message(&messages, None, None, tx)
+            .stream_message(&messages, None, None, &RequestOptions::default(), tx)
             .await
             .expect("should not error on API error, sends via channel");
 
@@ -1715,7 +1731,7 @@ data: [DONE]\n\n";
         let (tx, mut rx) = mpsc::channel(32);
         let messages = vec![ApiMessageV2::user("Hello")];
         provider
-            .stream_message(&messages, None, None, tx)
+            .stream_message(&messages, None, None, &RequestOptions::default(), tx)
             .await
             .expect("should succeed after retry");
 
@@ -1831,7 +1847,7 @@ data: [DONE]\n\n";
         let (tx, _rx) = mpsc::channel(32);
         let messages = vec![ApiMessageV2::user("Hello")];
         provider
-            .stream_message(&messages, None, None, tx)
+            .stream_message(&messages, None, None, &RequestOptions::default(), tx)
             .await
             .expect("should send request without tools");
 

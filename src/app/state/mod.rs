@@ -21,6 +21,7 @@ pub use ui_selection::UISelectionState;
 pub use worktree::WorktreeStatus;
 
 use crate::agents::{AgentProgress, ConflictReport, SubagentSpawner};
+use crate::api::provider::RequestOptions;
 use crate::api::tokens::model_context_limit;
 use crate::api::tools::default_tools;
 use crate::api::{LlmProvider, StreamEvent, TokenBudget, ToolChoice};
@@ -1423,7 +1424,13 @@ impl AppState {
         let tools = self.all_tool_definitions();
         tokio::spawn(async move {
             if let Err(e) = client
-                .stream_message(&api_messages, Some(&tools), Some(&ToolChoice::Auto), tx)
+                .stream_message(
+                    &api_messages,
+                    Some(&tools),
+                    Some(&ToolChoice::Auto),
+                    &RequestOptions::default(),
+                    tx,
+                )
                 .await
             {
                 tracing::error!("API error: {}", e);

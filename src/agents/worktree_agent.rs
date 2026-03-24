@@ -961,7 +961,13 @@ pub async fn run_agent_loop(
 
         tokio::spawn(async move {
             if let Err(e) = provider_clone
-                .stream_message(&messages_clone, None, None, tx)
+                .stream_message(
+                    &messages_clone,
+                    None,
+                    None,
+                    &crate::api::provider::RequestOptions::default(),
+                    tx,
+                )
                 .await
             {
                 tracing::error!("Agent loop provider error: {}", e);
@@ -1996,6 +2002,7 @@ mod tests {
             _messages: &'a [ApiMessageV2],
             _tools: Option<&'a [ToolDefinition]>,
             _tool_choice: Option<&'a ToolChoice>,
+            _options: &'a crate::api::provider::RequestOptions,
             tx: mpsc::Sender<StreamEvent>,
         ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
             let call_idx = self.call_count.fetch_add(1, Ordering::SeqCst);

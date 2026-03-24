@@ -570,6 +570,117 @@ pub fn model_context_limit(model: &str) -> usize {
     200_000
 }
 
+/// Capabilities and pricing metadata for a specific model.
+///
+/// Used to gate features like extended thinking and prompt caching
+/// at request-build time, preventing invalid API calls.
+///
+/// # Examples
+///
+/// ```rust
+/// let caps = patina::api::tokens::ModelCapabilities::for_model("claude-sonnet-4-20250514");
+/// assert!(caps.supports_thinking);
+/// assert!(caps.supports_cache_control);
+/// ```
+#[derive(Debug, Clone, PartialEq)]
+pub struct ModelCapabilities {
+    /// Whether the model supports extended thinking (budget_tokens).
+    pub supports_thinking: bool,
+    /// Maximum thinking tokens the model allows (0 if unsupported).
+    pub max_thinking_tokens: usize,
+    /// Whether the model supports `cache_control` on system/messages.
+    pub supports_cache_control: bool,
+    /// Context window size in tokens.
+    pub context_limit: usize,
+    /// Maximum output tokens the model can generate.
+    pub max_output_tokens: usize,
+}
+
+impl ModelCapabilities {
+    /// Returns capabilities for the given model identifier.
+    ///
+    /// Recognizes Claude model families and returns appropriate feature flags.
+    /// Unknown models receive conservative defaults (no thinking, no caching).
+    ///
+    /// Handles OpenRouter-style prefixed model names (e.g.,
+    /// `anthropic/claude-sonnet-4-20250514`) by stripping the prefix.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// let caps = patina::api::tokens::ModelCapabilities::for_model("claude-opus-4-20250514");
+    /// assert!(caps.supports_thinking);
+    /// assert_eq!(caps.context_limit, 200_000);
+    /// ```
+    #[must_use]
+    pub fn for_model(model: &str) -> Self {
+        // Strip provider prefix (e.g., "anthropic/claude-sonnet-4" → "claude-sonnet-4")
+        let model_name = model.rsplit('/').next().unwrap_or(model);
+        let model_lower = model_name.to_lowercase();
+
+        // Claude 4.x and 3.5 Sonnet support thinking + caching
+        if model_lower.contains("claude-sonnet-4") || model_lower.contains("claude-opus-4") {
+            return Self {
+                supports_thinking: true,
+                max_thinking_tokens: 128_000,
+                supports_cache_control: true,
+                context_limit: 200_000,
+                max_output_tokens: 16_384,
+            };
+        }
+
+        if model_lower.contains("claude-3-5-sonnet") || model_lower.contains("claude-3.5-sonnet") {
+            return Self {
+                supports_thinking: true,
+                max_thinking_tokens: 128_000,
+                supports_cache_control: true,
+                context_limit: 200_000,
+                max_output_tokens: 8_192,
+            };
+        }
+
+        // Claude 3 Haiku and older — no thinking, no caching
+        if model_lower.contains("claude-3-haiku")
+            || model_lower.contains("claude-3-opus")
+            || model_lower.contains("claude-3-sonnet")
+            || model_lower.contains("claude-2")
+        {
+            let context_limit = if model_lower.contains("claude-2") {
+                100_000
+            } else {
+                200_000
+            };
+            return Self {
+                supports_thinking: false,
+                max_thinking_tokens: 0,
+                supports_cache_control: false,
+                context_limit,
+                max_output_tokens: 4_096,
+            };
+        }
+
+        // Claude Haiku 4.5+ — thinking supported, caching supported
+        if model_lower.contains("claude-haiku") {
+            return Self {
+                supports_thinking: true,
+                max_thinking_tokens: 128_000,
+                supports_cache_control: true,
+                context_limit: 200_000,
+                max_output_tokens: 8_192,
+            };
+        }
+
+        // Unknown models: conservative defaults
+        Self {
+            supports_thinking: false,
+            max_thinking_tokens: 0,
+            supports_cache_control: false,
+            context_limit: model_context_limit(model),
+            max_output_tokens: 4_096,
+        }
+    }
+}
+
 impl std::fmt::Display for TokenBudget {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
@@ -1173,5 +1284,69 @@ mod tests {
         let limit1 = super::model_context_limit("CLAUDE-SONNET-4-20250514");
         let limit2 = super::model_context_limit("Claude-Sonnet-4-20250514");
         assert_eq!(limit1, limit2);
+    }
+
+    // =========================================================================
+    // ModelCapabilities tests
+    // =========================================================================
+
+    #[test]
+    fn test_model_capabilities_sonnet_4() {
+        let caps = ModelCapabilities::for_model("claude-sonnet-4-20250514");
+        assert!(caps.supports_thinking);
+        assert_eq!(caps.max_thinking_tokens, 128_000);
+        assert!(caps.supports_cache_control);
+        assert_eq!(caps.context_limit, 200_000);
+        assert_eq!(caps.max_output_tokens, 16_384);
+    }
+
+    #[test]
+    fn test_model_capabilities_opus_4() {
+        let caps = ModelCapabilities::for_model("claude-opus-4-20250514");
+        assert!(caps.supports_thinking);
+        assert_eq!(caps.max_thinking_tokens, 128_000);
+        assert!(caps.supports_cache_control);
+        assert_eq!(caps.context_limit, 200_000);
+    }
+
+    #[test]
+    fn test_model_capabilities_haiku_3() {
+        let caps = ModelCapabilities::for_model("claude-3-haiku-20240307");
+        assert!(!caps.supports_thinking);
+        assert_eq!(caps.max_thinking_tokens, 0);
+        assert!(!caps.supports_cache_control);
+        assert_eq!(caps.context_limit, 200_000);
+    }
+
+    #[test]
+    fn test_model_capabilities_unknown_model() {
+        let caps = ModelCapabilities::for_model("some-future-model");
+        assert!(!caps.supports_thinking);
+        assert_eq!(caps.max_thinking_tokens, 0);
+        assert!(!caps.supports_cache_control);
+        assert_eq!(caps.max_output_tokens, 4_096);
+    }
+
+    #[test]
+    fn test_model_capabilities_openrouter_prefix_strip() {
+        let caps = ModelCapabilities::for_model("anthropic/claude-sonnet-4-20250514");
+        assert!(caps.supports_thinking);
+        assert!(caps.supports_cache_control);
+        assert_eq!(caps.context_limit, 200_000);
+    }
+
+    #[test]
+    fn test_model_capabilities_35_sonnet() {
+        let caps = ModelCapabilities::for_model("claude-3-5-sonnet-20241022");
+        assert!(caps.supports_thinking);
+        assert!(caps.supports_cache_control);
+        assert_eq!(caps.max_output_tokens, 8_192);
+    }
+
+    #[test]
+    fn test_model_capabilities_claude_2() {
+        let caps = ModelCapabilities::for_model("claude-2.1");
+        assert!(!caps.supports_thinking);
+        assert_eq!(caps.context_limit, 100_000);
     }
 }

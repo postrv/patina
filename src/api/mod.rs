@@ -13,7 +13,7 @@ pub mod tools;
 // Re-export token utilities for convenience
 pub use tokens::{
     estimate_image_tokens, estimate_message_tokens, estimate_messages_tokens, estimate_tokens,
-    model_context_limit, TokenBudget, TokenEstimator, DEFAULT_IMAGE_TOKENS,
+    model_context_limit, ModelCapabilities, TokenBudget, TokenEstimator, DEFAULT_IMAGE_TOKENS,
 };
 
 // Re-export context utilities for convenience
@@ -41,6 +41,55 @@ pub use tools::{ToolChoice, ToolDefinition};
 
 // Re-export StreamEvent for backward compatibility
 pub use crate::types::StreamEvent;
+
+// Re-export request option types
+pub use provider::RequestOptions;
+
+/// Configuration for extended thinking.
+///
+/// When enabled, the API returns `thinking` content blocks before
+/// the main response. The `budget_tokens` field controls how many
+/// tokens the model can spend on internal reasoning.
+///
+/// # Errors
+///
+/// The API rejects requests where `budget_tokens` exceeds the model's
+/// maximum (currently 128,000 for Claude 4 family).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ThinkingConfig {
+    /// Must be `"enabled"`.
+    #[serde(rename = "type")]
+    pub config_type: String,
+    /// Maximum tokens for internal reasoning.
+    pub budget_tokens: u32,
+}
+
+/// Cache control directive for prompt caching.
+///
+/// Attached to system message blocks to enable prompt caching.
+/// Cached tokens cost 90% less on subsequent requests.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CacheControl {
+    /// Cache type. Currently only `"ephemeral"` is supported.
+    #[serde(rename = "type")]
+    pub cache_type: String,
+}
+
+/// A system message block with optional cache control.
+///
+/// The Anthropic API accepts system prompts as an array of blocks,
+/// each with optional `cache_control` for prompt caching.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SystemBlock {
+    /// Must be `"text"`.
+    #[serde(rename = "type")]
+    pub block_type: String,
+    /// The system prompt text.
+    pub text: String,
+    /// Optional cache control directive.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_control: Option<CacheControl>,
+}
 
 /// Default Anthropic API endpoint.
 const DEFAULT_BASE_URL: &str = "https://api.anthropic.com";
