@@ -233,6 +233,9 @@ pub struct AppState {
 
     /// System prompt text injected into API requests.
     system_prompt: Option<String>,
+
+    /// Buffer for accumulating thinking text from stream events.
+    thinking_buffer: String,
 }
 
 #[derive(Default)]
@@ -433,6 +436,7 @@ impl AppState {
             effort: EffortLevel::Auto,
             thinking_budget: None,
             system_prompt: None,
+            thinking_buffer: String::new(),
         }
     }
 
@@ -1595,14 +1599,20 @@ impl AppState {
                 tracing::debug!("Content block complete");
             }
             StreamEvent::ThinkingStart { .. } => {
+                self.thinking_buffer.clear();
                 tracing::debug!("Thinking block started");
             }
-            StreamEvent::ThinkingDelta(_text) => {
-                // Thinking text will be accumulated for display in a later task.
-                tracing::debug!("Thinking delta received");
+            StreamEvent::ThinkingDelta(text) => {
+                self.thinking_buffer.push_str(&text);
             }
             StreamEvent::ThinkingComplete { .. } => {
-                tracing::debug!("Thinking block complete");
+                if !self.thinking_buffer.is_empty() {
+                    let thinking_text = std::mem::take(&mut self.thinking_buffer);
+                    let token_count = crate::api::tokens::estimate_tokens(&thinking_text);
+                    tracing::info!("Thinking complete: {} tokens", token_count);
+                    self.timeline
+                        .push_assistant_message(format!("[Thought for ~{} tokens]", token_count));
+                }
             }
             StreamEvent::Usage(usage) => {
                 let record = UsageRecord::with_cache(
