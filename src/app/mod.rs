@@ -220,6 +220,21 @@ pub async fn run(config: Config) -> Result<()> {
     state.set_thinking_budget(config.thinking_budget);
     state.set_current_model(config.model.clone());
 
+    // Load persistent memory store
+    if let Some(project_dirs) = directories::ProjectDirs::from("com", "patina", "patina") {
+        let memory_dir = crate::memory::store::default_memory_dir(project_dirs.data_dir());
+        let mut store = crate::memory::store::MemoryStore::new(memory_dir);
+        if let Err(e) = store.load() {
+            tracing::warn!("Failed to load memory store: {}", e);
+        } else {
+            let count = store.list(None).len();
+            if count > 0 {
+                tracing::info!("Loaded {} memory entries", count);
+            }
+            state.set_memory_store(store);
+        }
+    }
+
     // Initialize compression orchestrator for CCG context management
     initialize_compression_orchestrator(&mut state, &config);
 

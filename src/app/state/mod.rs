@@ -222,6 +222,9 @@ pub struct AppState {
     /// Model name for cost tracking (needed when recording usage events).
     current_model: String,
 
+    /// Persistent memory store for cross-session context.
+    memory_store: Option<crate::memory::store::MemoryStore>,
+
     /// Reasoning effort level for API requests.
     effort: EffortLevel,
 
@@ -426,6 +429,7 @@ impl AppState {
             mcp_manager: None,
             cost_tracker: CostTracker::new(CostConfig::default()),
             current_model: String::new(),
+            memory_store: None,
             effort: EffortLevel::Auto,
             thinking_budget: None,
             system_prompt: None,
@@ -2935,6 +2939,22 @@ impl AppState {
         )
     }
 
+    /// Sets the memory store.
+    pub fn set_memory_store(&mut self, store: crate::memory::store::MemoryStore) {
+        self.memory_store = Some(store);
+    }
+
+    /// Returns a reference to the memory store.
+    #[must_use]
+    pub fn memory_store(&self) -> Option<&crate::memory::store::MemoryStore> {
+        self.memory_store.as_ref()
+    }
+
+    /// Returns a mutable reference to the memory store.
+    pub fn memory_store_mut(&mut self) -> Option<&mut crate::memory::store::MemoryStore> {
+        self.memory_store.as_mut()
+    }
+
     /// Sets the reasoning effort level.
     pub fn set_effort(&mut self, effort: EffortLevel) {
         self.effort = effort;
@@ -2979,8 +2999,22 @@ impl AppState {
             None
         };
 
+        // Build system prompt text, appending memory if available
+        let mut prompt_text = self.system_prompt.clone().unwrap_or_default();
+        if let Some(store) = &self.memory_store {
+            let memory_text = store.render_for_system_prompt();
+            if !memory_text.is_empty() {
+                if !prompt_text.is_empty() {
+                    prompt_text.push_str("\n\n");
+                }
+                prompt_text.push_str(&memory_text);
+            }
+        }
+
         // Build system blocks with optional cache control
-        let system = self.system_prompt.as_ref().map(|prompt| {
+        let system = if prompt_text.is_empty() {
+            None
+        } else {
             let cache_control = if caps.supports_cache_control {
                 Some(crate::api::CacheControl {
                     cache_type: "ephemeral".to_string(),
@@ -2988,12 +3022,12 @@ impl AppState {
             } else {
                 None
             };
-            vec![SystemBlock {
+            Some(vec![SystemBlock {
                 block_type: "text".to_string(),
-                text: prompt.clone(),
+                text: prompt_text,
                 cache_control,
-            }]
-        });
+            }])
+        };
 
         RequestOptions { thinking, system }
     }
