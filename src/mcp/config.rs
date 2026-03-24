@@ -182,6 +182,60 @@ pub fn load_mcp_config(working_dir: &Path) -> Result<HashMap<String, McpServerEn
     Ok(merged)
 }
 
+/// Loads MCP configuration with trust verification for project configs.
+///
+/// If a `trust_store` is provided, project-local `.mcp.json` files are only
+/// loaded if they have been explicitly trusted by the user. User-global
+/// configuration (`~/.claude.json`) is always trusted.
+///
+/// When a project config is not trusted, it is silently skipped with a warning
+/// log. The caller should prompt the user and call `trust_store.trust()` to
+/// approve the config.
+///
+/// # Errors
+///
+/// Returns an error if a config file exists but contains invalid JSON.
+pub fn load_mcp_config_with_trust(
+    working_dir: &Path,
+    trust_store: Option<&super::trust::McpTrustStore>,
+) -> Result<HashMap<String, McpServerEntry>> {
+    let project_config_path = working_dir.join(".mcp.json");
+    let project_config = if let Some(store) = trust_store {
+        if project_config_path.exists() {
+            let content = std::fs::read_to_string(&project_config_path).with_context(|| {
+                format!(
+                    "Failed to read config file: {}",
+                    project_config_path.display()
+                )
+            })?;
+            if store.is_trusted(working_dir, &content) {
+                let config: McpConfigFile = serde_json::from_str(&content).with_context(|| {
+                    format!(
+                        "Failed to parse config file: {}",
+                        project_config_path.display()
+                    )
+                })?;
+                config.mcp_servers
+            } else {
+                tracing::warn!(
+                    path = %project_config_path.display(),
+                    "Skipping untrusted project MCP config — approve it to enable"
+                );
+                HashMap::new()
+            }
+        } else {
+            HashMap::new()
+        }
+    } else {
+        // No trust store — load normally (backwards compatible)
+        load_config_file(&project_config_path)?
+    };
+
+    let user_config = load_user_global_config()?;
+    let merged = merge_configs(project_config, user_config);
+    Ok(merged)
+}
+
 /// Loads MCP configuration from a specific project directory only.
 ///
 /// Unlike [`load_mcp_config`], this does NOT load the user-global `~/.claude.json`.
@@ -515,5 +569,68 @@ mod tests {
         let json = r#"{"url":"http://localhost:8080/mcp","type":"sse"}"#;
         let entry: McpServerEntry = serde_json::from_str(json).unwrap();
         assert_eq!(entry.transport_type.as_deref(), Some("sse"));
+    }
+
+    #[test]
+    fn test_load_mcp_config_untrusted_project() {
+        use super::super::trust::McpTrustStore;
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let project_dir = dir.path();
+
+        // Create a .mcp.json in the project
+        let config_content = r#"{"mcpServers":{"test":{"command":"echo","args":["hello"]}}}"#;
+        std::fs::write(project_dir.join(".mcp.json"), config_content).unwrap();
+
+        // Load with a fresh (empty) trust store — project config should be skipped
+        let trust_data_dir = dir.path().join("trust");
+        std::fs::create_dir_all(&trust_data_dir).unwrap();
+        let store = McpTrustStore::load(&trust_data_dir);
+
+        let result = load_mcp_config_with_trust(project_dir, Some(&store)).unwrap();
+        // Project config not trusted → should be empty (ignoring user-global)
+        assert!(
+            !result.contains_key("test"),
+            "Untrusted project config should not be loaded"
+        );
+    }
+
+    #[test]
+    fn test_load_mcp_config_trusted_project() {
+        use super::super::trust::McpTrustStore;
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let project_dir = dir.path();
+
+        let config_content = r#"{"mcpServers":{"test":{"command":"echo","args":["hello"]}}}"#;
+        std::fs::write(project_dir.join(".mcp.json"), config_content).unwrap();
+
+        // Trust the config
+        let trust_data_dir = dir.path().join("trust");
+        std::fs::create_dir_all(&trust_data_dir).unwrap();
+        let mut store = McpTrustStore::load(&trust_data_dir);
+        store.trust(project_dir, config_content);
+
+        let result = load_mcp_config_with_trust(project_dir, Some(&store)).unwrap();
+        assert!(
+            result.contains_key("test"),
+            "Trusted project config should be loaded"
+        );
+    }
+
+    #[test]
+    fn test_load_mcp_config_no_trust_store_loads_normally() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let project_dir = dir.path();
+
+        let config_content = r#"{"mcpServers":{"test":{"command":"echo","args":["hello"]}}}"#;
+        std::fs::write(project_dir.join(".mcp.json"), config_content).unwrap();
+
+        // No trust store → backwards compatible, loads everything
+        let result = load_mcp_config_with_trust(project_dir, None).unwrap();
+        assert!(
+            result.contains_key("test"),
+            "Without trust store, config should load normally"
+        );
     }
 }

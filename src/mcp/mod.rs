@@ -17,6 +17,7 @@ pub mod handler;
 pub mod legacy_sse;
 pub mod manager;
 pub mod security;
+pub mod trust;
 
 // Re-export key types for convenience
 pub use config::McpServerEntry;
