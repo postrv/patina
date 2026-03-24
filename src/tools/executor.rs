@@ -353,6 +353,15 @@ impl ToolExecutor {
             Err(e) => return Ok(ToolResult::Error(e)),
         };
 
+        // Handle special file formats
+        if full_path
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("ipynb"))
+        {
+            return self.read_notebook(&full_path).await;
+        }
+
         match tokio::fs::read_to_string(&full_path).await {
             Ok(content) => Ok(ToolResult::Success(content)),
             Err(e) => {
@@ -362,6 +371,89 @@ impl ToolExecutor {
                     "File read failed"
                 );
                 Ok(ToolResult::Error(format!("Failed to read file: {}", e)))
+            }
+        }
+    }
+
+    /// Reads a Jupyter notebook file and formats all cells.
+    async fn read_notebook(&self, path: &Path) -> Result<ToolResult> {
+        let content = match tokio::fs::read_to_string(path).await {
+            Ok(c) => c,
+            Err(e) => return Ok(ToolResult::Error(format!("Failed to read notebook: {e}"))),
+        };
+
+        let notebook: serde_json::Value = match serde_json::from_str(&content) {
+            Ok(v) => v,
+            Err(e) => return Ok(ToolResult::Error(format!("Invalid notebook JSON: {e}"))),
+        };
+
+        match Self::format_notebook(&notebook) {
+            Ok(formatted) => Ok(ToolResult::Success(formatted)),
+            Err(e) => Ok(ToolResult::Error(format!("Failed to format notebook: {e}"))),
+        }
+    }
+
+    /// Formats a parsed Jupyter notebook into readable text.
+    fn format_notebook(notebook: &serde_json::Value) -> Result<String> {
+        let cells = notebook
+            .get("cells")
+            .and_then(|c| c.as_array())
+            .ok_or_else(|| anyhow::anyhow!("No cells found in notebook"))?;
+
+        let language = notebook
+            .pointer("/metadata/kernelspec/language")
+            .and_then(|l| l.as_str())
+            .unwrap_or("python");
+
+        let mut output = String::new();
+        for (i, cell) in cells.iter().enumerate() {
+            let cell_type = cell
+                .get("cell_type")
+                .and_then(|t| t.as_str())
+                .unwrap_or("raw");
+            let source = Self::join_notebook_source(cell.get("source")).unwrap_or_default();
+
+            match cell_type {
+                "code" => {
+                    output.push_str(&format!(
+                        "### Cell {} [code]\n```{language}\n{source}\n```\n",
+                        i + 1
+                    ));
+                    if let Some(outputs) = cell.get("outputs").and_then(|o| o.as_array()) {
+                        for out in outputs {
+                            Self::format_cell_output(&mut output, out);
+                        }
+                    }
+                }
+                "markdown" => {
+                    output.push_str(&format!("### Cell {} [markdown]\n{source}\n", i + 1));
+                }
+                other => {
+                    output.push_str(&format!("### Cell {} [{other}]\n{source}\n", i + 1));
+                }
+            }
+            output.push('\n');
+        }
+        Ok(output)
+    }
+
+    /// Joins a notebook cell source (can be array of strings or single string).
+    fn join_notebook_source(source: Option<&serde_json::Value>) -> Option<String> {
+        match source? {
+            serde_json::Value::Array(arr) => {
+                Some(arr.iter().filter_map(|v| v.as_str()).collect::<String>())
+            }
+            serde_json::Value::String(s) => Some(s.clone()),
+            _ => None,
+        }
+    }
+
+    /// Formats a single notebook cell output.
+    fn format_cell_output(output: &mut String, cell_output: &serde_json::Value) {
+        if let Some(text) = cell_output.get("text").and_then(|t| t.as_array()) {
+            let text_str: String = text.iter().filter_map(|v| v.as_str()).collect();
+            if !text_str.is_empty() {
+                output.push_str(&format!("```\n{text_str}```\n"));
             }
         }
     }
@@ -1083,5 +1175,108 @@ mod tests {
         assert!(executor.is_gitignored("app.log", &patterns));
         assert!(executor.is_gitignored("node_modules/pkg", &patterns));
         assert!(!executor.is_gitignored("src/main.rs", &patterns));
+    }
+
+    // =========================================================================
+    // Notebook formatting tests
+    // =========================================================================
+
+    #[test]
+    fn test_format_notebook_code_cells() {
+        let notebook = serde_json::json!({
+            "cells": [
+                {
+                    "cell_type": "code",
+                    "source": ["print('hello')\n", "print('world')"],
+                    "outputs": []
+                }
+            ],
+            "metadata": {"kernelspec": {"language": "python"}}
+        });
+
+        let formatted = ToolExecutor::format_notebook(&notebook).unwrap();
+        assert!(formatted.contains("### Cell 1 [code]"));
+        assert!(formatted.contains("```python"));
+        assert!(formatted.contains("print('hello')"));
+    }
+
+    #[test]
+    fn test_format_notebook_markdown_cells() {
+        let notebook = serde_json::json!({
+            "cells": [
+                {
+                    "cell_type": "markdown",
+                    "source": "# Title\nSome text"
+                }
+            ],
+            "metadata": {}
+        });
+
+        let formatted = ToolExecutor::format_notebook(&notebook).unwrap();
+        assert!(formatted.contains("### Cell 1 [markdown]"));
+        assert!(formatted.contains("# Title"));
+    }
+
+    #[test]
+    fn test_format_notebook_mixed_cells() {
+        let notebook = serde_json::json!({
+            "cells": [
+                {"cell_type": "markdown", "source": "# Intro"},
+                {"cell_type": "code", "source": ["x = 1"], "outputs": []},
+                {"cell_type": "raw", "source": "raw data"}
+            ],
+            "metadata": {}
+        });
+
+        let formatted = ToolExecutor::format_notebook(&notebook).unwrap();
+        assert!(formatted.contains("Cell 1 [markdown]"));
+        assert!(formatted.contains("Cell 2 [code]"));
+        assert!(formatted.contains("Cell 3 [raw]"));
+    }
+
+    #[test]
+    fn test_format_notebook_with_outputs() {
+        let notebook = serde_json::json!({
+            "cells": [
+                {
+                    "cell_type": "code",
+                    "source": ["print(42)"],
+                    "outputs": [
+                        {"text": ["42\n"]}
+                    ]
+                }
+            ],
+            "metadata": {}
+        });
+
+        let formatted = ToolExecutor::format_notebook(&notebook).unwrap();
+        assert!(formatted.contains("42"));
+    }
+
+    #[test]
+    fn test_format_notebook_no_cells_fails() {
+        let notebook = serde_json::json!({"metadata": {}});
+        let result = ToolExecutor::format_notebook(&notebook);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_join_notebook_source_array() {
+        let source = serde_json::json!(["line 1\n", "line 2"]);
+        let joined = ToolExecutor::join_notebook_source(Some(&source));
+        assert_eq!(joined, Some("line 1\nline 2".to_string()));
+    }
+
+    #[test]
+    fn test_join_notebook_source_string() {
+        let source = serde_json::json!("single string");
+        let joined = ToolExecutor::join_notebook_source(Some(&source));
+        assert_eq!(joined, Some("single string".to_string()));
+    }
+
+    #[test]
+    fn test_join_notebook_source_none() {
+        let joined = ToolExecutor::join_notebook_source(None);
+        assert!(joined.is_none());
     }
 }
