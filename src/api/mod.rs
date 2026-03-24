@@ -444,6 +444,23 @@ impl AnthropicClient {
         }
     }
 
+    /// Parses a single SSE line into a `StreamLine`.
+    ///
+    /// Returns `None` for:
+    /// - Lines without the `data: ` prefix (e.g., `event:` lines)
+    /// - The `[DONE]` marker
+    /// - Malformed JSON
+    ///
+    /// This is extracted from `process_stream` to make SSE parsing
+    /// testable independently of the HTTP streaming layer.
+    fn parse_sse_line(line: &str) -> Option<StreamLine> {
+        let json = line.strip_prefix("data: ")?;
+        if json == "[DONE]" {
+            return None;
+        }
+        serde_json::from_str::<StreamLine>(json).ok()
+    }
+
     /// Processes the SSE stream from a successful response.
     ///
     /// This method parses the Server-Sent Events stream and converts them
@@ -472,13 +489,7 @@ impl AnthropicClient {
                 let line = buffer[..pos].trim().to_string();
                 buffer = buffer[pos + 1..].to_string();
 
-                let Some(json) = line.strip_prefix("data: ") else {
-                    continue;
-                };
-                if json == "[DONE]" {
-                    continue;
-                }
-                let Ok(parsed) = serde_json::from_str::<StreamLine>(json) else {
+                let Some(parsed) = Self::parse_sse_line(&line) else {
                     continue;
                 };
 
@@ -1498,6 +1509,67 @@ data: {"type":"message_stop"}
 
     // ============================================================================
     // End Phase 2.9.1.6 unit tests
+    // ============================================================================
+
+    // ============================================================================
+    // Phase 2.1: parse_sse_line unit tests
+    // ============================================================================
+
+    #[test]
+    fn test_parse_sse_line_valid_content_delta() {
+        let line = r#"data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}"#;
+        let parsed = AnthropicClient::parse_sse_line(line);
+        assert!(parsed.is_some());
+        assert_eq!(parsed.unwrap().event_type, "content_block_delta");
+    }
+
+    #[test]
+    fn test_parse_sse_line_done_marker() {
+        let parsed = AnthropicClient::parse_sse_line("data: [DONE]");
+        assert!(parsed.is_none(), "[DONE] marker should return None");
+    }
+
+    #[test]
+    fn test_parse_sse_line_malformed_json() {
+        let parsed = AnthropicClient::parse_sse_line("data: {not valid json}");
+        assert!(parsed.is_none(), "Malformed JSON should return None");
+    }
+
+    #[test]
+    fn test_parse_sse_line_no_data_prefix() {
+        let parsed = AnthropicClient::parse_sse_line("event: message_start");
+        assert!(
+            parsed.is_none(),
+            "Lines without 'data: ' prefix should return None"
+        );
+    }
+
+    #[test]
+    fn test_parse_sse_line_empty_string() {
+        let parsed = AnthropicClient::parse_sse_line("");
+        assert!(parsed.is_none(), "Empty string should return None");
+    }
+
+    #[test]
+    fn test_parse_sse_line_message_stop() {
+        let line = r#"data: {"type":"message_stop"}"#;
+        let parsed = AnthropicClient::parse_sse_line(line);
+        assert!(parsed.is_some());
+        assert_eq!(parsed.unwrap().event_type, "message_stop");
+    }
+
+    #[test]
+    fn test_parse_sse_line_content_block_start() {
+        let line = r#"data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_abc","name":"bash"}}"#;
+        let parsed = AnthropicClient::parse_sse_line(line);
+        assert!(parsed.is_some());
+        let stream_line = parsed.unwrap();
+        assert_eq!(stream_line.event_type, "content_block_start");
+        assert!(stream_line.content_block.is_some());
+    }
+
+    // ============================================================================
+    // End Phase 2.1 unit tests
     // ============================================================================
 
     #[test]
