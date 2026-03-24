@@ -1,6 +1,6 @@
 //! Application core
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use crossterm::{
     event::{
         DisableMouseCapture, EnableMouseCapture, EventStream, KeyboardEnhancementFlags,
@@ -23,11 +23,12 @@ pub mod context;
 pub mod dispatch;
 pub mod events;
 pub mod handlers;
+pub mod print;
+pub mod session_helpers;
 pub mod state;
 pub mod tool_loop;
 
 use state::AppState;
-use tool_loop::ToolLoopState;
 
 use crate::api::LlmProvider;
 use crate::ide::controller::IdeController;
@@ -37,7 +38,6 @@ use crate::session::{default_sessions_dir, SessionManager};
 use crate::terminal;
 use crate::tui;
 use crate::types::config::{NarsilMode, ResumeMode};
-use crate::types::{ApiMessageV2, Message, Role};
 
 // Re-export Config for backward compatibility
 pub use crate::types::Config;
@@ -52,60 +52,6 @@ pub use crate::types::Config;
 /// Setting to 1000 provides headroom for ~50 tool_use events (each generates ~20 events)
 /// without causing backpressure.
 pub const STREAMING_CHANNEL_BUFFER: usize = 1000;
-
-/// Result of processing a print mode stream.
-enum PrintStreamResult {
-    /// Stream completed successfully (MessageStop or MessageComplete).
-    Completed(String),
-    /// Stream ended with an error.
-    Error(String),
-}
-
-/// Processes a print mode stream, printing content and handling tool use events.
-///
-/// Returns the accumulated response text and the final result.
-async fn process_print_stream(
-    rx: &mut tokio::sync::mpsc::Receiver<crate::api::StreamEvent>,
-    state: &mut AppState,
-) -> Result<PrintStreamResult> {
-    use crate::api::StreamEvent;
-
-    let mut response = String::new();
-
-    while let Some(event) = rx.recv().await {
-        match event {
-            StreamEvent::ContentDelta(text) => {
-                print!("{}", text);
-                response.push_str(&text);
-            }
-            StreamEvent::MessageStop | StreamEvent::MessageComplete { .. } => {
-                println!(); // Newline after response
-                return Ok(PrintStreamResult::Completed(response));
-            }
-            StreamEvent::Error(e) => {
-                eprintln!("Error: {}", e);
-                return Ok(PrintStreamResult::Error(e));
-            }
-            StreamEvent::ToolUseStart { id, name, index } => {
-                state.tool_loop_mut().start_streaming().ok();
-                state.handle_tool_use_start(id, name, index);
-            }
-            StreamEvent::ToolUseInputDelta {
-                index,
-                partial_json,
-            } => {
-                state.handle_tool_use_input_delta(index, &partial_json);
-            }
-            StreamEvent::ToolUseComplete { index } => {
-                state.handle_tool_use_complete(index)?;
-            }
-            _ => {}
-        }
-    }
-
-    // Channel closed without explicit completion
-    Ok(PrintStreamResult::Completed(response))
-}
 
 /// Initializes the compression orchestrator based on narsil configuration.
 ///
@@ -123,7 +69,8 @@ async fn process_print_stream(
 /// - `NarsilMode::Auto`: Enables if narsil-mcp is in PATH and project has code files
 /// - `NarsilMode::Enabled`: Always tries to enable (logs warning if unavailable)
 /// - `NarsilMode::Disabled`: Does nothing
-fn initialize_compression_orchestrator(state: &mut AppState, config: &Config) {
+#[doc(hidden)]
+pub fn initialize_compression_orchestrator(state: &mut AppState, config: &Config) {
     let should_enable = match config.narsil_mode() {
         NarsilMode::Disabled => false,
         NarsilMode::Enabled => {
@@ -167,7 +114,7 @@ fn initialize_compression_orchestrator(state: &mut AppState, config: &Config) {
 /// # Arguments
 ///
 /// * `working_dir` - The project root to search for `.mcp.json`
-async fn initialize_mcp_servers(
+pub(crate) async fn initialize_mcp_servers(
     working_dir: &std::path::Path,
 ) -> Option<crate::mcp::manager::McpManager> {
     let configs = match crate::mcp::config::load_mcp_config(working_dir) {
@@ -216,7 +163,7 @@ pub async fn run(config: Config) -> Result<()> {
     // If print mode is enabled with an initial prompt, run non-interactively
     if config.print_mode {
         if let Some(ref prompt) = config.initial_prompt {
-            return run_print_mode(&config, prompt).await;
+            return print::run_print_mode(&config, prompt).await;
         }
     }
 
@@ -262,7 +209,9 @@ pub async fn run(config: Config) -> Result<()> {
             config.plugins_enabled,
             config.subagents_enabled,
         ),
-        ResumeMode::Last | ResumeMode::SessionId(_) => load_session_state(&config).await?,
+        ResumeMode::Last | ResumeMode::SessionId(_) => {
+            session_helpers::load_session_state(&config).await?
+        }
     };
 
     // Initialize compression orchestrator for CCG context management
@@ -356,182 +305,6 @@ pub async fn run(config: Config) -> Result<()> {
     result
 }
 
-/// Loads session state based on the resume mode.
-async fn load_session_state(config: &Config) -> Result<AppState> {
-    let sessions_dir = default_sessions_dir()?;
-    let manager = SessionManager::new(sessions_dir);
-
-    let session_id = match &config.resume_mode {
-        ResumeMode::None => unreachable!("load_session_state called with ResumeMode::None"),
-        ResumeMode::Last => {
-            let (id, metadata) = manager
-                .find_latest()
-                .await?
-                .context("No sessions found to resume")?;
-            info!(
-                session_id = %id,
-                message_count = metadata.message_count,
-                "Resuming most recent session"
-            );
-            id
-        }
-        ResumeMode::SessionId(id) => {
-            info!(session_id = %id, "Resuming session by ID");
-            id.clone()
-        }
-    };
-
-    let session = manager
-        .load(&session_id)
-        .await
-        .context(format!("Failed to load session '{}'", session_id))?;
-
-    // Create AppState from the loaded session
-    let mut state = AppState::with_performance_config(
-        session.working_dir().clone(),
-        config.skip_permissions,
-        &config.performance,
-        config.plugins_enabled,
-        config.subagents_enabled,
-    );
-    state.restore_from_session(&session);
-
-    Ok(state)
-}
-
-/// Runs in print mode (non-interactive).
-///
-/// This function:
-/// 1. Sends the prompt to Claude
-/// 2. Streams and prints the response to stdout
-/// 3. Executes any tools Claude requests
-/// 4. Continues the conversation until Claude is done
-/// 5. Exits
-///
-/// This matches Claude Code's `-p` / `--print` flag behavior.
-async fn run_print_mode(config: &Config, prompt: &str) -> Result<()> {
-    use crate::api::ToolChoice;
-
-    let client: std::sync::Arc<dyn LlmProvider> =
-        std::sync::Arc::from(crate::api::provider::create_provider(config));
-    let mut state = AppState::with_performance_config(
-        config.working_dir.clone(),
-        config.skip_permissions,
-        &config.performance,
-        config.plugins_enabled,
-        config.subagents_enabled,
-    );
-
-    // Initialize compression orchestrator for CCG context management
-    // This enables auto-context injection in print mode when narsil is available
-    initialize_compression_orchestrator(&mut state, config);
-
-    // Initialize MCP servers from .mcp.json / ~/.claude.json
-    if let Some(manager) = initialize_mcp_servers(&config.working_dir).await {
-        state.set_mcp_manager(manager);
-    }
-
-    // Refresh CCG context before the first API call (async, requires narsil MCP)
-    state.refresh_build_context().await;
-
-    // Add the user's prompt (adds to both display and API messages via submit logic)
-    let user_msg = ApiMessageV2::user(prompt);
-    state.add_message(Message {
-        role: Role::User,
-        content: prompt.to_string(),
-    });
-    state.api_messages_mut().push(user_msg);
-
-    // Set up streaming using build_api_messages which includes context injection
-    let tools = state.all_tool_definitions();
-    let (tx, mut rx) = tokio::sync::mpsc::channel(STREAMING_CHANNEL_BUFFER);
-    let api_messages = state.build_api_messages();
-    let client_clone = std::sync::Arc::clone(&client);
-    let tools_clone = tools.clone();
-
-    tokio::spawn(async move {
-        if let Err(e) = client_clone
-            .stream_message(
-                &api_messages,
-                Some(&tools_clone),
-                Some(&ToolChoice::Auto),
-                tx,
-            )
-            .await
-        {
-            tracing::error!("API error: {}", e);
-        }
-    });
-
-    // Collect and print the response
-    let response = match process_print_stream(&mut rx, &mut state).await? {
-        PrintStreamResult::Completed(text) => text,
-        PrintStreamResult::Error(e) => return Err(anyhow::anyhow!("API error: {}", e)),
-    };
-
-    // If there are no tool uses, add the assistant message to both display and API
-    if !response.is_empty() && !matches!(state.tool_loop_state(), ToolLoopState::PendingApproval) {
-        state.add_message(Message {
-            role: Role::Assistant,
-            content: response.clone(),
-        });
-        state
-            .api_messages_mut()
-            .push(ApiMessageV2::assistant(&response));
-    }
-
-    // Handle any tool execution if needed
-    while matches!(state.tool_loop_state(), ToolLoopState::PendingApproval) {
-        // Auto-approve all tools in non-interactive mode
-        state.approve_all_tools()?;
-
-        // Execute the tools
-        let needs_permission = state.execute_pending_tools().await?;
-
-        // Check if any tools still need permission
-        if !needs_permission.is_empty() {
-            warn!(
-                "Tools need permission in print mode (skipping): {:?}",
-                needs_permission
-            );
-            break;
-        }
-
-        // Complete tool execution: build messages, add to history, truncate
-        tool_loop::complete_tool_cycle(&mut state)?;
-
-        let (tx, mut rx) = tokio::sync::mpsc::channel(STREAMING_CHANNEL_BUFFER);
-        let api_messages = state.prepare_api_messages_for_send(client.model()).await;
-        let client_clone = std::sync::Arc::clone(&client);
-        let tools = state.all_tool_definitions();
-
-        tokio::spawn(async move {
-            if let Err(e) = client_clone
-                .stream_message(&api_messages, Some(&tools), Some(&ToolChoice::Auto), tx)
-                .await
-            {
-                tracing::error!("API error during tool continuation: {}", e);
-            }
-        });
-
-        // Process the continuation using the same helper
-        match process_print_stream(&mut rx, &mut state).await? {
-            PrintStreamResult::Completed(_) => {} // Continue loop if more tools
-            PrintStreamResult::Error(e) => {
-                warn!("Error during tool continuation: {}", e);
-                break;
-            }
-        }
-    }
-
-    // Shut down MCP servers
-    if let Some(manager) = state.mcp_manager_mut() {
-        manager.shutdown_all().await;
-    }
-
-    Ok(())
-}
-
 /// Creates the event dispatcher with handlers in priority order.
 ///
 /// Handler priority (highest first):
@@ -543,8 +316,9 @@ async fn run_print_mode(config: &Config, prompt: &str) -> Result<()> {
 /// 6. [`ContinuousHandler`](handlers::continuous::ContinuousHandler) — continuous loop progress
 /// 7. [`TickHandler`](handlers::tick::TickHandler) — throbber animation
 /// 8. [`SessionHandler`](handlers::session::SessionHandler) — auto-save observer (always last, never consumes)
+#[doc(hidden)]
 #[must_use]
-fn create_dispatcher() -> dispatch::EventDispatcher {
+pub fn create_dispatcher() -> dispatch::EventDispatcher {
     dispatch::EventDispatcher::new(vec![
         Box::new(handlers::permission::PermissionHandler),
         Box::new(handlers::completion::CompletionHandler),
@@ -608,415 +382,7 @@ async fn event_loop(
 
     // Safety save for programmatic quit (request_quit) without Quit event.
     // SessionHandler handles Quit events, but this catches edge cases.
-    auto_save_session(state, session_manager).await;
+    session_helpers::auto_save_session(state, session_manager).await;
 
     Ok(())
-}
-
-/// Auto-saves the current session.
-///
-/// Creates a new session or updates an existing one. Errors are logged
-/// but do not interrupt the application flow.
-async fn auto_save_session(state: &mut AppState, session_manager: &SessionManager) {
-    let session = state.to_session();
-
-    let result = if let Some(existing_id) = state.session_id() {
-        // Update existing session
-        session_manager
-            .update(existing_id, &session)
-            .await
-            .map(|()| existing_id.to_string())
-    } else {
-        // Create new session
-        session_manager.save(&session).await
-    };
-
-    match result {
-        Ok(id) => {
-            if state.session_id().is_none() {
-                debug!(session_id = %id, "Created new session");
-                state.set_session_id(id);
-            } else {
-                debug!(session_id = %id, "Updated session");
-            }
-        }
-        Err(e) => {
-            warn!(error = %e, "Failed to auto-save session");
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::api::{AnthropicClient, LlmProvider};
-    use crate::app::context::AppContext;
-    use crate::app::dispatch::Handled;
-    use crate::app::events::AppEvent;
-    use crate::permissions::PermissionRequest;
-    use crate::session::SessionManager;
-    use crate::types::config::ParallelMode;
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
-    use secrecy::SecretString;
-    use std::path::PathBuf;
-    use std::sync::Arc;
-    use tempfile::TempDir;
-
-    // =========================================================================
-    // Test helpers
-    // =========================================================================
-
-    fn test_client() -> Arc<dyn LlmProvider> {
-        Arc::new(AnthropicClient::new(
-            SecretString::from("test-key"),
-            "claude-test",
-        ))
-    }
-
-    fn test_state() -> AppState {
-        AppState::new(PathBuf::from("/tmp/test"), true, ParallelMode::Disabled)
-    }
-
-    fn test_session_manager() -> (SessionManager, TempDir) {
-        let dir = TempDir::new().expect("failed to create temp dir");
-        let mgr = SessionManager::new(dir.path().to_path_buf());
-        (mgr, dir)
-    }
-
-    // =========================================================================
-    // Compression orchestrator initialization tests
-    // =========================================================================
-
-    #[test]
-    fn test_initialize_compression_orchestrator_disabled_mode() {
-        use secrecy::SecretString;
-
-        let mut state = AppState::new(PathBuf::from("/tmp"), false, ParallelMode::Enabled);
-        let config = Config::new(
-            SecretString::new("test".into()),
-            "model",
-            PathBuf::from("/tmp"),
-        )
-        .with_narsil_mode(NarsilMode::Disabled);
-
-        // Disabled mode should never set orchestrator
-        initialize_compression_orchestrator(&mut state, &config);
-        assert!(state.compression_orchestrator().is_none());
-    }
-
-    #[test]
-    fn test_initialize_compression_orchestrator_auto_mode_no_code_files() {
-        use secrecy::SecretString;
-        use tempfile::tempdir;
-
-        // Create a temp dir with no code files
-        let temp = tempdir().unwrap();
-        let mut state = AppState::new(temp.path().to_path_buf(), false, ParallelMode::Enabled);
-        let config = Config::new(
-            SecretString::new("test".into()),
-            "model",
-            temp.path().to_path_buf(),
-        )
-        .with_narsil_mode(NarsilMode::Auto);
-
-        // Auto mode with no code files should not set orchestrator
-        initialize_compression_orchestrator(&mut state, &config);
-        // Result depends on is_narsil_available() AND has_supported_code_files()
-        // Since temp dir has no code files, orchestrator should be None
-        assert!(state.compression_orchestrator().is_none());
-    }
-
-    // =========================================================================
-    // create_dispatcher() tests — Phase 1.10 integration
-    // =========================================================================
-
-    #[test]
-    fn create_dispatcher_returns_seven_handlers_and_one_observer() {
-        let dispatcher = create_dispatcher();
-        assert_eq!(
-            dispatcher.handler_count(),
-            7,
-            "Dispatcher must have 7 handlers: Permission, Completion, Keyboard, Stream, Agent, Continuous, Tick"
-        );
-        assert_eq!(
-            dispatcher.observer_count(),
-            1,
-            "Dispatcher must have 1 observer: Session"
-        );
-    }
-
-    // =========================================================================
-    // Full dispatcher integration tests — all handlers working together
-    // =========================================================================
-
-    #[tokio::test]
-    async fn dispatcher_quit_event_triggers_session_save() {
-        let mut dispatcher = create_dispatcher();
-
-        let client = test_client();
-        let mut state = test_state();
-        let (session_mgr, _dir) = test_session_manager();
-
-        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
-
-        // Quit event should be dispatched to all handlers (none consume it
-        // except SessionHandler which observes and returns IGNORED).
-        let event = AppEvent::Quit;
-        let result = dispatcher.dispatch(&event, &mut ctx).await.unwrap();
-
-        // SessionHandler always returns IGNORED, so overall result is IGNORED.
-        assert_eq!(
-            result,
-            Handled::IGNORED,
-            "Quit event should not be consumed (SessionHandler returns IGNORED)"
-        );
-
-        // SessionHandler must have saved the session on Quit.
-        assert!(
-            ctx.state.session_id().is_some(),
-            "SessionHandler must auto-save session on Quit event"
-        );
-    }
-
-    #[tokio::test]
-    async fn dispatcher_char_input_inserts_into_state() {
-        let mut dispatcher = create_dispatcher();
-
-        let client = test_client();
-        let mut state = test_state();
-        let (session_mgr, _dir) = test_session_manager();
-
-        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
-
-        let event = AppEvent::Key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
-        let result = dispatcher.dispatch(&event, &mut ctx).await.unwrap();
-
-        assert_eq!(result, Handled::CONSUMED);
-        assert_eq!(
-            ctx.state.input(),
-            "x",
-            "Character input must flow through to KeyboardHandler and insert into input"
-        );
-    }
-
-    #[tokio::test]
-    async fn dispatcher_tick_advances_throbber() {
-        let mut dispatcher = create_dispatcher();
-
-        let client = test_client();
-        let mut state = test_state();
-        let (session_mgr, _dir) = test_session_manager();
-
-        let before = state.throbber_char();
-
-        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
-
-        let event = AppEvent::Tick;
-        let result = dispatcher.dispatch(&event, &mut ctx).await.unwrap();
-
-        assert_eq!(result, Handled::CONSUMED);
-        assert_ne!(
-            ctx.state.throbber_char(),
-            before,
-            "Tick event must advance throbber via TickHandler"
-        );
-    }
-
-    #[tokio::test]
-    async fn dispatcher_api_chunk_content_delta_consumed() {
-        let mut dispatcher = create_dispatcher();
-
-        let client = test_client();
-        let mut state = test_state();
-        let (session_mgr, _dir) = test_session_manager();
-
-        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
-
-        let event = AppEvent::ApiChunk(crate::api::StreamEvent::ContentDelta("hello".to_string()));
-        let result = dispatcher.dispatch(&event, &mut ctx).await.unwrap();
-
-        assert_eq!(
-            result,
-            Handled::CONSUMED,
-            "ApiChunk must be consumed by StreamHandler"
-        );
-    }
-
-    #[tokio::test]
-    async fn dispatcher_message_complete_marks_dirty_and_saves() {
-        let mut dispatcher = create_dispatcher();
-
-        let client = test_client();
-        let mut state = test_state();
-        let (session_mgr, _dir) = test_session_manager();
-
-        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
-
-        // MessageComplete should: StreamHandler marks dirty → SessionHandler saves.
-        let event = AppEvent::ApiChunk(crate::api::StreamEvent::MessageComplete {
-            stop_reason: crate::types::StopReason::EndTurn,
-        });
-        let result = dispatcher.dispatch(&event, &mut ctx).await.unwrap();
-
-        assert_eq!(result, Handled::CONSUMED);
-
-        // SessionHandler should have observed the dirty flag and saved.
-        assert!(
-            ctx.state.session_id().is_some(),
-            "MessageComplete → StreamHandler marks dirty → SessionHandler saves"
-        );
-    }
-
-    #[tokio::test]
-    async fn dispatcher_permission_key_consumed_before_keyboard() {
-        let mut dispatcher = create_dispatcher();
-
-        let client = test_client();
-        let mut state = test_state();
-        let (session_mgr, _dir) = test_session_manager();
-
-        // Set up a pending permission.
-        state.set_pending_permission(PermissionRequest::new("Bash", Some("ls"), "List"));
-
-        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
-
-        // Send 'z' key — should be consumed by PermissionHandler, NOT
-        // reach KeyboardHandler (which would insert 'z' into input).
-        let event = AppEvent::Key(KeyEvent::new(KeyCode::Char('z'), KeyModifiers::NONE));
-        let result = dispatcher.dispatch(&event, &mut ctx).await.unwrap();
-
-        assert_eq!(
-            result,
-            Handled::CONSUMED,
-            "Key must be consumed by PermissionHandler when permission is pending"
-        );
-        assert_eq!(
-            ctx.state.input(),
-            "",
-            "Key must NOT reach KeyboardHandler when permission is pending"
-        );
-    }
-
-    #[tokio::test]
-    async fn dispatcher_resize_marks_redraw() {
-        let mut dispatcher = create_dispatcher();
-
-        let client = test_client();
-        let mut state = test_state();
-        let (session_mgr, _dir) = test_session_manager();
-
-        // Clear initial render flags.
-        state.mark_rendered();
-
-        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
-
-        let event = AppEvent::Resize {
-            width: 120,
-            height: 40,
-        };
-        let result = dispatcher.dispatch(&event, &mut ctx).await.unwrap();
-
-        assert_eq!(result, Handled::CONSUMED);
-        assert!(
-            ctx.state.needs_render(),
-            "Resize must mark UI for redraw via KeyboardHandler"
-        );
-    }
-
-    #[tokio::test]
-    async fn dispatcher_mouse_scroll_consumed() {
-        let mut dispatcher = create_dispatcher();
-
-        let client = test_client();
-        let mut state = test_state();
-        let (session_mgr, _dir) = test_session_manager();
-
-        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
-
-        let event = AppEvent::Mouse(MouseEvent {
-            kind: MouseEventKind::ScrollUp,
-            column: 0,
-            row: 0,
-            modifiers: KeyModifiers::NONE,
-        });
-        let result = dispatcher.dispatch(&event, &mut ctx).await.unwrap();
-
-        assert_eq!(
-            result,
-            Handled::CONSUMED,
-            "Mouse events must be consumed by KeyboardHandler"
-        );
-    }
-
-    #[tokio::test]
-    async fn dispatcher_ctrl_c_as_quit_saves_and_is_detectable() {
-        let mut dispatcher = create_dispatcher();
-
-        let client = test_client();
-        let mut state = test_state();
-        let (session_mgr, _dir) = test_session_manager();
-
-        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
-
-        // In the real event loop, Ctrl+C is mapped to AppEvent::Quit by recv_event().
-        // Dispatching Quit should save the session (via SessionHandler).
-        let event = AppEvent::Quit;
-        let is_quit = event.is_quit();
-        let _result = dispatcher.dispatch(&event, &mut ctx).await.unwrap();
-
-        assert!(is_quit, "AppEvent::Quit must report is_quit() == true");
-        assert!(
-            ctx.state.session_id().is_some(),
-            "Quit dispatch must trigger session save"
-        );
-    }
-
-    #[tokio::test]
-    async fn dispatcher_keyboard_quit_sets_wants_quit() {
-        let mut dispatcher = create_dispatcher();
-
-        let client = test_client();
-        let mut state = test_state();
-        let (session_mgr, _dir) = test_session_manager();
-
-        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
-
-        // If a Key event for Ctrl+C reaches KeyboardHandler (bypassing recv_event's
-        // Quit mapping), it should set wants_quit on state.
-        let event = AppEvent::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
-        let result = dispatcher.dispatch(&event, &mut ctx).await.unwrap();
-
-        assert_eq!(result, Handled::CONSUMED);
-        assert!(
-            ctx.state.wants_quit(),
-            "Ctrl+C Key event must set wants_quit via KeyboardHandler"
-        );
-    }
-
-    #[tokio::test]
-    async fn dispatcher_multiple_events_sequence() {
-        let mut dispatcher = create_dispatcher();
-
-        let client = test_client();
-        let mut state = test_state();
-        let (session_mgr, _dir) = test_session_manager();
-
-        // Simulate a sequence: type "hi", then get an API chunk, then tick.
-        let events = vec![
-            AppEvent::Key(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE)),
-            AppEvent::Key(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE)),
-            AppEvent::ApiChunk(crate::api::StreamEvent::ContentDelta(
-                "response".to_string(),
-            )),
-            AppEvent::Tick,
-        ];
-
-        for event in &events {
-            let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
-            let result = dispatcher.dispatch(event, &mut ctx).await.unwrap();
-            assert_eq!(result, Handled::CONSUMED, "Event {event} must be consumed");
-        }
-
-        assert_eq!(state.input(), "hi", "Both characters must be inserted");
-    }
 }

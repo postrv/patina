@@ -114,3 +114,6 @@ mod token_refresh_test;
 
 #[path = "unit/keyring_storage_test.rs"]
 mod keyring_storage_test;
+
+#[path = "unit/app_test.rs"]
+mod app_test;
