@@ -38,10 +38,15 @@ pub struct IdeController {
     prompt_tx: mpsc::Sender<QueuedPrompt>,
     /// Receiver for prompts (held by controller, given to main app)
     prompt_rx: Option<mpsc::Receiver<QueuedPrompt>>,
+    /// Authentication token required for connections
+    auth_token: String,
 }
 
 impl IdeController {
     /// Creates a new IDE controller for the specified port
+    ///
+    /// Generates a unique authentication token that clients must present
+    /// before any requests are processed.
     #[must_use]
     pub fn new(port: u16) -> Self {
         let (prompt_tx, prompt_rx) = mpsc::channel(32);
@@ -50,7 +55,17 @@ impl IdeController {
             state: Arc::new(Mutex::new(IdeSharedState::default())),
             prompt_tx,
             prompt_rx: Some(prompt_rx),
+            auth_token: Uuid::new_v4().to_string(),
         }
+    }
+
+    /// Returns the authentication token for this controller
+    ///
+    /// IDE clients must send this token via an `Authenticate` request
+    /// before any other requests will be processed.
+    #[must_use]
+    pub fn auth_token(&self) -> &str {
+        &self.auth_token
     }
 
     /// Takes the prompt receiver for the main application to consume
@@ -86,10 +101,17 @@ impl IdeController {
 
                     let state = Arc::clone(&self.state);
                     let prompt_tx = self.prompt_tx.clone();
+                    let auth_token = self.auth_token.clone();
 
                     tokio::spawn(async move {
-                        if let Err(e) =
-                            handle_connection(stream, state, prompt_tx, session_id.clone()).await
+                        if let Err(e) = handle_connection(
+                            stream,
+                            state,
+                            prompt_tx,
+                            session_id.clone(),
+                            auth_token,
+                        )
+                        .await
                         {
                             warn!("IDE connection {} error: {}", session_id, e);
                         }
@@ -105,13 +127,18 @@ impl IdeController {
 }
 
 /// Handles a single IDE connection
+///
+/// Connections must authenticate with a valid token before any requests
+/// are processed. Unauthenticated requests receive an `AUTH_REQUIRED` error.
 async fn handle_connection(
     mut stream: TcpStream,
     state: Arc<Mutex<IdeSharedState>>,
     prompt_tx: mpsc::Sender<QueuedPrompt>,
     session_id: String,
+    auth_token: String,
 ) -> Result<()> {
     let mut buffer = vec![0u8; 8192];
+    let mut authenticated = false;
 
     loop {
         // Read message length (4 bytes, big-endian) followed by JSON
@@ -131,7 +158,27 @@ async fn handle_connection(
             let response = match parse_request(line) {
                 Ok(request) => {
                     debug!("IDE request: {:?}", request);
-                    process_request(request, &state, &prompt_tx, &session_id).await
+                    if !authenticated {
+                        if let IdeRequest::Authenticate { token } = &request {
+                            if token == &auth_token {
+                                authenticated = true;
+                                info!("IDE connection {} authenticated", session_id);
+                                IdeResponse::AuthResult { success: true }
+                            } else {
+                                warn!("IDE connection {} failed authentication", session_id);
+                                IdeResponse::AuthResult { success: false }
+                            }
+                        } else {
+                            IdeResponse::Error {
+                                code: "AUTH_REQUIRED".to_string(),
+                                message: "Connection must authenticate before sending requests"
+                                    .to_string(),
+                                request_id: None,
+                            }
+                        }
+                    } else {
+                        process_request(request, &state, &prompt_tx, &session_id).await
+                    }
                 }
                 Err(e) => {
                     warn!("Failed to parse IDE request: {}", e);
@@ -189,6 +236,93 @@ mod tests {
     use tokio::io::{AsyncBufReadExt, BufReader};
     use tokio::time::timeout;
 
+    /// Helper: spawn a server handler on a random port with the given controller's
+    /// state, prompt_tx, and auth_token. Returns the address and the token.
+    async fn spawn_server(controller: &IdeController) -> (std::net::SocketAddr, String) {
+        let state = controller.shared_state();
+        let token = controller.auth_token().to_string();
+        let prompt_tx = controller.prompt_tx.clone();
+        let token_for_server = token.clone();
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        tokio::spawn(async move {
+            if let Ok((stream, _)) = listener.accept().await {
+                let session_id = "test-session".to_string();
+                let _ =
+                    handle_connection(stream, state, prompt_tx, session_id, token_for_server).await;
+            }
+        });
+
+        (addr, token)
+    }
+
+    /// Helper: spawn a server handler that uses a custom state Arc (for pre-set state).
+    async fn spawn_server_with_state(
+        controller: &IdeController,
+        state: Arc<Mutex<IdeSharedState>>,
+    ) -> (std::net::SocketAddr, String) {
+        let token = controller.auth_token().to_string();
+        let prompt_tx = controller.prompt_tx.clone();
+        let token_for_server = token.clone();
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        tokio::spawn(async move {
+            if let Ok((stream, _)) = listener.accept().await {
+                let session_id = "test-session".to_string();
+                let _ =
+                    handle_connection(stream, state, prompt_tx, session_id, token_for_server).await;
+            }
+        });
+
+        (addr, token)
+    }
+
+    /// Helper: connect to address and split into (reader, writer).
+    async fn connect_split(
+        addr: std::net::SocketAddr,
+    ) -> (
+        BufReader<tokio::net::tcp::OwnedReadHalf>,
+        tokio::net::tcp::OwnedWriteHalf,
+    ) {
+        let stream = TcpStream::connect(addr).await.unwrap();
+        let (read_half, write_half) = stream.into_split();
+        (BufReader::new(read_half), write_half)
+    }
+
+    /// Helper: send a JSON message (newline-terminated) on the write half.
+    async fn send_msg(writer: &mut tokio::net::tcp::OwnedWriteHalf, msg: &str) {
+        writer.write_all(msg.as_bytes()).await.unwrap();
+        writer.write_all(b"\n").await.unwrap();
+        writer.flush().await.unwrap();
+    }
+
+    /// Helper: read one newline-terminated JSON response, with a 2-second timeout.
+    async fn recv_json(
+        reader: &mut BufReader<tokio::net::tcp::OwnedReadHalf>,
+    ) -> serde_json::Value {
+        let mut line = String::new();
+        let result = timeout(Duration::from_secs(2), reader.read_line(&mut line)).await;
+        assert!(result.is_ok(), "Timeout waiting for response");
+        serde_json::from_str(&line).unwrap()
+    }
+
+    /// Helper: authenticate a connection with the given token.
+    async fn authenticate(
+        reader: &mut BufReader<tokio::net::tcp::OwnedReadHalf>,
+        writer: &mut tokio::net::tcp::OwnedWriteHalf,
+        token: &str,
+    ) {
+        let auth_msg = format!("{{\"type\": \"authenticate\", \"token\": \"{token}\"}}");
+        send_msg(writer, &auth_msg).await;
+        let resp = recv_json(reader).await;
+        assert_eq!(resp["type"], "auth_result");
+        assert_eq!(resp["success"], true);
+    }
+
     #[tokio::test]
     async fn test_ide_controller_creation() {
         let controller = IdeController::new(0); // Port 0 = let OS assign
@@ -217,39 +351,17 @@ mod tests {
 
     #[tokio::test]
     async fn test_ide_server_ping_pong() {
-        // Start server on random port
         let controller = IdeController::new(0);
-        let state = controller.shared_state();
+        let (addr, token) = spawn_server(&controller).await;
+        let (mut reader, mut writer) = connect_split(addr).await;
 
-        // Bind to port 0 to get a random available port
-        let addr = "127.0.0.1:0";
-        let listener = TcpListener::bind(addr).await.unwrap();
-        let actual_addr = listener.local_addr().unwrap();
-
-        // Spawn server handler
-        let prompt_tx = controller.prompt_tx.clone();
-        tokio::spawn(async move {
-            if let Ok((stream, _)) = listener.accept().await {
-                let session_id = "test-session".to_string();
-                let _ = handle_connection(stream, state, prompt_tx, session_id).await;
-            }
-        });
-
-        // Connect as client
-        let mut stream = TcpStream::connect(actual_addr).await.unwrap();
+        // Authenticate first
+        authenticate(&mut reader, &mut writer, &token).await;
 
         // Send ping
-        stream.write_all(b"{\"type\": \"ping\"}\n").await.unwrap();
-        stream.flush().await.unwrap();
+        send_msg(&mut writer, "{\"type\": \"ping\"}").await;
+        let response = recv_json(&mut reader).await;
 
-        // Read response
-        let mut reader = BufReader::new(&mut stream);
-        let mut response_line = String::new();
-
-        let result = timeout(Duration::from_secs(2), reader.read_line(&mut response_line)).await;
-
-        assert!(result.is_ok(), "Timeout waiting for response");
-        let response: serde_json::Value = serde_json::from_str(&response_line).unwrap();
         assert_eq!(response["type"], "pong");
         assert!(response["version"].as_str().is_some());
     }
@@ -267,32 +379,16 @@ mod tests {
             s.active_tools = vec!["bash".to_string()];
         }
 
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let actual_addr = listener.local_addr().unwrap();
+        let (addr, token) = spawn_server_with_state(&controller, Arc::clone(&state)).await;
+        let (mut reader, mut writer) = connect_split(addr).await;
 
-        let prompt_tx = controller.prompt_tx.clone();
-        let state_clone = Arc::clone(&state);
-        tokio::spawn(async move {
-            if let Ok((stream, _)) = listener.accept().await {
-                let session_id = "test-session".to_string();
-                let _ = handle_connection(stream, state_clone, prompt_tx, session_id).await;
-            }
-        });
+        // Authenticate first
+        authenticate(&mut reader, &mut writer, &token).await;
 
-        let mut stream = TcpStream::connect(actual_addr).await.unwrap();
-        stream
-            .write_all(b"{\"type\": \"get_status\"}\n")
-            .await
-            .unwrap();
-        stream.flush().await.unwrap();
+        // Send get_status
+        send_msg(&mut writer, "{\"type\": \"get_status\"}").await;
+        let response = recv_json(&mut reader).await;
 
-        let mut reader = BufReader::new(&mut stream);
-        let mut response_line = String::new();
-
-        let result = timeout(Duration::from_secs(2), reader.read_line(&mut response_line)).await;
-
-        assert!(result.is_ok(), "Timeout waiting for response");
-        let response: serde_json::Value = serde_json::from_str(&response_line).unwrap();
         assert_eq!(response["type"], "status");
         assert_eq!(response["busy"], true);
         assert_eq!(response["turn_count"], 5);
@@ -302,34 +398,21 @@ mod tests {
     #[tokio::test]
     async fn test_ide_server_prompt_queuing() {
         let mut controller = IdeController::new(0);
-        let state = controller.shared_state();
         let mut prompt_rx = controller.take_prompt_receiver().unwrap();
+        let (addr, token) = spawn_server(&controller).await;
+        let (mut reader, mut writer) = connect_split(addr).await;
 
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let actual_addr = listener.local_addr().unwrap();
+        // Authenticate first
+        authenticate(&mut reader, &mut writer, &token).await;
 
-        let prompt_tx = controller.prompt_tx.clone();
-        tokio::spawn(async move {
-            if let Ok((stream, _)) = listener.accept().await {
-                let session_id = "test-session".to_string();
-                let _ = handle_connection(stream, state, prompt_tx, session_id).await;
-            }
-        });
+        // Send prompt
+        send_msg(
+            &mut writer,
+            "{\"type\": \"send_prompt\", \"text\": \"Hello, Claude!\"}",
+        )
+        .await;
+        let response = recv_json(&mut reader).await;
 
-        let mut stream = TcpStream::connect(actual_addr).await.unwrap();
-        stream
-            .write_all(b"{\"type\": \"send_prompt\", \"text\": \"Hello, Claude!\"}\n")
-            .await
-            .unwrap();
-        stream.flush().await.unwrap();
-
-        let mut reader = BufReader::new(&mut stream);
-        let mut response_line = String::new();
-
-        let result = timeout(Duration::from_secs(2), reader.read_line(&mut response_line)).await;
-
-        assert!(result.is_ok(), "Timeout waiting for response");
-        let response: serde_json::Value = serde_json::from_str(&response_line).unwrap();
         assert_eq!(response["type"], "prompt_received");
         assert!(response["request_id"].as_str().is_some());
 
@@ -340,5 +423,78 @@ mod tests {
         assert!(queued.is_some());
         let prompt = queued.unwrap();
         assert_eq!(prompt.text, "Hello, Claude!");
+    }
+
+    // =========================================================================
+    // Authentication tests
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_ide_auth_token_generated_nonempty() {
+        let controller = IdeController::new(0);
+        assert!(!controller.auth_token().is_empty());
+        // Should be a valid UUID v4
+        assert!(uuid::Uuid::parse_str(controller.auth_token()).is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_ide_auth_token_unique() {
+        let controller1 = IdeController::new(0);
+        let controller2 = IdeController::new(0);
+        assert_ne!(controller1.auth_token(), controller2.auth_token());
+    }
+
+    #[tokio::test]
+    async fn test_ide_connection_requires_auth() {
+        let controller = IdeController::new(0);
+        let (addr, _token) = spawn_server(&controller).await;
+        let (mut reader, mut writer) = connect_split(addr).await;
+
+        // Send ping without authenticating first
+        send_msg(&mut writer, "{\"type\": \"ping\"}").await;
+        let response = recv_json(&mut reader).await;
+
+        assert_eq!(response["type"], "error");
+        assert_eq!(response["code"], "AUTH_REQUIRED");
+    }
+
+    #[tokio::test]
+    async fn test_ide_connection_wrong_token() {
+        let controller = IdeController::new(0);
+        let (addr, _token) = spawn_server(&controller).await;
+        let (mut reader, mut writer) = connect_split(addr).await;
+
+        // Send authenticate with wrong token
+        send_msg(
+            &mut writer,
+            "{\"type\": \"authenticate\", \"token\": \"wrong-token-value\"}",
+        )
+        .await;
+        let response = recv_json(&mut reader).await;
+
+        assert_eq!(response["type"], "auth_result");
+        assert_eq!(response["success"], false);
+    }
+
+    #[tokio::test]
+    async fn test_ide_connection_auth_success() {
+        let controller = IdeController::new(0);
+        let (addr, token) = spawn_server(&controller).await;
+        let (mut reader, mut writer) = connect_split(addr).await;
+
+        // Authenticate with correct token
+        let auth_msg = format!("{{\"type\": \"authenticate\", \"token\": \"{token}\"}}");
+        send_msg(&mut writer, &auth_msg).await;
+        let auth_resp = recv_json(&mut reader).await;
+
+        assert_eq!(auth_resp["type"], "auth_result");
+        assert_eq!(auth_resp["success"], true);
+
+        // Now send ping - should work after authentication
+        send_msg(&mut writer, "{\"type\": \"ping\"}").await;
+        let pong_resp = recv_json(&mut reader).await;
+
+        assert_eq!(pong_resp["type"], "pong");
+        assert!(pong_resp["version"].as_str().is_some());
     }
 }

@@ -64,6 +64,12 @@ pub enum IdeRequest {
         /// Supported capabilities
         capabilities: Vec<String>,
     },
+
+    /// Authenticate this connection with a token
+    Authenticate {
+        /// Authentication token
+        token: String,
+    },
 }
 
 /// Selected text range in a file
@@ -200,6 +206,12 @@ pub enum IdeResponse {
         version: String,
         /// Server capabilities
         capabilities: Vec<String>,
+    },
+
+    /// Authentication result
+    AuthResult {
+        /// Whether authentication succeeded
+        success: bool,
     },
 }
 

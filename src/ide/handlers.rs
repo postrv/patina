@@ -317,6 +317,12 @@ pub fn route_request(
             capabilities,
         } => handle_init(&workspace, &capabilities, session_id),
         IdeRequest::ApplyEdit { file, edits } => handle_apply_edit(&file, &edits),
+        IdeRequest::Authenticate { .. } => {
+            // Authentication is handled at the connection level in controller.rs,
+            // not through the normal request router. If it reaches here, it means
+            // the connection is already authenticated and the request is a no-op.
+            IdeResponse::AuthResult { success: true }
+        }
     }
 }
 
