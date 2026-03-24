@@ -84,6 +84,12 @@ pub struct SlashCommandHandler {
     mcp_servers: Vec<McpServerInfo>,
     /// Pre-formatted cost summary from AppState.
     cost_summary: Option<String>,
+    /// Conversation messages for /context and /export.
+    messages: Vec<crate::types::Message>,
+    /// Context limit in tokens (for /context analysis).
+    context_limit: usize,
+    /// Current session ID (for /fork).
+    session_id: Option<String>,
 }
 
 impl SlashCommandHandler {
@@ -95,6 +101,9 @@ impl SlashCommandHandler {
             plugins: Vec::new(),
             mcp_servers: Vec::new(),
             cost_summary: None,
+            messages: Vec::new(),
+            context_limit: 200_000,
+            session_id: None,
         }
     }
 
@@ -111,6 +120,25 @@ impl SlashCommandHandler {
     #[must_use]
     pub fn with_cost_summary(mut self, summary: String) -> Self {
         self.cost_summary = Some(summary);
+        self
+    }
+
+    /// Sets conversation messages for `/context` and `/export` commands.
+    #[must_use]
+    pub fn with_messages(
+        mut self,
+        messages: Vec<crate::types::Message>,
+        context_limit: usize,
+    ) -> Self {
+        self.messages = messages;
+        self.context_limit = context_limit;
+        self
+    }
+
+    /// Sets the session ID for the `/fork` command.
+    #[must_use]
+    pub fn with_session_id(mut self, session_id: Option<String>) -> Self {
+        self.session_id = session_id;
         self
     }
 
@@ -543,11 +571,16 @@ impl SlashCommandHandler {
     ///
     /// Displays context window usage breakdown with per-message token estimates.
     fn handle_context(&self) -> CommandResult {
-        CommandResult::Executed(
-            "Context analysis: No messages in session.\n\
-             As you interact, token usage per message will be tracked here."
-                .to_string(),
-        )
+        if self.messages.is_empty() {
+            return CommandResult::Executed(
+                "Context analysis: No messages in session yet.".to_string(),
+            );
+        }
+        let analysis = crate::app::context_analysis::ContextAnalysis::analyze(
+            &self.messages,
+            self.context_limit,
+        );
+        CommandResult::Executed(analysis.format())
     }
 
     /// Handles the `/export` command.
@@ -555,16 +588,25 @@ impl SlashCommandHandler {
     /// Exports the conversation in markdown (default) or JSON format.
     fn handle_export(&self, args: &str) -> CommandResult {
         let format = args.trim();
+        if self.messages.is_empty() {
+            return CommandResult::Executed("No messages to export.".to_string());
+        }
         match format {
-            "" | "markdown" | "md" | "json" => CommandResult::Executed(format!(
-                "Export ({}): No messages to export.\n\
-                 Usage: /export [markdown|json]",
-                if format.is_empty() {
-                    "markdown"
-                } else {
-                    format
-                },
-            )),
+            "" | "markdown" | "md" => {
+                let mut output = String::from("# Conversation Export\n\n");
+                for msg in &self.messages {
+                    let role = match msg.role {
+                        crate::types::Role::User => "**User**",
+                        crate::types::Role::Assistant => "**Assistant**",
+                    };
+                    output.push_str(&format!("## {}\n\n{}\n\n---\n\n", role, msg.content));
+                }
+                CommandResult::Executed(output)
+            }
+            "json" => match serde_json::to_string_pretty(&self.messages) {
+                Ok(json) => CommandResult::Executed(json),
+                Err(e) => CommandResult::Error(format!("Failed to serialize: {e}")),
+            },
             _ => CommandResult::Error(format!(
                 "Unknown export format: '{}'. Use 'markdown' or 'json'.",
                 format
@@ -579,20 +621,23 @@ impl SlashCommandHandler {
     fn handle_fork(&self, args: &str) -> CommandResult {
         let name = args.trim();
         if name.is_empty() {
-            CommandResult::Executed(
+            return CommandResult::Executed(
                 "Fork: Creates a new session from the current conversation.\n\
                  Usage: /fork [branch-name]\n\
                  The new session preserves all messages up to this point."
                     .to_string(),
-            )
-        } else {
-            // The actual fork operation requires async session management,
-            // so the TUI layer intercepts this and performs the fork.
-            CommandResult::Executed(format!(
-                "Forking session as '{}'...\n\
-                 The TUI will create the new session branch.",
-                name
-            ))
+            );
+        }
+        match &self.session_id {
+            Some(sid) => CommandResult::Executed(format!(
+                "Fork requested: branch '{}' from session {}.\n\
+                 The session manager will create the fork on the next save cycle.",
+                name,
+                &sid[..sid.len().min(8)]
+            )),
+            None => CommandResult::Error(
+                "Cannot fork: no active session. Start a conversation first.".to_string(),
+            ),
         }
     }
 
@@ -2260,14 +2305,14 @@ mod tests {
     // =========================================================================
 
     #[test]
-    fn test_handle_export_default() {
+    fn test_handle_export_no_messages() {
         let (handler, _temp) = create_handler_in_temp();
         let result = handler.handle("/export");
         match result {
             CommandResult::Executed(output) => {
                 assert!(
-                    output.contains("Export"),
-                    "Should show export info: {}",
+                    output.contains("No messages"),
+                    "Should report no messages: {}",
                     output
                 );
             }
@@ -2276,32 +2321,53 @@ mod tests {
     }
 
     #[test]
-    fn test_handle_export_markdown() {
-        let (handler, _temp) = create_handler_in_temp();
+    fn test_handle_export_markdown_with_messages() {
+        use crate::types::{Message, Role};
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let handler = SlashCommandHandler::new(temp_dir.path().to_path_buf()).with_messages(
+            vec![
+                Message {
+                    role: Role::User,
+                    content: "Hello".to_string(),
+                },
+                Message {
+                    role: Role::Assistant,
+                    content: "Hi there".to_string(),
+                },
+            ],
+            200_000,
+        );
         let result = handler.handle("/export markdown");
         match result {
             CommandResult::Executed(output) => {
-                assert!(
-                    output.contains("Export"),
-                    "Should show export info: {}",
-                    output
-                );
+                assert!(output.contains("**User**"), "Should contain user role");
+                assert!(output.contains("Hello"), "Should contain message");
+                assert!(output.contains("Hi there"), "Should contain response");
             }
             other => panic!("Expected executed result: {:?}", other),
         }
     }
 
     #[test]
-    fn test_handle_export_json() {
-        let (handler, _temp) = create_handler_in_temp();
+    fn test_handle_export_json_with_messages() {
+        use crate::types::{Message, Role};
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let handler = SlashCommandHandler::new(temp_dir.path().to_path_buf()).with_messages(
+            vec![Message {
+                role: Role::User,
+                content: "Test".to_string(),
+            }],
+            200_000,
+        );
         let result = handler.handle("/export json");
         match result {
             CommandResult::Executed(output) => {
                 assert!(
-                    output.contains("Export"),
-                    "Should show export info: {}",
+                    output.contains("\"content\""),
+                    "Should be valid JSON: {}",
                     output
                 );
+                assert!(output.contains("Test"), "Should contain message content");
             }
             other => panic!("Expected executed result: {:?}", other),
         }
@@ -2309,7 +2375,15 @@ mod tests {
 
     #[test]
     fn test_handle_export_unknown_format() {
-        let (handler, _temp) = create_handler_in_temp();
+        use crate::types::{Message, Role};
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let handler = SlashCommandHandler::new(temp_dir.path().to_path_buf()).with_messages(
+            vec![Message {
+                role: Role::User,
+                content: "Test".to_string(),
+            }],
+            200_000,
+        );
         let result = handler.handle("/export csv");
         match result {
             CommandResult::Error(msg) => {
@@ -2352,7 +2426,9 @@ mod tests {
 
     #[test]
     fn test_handle_fork_with_name() {
-        let (handler, _temp) = create_handler_in_temp();
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let handler = SlashCommandHandler::new(temp_dir.path().to_path_buf())
+            .with_session_id(Some("abc12345-defg".to_string()));
         let result = handler.handle("/fork explore-auth");
         match result {
             CommandResult::Executed(output) => {
@@ -2367,8 +2443,26 @@ mod tests {
     }
 
     #[test]
-    fn test_handle_branch_alias() {
+    fn test_handle_fork_no_session() {
         let (handler, _temp) = create_handler_in_temp();
+        let result = handler.handle("/fork test-branch");
+        match result {
+            CommandResult::Error(msg) => {
+                assert!(
+                    msg.contains("no active session"),
+                    "Should report no session: {}",
+                    msg
+                );
+            }
+            other => panic!("Expected error: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_handle_branch_alias() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let handler = SlashCommandHandler::new(temp_dir.path().to_path_buf())
+            .with_session_id(Some("xyz98765-hijk".to_string()));
         let result = handler.handle("/branch my-experiment");
         match result {
             CommandResult::Executed(output) => {

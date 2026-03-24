@@ -241,10 +241,20 @@ fn handle_slash_command(ctx: &mut AppContext<'_>, input: &str) {
     let plugin_info = SlashCommandHandler::build_plugin_info(ctx.state.plugins());
     let mcp_info = build_mcp_server_info(ctx.state);
     let cost_summary = ctx.state.cost_summary();
+    let messages: Vec<_> = ctx
+        .state
+        .api_messages()
+        .iter()
+        .map(|m| m.to_legacy())
+        .collect();
+    let context_limit = crate::api::tokens::model_context_limit(ctx.client.model());
+    let session_id = ctx.state.session_id().map(String::from);
     let handler = SlashCommandHandler::new(ctx.state.working_dir.clone())
         .with_plugins(plugin_info)
         .with_mcp_info(mcp_info)
-        .with_cost_summary(cost_summary);
+        .with_cost_summary(cost_summary)
+        .with_messages(messages, context_limit)
+        .with_session_id(session_id);
     let result = handler.handle(input);
 
     // Display the user's command in timeline
