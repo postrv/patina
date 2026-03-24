@@ -117,33 +117,61 @@ impl ModelPricing {
     }
 }
 
-/// Default pricing for known models.
-fn default_model_pricing() -> HashMap<&'static str, ModelPricing> {
-    let mut pricing = HashMap::new();
+/// Default pricing for known models (lazy-initialized, allocated once).
+static DEFAULT_MODEL_PRICING: once_cell::sync::Lazy<HashMap<&'static str, ModelPricing>> =
+    once_cell::sync::Lazy::new(|| {
+        let mut pricing = HashMap::new();
 
-    // Claude 3 Opus: $15/1M input, $75/1M output
-    pricing.insert("claude-3-opus-20240229", ModelPricing::new(15.0, 75.0));
-    pricing.insert("claude-3-opus", ModelPricing::new(15.0, 75.0));
+        // Claude 3 Opus: $15/1M input, $75/1M output
+        pricing.insert("claude-3-opus-20240229", ModelPricing::new(15.0, 75.0));
+        pricing.insert("claude-3-opus", ModelPricing::new(15.0, 75.0));
 
-    // Claude 3 Sonnet: $3/1M input, $15/1M output
-    pricing.insert("claude-3-sonnet-20240229", ModelPricing::new(3.0, 15.0));
-    pricing.insert("claude-3-sonnet", ModelPricing::new(3.0, 15.0));
+        // Claude 3 Sonnet: $3/1M input, $15/1M output
+        pricing.insert("claude-3-sonnet-20240229", ModelPricing::new(3.0, 15.0));
+        pricing.insert("claude-3-sonnet", ModelPricing::new(3.0, 15.0));
 
-    // Claude 3.5 Sonnet: $3/1M input, $15/1M output
-    pricing.insert("claude-3-5-sonnet-20240620", ModelPricing::new(3.0, 15.0));
-    pricing.insert("claude-3-5-sonnet", ModelPricing::new(3.0, 15.0));
+        // Claude 3 Haiku: $0.25/1M input, $1.25/1M output
+        pricing.insert("claude-3-haiku-20240307", ModelPricing::new(0.25, 1.25));
+        pricing.insert("claude-3-haiku", ModelPricing::new(0.25, 1.25));
 
-    // Claude 3 Haiku: $0.25/1M input, $1.25/1M output
-    pricing.insert("claude-3-haiku-20240307", ModelPricing::new(0.25, 1.25));
-    pricing.insert("claude-3-haiku", ModelPricing::new(0.25, 1.25));
+        // Claude 3.5 Sonnet: $3/1M input, $15/1M output
+        pricing.insert("claude-3-5-sonnet-20240620", ModelPricing::new(3.0, 15.0));
+        pricing.insert("claude-3-5-sonnet-20241022", ModelPricing::new(3.0, 15.0));
+        pricing.insert("claude-3-5-sonnet", ModelPricing::new(3.0, 15.0));
+        pricing.insert("claude-3-5-sonnet-v2", ModelPricing::new(3.0, 15.0));
 
-    pricing
-}
+        // Claude 3.5 Haiku: $0.80/1M input, $4/1M output
+        pricing.insert("claude-3-5-haiku-20241022", ModelPricing::new(0.80, 4.0));
+        pricing.insert("claude-3-5-haiku", ModelPricing::new(0.80, 4.0));
 
-/// Default pricing for unknown models (conservative estimate).
+        // Claude 4 Sonnet: $3/1M input, $15/1M output
+        pricing.insert("claude-sonnet-4-20250514", ModelPricing::new(3.0, 15.0));
+        pricing.insert("claude-sonnet-4", ModelPricing::new(3.0, 15.0));
+
+        // Claude 4 Opus: $15/1M input, $75/1M output
+        pricing.insert("claude-opus-4-20250514", ModelPricing::new(15.0, 75.0));
+        pricing.insert("claude-opus-4", ModelPricing::new(15.0, 75.0));
+
+        // Claude 4.5 Sonnet: $3/1M input, $15/1M output
+        pricing.insert("claude-sonnet-4-5-20250929", ModelPricing::new(3.0, 15.0));
+        pricing.insert("claude-sonnet-4-5", ModelPricing::new(3.0, 15.0));
+
+        // Claude 4.5 Haiku: $0.80/1M input, $4/1M output
+        pricing.insert("claude-haiku-4-5-20251001", ModelPricing::new(0.80, 4.0));
+        pricing.insert("claude-haiku-4-5", ModelPricing::new(0.80, 4.0));
+
+        // Claude 4.5/4.6 Opus: $15/1M input, $75/1M output
+        pricing.insert("claude-opus-4-5-20251101", ModelPricing::new(15.0, 75.0));
+        pricing.insert("claude-opus-4-5", ModelPricing::new(15.0, 75.0));
+        pricing.insert("claude-opus-4-6", ModelPricing::new(15.0, 75.0));
+
+        pricing
+    });
+
+/// Default pricing for unknown models (moderate estimate).
 const DEFAULT_UNKNOWN_PRICING: ModelPricing = ModelPricing {
-    input_per_million: 10.0,
-    output_per_million: 50.0,
+    input_per_million: 5.0,
+    output_per_million: 25.0,
 };
 
 /// Configuration for cost controls.
@@ -250,8 +278,7 @@ impl UsageRecord {
         cache_creation_input_tokens: u32,
         duration: Duration,
     ) -> Self {
-        let pricing = default_model_pricing();
-        let model_pricing = pricing
+        let model_pricing = DEFAULT_MODEL_PRICING
             .get(model)
             .copied()
             .unwrap_or(DEFAULT_UNKNOWN_PRICING);
@@ -619,6 +646,70 @@ mod tests {
         assert_eq!(record.cache_read_input_tokens, 50_000);
         assert_eq!(record.cache_creation_input_tokens, 20_000);
         assert!(record.cost > 0.0);
+    }
+
+    #[test]
+    fn test_claude4_sonnet_pricing() {
+        let record = UsageRecord::new(
+            "claude-sonnet-4-20250514",
+            1_000_000,
+            1_000_000,
+            Duration::from_secs(1),
+        );
+        // Claude 4 Sonnet: $3/1M input + $15/1M output = $18
+        assert!(
+            (record.cost - 18.0).abs() < 0.01,
+            "Claude 4 Sonnet cost should be $18, got {}",
+            record.cost
+        );
+    }
+
+    #[test]
+    fn test_claude4_opus_pricing() {
+        let record = UsageRecord::new(
+            "claude-opus-4-20250514",
+            1_000_000,
+            1_000_000,
+            Duration::from_secs(1),
+        );
+        // Claude 4 Opus: $15/1M input + $75/1M output = $90
+        assert!(
+            (record.cost - 90.0).abs() < 0.01,
+            "Claude 4 Opus cost should be $90, got {}",
+            record.cost
+        );
+    }
+
+    #[test]
+    fn test_claude35_haiku_pricing() {
+        let record = UsageRecord::new(
+            "claude-3-5-haiku-20241022",
+            1_000_000,
+            1_000_000,
+            Duration::from_secs(1),
+        );
+        // Claude 3.5 Haiku: $0.80/1M input + $4/1M output = $4.80
+        assert!(
+            (record.cost - 4.80).abs() < 0.01,
+            "Claude 3.5 Haiku cost should be $4.80, got {}",
+            record.cost
+        );
+    }
+
+    #[test]
+    fn test_unknown_model_uses_default_pricing() {
+        let record = UsageRecord::new(
+            "some-unknown-model",
+            1_000_000,
+            1_000_000,
+            Duration::from_secs(1),
+        );
+        // Default: $5/1M input + $25/1M output = $30
+        assert!(
+            (record.cost - 30.0).abs() < 0.01,
+            "Unknown model cost should be $30 (default), got {}",
+            record.cost
+        );
     }
 
     #[test]

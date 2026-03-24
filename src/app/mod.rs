@@ -27,6 +27,7 @@ pub mod handlers;
 pub mod print;
 pub mod session_helpers;
 pub mod state;
+pub mod system_prompt;
 pub mod tool_loop;
 
 use state::AppState;
@@ -219,6 +220,10 @@ pub async fn run(config: Config) -> Result<()> {
     state.set_effort(config.effort);
     state.set_thinking_budget(config.thinking_budget);
     state.set_current_model(config.model.clone());
+
+    // Build and inject system prompt
+    let prompt = system_prompt::build_system_prompt(&config.working_dir);
+    state.set_system_prompt(Some(prompt));
 
     // Load persistent memory store
     if let Some(project_dirs) = directories::ProjectDirs::from("com", "patina", "patina") {

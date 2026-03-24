@@ -225,10 +225,24 @@ impl LlmProvider for OpenRouterProvider {
                     "OpenRouter does not support extended thinking; ignoring thinking config"
                 );
             }
-            if options.system.is_some() {
-                tracing::warn!("OpenRouter does not support cache_control system blocks; ignoring");
+            let system_text: Option<String> = options.system.as_ref().map(|blocks| {
+                blocks
+                    .iter()
+                    .map(|b| b.text.as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            });
+            if options
+                .system
+                .as_ref()
+                .is_some_and(|blocks| blocks.iter().any(|b| b.cache_control.is_some()))
+            {
+                tracing::warn!(
+                    "OpenRouter does not support cache_control on system blocks; \
+                     system prompt text is passed through but cache directives are ignored"
+                );
             }
-            let openai_messages = translate_to_openai(None, messages);
+            let openai_messages = translate_to_openai(system_text.as_deref(), messages);
 
             let openai_tools: Option<Vec<OpenAiTool>> =
                 tools.map(|t| t.iter().map(|td| OpenAiTool::from(td.clone())).collect());
