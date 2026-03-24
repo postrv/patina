@@ -166,12 +166,12 @@ impl ToolExecutor {
     /// # Errors
     ///
     /// Returns an error message if the path is a symlink.
-    fn check_symlink(&self, path: &str) -> std::result::Result<(), String> {
+    async fn check_symlink(&self, path: &str) -> std::result::Result<(), String> {
         let full_path = self.working_dir.join(path);
 
         // Use symlink_metadata to check the path itself, not what it points to
         // fs::metadata follows symlinks, symlink_metadata does not
-        match std::fs::symlink_metadata(&full_path) {
+        match tokio::fs::symlink_metadata(&full_path).await {
             Ok(metadata) => {
                 if metadata.file_type().is_symlink() {
                     warn!(
@@ -355,7 +355,7 @@ impl ToolExecutor {
             .ok_or_else(|| anyhow::anyhow!("Missing path"))?;
 
         // Check for symlinks BEFORE path validation to prevent TOCTOU attacks
-        if let Err(e) = self.check_symlink(path) {
+        if let Err(e) = self.check_symlink(path).await {
             return Ok(ToolResult::Error(e));
         }
 
@@ -496,7 +496,7 @@ impl ToolExecutor {
         }
 
         // Check for symlinks BEFORE path validation to prevent TOCTOU attacks
-        if let Err(e) = self.check_symlink(path) {
+        if let Err(e) = self.check_symlink(path).await {
             return Ok(ToolResult::Error(e));
         }
 
@@ -556,7 +556,7 @@ impl ToolExecutor {
             .ok_or_else(|| anyhow::anyhow!("Missing new_string"))?;
 
         // Check for symlinks BEFORE path validation to prevent TOCTOU attacks
-        if let Err(e) = self.check_symlink(path) {
+        if let Err(e) = self.check_symlink(path).await {
             return Ok(ToolResult::Error(e));
         }
 
@@ -1053,7 +1053,7 @@ impl ToolExecutor {
         let prompt = input.get("prompt").and_then(|v| v.as_str());
 
         // Check for symlinks BEFORE path validation to prevent TOCTOU attacks
-        if let Err(e) = self.check_symlink(path) {
+        if let Err(e) = self.check_symlink(path).await {
             return Ok(ToolResult::Error(e));
         }
 

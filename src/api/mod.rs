@@ -730,8 +730,8 @@ impl AnthropicClient {
             buffer.push_str(&String::from_utf8_lossy(&chunk));
 
             while let Some(pos) = buffer.find('\n') {
-                let line = buffer[..pos].trim().to_string();
-                buffer = buffer[pos + 1..].to_string();
+                let line = buffer[..pos].trim().to_owned();
+                drop(buffer.drain(..pos + 1));
 
                 let Some(parsed) = Self::parse_sse_line(&line) else {
                     continue;
