@@ -161,6 +161,21 @@ impl std::fmt::Display for EffortLevel {
     }
 }
 
+/// Controls OS-level sandboxing for bash commands.
+///
+/// Sandboxing uses macOS Seatbelt or Linux Landlock to enforce
+/// kernel-level filesystem restrictions on spawned processes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SandboxMode {
+    /// Auto-detect: enable if available on the platform.
+    #[default]
+    Auto,
+    /// Always enable (error if unavailable).
+    Enabled,
+    /// Never enable, even if available.
+    Disabled,
+}
+
 /// Configuration for context compression.
 ///
 /// Controls how context is compressed and cached for efficient token usage.

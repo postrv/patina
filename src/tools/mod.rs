@@ -13,6 +13,7 @@
 mod executor;
 mod hooked;
 pub mod parallel;
+pub mod sandbox;
 mod security;
 mod stateful;
 pub mod vision;
