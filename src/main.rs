@@ -2,7 +2,6 @@
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 // Use the library crate
 use patina::app;
@@ -238,16 +237,53 @@ async fn main() -> Result<()> {
         return oauth_login().await;
     }
 
-    let filter = if args.debug { "debug" } else { "info" };
+    setup_logging(args.debug, !args.print || args.prompt.is_none());
 
-    // Determine if we're running in interactive TUI mode
-    // TUI mode uses alternate screen which conflicts with stdout logging
-    let is_tui_mode = !args.print || args.prompt.is_none();
+    let narsil_mode = resolve_narsil_mode(args.with_narsil, args.no_narsil);
+    let parallel_mode = resolve_parallel_mode(args.no_parallel, args.parallel_aggressive);
+    let resume_mode = resolve_resume_mode(args.continue_session, args.resume.as_deref());
+    let provider_config = build_provider_config(&args)?;
+    let api_key = resolve_api_key(args.api_key)?;
+    let (initial_prompt, print_mode) = resolve_execution_mode(args.prompt, args.print)?;
+
+    app::run(app::Config {
+        api_key,
+        model: args.model,
+        working_dir: args.directory,
+        narsil_mode,
+        parallel_mode,
+        resume_mode,
+        skip_permissions: args.dangerously_skip_permissions,
+        initial_prompt,
+        print_mode,
+        vision_model: None,
+        oauth_client_id: args.oauth_client_id,
+        initial_images: args.image,
+        plugins_enabled: !args.no_plugins,
+        subagents_enabled: args.enable_subagents,
+        ide_port: args.ide_port,
+        auto_context_enabled: !args.no_auto_context,
+        effort: patina::types::config::EffortLevel::Auto,
+        thinking_budget: None,
+        compression: CompressionConfig::default(),
+        provider: provider_config,
+        performance: patina::types::config::PerformanceConfig::default(),
+    })
+    .await
+}
+
+/// Lists all available sessions and exits.
+/// Initializes the tracing subscriber for logging.
+///
+/// In TUI mode, logs go to a file (`$TMPDIR/patina.log`) to avoid corrupting
+/// the ratatui alternate screen. In print mode, logs go to stderr.
+fn setup_logging(debug: bool, is_tui_mode: bool) {
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::util::SubscriberInitExt;
+
+    let filter = if debug { "debug" } else { "info" };
 
     if is_tui_mode {
-        // TUI mode: ALL logs go to a file to avoid corrupting the alternate screen.
-        // Any stdout/stderr writes corrupt ratatui's display, including tracing
-        // output and child-process stderr (e.g. MCP server logs).
         let log_path = std::env::temp_dir().join("patina.log");
         let file = std::fs::OpenOptions::new()
             .create(true)
@@ -269,7 +305,6 @@ async fn main() -> Result<()> {
             )
             .init();
     } else {
-        // Print mode: log to stderr (stdout is used for model output)
         tracing_subscriber::registry()
             .with(
                 tracing_subscriber::EnvFilter::try_from_default_env()
@@ -282,67 +317,88 @@ async fn main() -> Result<()> {
             )
             .init();
     }
+}
 
-    // Determine authentication method
-    // Currently API key only (OAuth is disabled pending client_id registration)
-    let api_key = args
-        .api_key
+/// Resolves the API key from CLI argument or environment variable.
+///
+/// # Errors
+///
+/// Returns an error if no API key is found.
+fn resolve_api_key(cli_key: Option<secrecy::SecretString>) -> Result<secrecy::SecretString> {
+    cli_key
         .or_else(|| std::env::var("ANTHROPIC_API_KEY").ok().map(Into::into))
         .ok_or_else(|| {
             anyhow::anyhow!(
                 "API key required. Set ANTHROPIC_API_KEY environment variable or use --api-key flag.\n\
                  Get your API key at: https://console.anthropic.com/settings/keys"
             )
-        })?;
+        })
+}
 
-    // Determine narsil mode from CLI flags
-    let narsil_mode = if args.with_narsil {
+/// Maps CLI narsil flags to `NarsilMode`.
+#[must_use]
+fn resolve_narsil_mode(with: bool, without: bool) -> NarsilMode {
+    if with {
         NarsilMode::Enabled
-    } else if args.no_narsil {
+    } else if without {
         NarsilMode::Disabled
     } else {
         NarsilMode::Auto
-    };
+    }
+}
 
-    // Determine parallel mode from CLI flags
-    let parallel_mode = if args.no_parallel {
+/// Maps CLI parallel flags to `ParallelMode`.
+#[must_use]
+fn resolve_parallel_mode(no_parallel: bool, aggressive: bool) -> ParallelMode {
+    if no_parallel {
         ParallelMode::Disabled
-    } else if args.parallel_aggressive {
+    } else if aggressive {
         ParallelMode::Aggressive
     } else {
         ParallelMode::Enabled
-    };
+    }
+}
 
-    // Determine resume mode from CLI flags
-    let resume_mode = if args.continue_session {
+/// Maps CLI resume flags to `ResumeMode`.
+#[must_use]
+fn resolve_resume_mode(continue_session: bool, resume: Option<&str>) -> ResumeMode {
+    if continue_session {
         ResumeMode::Last
     } else {
-        match args.resume.as_deref() {
+        match resume {
             Some(session_id) => ResumeMode::SessionId(session_id.to_string()),
             None => ResumeMode::None,
         }
-    };
+    }
+}
 
-    // Determine execution mode:
-    // - print mode (-p) with prompt: non-interactive (send prompt, print response, exit)
-    // - prompt only: interactive mode with initial prompt pre-submitted
-    // - no prompt: interactive mode
-    let (initial_prompt, print_mode) = match (args.prompt, args.print) {
-        (Some(prompt), true) => (Some(prompt), true), // Non-interactive
-        (Some(prompt), false) => (Some(prompt), false), // Interactive with initial prompt
+/// Determines the execution mode from prompt and print flags.
+///
+/// # Errors
+///
+/// Returns an error if `--print` is used without a prompt.
+fn resolve_execution_mode(prompt: Option<String>, print: bool) -> Result<(Option<String>, bool)> {
+    match (prompt, print) {
+        (Some(p), true) => Ok((Some(p), true)),
+        (Some(p), false) => Ok((Some(p), false)),
         (None, true) => {
-            // -p without prompt reads from stdin (not yet implemented)
-            eprintln!("Error: --print requires a prompt argument or piped input");
-            std::process::exit(1);
+            anyhow::bail!("--print requires a prompt argument or piped input");
         }
-        (None, false) => (None, false), // Pure interactive
-    };
+        (None, false) => Ok((None, false)),
+    }
+}
 
-    // Determine provider config from CLI flags
-    let provider_config = match args.provider.as_deref() {
+/// Builds the provider configuration from CLI arguments.
+///
+/// # Errors
+///
+/// Returns an error for unknown providers or missing required fields.
+fn build_provider_config(args: &Args) -> Result<patina::types::config::ProviderConfig> {
+    match args.provider.as_deref() {
         Some("openrouter") => {
             let or_key = args
                 .openrouter_key
+                .clone()
                 .or_else(|| std::env::var("OPENROUTER_API_KEY").ok().map(Into::into))
                 .ok_or_else(|| {
                     anyhow::anyhow!(
@@ -350,20 +406,20 @@ async fn main() -> Result<()> {
                          Set OPENROUTER_API_KEY environment variable or use --openrouter-key flag."
                     )
                 })?;
-            let or_model = args.openrouter_model.ok_or_else(|| {
+            let or_model = args.openrouter_model.clone().ok_or_else(|| {
                 anyhow::anyhow!(
                     "OpenRouter provider requires a model.\n\
                      Use --openrouter-model (e.g., --openrouter-model anthropic/claude-sonnet-4)."
                 )
             })?;
             let mut config = patina::types::config::ProviderConfig::openrouter(or_key, &or_model);
-            if let Some(url) = args.openrouter_site_url {
-                config = config.with_site_url(url);
+            if let Some(ref url) = args.openrouter_site_url {
+                config = config.with_site_url(url.clone());
             }
-            if let Some(name) = args.openrouter_app_name {
-                config = config.with_app_name(name);
+            if let Some(ref name) = args.openrouter_app_name {
+                config = config.with_app_name(name.clone());
             }
-            config
+            Ok(config)
         }
         Some("fallback") => {
             if args.fallback.is_empty() {
@@ -415,44 +471,18 @@ async fn main() -> Result<()> {
                 chain.push(pc);
             }
 
-            patina::types::config::ProviderConfig::fallback(chain)
+            Ok(patina::types::config::ProviderConfig::fallback(chain))
         }
-        Some("anthropic") | None => patina::types::config::ProviderConfig::anthropic(),
+        Some("anthropic") | None => Ok(patina::types::config::ProviderConfig::anthropic()),
         Some(other) => {
             anyhow::bail!(
                 "Unknown provider '{}'. Supported providers: anthropic, openrouter, fallback",
                 other
             );
         }
-    };
-
-    app::run(app::Config {
-        api_key,
-        model: args.model,
-        working_dir: args.directory,
-        narsil_mode,
-        parallel_mode,
-        resume_mode,
-        skip_permissions: args.dangerously_skip_permissions,
-        initial_prompt,
-        print_mode,
-        vision_model: None,
-        oauth_client_id: args.oauth_client_id,
-        initial_images: args.image,
-        plugins_enabled: !args.no_plugins,
-        subagents_enabled: args.enable_subagents,
-        ide_port: args.ide_port,
-        auto_context_enabled: !args.no_auto_context,
-        effort: patina::types::config::EffortLevel::Auto,
-        thinking_budget: None,
-        compression: CompressionConfig::default(),
-        provider: provider_config,
-        performance: patina::types::config::PerformanceConfig::default(),
-    })
-    .await
+    }
 }
 
-/// Lists all available sessions and exits.
 async fn list_sessions() -> Result<()> {
     let sessions_dir = default_sessions_dir()?;
     let manager = SessionManager::new(sessions_dir);
