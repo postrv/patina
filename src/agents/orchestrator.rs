@@ -578,6 +578,10 @@ impl SubagentRunner {
                     // For now, we don't execute tools in the subagent
                     // This would be extended in task 1.5.4.3 when wiring into app state
                 }
+                StreamEvent::ThinkingStart { .. }
+                | StreamEvent::ThinkingDelta(_)
+                | StreamEvent::ThinkingComplete { .. }
+                | StreamEvent::Usage(_) => {}
             }
         }
 

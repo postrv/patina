@@ -365,6 +365,9 @@ fn translate_assistant_blocks(blocks: &[ContentBlock], out: &mut Vec<OpenAiMessa
                 // ToolResult in assistant messages is invalid in Anthropic format,
                 // but we handle it gracefully by ignoring it.
             }
+            ContentBlock::Thinking { .. } => {
+                // Thinking blocks are internal reasoning; not forwarded to OpenAI.
+            }
         }
     }
 
@@ -422,6 +425,9 @@ fn translate_user_blocks(blocks: &[ContentBlock], out: &mut Vec<OpenAiMessage>) 
             ContentBlock::ToolUse(_) => {
                 // ToolUse in user messages is invalid in Anthropic format,
                 // but we handle it gracefully by ignoring it.
+            }
+            ContentBlock::Thinking { .. } => {
+                // Thinking blocks are internal reasoning; not forwarded to OpenAI.
             }
         }
     }

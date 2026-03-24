@@ -1567,6 +1567,20 @@ impl AppState {
                 // Content block completion is tracked internally
                 tracing::debug!("Content block complete");
             }
+            StreamEvent::ThinkingStart { .. } => {
+                tracing::debug!("Thinking block started");
+            }
+            StreamEvent::ThinkingDelta(_text) => {
+                // Thinking text will be accumulated for display in a later task.
+                tracing::debug!("Thinking delta received");
+            }
+            StreamEvent::ThinkingComplete { .. } => {
+                tracing::debug!("Thinking block complete");
+            }
+            StreamEvent::Usage(_usage) => {
+                // Token usage accounting will be wired in a later task.
+                tracing::debug!("Usage event received");
+            }
         }
         Ok(())
     }

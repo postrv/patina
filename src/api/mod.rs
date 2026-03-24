@@ -157,6 +157,8 @@ struct DeltaPayload {
     text: Option<String>,
     /// For tool_use input JSON deltas.
     partial_json: Option<String>,
+    /// For thinking content deltas.
+    thinking: Option<String>,
     /// For message_delta - the stop reason.
     stop_reason: Option<String>,
     /// Delta type indicator.
@@ -414,24 +416,34 @@ impl AnthropicClient {
         content_block: &ContentBlockStart,
         index: usize,
     ) -> Option<StreamEvent> {
-        if content_block.block_type == "tool_use" {
-            if let (Some(id), Some(name)) = (&content_block.id, &content_block.name) {
-                return Some(StreamEvent::ToolUseStart {
-                    id: id.clone(),
-                    name: name.clone(),
-                    index,
-                });
+        match content_block.block_type.as_str() {
+            "tool_use" => {
+                if let (Some(id), Some(name)) = (&content_block.id, &content_block.name) {
+                    return Some(StreamEvent::ToolUseStart {
+                        id: id.clone(),
+                        name: name.clone(),
+                        index,
+                    });
+                }
+                None
             }
+            "thinking" => Some(StreamEvent::ThinkingStart { index }),
+            _ => None,
         }
-        None
     }
 
     /// Handles a content_block_stop event, returning the appropriate completion event.
     ///
     /// Returns `ToolUseComplete` if `in_tool_use_block` is true, otherwise `ContentBlockComplete`.
-    fn handle_content_block_stop(block_index: usize, in_tool_use_block: bool) -> StreamEvent {
+    fn handle_content_block_stop(
+        block_index: usize,
+        in_tool_use_block: bool,
+        in_thinking_block: bool,
+    ) -> StreamEvent {
         if in_tool_use_block {
             StreamEvent::ToolUseComplete { index: block_index }
+        } else if in_thinking_block {
+            StreamEvent::ThinkingComplete { index: block_index }
         } else {
             StreamEvent::ContentBlockComplete { index: block_index }
         }
@@ -476,6 +488,13 @@ impl AnthropicClient {
                         partial_json: partial_json.clone(),
                     })
             }
+            Some("thinking_delta") => {
+                // Extended thinking content fragment
+                delta
+                    .thinking
+                    .as_ref()
+                    .map(|text| StreamEvent::ThinkingDelta(text.clone()))
+            }
             Some("text_delta") | None => {
                 // Regular text content
                 delta
@@ -518,6 +537,7 @@ impl AnthropicClient {
         parsed: &StreamLine,
         current_block_index: &mut usize,
         in_tool_use_block: &mut bool,
+        in_thinking_block: &mut bool,
         tx: &mpsc::Sender<StreamEvent>,
     ) {
         let Some(ref content_block) = parsed.content_block else {
@@ -525,6 +545,7 @@ impl AnthropicClient {
         };
         *current_block_index = parsed.index.unwrap_or(0);
         *in_tool_use_block = content_block.block_type == "tool_use";
+        *in_thinking_block = content_block.block_type == "thinking";
 
         if let Some(event) = Self::handle_content_block_start(content_block, *current_block_index) {
             tx.send(event).await.ok();
@@ -557,12 +578,41 @@ impl AnthropicClient {
         parsed: &StreamLine,
         current_block_index: usize,
         in_tool_use_block: &mut bool,
+        in_thinking_block: &mut bool,
         tx: &mpsc::Sender<StreamEvent>,
     ) {
         let block_index = parsed.index.unwrap_or(current_block_index);
-        let event = Self::handle_content_block_stop(block_index, *in_tool_use_block);
+        let event =
+            Self::handle_content_block_stop(block_index, *in_tool_use_block, *in_thinking_block);
         tx.send(event).await.ok();
         *in_tool_use_block = false;
+        *in_thinking_block = false;
+    }
+
+    /// Processes a `message_start` SSE event for usage statistics.
+    ///
+    /// Extracts token usage from the `message_start` event and sends a `Usage` event.
+    /// This includes cache hit/miss stats when prompt caching is active.
+    async fn process_message_start(raw_line: &str, tx: &mpsc::Sender<StreamEvent>) {
+        // Parse the full message_start payload to extract usage
+        #[derive(Deserialize)]
+        struct MessageStartPayload {
+            message: Option<MessageInfo>,
+        }
+        #[derive(Deserialize)]
+        struct MessageInfo {
+            usage: Option<crate::types::stream::ApiUsage>,
+        }
+
+        if let Some(json) = raw_line.strip_prefix("data: ") {
+            if let Ok(payload) = serde_json::from_str::<MessageStartPayload>(json) {
+                if let Some(msg) = payload.message {
+                    if let Some(usage) = msg.usage {
+                        tx.send(StreamEvent::Usage(usage)).await.ok();
+                    }
+                }
+            }
+        }
     }
 
     /// Processes a `message_delta` SSE event.
@@ -601,6 +651,8 @@ impl AnthropicClient {
         let mut current_block_index: usize = 0;
         // Track if current block is tool_use (vs text)
         let mut in_tool_use_block = false;
+        // Track if current block is thinking (extended thinking)
+        let mut in_thinking_block = false;
 
         while let Some(chunk) = stream.next().await {
             let chunk = chunk?;
@@ -615,11 +667,16 @@ impl AnthropicClient {
                 };
 
                 match parsed.event_type.as_str() {
+                    "message_start" => {
+                        // Parse usage from message_start for token tracking
+                        Self::process_message_start(&line, &tx).await;
+                    }
                     "content_block_start" => {
                         Self::process_content_block_start(
                             &parsed,
                             &mut current_block_index,
                             &mut in_tool_use_block,
+                            &mut in_thinking_block,
                             &tx,
                         )
                         .await;
@@ -632,6 +689,7 @@ impl AnthropicClient {
                             &parsed,
                             current_block_index,
                             &mut in_tool_use_block,
+                            &mut in_thinking_block,
                             &tx,
                         )
                         .await;
@@ -642,7 +700,7 @@ impl AnthropicClient {
                     "message_stop" => {
                         Self::process_message_stop(&tx).await;
                     }
-                    // Ignore other event types (message_start, ping, etc.)
+                    // Ignore other event types (ping, etc.)
                     _ => {}
                 }
             }
@@ -1199,6 +1257,7 @@ data: {"type":"message_stop"}
                 StreamEvent::ContentDelta(_) => "ContentDelta",
                 StreamEvent::ContentBlockComplete { .. } => "ContentBlockComplete",
                 StreamEvent::Error(_) => "Error",
+                _ => "Other",
             })
             .collect();
 
@@ -1324,6 +1383,7 @@ data: {"type":"message_stop"}
         let delta = DeltaPayload {
             text: Some("Hello world".to_string()),
             partial_json: None,
+            thinking: None,
             stop_reason: None,
             delta_type: Some("text_delta".to_string()),
         };
@@ -1340,6 +1400,7 @@ data: {"type":"message_stop"}
         let delta = DeltaPayload {
             text: None,
             partial_json: Some("{\"key\":".to_string()),
+            thinking: None,
             stop_reason: None,
             delta_type: Some("input_json_delta".to_string()),
         };
@@ -1362,6 +1423,7 @@ data: {"type":"message_stop"}
         let delta = DeltaPayload {
             text: Some("Fallback text".to_string()),
             partial_json: None,
+            thinking: None,
             stop_reason: None,
             delta_type: None,
         };
@@ -1378,6 +1440,7 @@ data: {"type":"message_stop"}
         let delta = DeltaPayload {
             text: Some("Unknown type text".to_string()),
             partial_json: None,
+            thinking: None,
             stop_reason: None,
             delta_type: Some("future_unknown_type".to_string()),
         };
@@ -1394,6 +1457,7 @@ data: {"type":"message_stop"}
         let delta = DeltaPayload {
             text: None,
             partial_json: None,
+            thinking: None,
             stop_reason: None,
             delta_type: Some("input_json_delta".to_string()),
         };
@@ -1410,6 +1474,7 @@ data: {"type":"message_stop"}
         let delta = DeltaPayload {
             text: None,
             partial_json: None,
+            thinking: None,
             stop_reason: None,
             delta_type: Some("text_delta".to_string()),
         };
@@ -1431,6 +1496,7 @@ data: {"type":"message_stop"}
         let delta = DeltaPayload {
             text: None,
             partial_json: None,
+            thinking: None,
             stop_reason: Some("tool_use".to_string()),
             delta_type: None,
         };
@@ -1449,6 +1515,7 @@ data: {"type":"message_stop"}
         let delta = DeltaPayload {
             text: None,
             partial_json: None,
+            thinking: None,
             stop_reason: Some("max_tokens".to_string()),
             delta_type: None,
         };
@@ -1467,6 +1534,7 @@ data: {"type":"message_stop"}
         let delta = DeltaPayload {
             text: None,
             partial_json: None,
+            thinking: None,
             stop_reason: Some("stop_sequence".to_string()),
             delta_type: None,
         };
@@ -1485,6 +1553,7 @@ data: {"type":"message_stop"}
         let delta = DeltaPayload {
             text: None,
             partial_json: None,
+            thinking: None,
             stop_reason: Some("end_turn".to_string()),
             delta_type: None,
         };
@@ -1503,6 +1572,7 @@ data: {"type":"message_stop"}
         let delta = DeltaPayload {
             text: None,
             partial_json: None,
+            thinking: None,
             stop_reason: Some("some_future_reason".to_string()),
             delta_type: None,
         };
@@ -1522,6 +1592,7 @@ data: {"type":"message_stop"}
         let delta = DeltaPayload {
             text: None,
             partial_json: None,
+            thinking: None,
             stop_reason: None,
             delta_type: None,
         };
@@ -1598,17 +1669,96 @@ data: {"type":"message_stop"}
 
     #[test]
     fn test_handle_content_block_stop_tool_use() {
-        let result = AnthropicClient::handle_content_block_stop(1, true);
+        let result = AnthropicClient::handle_content_block_stop(1, true, false);
         assert!(matches!(result, StreamEvent::ToolUseComplete { index: 1 }));
     }
 
     #[test]
     fn test_handle_content_block_stop_text() {
-        let result = AnthropicClient::handle_content_block_stop(2, false);
+        let result = AnthropicClient::handle_content_block_stop(2, false, false);
         assert!(matches!(
             result,
             StreamEvent::ContentBlockComplete { index: 2 }
         ));
+    }
+
+    // ============================================================================
+    // Extended Thinking tests
+    // ============================================================================
+
+    #[test]
+    fn test_handle_content_block_start_thinking() {
+        let block = ContentBlockStart {
+            block_type: "thinking".to_string(),
+            id: None,
+            name: None,
+        };
+
+        let result = AnthropicClient::handle_content_block_start(&block, 0);
+        assert!(matches!(
+            result,
+            Some(StreamEvent::ThinkingStart { index: 0 })
+        ));
+    }
+
+    #[test]
+    fn test_handle_content_block_stop_thinking() {
+        let result = AnthropicClient::handle_content_block_stop(0, false, true);
+        assert!(matches!(result, StreamEvent::ThinkingComplete { index: 0 }));
+    }
+
+    #[test]
+    fn test_handle_content_block_delta_thinking() {
+        let delta = DeltaPayload {
+            text: None,
+            partial_json: None,
+            thinking: Some("Let me reason...".to_string()),
+            stop_reason: None,
+            delta_type: Some("thinking_delta".to_string()),
+        };
+
+        let result = AnthropicClient::handle_content_block_delta(&delta, 0);
+        assert_eq!(
+            result,
+            Some(StreamEvent::ThinkingDelta("Let me reason...".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_thinking_config_serialization() {
+        let config = ThinkingConfig {
+            config_type: "enabled".to_string(),
+            budget_tokens: 10_000,
+        };
+        let json = serde_json::to_value(&config).unwrap();
+        assert_eq!(json["type"], "enabled");
+        assert_eq!(json["budget_tokens"], 10_000);
+    }
+
+    #[test]
+    fn test_system_block_serialization_with_cache() {
+        let block = SystemBlock {
+            block_type: "text".to_string(),
+            text: "You are helpful.".to_string(),
+            cache_control: Some(CacheControl {
+                cache_type: "ephemeral".to_string(),
+            }),
+        };
+        let json = serde_json::to_value(&block).unwrap();
+        assert_eq!(json["type"], "text");
+        assert_eq!(json["text"], "You are helpful.");
+        assert_eq!(json["cache_control"]["type"], "ephemeral");
+    }
+
+    #[test]
+    fn test_system_block_serialization_without_cache() {
+        let block = SystemBlock {
+            block_type: "text".to_string(),
+            text: "Hello".to_string(),
+            cache_control: None,
+        };
+        let json = serde_json::to_value(&block).unwrap();
+        assert!(json.get("cache_control").is_none());
     }
 
     // ============================================================================

@@ -61,6 +61,26 @@ pub enum StreamEvent {
     /// A delta containing new content text.
     ContentDelta(String),
 
+    /// A thinking content block is starting.
+    ///
+    /// The API sends this before thinking deltas when extended thinking is enabled.
+    ThinkingStart {
+        /// Index of this content block in the message.
+        index: usize,
+    },
+
+    /// A delta containing reasoning text from the thinking block.
+    ///
+    /// Note: The API sends this with a `thinking` field (not `text`),
+    /// which requires special handling in the SSE parser.
+    ThinkingDelta(String),
+
+    /// A thinking content block is complete.
+    ThinkingComplete {
+        /// Index of the completed thinking block.
+        index: usize,
+    },
+
     /// A tool_use content block is starting.
     ///
     /// The tool ID is used to correlate tool results with tool calls.
@@ -114,8 +134,34 @@ pub enum StreamEvent {
     /// Use `MessageComplete` instead for new code to access the stop_reason.
     MessageStop,
 
+    /// Token usage statistics from the API response.
+    ///
+    /// Emitted from `message_start` events. Contains cache hit/miss stats
+    /// when prompt caching is enabled.
+    Usage(ApiUsage),
+
     /// An error occurred during streaming.
     Error(String),
+}
+
+/// Token usage information from an API response.
+///
+/// Reported in `message_start` and `message_delta` events. Includes
+/// cache statistics when prompt caching is active.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct ApiUsage {
+    /// Number of input tokens consumed.
+    #[serde(default)]
+    pub input_tokens: u32,
+    /// Number of output tokens generated.
+    #[serde(default)]
+    pub output_tokens: u32,
+    /// Tokens written to the prompt cache (25% surcharge).
+    #[serde(default)]
+    pub cache_creation_input_tokens: u32,
+    /// Tokens read from the prompt cache (90% discount).
+    #[serde(default)]
+    pub cache_read_input_tokens: u32,
 }
 
 impl StreamEvent {
@@ -129,6 +175,26 @@ impl StreamEvent {
     #[must_use]
     pub fn is_content(&self) -> bool {
         matches!(self, StreamEvent::ContentDelta(_))
+    }
+
+    /// Returns true if this is a thinking-related event.
+    #[must_use]
+    pub fn is_thinking(&self) -> bool {
+        matches!(
+            self,
+            StreamEvent::ThinkingStart { .. }
+                | StreamEvent::ThinkingDelta(_)
+                | StreamEvent::ThinkingComplete { .. }
+        )
+    }
+
+    /// Extracts thinking text from a `ThinkingDelta`, if applicable.
+    #[must_use]
+    pub fn thinking_content(&self) -> Option<&str> {
+        match self {
+            StreamEvent::ThinkingDelta(text) => Some(text),
+            _ => None,
+        }
     }
 
     /// Returns true if this is a message stop event (including MessageComplete).
@@ -607,5 +673,91 @@ mod tests {
         let result = started.complete();
 
         assert!(result.is_err());
+    }
+
+    // =========================================================================
+    // Thinking event tests
+    // =========================================================================
+
+    #[test]
+    fn test_thinking_start_is_thinking() {
+        let event = StreamEvent::ThinkingStart { index: 0 };
+        assert!(event.is_thinking());
+        assert!(!event.is_content());
+        assert!(!event.is_error());
+    }
+
+    #[test]
+    fn test_thinking_delta_is_thinking() {
+        let event = StreamEvent::ThinkingDelta("reasoning...".to_string());
+        assert!(event.is_thinking());
+        assert_eq!(event.thinking_content(), Some("reasoning..."));
+    }
+
+    #[test]
+    fn test_thinking_complete_is_thinking() {
+        let event = StreamEvent::ThinkingComplete { index: 0 };
+        assert!(event.is_thinking());
+        assert_eq!(event.thinking_content(), None);
+    }
+
+    #[test]
+    fn test_content_delta_is_not_thinking() {
+        let event = StreamEvent::ContentDelta("hello".to_string());
+        assert!(!event.is_thinking());
+        assert_eq!(event.thinking_content(), None);
+    }
+
+    #[test]
+    fn test_thinking_events_serde_roundtrip() {
+        let events = vec![
+            StreamEvent::ThinkingStart { index: 0 },
+            StreamEvent::ThinkingDelta("Let me think...".to_string()),
+            StreamEvent::ThinkingComplete { index: 0 },
+        ];
+
+        for event in events {
+            let json = serde_json::to_string(&event).unwrap();
+            let deserialized: StreamEvent = serde_json::from_str(&json).unwrap();
+            assert_eq!(event, deserialized);
+        }
+    }
+
+    // =========================================================================
+    // Usage event tests
+    // =========================================================================
+
+    #[test]
+    fn test_usage_event_default() {
+        let usage = ApiUsage::default();
+        assert_eq!(usage.input_tokens, 0);
+        assert_eq!(usage.output_tokens, 0);
+        assert_eq!(usage.cache_creation_input_tokens, 0);
+        assert_eq!(usage.cache_read_input_tokens, 0);
+    }
+
+    #[test]
+    fn test_usage_event_serde_roundtrip() {
+        let usage = ApiUsage {
+            input_tokens: 100,
+            output_tokens: 50,
+            cache_creation_input_tokens: 20,
+            cache_read_input_tokens: 80,
+        };
+        let event = StreamEvent::Usage(usage.clone());
+        let json = serde_json::to_string(&event).unwrap();
+        let deserialized: StreamEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(StreamEvent::Usage(usage), deserialized);
+    }
+
+    #[test]
+    fn test_usage_event_deserialize_partial() {
+        // API may send only some fields
+        let json = r#"{"input_tokens": 42, "output_tokens": 10}"#;
+        let usage: ApiUsage = serde_json::from_str(json).unwrap();
+        assert_eq!(usage.input_tokens, 42);
+        assert_eq!(usage.output_tokens, 10);
+        assert_eq!(usage.cache_creation_input_tokens, 0);
+        assert_eq!(usage.cache_read_input_tokens, 0);
     }
 }

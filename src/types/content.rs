@@ -64,6 +64,16 @@ pub enum ContentBlock {
         /// The source of the image (base64 data or URL).
         source: ImageSource,
     },
+
+    /// Internal reasoning from extended thinking.
+    ///
+    /// These blocks are returned by the API when thinking is enabled.
+    /// They contain the model's reasoning process before the main response.
+    /// Displayed as a collapsible pill in the TUI.
+    Thinking {
+        /// The thinking/reasoning text content.
+        thinking: String,
+    },
 }
 
 impl ContentBlock {
@@ -109,6 +119,14 @@ impl ContentBlock {
         Self::Image { source }
     }
 
+    /// Creates a new thinking content block.
+    #[must_use]
+    pub fn thinking(text: impl Into<String>) -> Self {
+        Self::Thinking {
+            thinking: text.into(),
+        }
+    }
+
     /// Returns true if this is a text block.
     #[must_use]
     pub fn is_text(&self) -> bool {
@@ -131,6 +149,12 @@ impl ContentBlock {
     #[must_use]
     pub fn is_image(&self) -> bool {
         matches!(self, Self::Image { .. })
+    }
+
+    /// Returns true if this is a thinking block.
+    #[must_use]
+    pub fn is_thinking(&self) -> bool {
+        matches!(self, Self::Thinking { .. })
     }
 
     /// Extracts the text content if this is a text block.
@@ -165,6 +189,15 @@ impl ContentBlock {
     pub fn as_image(&self) -> Option<&ImageSource> {
         match self {
             Self::Image { source } => Some(source),
+            _ => None,
+        }
+    }
+
+    /// Extracts the thinking text if this is a thinking block.
+    #[must_use]
+    pub fn as_thinking(&self) -> Option<&str> {
+        match self {
+            Self::Thinking { thinking } => Some(thinking),
             _ => None,
         }
     }
@@ -681,5 +714,44 @@ mod tests {
 
         let result_block = ContentBlock::tool_result("id", "content");
         assert!(result_block.as_image().is_none());
+    }
+
+    // =========================================================================
+    // Thinking content block tests
+    // =========================================================================
+
+    #[test]
+    fn test_thinking_block_creation() {
+        let block = ContentBlock::thinking("Let me reason about this...");
+        assert!(block.is_thinking());
+        assert!(!block.is_text());
+        assert_eq!(block.as_thinking(), Some("Let me reason about this..."));
+    }
+
+    #[test]
+    fn test_thinking_block_serialization() {
+        let block = ContentBlock::thinking("reasoning");
+        let json = serde_json::to_value(&block).unwrap();
+        assert_eq!(json["type"], "thinking");
+        assert_eq!(json["thinking"], "reasoning");
+    }
+
+    #[test]
+    fn test_thinking_block_deserialization() {
+        let json = r#"{"type": "thinking", "thinking": "Let me analyze..."}"#;
+        let block: ContentBlock = serde_json::from_str(json).unwrap();
+        assert!(block.is_thinking());
+        assert_eq!(block.as_thinking(), Some("Let me analyze..."));
+    }
+
+    #[test]
+    fn test_thinking_block_accessors_on_other_types() {
+        let text = ContentBlock::text("hello");
+        assert!(!text.is_thinking());
+        assert!(text.as_thinking().is_none());
+
+        let tool_use = ContentBlock::tool_use("id", "bash", json!({}));
+        assert!(!tool_use.is_thinking());
+        assert!(tool_use.as_thinking().is_none());
     }
 }

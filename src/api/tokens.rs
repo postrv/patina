@@ -182,6 +182,7 @@ fn estimate_block_tokens(block: &ContentBlock) -> usize {
             // Use estimate_image_tokens(width, height) if dimensions are known.
             DEFAULT_IMAGE_TOKENS
         }
+        ContentBlock::Thinking { thinking } => estimate_tokens(thinking),
     }
 }
 

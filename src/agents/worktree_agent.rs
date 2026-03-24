@@ -1008,6 +1008,10 @@ pub async fn run_agent_loop(
                 | StreamEvent::ToolUseInputDelta { .. }
                 | StreamEvent::ToolUseComplete { .. }
                 | StreamEvent::ContentBlockComplete { .. } => {}
+                StreamEvent::ThinkingStart { .. }
+                | StreamEvent::ThinkingDelta(_)
+                | StreamEvent::ThinkingComplete { .. }
+                | StreamEvent::Usage(_) => {}
             }
         }
 
