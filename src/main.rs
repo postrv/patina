@@ -443,6 +443,8 @@ async fn main() -> Result<()> {
         subagents_enabled: args.enable_subagents,
         ide_port: args.ide_port,
         auto_context_enabled: !args.no_auto_context,
+        effort: patina::types::config::EffortLevel::Auto,
+        thinking_budget: None,
         compression: CompressionConfig::default(),
         provider: provider_config,
         performance: patina::types::config::PerformanceConfig::default(),

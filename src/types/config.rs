@@ -83,6 +83,84 @@ pub enum NarsilMode {
     Disabled,
 }
 
+/// Controls how much reasoning effort the model applies.
+///
+/// Maps to the extended thinking `budget_tokens` parameter:
+/// - `Low`: Thinking disabled (fastest, cheapest)
+/// - `Medium`: 5,000 token thinking budget
+/// - `High`: 16,000 token thinking budget
+/// - `Auto`: Selects based on model defaults
+///
+/// # Examples
+///
+/// ```rust
+/// use patina::types::config::EffortLevel;
+///
+/// let effort = EffortLevel::High;
+/// assert_eq!(effort.thinking_budget(), Some(16_000));
+/// assert_eq!(effort.indicator(), "●");
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum EffortLevel {
+    /// Auto-select effort based on model defaults.
+    #[default]
+    Auto,
+    /// Low effort: no thinking, fast responses.
+    Low,
+    /// Medium effort: moderate thinking budget (5,000 tokens).
+    Medium,
+    /// High effort: large thinking budget (16,000 tokens).
+    High,
+}
+
+impl EffortLevel {
+    /// Returns the thinking budget for this effort level.
+    ///
+    /// Returns `None` for `Auto` (handled dynamically) and `Low` (disabled).
+    /// Returns `Some(budget)` for `Medium` and `High`.
+    #[must_use]
+    pub fn thinking_budget(&self) -> Option<u32> {
+        match self {
+            Self::Auto | Self::Low => None,
+            Self::Medium => Some(5_000),
+            Self::High => Some(16_000),
+        }
+    }
+
+    /// Returns a single-character indicator for the status bar.
+    ///
+    /// - Auto: `◉`
+    /// - Low: `○`
+    /// - Medium: `◐`
+    /// - High: `●`
+    #[must_use]
+    pub fn indicator(&self) -> &'static str {
+        match self {
+            Self::Auto => "◉",
+            Self::Low => "○",
+            Self::Medium => "◐",
+            Self::High => "●",
+        }
+    }
+
+    /// Returns a human-readable label for display.
+    #[must_use]
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+        }
+    }
+}
+
+impl std::fmt::Display for EffortLevel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.label())
+    }
+}
+
 /// Configuration for context compression.
 ///
 /// Controls how context is compressed and cached for efficient token usage.
@@ -754,6 +832,17 @@ pub struct Config {
     /// Disable with `--no-auto-context` CLI flag.
     pub auto_context_enabled: bool,
 
+    /// Reasoning effort level.
+    ///
+    /// Controls how much extended thinking the model uses. Higher effort
+    /// produces more thorough responses but costs more tokens.
+    pub effort: EffortLevel,
+
+    /// Optional explicit thinking budget (overrides effort level).
+    ///
+    /// When set via `--thinking <BUDGET>`, takes precedence over `effort`.
+    pub thinking_budget: Option<u32>,
+
     /// Context compression configuration.
     ///
     /// Controls cache TTL, max entries, and token budget for context compression.
@@ -818,6 +907,8 @@ impl Config {
             subagents_enabled: false,
             ide_port: None,
             auto_context_enabled: true,
+            effort: EffortLevel::Auto,
+            thinking_budget: None,
             compression: CompressionConfig::default(),
             provider: ProviderConfig::default(),
             performance: PerformanceConfig::default(),
@@ -1190,6 +1281,8 @@ mod tests {
             subagents_enabled: false,
             ide_port: None,
             auto_context_enabled: true,
+            effort: EffortLevel::Auto,
+            thinking_budget: None,
             compression: CompressionConfig::default(),
             provider: ProviderConfig::default(),
             performance: PerformanceConfig::default(),
@@ -1218,6 +1311,8 @@ mod tests {
             subagents_enabled: false,
             ide_port: None,
             auto_context_enabled: true,
+            effort: EffortLevel::Auto,
+            thinking_budget: None,
             compression: CompressionConfig::default(),
             provider: ProviderConfig::default(),
             performance: PerformanceConfig::default(),
@@ -1975,5 +2070,44 @@ mod tests {
         assert_eq!(config.performance().parallel_mode, ParallelMode::Disabled);
         assert_eq!(config.performance().max_parallel_tools, 1);
         assert_eq!(config.performance().max_parallel_agents, 1);
+    }
+
+    // =========================================================================
+    // EffortLevel tests
+    // =========================================================================
+
+    #[test]
+    fn test_effort_level_default_is_auto() {
+        assert_eq!(EffortLevel::default(), EffortLevel::Auto);
+    }
+
+    #[test]
+    fn test_effort_level_thinking_budget() {
+        assert_eq!(EffortLevel::Auto.thinking_budget(), None);
+        assert_eq!(EffortLevel::Low.thinking_budget(), None);
+        assert_eq!(EffortLevel::Medium.thinking_budget(), Some(5_000));
+        assert_eq!(EffortLevel::High.thinking_budget(), Some(16_000));
+    }
+
+    #[test]
+    fn test_effort_level_indicator() {
+        assert_eq!(EffortLevel::Auto.indicator(), "◉");
+        assert_eq!(EffortLevel::Low.indicator(), "○");
+        assert_eq!(EffortLevel::Medium.indicator(), "◐");
+        assert_eq!(EffortLevel::High.indicator(), "●");
+    }
+
+    #[test]
+    fn test_effort_level_label() {
+        assert_eq!(EffortLevel::Auto.label(), "auto");
+        assert_eq!(EffortLevel::Low.label(), "low");
+        assert_eq!(EffortLevel::Medium.label(), "medium");
+        assert_eq!(EffortLevel::High.label(), "high");
+    }
+
+    #[test]
+    fn test_effort_level_display() {
+        assert_eq!(format!("{}", EffortLevel::High), "high");
+        assert_eq!(format!("{}", EffortLevel::Auto), "auto");
     }
 }
