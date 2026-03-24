@@ -150,6 +150,11 @@ pub struct ToolExecutionPolicy {
     ///
     /// Only used when `allowlist_mode` is true.
     pub allowed_commands: Vec<Regex>,
+    /// Enable OS-level sandboxing for bash commands (macOS Seatbelt / Linux Landlock).
+    ///
+    /// When false, commands execute through the standard shell.
+    /// When true, commands are wrapped with platform-specific sandbox enforcement.
+    pub sandbox_enabled: bool,
 }
 
 impl Default for ToolExecutionPolicy {
@@ -162,6 +167,7 @@ impl Default for ToolExecutionPolicy {
             command_timeout: Duration::from_secs(300),
             allowlist_mode: false,
             allowed_commands: vec![],
+            sandbox_enabled: false,
         }
     }
 }

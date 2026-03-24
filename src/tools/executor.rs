@@ -254,11 +254,20 @@ impl ToolExecutor {
         }
 
         // Spawn the command with kill_on_drop to ensure process cleanup on timeout
-        // Apply OS-level sandboxing when available (macOS Seatbelt, Linux Landlock)
-        let sandbox = super::sandbox::create_sandbox();
-        let sandbox_config =
-            super::sandbox::SandboxConfig::for_working_dir(self.working_dir.clone());
-        let (program, args) = sandbox.wrap_command(command, &sandbox_config);
+        // Apply OS-level sandboxing when enabled (macOS Seatbelt, Linux Landlock)
+        let (program, args) = if self.policy.sandbox_enabled {
+            let sandbox = super::sandbox::create_sandbox();
+            let sandbox_config =
+                super::sandbox::SandboxConfig::for_working_dir(self.working_dir.clone());
+            sandbox.wrap_command(command, &sandbox_config)
+        } else {
+            let shell = crate::shell::ShellConfig::default();
+            (shell.command, {
+                let mut a = shell.args;
+                a.push(command.to_string());
+                a
+            })
+        };
 
         let child = Command::new(&program)
             .args(&args)
