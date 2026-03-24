@@ -1405,7 +1405,12 @@ impl AppState {
             tracing::warn!("Failed to start tool loop streaming: {}", e);
             // Reset and try again - the loop might be in an unexpected state
             self.tool_state.tool_loop.reset();
-            self.tool_state.tool_loop.start_streaming().ok();
+            if let Err(e2) = self.tool_state.tool_loop.start_streaming() {
+                tracing::error!(
+                    "Tool loop start_streaming failed after reset: {}. Tool execution may be compromised.",
+                    e2
+                );
+            }
         }
 
         let (tx, rx) = mpsc::channel(STREAMING_CHANNEL_BUFFER);

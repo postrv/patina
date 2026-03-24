@@ -51,7 +51,9 @@ pub(crate) async fn process_print_stream(
                 return Ok(PrintStreamResult::Error(e));
             }
             StreamEvent::ToolUseStart { id, name, index } => {
-                state.tool_loop_mut().start_streaming().ok();
+                if let Err(e) = state.tool_loop_mut().start_streaming() {
+                    tracing::warn!("Failed to start streaming in print mode tool use: {}", e);
+                }
                 state.handle_tool_use_start(id, name, index);
             }
             StreamEvent::ToolUseInputDelta {
