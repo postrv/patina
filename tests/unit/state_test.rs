@@ -1743,7 +1743,7 @@ async fn test_recv_tool_result_receives_results_when_channel_set() {
     let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
 
     // Set up a tool result channel
-    let (tx, rx) = mpsc::unbounded_channel();
+    let (tx, rx) = mpsc::channel(100);
     state.set_tool_result_rx(rx);
     assert!(state.has_tool_result_rx());
 
@@ -1753,7 +1753,9 @@ async fn test_recv_tool_result_receives_results_when_channel_set() {
         content: "Success".to_string(),
         is_error: false,
     };
-    tx.send(("toolu_123".to_string(), result_block)).unwrap();
+    tx.send(("toolu_123".to_string(), result_block))
+        .await
+        .unwrap();
 
     // Should receive the result
     let result = state.recv_tool_result().await;
@@ -1784,7 +1786,7 @@ async fn test_recv_background_event_prioritizes_tool_results() {
 
     // Set up both channels
     let (api_tx, api_rx) = mpsc::channel(100);
-    let (tool_tx, tool_rx) = mpsc::unbounded_channel();
+    let (tool_tx, tool_rx) = mpsc::channel(100);
     state.set_streaming_rx(api_rx);
     state.set_tool_result_rx(tool_rx);
 
@@ -1800,6 +1802,7 @@ async fn test_recv_background_event_prioritizes_tool_results() {
     };
     tool_tx
         .send(("toolu_456".to_string(), result_block))
+        .await
         .unwrap();
 
     // Tool results are prioritized (biased select)
@@ -1833,7 +1836,7 @@ fn test_clear_tool_result_rx() {
     let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
 
     // Set up channel
-    let (_tx, rx) = mpsc::unbounded_channel();
+    let (_tx, rx) = mpsc::channel(100);
     state.set_tool_result_rx(rx);
     assert!(state.has_tool_result_rx());
 
@@ -2379,7 +2382,7 @@ fn test_tool_state_result_channel_lifecycle() {
     assert!(state.try_recv_tool_result().is_none());
 
     // Set a channel
-    let (tx, rx) = mpsc::unbounded_channel();
+    let (tx, rx) = mpsc::channel(100);
     state.set_tool_result_rx(rx);
     assert!(state.has_tool_result_rx());
 
@@ -2389,7 +2392,7 @@ fn test_tool_state_result_channel_lifecycle() {
         content: "ok".to_string(),
         is_error: false,
     };
-    tx.send(("t1".to_string(), result)).unwrap();
+    tx.try_send(("t1".to_string(), result)).unwrap();
 
     // Receive it
     let received = state.try_recv_tool_result();

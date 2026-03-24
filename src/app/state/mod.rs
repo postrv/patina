@@ -2498,7 +2498,7 @@ impl AppState {
     /// streamed back through this channel.
     pub fn set_tool_result_rx(
         &mut self,
-        rx: mpsc::UnboundedReceiver<(String, crate::types::ToolResultBlock)>,
+        rx: mpsc::Receiver<(String, crate::types::ToolResultBlock)>,
     ) {
         self.tool_state.tool_result_rx = Some(rx);
     }
@@ -2566,7 +2566,7 @@ impl AppState {
         &mut self,
     ) -> Option<tokio::task::JoinHandle<Vec<(String, crate::types::ToolResultBlock)>>> {
         // Create channel for results
-        let (tx, rx) = mpsc::unbounded_channel();
+        let (tx, rx) = mpsc::channel(100);
         self.tool_state.tool_result_rx = Some(rx);
 
         // Get pending tools
@@ -2674,7 +2674,7 @@ impl AppState {
                 };
 
                 // Send through channel (ignore error if receiver dropped)
-                let _ = tx.send((tool_id.clone(), result_block.clone()));
+                let _ = tx.send((tool_id.clone(), result_block.clone())).await;
                 results.push((tool_id, result_block));
             }
             results
@@ -3297,7 +3297,7 @@ mod tests {
 
         // Clear streaming, set tool channel
         state.streaming_rx = None;
-        let (_tx, rx) = mpsc::unbounded_channel();
+        let (_tx, rx) = mpsc::channel(100);
         state.set_tool_result_rx(rx);
         assert!(state.has_background_work());
 

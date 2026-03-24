@@ -80,7 +80,7 @@ pub struct PatinaClientHandler {
     /// Shared tool list, updated when `on_tool_list_changed` fires.
     tools: Arc<RwLock<Vec<Tool>>>,
     /// Channel for forwarding events to the manager.
-    event_tx: mpsc::UnboundedSender<McpEvent>,
+    event_tx: mpsc::Sender<McpEvent>,
 }
 
 impl PatinaClientHandler {
@@ -95,7 +95,7 @@ impl PatinaClientHandler {
     pub fn new(
         server_name: String,
         tools: Arc<RwLock<Vec<Tool>>>,
-        event_tx: mpsc::UnboundedSender<McpEvent>,
+        event_tx: mpsc::Sender<McpEvent>,
     ) -> Self {
         Self {
             server_name,
@@ -151,7 +151,12 @@ impl ClientHandler for PatinaClientHandler {
                 }
             }
 
-            let _ = event_tx.send(McpEvent::ToolListChanged { server_name });
+            if event_tx
+                .try_send(McpEvent::ToolListChanged { server_name })
+                .is_err()
+            {
+                tracing::warn!("MCP event channel full, dropping ToolListChanged notification");
+            }
         }
     }
 
@@ -166,7 +171,9 @@ impl ClientHandler for PatinaClientHandler {
             total: params.total,
             message: params.message,
         };
-        let _ = self.event_tx.send(event);
+        if self.event_tx.try_send(event).is_err() {
+            tracing::warn!("MCP event channel full, dropping ProgressUpdate notification");
+        }
         std::future::ready(())
     }
 
@@ -190,7 +197,9 @@ impl ClientHandler for PatinaClientHandler {
             level: level_str,
             data: data_str,
         };
-        let _ = self.event_tx.send(event);
+        if self.event_tx.try_send(event).is_err() {
+            tracing::warn!("MCP event channel full, dropping LogMessage notification");
+        }
         std::future::ready(())
     }
 
@@ -198,9 +207,15 @@ impl ClientHandler for PatinaClientHandler {
         &self,
         _context: NotificationContext<RoleClient>,
     ) -> impl Future<Output = ()> + Send + '_ {
-        let _ = self.event_tx.send(McpEvent::ResourceListChanged {
-            server_name: self.server_name.clone(),
-        });
+        if self
+            .event_tx
+            .try_send(McpEvent::ResourceListChanged {
+                server_name: self.server_name.clone(),
+            })
+            .is_err()
+        {
+            tracing::warn!("MCP event channel full, dropping ResourceListChanged notification");
+        }
         std::future::ready(())
     }
 
@@ -208,9 +223,15 @@ impl ClientHandler for PatinaClientHandler {
         &self,
         _context: NotificationContext<RoleClient>,
     ) -> impl Future<Output = ()> + Send + '_ {
-        let _ = self.event_tx.send(McpEvent::PromptListChanged {
-            server_name: self.server_name.clone(),
-        });
+        if self
+            .event_tx
+            .try_send(McpEvent::PromptListChanged {
+                server_name: self.server_name.clone(),
+            })
+            .is_err()
+        {
+            tracing::warn!("MCP event channel full, dropping PromptListChanged notification");
+        }
         std::future::ready(())
     }
 }
@@ -246,7 +267,7 @@ mod tests {
 
     #[test]
     fn test_handler_get_info() {
-        let (tx, _rx) = mpsc::unbounded_channel();
+        let (tx, _rx) = mpsc::channel(256);
         let tools = Arc::new(RwLock::new(Vec::new()));
         let handler = PatinaClientHandler::new("test-server".to_string(), tools, tx);
 
@@ -257,7 +278,7 @@ mod tests {
 
     #[test]
     fn test_handler_construction() {
-        let (tx, _rx) = mpsc::unbounded_channel();
+        let (tx, _rx) = mpsc::channel(256);
         let tools = Arc::new(RwLock::new(Vec::new()));
         let handler = PatinaClientHandler::new("my-server".to_string(), tools.clone(), tx);
 

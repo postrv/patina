@@ -49,7 +49,7 @@ pub struct McpConnection {
     /// Shared tool list, kept in sync by the handler.
     tools: Arc<RwLock<Vec<Tool>>>,
     /// Receiver for events from the handler.
-    event_rx: mpsc::UnboundedReceiver<McpEvent>,
+    event_rx: mpsc::Receiver<McpEvent>,
 }
 
 impl McpConnection {
@@ -96,7 +96,7 @@ impl McpConnection {
 
         // Create shared state
         let tools: Arc<RwLock<Vec<Tool>>> = Arc::new(RwLock::new(Vec::new()));
-        let (event_tx, event_rx) = mpsc::unbounded_channel();
+        let (event_tx, event_rx) = mpsc::channel(256);
 
         let handler = PatinaClientHandler::new(name.to_string(), Arc::clone(&tools), event_tx);
 
@@ -162,7 +162,7 @@ impl McpConnection {
             .with_context(|| format!("Legacy SSE connection to '{}' failed", name))?;
 
         let tools: Arc<RwLock<Vec<Tool>>> = Arc::new(RwLock::new(Vec::new()));
-        let (event_tx, event_rx) = mpsc::unbounded_channel();
+        let (event_tx, event_rx) = mpsc::channel(256);
 
         let handler = PatinaClientHandler::new(name.to_string(), Arc::clone(&tools), event_tx);
 
@@ -238,7 +238,7 @@ impl McpConnection {
         let transport = StreamableHttpClientTransport::from_config(config);
 
         let tools: Arc<RwLock<Vec<Tool>>> = Arc::new(RwLock::new(Vec::new()));
-        let (event_tx, event_rx) = mpsc::unbounded_channel();
+        let (event_tx, event_rx) = mpsc::channel(256);
 
         let handler = PatinaClientHandler::new(name.to_string(), Arc::clone(&tools), event_tx);
 
@@ -405,7 +405,7 @@ impl McpConnection {
     #[cfg(test)]
     #[must_use]
     pub fn disconnected(name: &str) -> Self {
-        let (_event_tx, event_rx) = mpsc::unbounded_channel();
+        let (_event_tx, event_rx) = mpsc::channel(256);
         Self {
             name: name.to_string(),
             client: None,

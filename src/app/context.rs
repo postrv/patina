@@ -598,14 +598,14 @@ mod tests {
         let session_mgr = test_session_manager();
 
         // Set up a tool result channel with a result ready.
-        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let (tx, rx) = tokio::sync::mpsc::channel(100);
         state.set_tool_result_rx(rx);
         let result = crate::types::ToolResultBlock {
             tool_use_id: "toolu_abc".to_string(),
             content: "output".to_string(),
             is_error: false,
         };
-        tx.send(("toolu_abc".to_string(), result)).unwrap();
+        tx.send(("toolu_abc".to_string(), result)).await.unwrap();
 
         let mut stream = futures::stream::pending::<Result<Event, io::Error>>();
         let mut interval = tokio::time::interval(Duration::from_secs(60));

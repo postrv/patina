@@ -31,8 +31,7 @@ pub struct ToolExecutionState {
     /// Channel receiver for async tool results.
     /// When set, tool execution runs in the background and results
     /// are streamed back through this channel.
-    pub(crate) tool_result_rx:
-        Option<mpsc::UnboundedReceiver<(String, crate::types::ToolResultBlock)>>,
+    pub(crate) tool_result_rx: Option<mpsc::Receiver<(String, crate::types::ToolResultBlock)>>,
 
     /// Set of tool IDs currently being executed.
     /// Used to track which tools are in-flight for progress display.

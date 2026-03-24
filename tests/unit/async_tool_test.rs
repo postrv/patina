@@ -43,7 +43,7 @@ fn test_tool_result_channel_setup() {
     let mut state = new_state();
 
     // Create a channel for tool results
-    let (tx, rx) = mpsc::unbounded_channel::<(String, ToolResultBlock)>();
+    let (tx, rx) = mpsc::channel::<(String, ToolResultBlock)>(100);
 
     // Should be able to set the receiver on state
     state.set_tool_result_rx(rx);
@@ -53,7 +53,7 @@ fn test_tool_result_channel_setup() {
 
     // Send a result through the channel
     let result = mock_tool_result("tool_bash", "/home/user", false);
-    tx.send(("tool_bash".to_string(), result)).unwrap();
+    tx.try_send(("tool_bash".to_string(), result)).unwrap();
 
     // Should be able to receive (non-blocking check)
     assert!(state.try_recv_tool_result().is_some());
@@ -89,15 +89,17 @@ async fn test_tool_results_streamed() {
     let mut state = new_state();
 
     // Set up channel
-    let (tx, rx) = mpsc::unbounded_channel::<(String, ToolResultBlock)>();
+    let (tx, rx) = mpsc::channel::<(String, ToolResultBlock)>(100);
     state.set_tool_result_rx(rx);
 
     // Simulate tool execution sending results
     let result1 = mock_tool_result("tool_1", "result 1", false);
     let result2 = mock_tool_result("tool_2", "result 2", false);
 
-    tx.send(("tool_1".to_string(), result1.clone())).unwrap();
-    tx.send(("tool_2".to_string(), result2.clone())).unwrap();
+    tx.try_send(("tool_1".to_string(), result1.clone()))
+        .unwrap();
+    tx.try_send(("tool_2".to_string(), result2.clone()))
+        .unwrap();
 
     // Results should be receivable
     let received1 = state.try_recv_tool_result();
@@ -123,7 +125,7 @@ async fn test_ui_responsive_during_tools() {
     let mut state = new_state();
 
     // Set up channel
-    let (tx, rx) = mpsc::unbounded_channel::<(String, ToolResultBlock)>();
+    let (tx, rx) = mpsc::channel::<(String, ToolResultBlock)>(100);
     state.set_tool_result_rx(rx);
 
     // Spawn a task that simulates slow tool execution
@@ -132,7 +134,7 @@ async fn test_ui_responsive_during_tools() {
         // Simulate slow tool (100ms)
         tokio::time::sleep(Duration::from_millis(100)).await;
         let result = mock_tool_result("slow_tool", "done", false);
-        tx_clone.send(("slow_tool".to_string(), result)).ok();
+        tx_clone.send(("slow_tool".to_string(), result)).await.ok();
     });
 
     // Meanwhile, UI should be able to process events
@@ -232,7 +234,7 @@ async fn test_multiple_tools_independent_results() {
     let mut state = new_state();
 
     // Set up channel
-    let (tx, rx) = mpsc::unbounded_channel::<(String, ToolResultBlock)>();
+    let (tx, rx) = mpsc::channel::<(String, ToolResultBlock)>(100);
     state.set_tool_result_rx(rx);
 
     // Spawn multiple tool executions
@@ -242,13 +244,13 @@ async fn test_multiple_tools_independent_results() {
     let task1 = tokio::spawn(async move {
         tokio::time::sleep(Duration::from_millis(50)).await;
         let result = mock_tool_result("tool_1", "result 1", false);
-        tx1.send(("tool_1".to_string(), result)).ok();
+        tx1.send(("tool_1".to_string(), result)).await.ok();
     });
 
     let task2 = tokio::spawn(async move {
         tokio::time::sleep(Duration::from_millis(30)).await;
         let result = mock_tool_result("tool_2", "result 2", false);
-        tx2.send(("tool_2".to_string(), result)).ok();
+        tx2.send(("tool_2".to_string(), result)).await.ok();
     });
 
     // Collect results (tool_2 should arrive first due to shorter delay)

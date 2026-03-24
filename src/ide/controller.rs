@@ -35,16 +35,16 @@ pub struct IdeController {
     /// Shared state accessible by all connections
     state: Arc<Mutex<IdeSharedState>>,
     /// Channel to send prompts to the main application
-    prompt_tx: mpsc::UnboundedSender<QueuedPrompt>,
+    prompt_tx: mpsc::Sender<QueuedPrompt>,
     /// Receiver for prompts (held by controller, given to main app)
-    prompt_rx: Option<mpsc::UnboundedReceiver<QueuedPrompt>>,
+    prompt_rx: Option<mpsc::Receiver<QueuedPrompt>>,
 }
 
 impl IdeController {
     /// Creates a new IDE controller for the specified port
     #[must_use]
     pub fn new(port: u16) -> Self {
-        let (prompt_tx, prompt_rx) = mpsc::unbounded_channel();
+        let (prompt_tx, prompt_rx) = mpsc::channel(32);
         Self {
             port,
             state: Arc::new(Mutex::new(IdeSharedState::default())),
@@ -56,7 +56,7 @@ impl IdeController {
     /// Takes the prompt receiver for the main application to consume
     ///
     /// This can only be called once. Subsequent calls return `None`.
-    pub fn take_prompt_receiver(&mut self) -> Option<mpsc::UnboundedReceiver<QueuedPrompt>> {
+    pub fn take_prompt_receiver(&mut self) -> Option<mpsc::Receiver<QueuedPrompt>> {
         self.prompt_rx.take()
     }
 
@@ -108,7 +108,7 @@ impl IdeController {
 async fn handle_connection(
     mut stream: TcpStream,
     state: Arc<Mutex<IdeSharedState>>,
-    prompt_tx: mpsc::UnboundedSender<QueuedPrompt>,
+    prompt_tx: mpsc::Sender<QueuedPrompt>,
     session_id: String,
 ) -> Result<()> {
     let mut buffer = vec![0u8; 8192];
@@ -158,7 +158,7 @@ async fn handle_connection(
 async fn process_request(
     request: IdeRequest,
     state: &Arc<Mutex<IdeSharedState>>,
-    prompt_tx: &mpsc::UnboundedSender<QueuedPrompt>,
+    prompt_tx: &mpsc::Sender<QueuedPrompt>,
     session_id: &str,
 ) -> IdeResponse {
     let shared = state.lock().await;

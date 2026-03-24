@@ -79,7 +79,7 @@ pub struct LegacySseTransport {
     /// Custom headers to include in POST requests.
     custom_headers: HeaderMap,
     /// Receiver for JSON-RPC messages from the SSE stream.
-    server_rx: mpsc::UnboundedReceiver<ServerJsonRpcMessage>,
+    server_rx: mpsc::Receiver<ServerJsonRpcMessage>,
     /// Handle for the background SSE reader task.
     reader_handle: Option<JoinHandle<()>>,
 }
@@ -184,7 +184,7 @@ impl LegacySseTransport {
         .map_err(|_| LegacySseError::EndpointTimeout)??;
 
         let post_url = Arc::new(post_endpoint);
-        let (tx, rx) = mpsc::unbounded_channel();
+        let (tx, rx) = mpsc::channel(256);
 
         // Spawn background task to continue reading SSE message events.
         // The stream and buffers are moved here, continuing from where
@@ -259,7 +259,7 @@ async fn sse_reader_loop(
     line_buffer: &mut String,
     event_type: &mut String,
     event_data: &mut String,
-    tx: &mpsc::UnboundedSender<ServerJsonRpcMessage>,
+    tx: &mpsc::Sender<ServerJsonRpcMessage>,
 ) {
     while let Some(chunk_result) = stream.next().await {
         let chunk = match chunk_result {
@@ -284,7 +284,7 @@ async fn sse_reader_loop(
                 if is_message && !event_data.is_empty() {
                     match serde_json::from_str::<ServerJsonRpcMessage>(event_data) {
                         Ok(msg) => {
-                            if tx.send(msg).is_err() {
+                            if tx.send(msg).await.is_err() {
                                 return; // Channel closed, receiver dropped
                             }
                         }
@@ -389,7 +389,7 @@ mod tests {
         let mut line_buffer = String::new();
         let mut event_type = String::new();
         let mut event_data = String::new();
-        let (tx, mut rx) = mpsc::unbounded_channel();
+        let (tx, mut rx) = mpsc::channel(256);
 
         sse_reader_loop(
             &mut pinned,
@@ -417,7 +417,7 @@ mod tests {
         let mut line_buffer = String::new();
         let mut event_type = String::new();
         let mut event_data = String::new();
-        let (tx, mut rx) = mpsc::unbounded_channel();
+        let (tx, mut rx) = mpsc::channel(256);
 
         sse_reader_loop(
             &mut pinned,
@@ -445,7 +445,7 @@ mod tests {
         let mut line_buffer = String::new();
         let mut event_type = String::new();
         let mut event_data = String::new();
-        let (tx, mut rx) = mpsc::unbounded_channel();
+        let (tx, mut rx) = mpsc::channel(256);
 
         sse_reader_loop(
             &mut pinned,
@@ -472,7 +472,7 @@ mod tests {
         let mut line_buffer = String::new();
         let mut event_type = String::new();
         let mut event_data = String::new();
-        let (tx, mut rx) = mpsc::unbounded_channel();
+        let (tx, mut rx) = mpsc::channel(256);
 
         sse_reader_loop(
             &mut pinned,
@@ -501,7 +501,7 @@ mod tests {
         let mut line_buffer = String::new();
         let mut event_type = String::new();
         let mut event_data = String::new();
-        let (tx, mut rx) = mpsc::unbounded_channel();
+        let (tx, mut rx) = mpsc::channel(256);
 
         sse_reader_loop(
             &mut pinned,
@@ -527,7 +527,7 @@ mod tests {
         let mut line_buffer = String::new();
         let mut event_type = String::new();
         let mut event_data = String::new();
-        let (tx, mut rx) = mpsc::unbounded_channel();
+        let (tx, mut rx) = mpsc::channel(256);
 
         sse_reader_loop(
             &mut pinned,

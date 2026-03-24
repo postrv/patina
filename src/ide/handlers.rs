@@ -38,7 +38,7 @@ pub struct StatusContext {
 #[derive(Debug)]
 pub struct PromptContext {
     /// Channel to send prompts to the main application
-    pub prompt_tx: mpsc::UnboundedSender<QueuedPrompt>,
+    pub prompt_tx: mpsc::Sender<QueuedPrompt>,
 }
 
 /// A prompt queued for processing
@@ -111,10 +111,15 @@ pub fn handle_send_prompt(
         selection,
     };
 
-    match ctx.prompt_tx.send(prompt) {
+    match ctx.prompt_tx.try_send(prompt) {
         Ok(()) => IdeResponse::PromptReceived { request_id },
-        Err(_) => IdeResponse::Error {
+        Err(mpsc::error::TrySendError::Full(_)) => IdeResponse::Error {
             code: "QUEUE_FULL".to_string(),
+            message: "Prompt queue is full - too many pending prompts".to_string(),
+            request_id: None,
+        },
+        Err(mpsc::error::TrySendError::Closed(_)) => IdeResponse::Error {
+            code: "CHANNEL_CLOSED".to_string(),
             message: "Failed to queue prompt - channel closed".to_string(),
             request_id: None,
         },
@@ -402,7 +407,7 @@ mod tests {
 
     #[test]
     fn test_handle_send_prompt_success() {
-        let (tx, mut rx) = mpsc::unbounded_channel();
+        let (tx, mut rx) = mpsc::channel(32);
         let ctx = PromptContext { prompt_tx: tx };
 
         let response = handle_send_prompt(&ctx, "Hello".to_string(), None, None);
@@ -424,7 +429,7 @@ mod tests {
 
     #[test]
     fn test_handle_send_prompt_with_file() {
-        let (tx, mut rx) = mpsc::unbounded_channel();
+        let (tx, mut rx) = mpsc::channel(32);
         let ctx = PromptContext { prompt_tx: tx };
 
         let response = handle_send_prompt(
@@ -445,7 +450,7 @@ mod tests {
 
     #[test]
     fn test_handle_send_prompt_channel_closed() {
-        let (tx, rx) = mpsc::unbounded_channel::<QueuedPrompt>();
+        let (tx, rx) = mpsc::channel::<QueuedPrompt>(32);
         drop(rx); // Close the receiver
         let ctx = PromptContext { prompt_tx: tx };
 
@@ -453,7 +458,7 @@ mod tests {
 
         match response {
             IdeResponse::Error { code, .. } => {
-                assert_eq!(code, "QUEUE_FULL");
+                assert_eq!(code, "CHANNEL_CLOSED");
             }
             _ => panic!("Expected Error response"),
         }
@@ -528,7 +533,7 @@ mod tests {
 
     #[test]
     fn test_route_ping_request() {
-        let (tx, _rx) = mpsc::unbounded_channel();
+        let (tx, _rx) = mpsc::channel(32);
         let status_ctx = StatusContext {
             busy: false,
             turn_count: 0,
@@ -550,7 +555,7 @@ mod tests {
 
     #[test]
     fn test_route_status_request() {
-        let (tx, _rx) = mpsc::unbounded_channel();
+        let (tx, _rx) = mpsc::channel(32);
         let status_ctx = StatusContext {
             busy: true,
             turn_count: 3,
@@ -713,7 +718,7 @@ mod tests {
 
     #[test]
     fn test_route_apply_edit_request() {
-        let (tx, _rx) = mpsc::unbounded_channel();
+        let (tx, _rx) = mpsc::channel(32);
         let status_ctx = StatusContext {
             busy: false,
             turn_count: 0,
