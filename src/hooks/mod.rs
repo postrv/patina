@@ -749,4 +749,130 @@ mod tests {
         // but NOT be blocked (exit 2) by security policy
         assert_ne!(result.exit_code, 2, "Safe command should not be blocked");
     }
+
+    #[test]
+    fn test_matches_pattern_exact() {
+        assert!(matches_pattern("Bash", "Bash").unwrap());
+        assert!(!matches_pattern("Bash", "Read").unwrap());
+    }
+
+    #[test]
+    fn test_matches_pattern_glob_star() {
+        assert!(matches_pattern("mcp__*", "mcp__read").unwrap());
+        assert!(!matches_pattern("mcp__*", "Bash").unwrap());
+    }
+
+    #[test]
+    fn test_matches_pattern_glob_question() {
+        assert!(matches_pattern("Ba?h", "Bash").unwrap());
+        assert!(!matches_pattern("Ba?h", "Baash").unwrap());
+    }
+
+    #[test]
+    fn test_matches_pattern_pipe_separated() {
+        assert!(matches_pattern("Bash|Read", "Bash").unwrap());
+        assert!(matches_pattern("Bash|Read", "Read").unwrap());
+        assert!(!matches_pattern("Bash|Read", "Write").unwrap());
+    }
+
+    #[test]
+    fn test_matches_pattern_pipe_with_glob() {
+        assert!(matches_pattern("mcp__*|Bash", "mcp__read").unwrap());
+        assert!(matches_pattern("mcp__*|Bash", "Bash").unwrap());
+        assert!(!matches_pattern("mcp__*|Bash", "Write").unwrap());
+    }
+
+    #[test]
+    fn test_matches_pattern_no_match() {
+        assert!(!matches_pattern("Bash", "Read").unwrap());
+        assert!(!matches_pattern("Bash", "").unwrap());
+        assert!(!matches_pattern("Bash", "bash").unwrap()); // case-sensitive
+    }
+
+    #[test]
+    fn test_hook_context_serialization_minimal() {
+        let ctx = HookContext {
+            hook_event_name: "SessionStart".to_string(),
+            session_id: "s1".to_string(),
+            tool_name: None,
+            tool_input: None,
+            tool_response: None,
+            prompt: None,
+            stop_reason: None,
+        };
+        let json: serde_json::Value = serde_json::to_value(&ctx).unwrap();
+        let obj = json.as_object().unwrap();
+        // Required fields present
+        assert_eq!(obj["hook_event_name"], "SessionStart");
+        assert_eq!(obj["session_id"], "s1");
+        // Optional fields omitted (skip_serializing_if)
+        assert!(!obj.contains_key("tool_name"));
+        assert!(!obj.contains_key("tool_input"));
+        assert!(!obj.contains_key("tool_response"));
+        assert!(!obj.contains_key("prompt"));
+        assert!(!obj.contains_key("stop_reason"));
+    }
+
+    #[test]
+    fn test_hook_context_serialization_full() {
+        let ctx = HookContext {
+            hook_event_name: "PreToolUse".to_string(),
+            session_id: "s2".to_string(),
+            tool_name: Some("Bash".to_string()),
+            tool_input: Some(serde_json::json!({"command": "ls"})),
+            tool_response: Some(serde_json::json!({"output": "file.txt"})),
+            prompt: Some("list files".to_string()),
+            stop_reason: Some("done".to_string()),
+        };
+        let json: serde_json::Value = serde_json::to_value(&ctx).unwrap();
+        let obj = json.as_object().unwrap();
+        assert_eq!(obj["hook_event_name"], "PreToolUse");
+        assert_eq!(obj["session_id"], "s2");
+        assert_eq!(obj["tool_name"], "Bash");
+        assert_eq!(obj["tool_input"]["command"], "ls");
+        assert_eq!(obj["tool_response"]["output"], "file.txt");
+        assert_eq!(obj["prompt"], "list files");
+        assert_eq!(obj["stop_reason"], "done");
+    }
+
+    #[test]
+    fn test_hook_event_as_str_all_variants() {
+        let expected = vec![
+            (HookEvent::PreToolUse, "PreToolUse"),
+            (HookEvent::PostToolUse, "PostToolUse"),
+            (HookEvent::PostToolUseFailure, "PostToolUseFailure"),
+            (HookEvent::PermissionRequest, "PermissionRequest"),
+            (HookEvent::UserPromptSubmit, "UserPromptSubmit"),
+            (HookEvent::SessionStart, "SessionStart"),
+            (HookEvent::SessionEnd, "SessionEnd"),
+            (HookEvent::Notification, "Notification"),
+            (HookEvent::Stop, "Stop"),
+            (HookEvent::SubagentStop, "SubagentStop"),
+            (HookEvent::PreCompact, "PreCompact"),
+        ];
+        for (event, name) in &expected {
+            assert_eq!(
+                event.as_str(),
+                *name,
+                "HookEvent::{name} produced wrong string"
+            );
+        }
+        // Ensure we tested all 11 variants
+        assert_eq!(expected.len(), 11);
+    }
+
+    #[test]
+    fn test_hook_decision_default_is_continue() {
+        let decision = HookDecision::default();
+        assert!(
+            matches!(decision, HookDecision::Continue),
+            "Default HookDecision should be Continue, got: {decision:?}"
+        );
+    }
+
+    #[test]
+    fn test_hook_manager_session_id() {
+        let manager = HookManager::new("test-session-42".to_string());
+        assert_eq!(manager.session_id(), "test-session-42");
+    }
 }

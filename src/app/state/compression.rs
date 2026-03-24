@@ -236,3 +236,162 @@ impl CompressionState {
         &self.compaction_metrics
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tui::widgets::CompactionStatus;
+
+    /// Helper to build a default `CompressionState` for testing.
+    fn make_state() -> CompressionState {
+        CompressionState {
+            compression_orchestrator: None,
+            last_ccg_hash: None,
+            cached_ccg_context: None,
+            narsil_client: None,
+            context_token_budget: 10_000,
+            context_tokens_injected: 0,
+            auto_context_enabled: false,
+            pending_context: Vec::new(),
+            compaction_state: None,
+            compaction_metrics: Arc::new(CompactionMetrics::new()),
+            token_budget: TokenBudget::new(100_000),
+        }
+    }
+
+    #[test]
+    fn test_start_compaction_manual() {
+        let mut state = make_state();
+        state.start_compaction(8_000, 50_000, false);
+
+        let cs = state
+            .compaction_state()
+            .expect("compaction_state should be Some");
+        assert_eq!(cs.status(), CompactionStatus::Compacting);
+        assert!(!cs.is_auto());
+        assert_eq!(cs.target_tokens(), 8_000);
+        assert_eq!(cs.before_tokens(), 50_000);
+    }
+
+    #[test]
+    fn test_start_compaction_auto() {
+        let mut state = make_state();
+        state.start_compaction(8_000, 50_000, true);
+
+        let cs = state
+            .compaction_state()
+            .expect("compaction_state should be Some");
+        assert!(
+            cs.is_auto(),
+            "is_auto flag should be true for auto compaction"
+        );
+        assert_eq!(cs.status(), CompactionStatus::Compacting);
+    }
+
+    #[test]
+    fn test_update_compaction_progress() {
+        let mut state = make_state();
+        state.start_compaction(8_000, 50_000, false);
+        state.update_compaction_progress(0.42);
+
+        let cs = state
+            .compaction_state()
+            .expect("compaction_state should be Some");
+        assert!((cs.progress() - 0.42).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_complete_compaction() {
+        let mut state = make_state();
+        state.start_compaction(8_000, 50_000, false);
+        state.complete_compaction(12_000);
+
+        let cs = state
+            .compaction_state()
+            .expect("compaction_state should be Some");
+        assert_eq!(cs.status(), CompactionStatus::Complete);
+        assert_eq!(cs.after_tokens(), Some(12_000));
+        assert!((cs.progress() - 1.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_fail_compaction() {
+        let mut state = make_state();
+        state.start_compaction(8_000, 50_000, false);
+        state.fail_compaction();
+
+        let cs = state
+            .compaction_state()
+            .expect("compaction_state should be Some");
+        assert_eq!(cs.status(), CompactionStatus::Failed);
+    }
+
+    #[test]
+    fn test_clear_compaction() {
+        let mut state = make_state();
+        state.start_compaction(8_000, 50_000, false);
+        assert!(state.compaction_state().is_some());
+
+        state.clear_compaction();
+        assert!(state.compaction_state().is_none());
+    }
+
+    #[test]
+    fn test_compaction_lifecycle_full() {
+        let mut state = make_state();
+
+        // start
+        state.start_compaction(8_000, 50_000, false);
+        assert_eq!(
+            state.compaction_state().unwrap().status(),
+            CompactionStatus::Compacting,
+        );
+
+        // update progress
+        state.update_compaction_progress(0.5);
+        assert!((state.compaction_state().unwrap().progress() - 0.5).abs() < f64::EPSILON);
+
+        // complete
+        state.complete_compaction(10_000);
+        let cs = state.compaction_state().unwrap();
+        assert_eq!(cs.status(), CompactionStatus::Complete);
+        assert_eq!(cs.after_tokens(), Some(10_000));
+        assert!((cs.progress() - 1.0).abs() < f64::EPSILON);
+
+        // clear
+        state.clear_compaction();
+        assert!(state.compaction_state().is_none());
+    }
+
+    #[test]
+    fn test_context_for_injection_enabled_cached() {
+        let mut state = make_state();
+        state.auto_context_enabled = true;
+        state.cached_ccg_context = Some("cached context data".to_string());
+
+        assert_eq!(state.context_for_injection(), Some("cached context data"));
+    }
+
+    #[test]
+    fn test_context_for_injection_disabled_cached() {
+        let mut state = make_state();
+        state.auto_context_enabled = false;
+        state.cached_ccg_context = Some("cached context data".to_string());
+
+        assert_eq!(
+            state.context_for_injection(),
+            None,
+            "Should return None when auto_context_enabled is false even with cached context"
+        );
+    }
+
+    #[test]
+    fn test_update_progress_noop_without_state() {
+        let mut state = make_state();
+        assert!(state.compaction_state().is_none());
+
+        // Must not panic when compaction_state is None.
+        state.update_compaction_progress(0.75);
+        assert!(state.compaction_state().is_none());
+    }
+}

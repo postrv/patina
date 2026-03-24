@@ -104,3 +104,116 @@ impl ContinuousLoopState {
         self.gate_results.clear();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_state() -> ContinuousLoopState {
+        ContinuousLoopState {
+            status: ContinuousLoopStatus::Inactive,
+            iterations_completed: 0,
+            last_duration_ms: None,
+            checking_gate: None,
+            gate_results: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn test_set_gate_checking() {
+        let mut state = make_state();
+
+        state.set_gate_checking("clippy");
+        assert_eq!(state.checking_gate(), Some("clippy"));
+
+        state.record_gate_result("clippy", true, None);
+        assert_eq!(state.checking_gate(), None);
+    }
+
+    #[test]
+    fn test_record_gate_result_accumulates() {
+        let mut state = make_state();
+
+        state.record_gate_result("clippy", true, None);
+        state.record_gate_result("tests", false, Some("3 failures"));
+        state.record_gate_result("fmt", true, Some("ok"));
+
+        assert_eq!(state.gate_results().len(), 3);
+        assert_eq!(
+            state.gate_results()[0],
+            GateResult {
+                gate: "clippy".to_string(),
+                passed: true,
+                message: None,
+            }
+        );
+        assert_eq!(
+            state.gate_results()[1],
+            GateResult {
+                gate: "tests".to_string(),
+                passed: false,
+                message: Some("3 failures".to_string()),
+            }
+        );
+        assert_eq!(
+            state.gate_results()[2],
+            GateResult {
+                gate: "fmt".to_string(),
+                passed: true,
+                message: Some("ok".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn test_update_iteration_clears_gates() {
+        let mut state = make_state();
+
+        state.set_gate_checking("clippy");
+        state.record_gate_result("clippy", true, None);
+        state.set_gate_checking("tests");
+
+        assert!(!state.gate_results().is_empty());
+        assert!(state.checking_gate().is_some());
+
+        state.update_iteration(2);
+
+        assert!(state.gate_results().is_empty());
+        assert_eq!(state.checking_gate(), None);
+        assert_eq!(
+            *state.status(),
+            ContinuousLoopStatus::Running { iteration: 2 }
+        );
+    }
+
+    #[test]
+    fn test_complete_iteration_accumulates() {
+        let mut state = make_state();
+
+        state.complete_iteration(1000);
+        assert_eq!(state.iterations_completed(), 1);
+        assert_eq!(state.last_duration_ms(), Some(1000));
+
+        state.complete_iteration(2000);
+        assert_eq!(state.iterations_completed(), 2);
+        assert_eq!(state.last_duration_ms(), Some(2000));
+
+        state.complete_iteration(500);
+        assert_eq!(state.iterations_completed(), 3);
+        assert_eq!(state.last_duration_ms(), Some(500));
+    }
+
+    #[test]
+    fn test_set_human_checkpoint() {
+        let mut state = make_state();
+
+        state.set_human_checkpoint("merge conflict detected");
+
+        assert_eq!(
+            *state.status(),
+            ContinuousLoopStatus::HumanRequired {
+                reason: "merge conflict detected".to_string(),
+            }
+        );
+    }
+}
