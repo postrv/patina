@@ -27,7 +27,15 @@ async fn test_file_read_within_working_dir() {
 
     match result {
         ToolResult::Success(content) => {
-            assert_eq!(content, "file content here", "should read exact content");
+            // read_file now returns cat -n style line-numbered output
+            assert!(
+                content.contains("file content here"),
+                "should contain file content, got: {content}"
+            );
+            assert!(
+                content.contains("1\t"),
+                "should have line number prefix, got: {content}"
+            );
         }
         ToolResult::Error(e) => panic!("expected success, got error: {e}"),
         ToolResult::Cancelled => panic!("expected success, got cancelled"),
@@ -137,11 +145,14 @@ async fn test_read_file_large_file() {
 
     match result {
         ToolResult::Success(content) => {
-            assert_eq!(
-                content.len(),
-                1024 * 1024,
-                "should read full 1MB file content"
+            // read_file now returns cat -n style line-numbered output
+            // The 1MB file is one long line, so output is "     1\t" + 1MB + "\n"
+            assert!(
+                content.len() > 1024 * 1024,
+                "should read full file content plus line number prefix, got len: {}",
+                content.len()
             );
+            assert!(content.contains("xxxx"), "should contain file data");
         }
         ToolResult::Error(e) => panic!("expected success for large file, got error: {e}"),
         ToolResult::Cancelled => panic!("expected success, got cancelled"),

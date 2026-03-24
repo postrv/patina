@@ -120,6 +120,14 @@ pub fn bash_tool() -> ToolDefinition {
                 "command": {
                     "type": "string",
                     "description": "The bash command to execute"
+                },
+                "timeout": {
+                    "type": "integer",
+                    "description": "Timeout in milliseconds (max 600000, default: policy timeout)"
+                },
+                "description": {
+                    "type": "string",
+                    "description": "A brief description of what this command does"
                 }
             },
             "required": ["command"]
@@ -134,14 +142,22 @@ pub fn bash_tool() -> ToolDefinition {
 pub fn read_file_tool() -> ToolDefinition {
     ToolDefinition::new(
         "read_file",
-        "Read the contents of a file. The path must be relative to the working directory. \
-         Returns the full file content as text. Binary files may not read correctly.",
+        "Read the contents of a file with optional line-range selection. Returns content \
+         with cat -n style line numbers. The path must be relative to the working directory.",
         json!({
             "type": "object",
             "properties": {
                 "path": {
                     "type": "string",
                     "description": "The relative path to the file to read"
+                },
+                "offset": {
+                    "type": "integer",
+                    "description": "Number of lines to skip from the start (0-based). Only provide if the file is too large to read at once."
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum number of lines to return. Only provide if the file is too large to read at once."
                 }
             },
             "required": ["path"]
@@ -183,9 +199,10 @@ pub fn write_file_tool() -> ToolDefinition {
 pub fn edit_tool() -> ToolDefinition {
     ToolDefinition::new(
         "edit",
-        "Edit a file by replacing a specific string with another. The old_string must \
-         match exactly once in the file (unique match required). Use this for precise \
-         modifications rather than rewriting entire files.",
+        "Edit a file by replacing a specific string with another. By default, old_string must \
+         match exactly once in the file (unique match required). Set replace_all to true to \
+         replace all occurrences. Use this for precise modifications rather than rewriting \
+         entire files.",
         json!({
             "type": "object",
             "properties": {
@@ -195,11 +212,15 @@ pub fn edit_tool() -> ToolDefinition {
                 },
                 "old_string": {
                     "type": "string",
-                    "description": "The exact string to find and replace (must be unique in file)"
+                    "description": "The exact string to find and replace (must be unique in file unless replace_all is true)"
                 },
                 "new_string": {
                     "type": "string",
                     "description": "The string to replace old_string with"
+                },
+                "replace_all": {
+                    "type": "boolean",
+                    "description": "Replace all occurrences of old_string (default: false)"
                 }
             },
             "required": ["path", "old_string", "new_string"]
@@ -276,11 +297,32 @@ pub fn grep_tool() -> ToolDefinition {
                 },
                 "file_pattern": {
                     "type": "string",
-                    "description": "Optional glob pattern to filter which files to search (e.g., '*.rs')"
+                    "description": "Glob pattern to filter which files to search (e.g., '*.rs')"
                 },
                 "case_insensitive": {
                     "type": "boolean",
                     "description": "Whether to perform case-insensitive search (default: false)"
+                },
+                "output_mode": {
+                    "type": "string",
+                    "enum": ["content", "files_with_matches", "count"],
+                    "description": "Output format: 'content' shows matching lines (default), 'files_with_matches' shows only file paths, 'count' shows match counts per file"
+                },
+                "context_lines": {
+                    "type": "integer",
+                    "description": "Number of lines to show before and after each match"
+                },
+                "file_type": {
+                    "type": "string",
+                    "description": "File type filter (e.g., 'rust', 'js', 'py', 'ts', 'go', 'java')"
+                },
+                "head_limit": {
+                    "type": "integer",
+                    "description": "Maximum number of results to return"
+                },
+                "path": {
+                    "type": "string",
+                    "description": "Directory or file to search in (relative to working directory)"
                 }
             },
             "required": ["pattern"]
@@ -721,5 +763,115 @@ mod tests {
                 expected
             );
         }
+    }
+
+    // =========================================================================
+    // 10.3.1: read_file schema enrichment
+    // =========================================================================
+
+    #[test]
+    fn test_read_file_schema_has_offset_and_limit() {
+        let tool = read_file_tool();
+        let schema = &tool.input_schema;
+        assert!(
+            schema["properties"]["offset"].is_object(),
+            "read_file should have offset property"
+        );
+        assert!(
+            schema["properties"]["limit"].is_object(),
+            "read_file should have limit property"
+        );
+        assert_eq!(
+            schema["properties"]["offset"]["type"], "integer",
+            "offset should be integer"
+        );
+        assert_eq!(
+            schema["properties"]["limit"]["type"], "integer",
+            "limit should be integer"
+        );
+        // offset and limit are optional (not in required)
+        let required = schema["required"].as_array().unwrap();
+        assert!(
+            !required.contains(&serde_json::json!("offset")),
+            "offset should not be required"
+        );
+        assert!(
+            !required.contains(&serde_json::json!("limit")),
+            "limit should not be required"
+        );
+    }
+
+    // =========================================================================
+    // 10.3.2: edit schema enrichment
+    // =========================================================================
+
+    #[test]
+    fn test_edit_schema_has_replace_all() {
+        let tool = edit_tool();
+        let schema = &tool.input_schema;
+        assert!(
+            schema["properties"]["replace_all"].is_object(),
+            "edit should have replace_all property"
+        );
+        assert_eq!(
+            schema["properties"]["replace_all"]["type"], "boolean",
+            "replace_all should be boolean"
+        );
+    }
+
+    // =========================================================================
+    // 10.3.3: grep schema enrichment
+    // =========================================================================
+
+    #[test]
+    fn test_grep_schema_has_enriched_properties() {
+        let tool = grep_tool();
+        let schema = &tool.input_schema;
+        assert!(
+            schema["properties"]["output_mode"].is_object(),
+            "grep should have output_mode"
+        );
+        assert!(
+            schema["properties"]["context_lines"].is_object(),
+            "grep should have context_lines"
+        );
+        assert!(
+            schema["properties"]["file_type"].is_object(),
+            "grep should have file_type"
+        );
+        assert!(
+            schema["properties"]["head_limit"].is_object(),
+            "grep should have head_limit"
+        );
+        assert!(
+            schema["properties"]["path"].is_object(),
+            "grep should have path"
+        );
+    }
+
+    // =========================================================================
+    // 10.3.4: bash schema enrichment
+    // =========================================================================
+
+    #[test]
+    fn test_bash_schema_has_timeout_and_description() {
+        let tool = bash_tool();
+        let schema = &tool.input_schema;
+        assert!(
+            schema["properties"]["timeout"].is_object(),
+            "bash should have timeout property"
+        );
+        assert_eq!(
+            schema["properties"]["timeout"]["type"], "integer",
+            "timeout should be integer"
+        );
+        assert!(
+            schema["properties"]["description"].is_object(),
+            "bash should have description property"
+        );
+        assert_eq!(
+            schema["properties"]["description"]["type"], "string",
+            "description should be string"
+        );
     }
 }

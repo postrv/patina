@@ -8,6 +8,7 @@ use regex::Regex;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::time::Duration;
 use tokio::process::Command;
 use tracing::{debug, warn};
 use walkdir::WalkDir;
@@ -217,6 +218,18 @@ impl ToolExecutor {
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("Missing command"))?;
 
+        // Per-call timeout (capped at 600_000ms = 10 minutes)
+        let timeout = input
+            .get("timeout")
+            .and_then(|v| v.as_u64())
+            .map(|ms| Duration::from_millis(ms.min(600_000)))
+            .unwrap_or(self.policy.command_timeout);
+
+        // Description is informational only — log it for audit trail
+        if let Some(desc) = input.get("description").and_then(|v| v.as_str()) {
+            debug!(description = %desc, command = %command, "Bash command with description");
+        }
+
         // Normalize the command to detect escape-based bypasses (e.g., r\m -> rm)
         let normalized = normalize_command(command);
 
@@ -279,7 +292,7 @@ impl ToolExecutor {
 
         // Wait for the child with timeout
         // When timeout occurs, the future (and child) is dropped, triggering kill_on_drop
-        match tokio::time::timeout(self.policy.command_timeout, child.wait_with_output()).await {
+        match tokio::time::timeout(timeout, child.wait_with_output()).await {
             Ok(Ok(output)) => {
                 let stdout = String::from_utf8_lossy(&output.stdout);
                 let stderr = String::from_utf8_lossy(&output.stderr);
@@ -337,13 +350,10 @@ impl ToolExecutor {
             Err(_) => {
                 // Timeout occurred - child is automatically killed by kill_on_drop
                 warn!(
-                    timeout_ms = %self.policy.command_timeout.as_millis(),
+                    timeout_ms = %timeout.as_millis(),
                     "Bash command timed out and was killed"
                 );
-                Err(anyhow::anyhow!(
-                    "Command timed out after {:?}",
-                    self.policy.command_timeout
-                ))
+                Err(anyhow::anyhow!("Command timed out after {:?}", timeout))
             }
         }
     }
@@ -374,8 +384,20 @@ impl ToolExecutor {
             return self.read_notebook(&full_path).await;
         }
 
+        let offset = input
+            .get("offset")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as usize);
+        let limit = input
+            .get("limit")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as usize);
+
         match tokio::fs::read_to_string(&full_path).await {
-            Ok(content) => Ok(ToolResult::Success(content)),
+            Ok(content) => {
+                let output = Self::format_file_content(&content, offset, limit);
+                Ok(ToolResult::Success(output))
+            }
             Err(e) => {
                 debug!(
                     path = %path,
@@ -555,6 +577,11 @@ impl ToolExecutor {
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("Missing new_string"))?;
 
+        let replace_all = input
+            .get("replace_all")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
         // Check for symlinks BEFORE path validation to prevent TOCTOU attacks
         if let Err(e) = self.check_symlink(path).await {
             return Ok(ToolResult::Error(e));
@@ -581,7 +608,7 @@ impl ToolExecutor {
             ));
         }
 
-        if match_count > 1 {
+        if !replace_all && match_count > 1 {
             return Ok(ToolResult::Error(format!(
                 "Multiple matches found: {match_count} matches. Edit requires a unique match to avoid ambiguity."
             )));
@@ -593,7 +620,11 @@ impl ToolExecutor {
         }
 
         // Perform the replacement
-        let new_content = content.replacen(old_string, new_string, 1);
+        let new_content = if replace_all {
+            content.replace(old_string, new_string)
+        } else {
+            content.replacen(old_string, new_string, 1)
+        };
 
         // Write the modified content
         if let Err(e) = tokio::fs::write(&full_path, &new_content).await {
@@ -603,9 +634,36 @@ impl ToolExecutor {
         // Generate diff output
         let diff = Self::generate_diff(old_string, new_string);
 
-        Ok(ToolResult::Success(format!(
-            "Successfully replaced in {path}:\n{diff}"
-        )))
+        let summary = if replace_all && match_count > 1 {
+            format!("Successfully replaced {match_count} occurrences in {path}:\n{diff}")
+        } else {
+            format!("Successfully replaced in {path}:\n{diff}")
+        };
+
+        Ok(ToolResult::Success(summary))
+    }
+
+    /// Formats file content with cat -n style line numbers and optional offset/limit.
+    ///
+    /// # Arguments
+    ///
+    /// * `content` - The full file content
+    /// * `offset` - Number of lines to skip from the start (0-based)
+    /// * `limit` - Maximum number of lines to return
+    fn format_file_content(content: &str, offset: Option<usize>, limit: Option<usize>) -> String {
+        let lines: Vec<&str> = content.lines().collect();
+        let start = offset.unwrap_or(0);
+        let end = match limit {
+            Some(lim) => (start + lim).min(lines.len()),
+            None => lines.len(),
+        };
+
+        let mut output = String::new();
+        for (i, line) in lines.iter().enumerate().take(end).skip(start) {
+            // cat -n style: right-aligned line number, tab, content
+            output.push_str(&format!("{:>6}\t{line}\n", i + 1));
+        }
+        output
     }
 
     /// Generates a simple diff output showing the replacement.
@@ -851,6 +909,60 @@ impl ToolExecutor {
         false
     }
 
+    /// Resolves a file type name to file extensions.
+    ///
+    /// Maps common language names to their typical file extensions.
+    fn file_type_extensions(file_type: &str) -> Option<Vec<&'static str>> {
+        match file_type.to_lowercase().as_str() {
+            "rust" | "rs" => Some(vec![".rs"]),
+            "js" | "javascript" => Some(vec![".js", ".mjs", ".cjs"]),
+            "ts" | "typescript" => Some(vec![".ts", ".tsx"]),
+            "py" | "python" => Some(vec![".py"]),
+            "go" | "golang" => Some(vec![".go"]),
+            "java" => Some(vec![".java"]),
+            "c" => Some(vec![".c", ".h"]),
+            "cpp" | "c++" | "cxx" => Some(vec![".cpp", ".hpp", ".cc", ".cxx", ".hxx"]),
+            "rb" | "ruby" => Some(vec![".rb"]),
+            "sh" | "shell" | "bash" => Some(vec![".sh", ".bash"]),
+            "json" => Some(vec![".json"]),
+            "yaml" | "yml" => Some(vec![".yaml", ".yml"]),
+            "toml" => Some(vec![".toml"]),
+            "md" | "markdown" => Some(vec![".md"]),
+            "html" => Some(vec![".html", ".htm"]),
+            "css" => Some(vec![".css"]),
+            "sql" => Some(vec![".sql"]),
+            _ => None,
+        }
+    }
+
+    /// Checks whether a file should be searched based on glob and type filters.
+    fn should_search_file(
+        relative: &Path,
+        file_glob: Option<&Pattern>,
+        type_extensions: Option<&[&str]>,
+    ) -> bool {
+        // Apply file pattern filter
+        if let Some(glob) = file_glob {
+            let filename = relative
+                .file_name()
+                .map(|n| n.to_string_lossy())
+                .unwrap_or_default();
+            if !glob.matches(&filename) {
+                return false;
+            }
+        }
+
+        // Apply file type filter
+        if let Some(extensions) = type_extensions {
+            let path_str = relative.to_string_lossy();
+            if !extensions.iter().any(|ext| path_str.ends_with(ext)) {
+                return false;
+            }
+        }
+
+        true
+    }
+
     /// Searches file contents for a pattern.
     ///
     /// # Arguments
@@ -858,6 +970,11 @@ impl ToolExecutor {
     /// * `pattern` - The regex pattern to search for
     /// * `case_insensitive` - Whether to perform case-insensitive search (optional)
     /// * `file_pattern` - Glob pattern to filter files (optional)
+    /// * `output_mode` - Output format: "content", "files_with_matches", or "count"
+    /// * `context_lines` - Number of context lines around matches
+    /// * `file_type` - Filter by language (e.g., "rust", "js")
+    /// * `head_limit` - Maximum number of results
+    /// * `path` - Subdirectory or file to search in
     ///
     /// # Errors
     ///
@@ -877,6 +994,25 @@ impl ToolExecutor {
             .get("file_pattern")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
+
+        let output_mode = input
+            .get("output_mode")
+            .and_then(|v| v.as_str())
+            .unwrap_or("content");
+
+        let context_lines = input
+            .get("context_lines")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as usize);
+
+        let file_type = input.get("file_type").and_then(|v| v.as_str());
+
+        let head_limit = input
+            .get("head_limit")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as usize);
+
+        let search_path = input.get("path").and_then(|v| v.as_str());
 
         // Compile the regex pattern
         let regex = match if case_insensitive {
@@ -900,14 +1036,29 @@ impl ToolExecutor {
         // Compile file filter pattern if provided
         let file_glob = file_pattern.as_ref().and_then(|p| Pattern::new(p).ok());
 
+        // Resolve file type to extensions
+        let type_exts = file_type.and_then(Self::file_type_extensions);
+        let type_ext_refs: Option<Vec<&str>> = type_exts.as_deref().map(|v| v.to_vec());
+
+        // Determine search root
+        let search_root = match search_path {
+            Some(p) => self.working_dir.join(p),
+            None => self.working_dir.clone(),
+        };
+
         let mut results = Vec::new();
+        let mut result_count = 0usize;
 
         // Walk the directory tree
-        for entry in WalkDir::new(&self.working_dir)
+        for entry in WalkDir::new(&search_root)
             .follow_links(false)
             .into_iter()
             .filter_map(|e| e.ok())
         {
+            if head_limit.is_some_and(|lim| result_count >= lim) {
+                break;
+            }
+
             let path = entry.path();
 
             // Skip directories
@@ -915,35 +1066,85 @@ impl ToolExecutor {
                 continue;
             }
 
-            // Get relative path
+            // Get relative path (always relative to working_dir, not search_root)
             let relative = match path.strip_prefix(&self.working_dir) {
                 Ok(r) => r,
                 Err(_) => continue,
             };
 
-            let relative_str = relative.to_string_lossy();
-
-            // Apply file pattern filter if provided
-            if let Some(ref glob) = file_glob {
-                let filename = relative
-                    .file_name()
-                    .map(|n| n.to_string_lossy())
-                    .unwrap_or_default();
-                if !glob.matches(&filename) {
-                    continue;
-                }
+            // Apply filters
+            if !Self::should_search_file(relative, file_glob.as_ref(), type_ext_refs.as_deref()) {
+                continue;
             }
 
             // Read file content (skip binary files)
             let content = match fs::read_to_string(path) {
                 Ok(c) => c,
-                Err(_) => continue, // Skip files we can't read as text
+                Err(_) => continue,
             };
 
-            // Search for matches
-            for (line_num, line) in content.lines().enumerate() {
-                if regex.is_match(line) {
-                    results.push(format!("{}:{}: {}", relative_str, line_num + 1, line));
+            let relative_str = relative.to_string_lossy();
+            let lines: Vec<&str> = content.lines().collect();
+
+            match output_mode {
+                "files_with_matches" => {
+                    if lines.iter().any(|line| regex.is_match(line)) {
+                        results.push(relative_str.to_string());
+                        result_count += 1;
+                    }
+                }
+                "count" => {
+                    let count = lines.iter().filter(|line| regex.is_match(line)).count();
+                    if count > 0 {
+                        results.push(format!("{relative_str}:{count}"));
+                        result_count += 1;
+                    }
+                }
+                _ => {
+                    // "content" mode (default)
+                    for (line_num, line) in lines.iter().enumerate() {
+                        if head_limit.is_some_and(|lim| result_count >= lim) {
+                            break;
+                        }
+                        if regex.is_match(line) {
+                            if let Some(ctx) = context_lines {
+                                // Add context lines before
+                                let start = line_num.saturating_sub(ctx);
+                                for (i, ctx_line) in
+                                    lines.iter().enumerate().take(line_num).skip(start)
+                                {
+                                    results.push(format!(
+                                        "{}-{}- {}",
+                                        relative_str,
+                                        i + 1,
+                                        ctx_line
+                                    ));
+                                }
+                                // The matching line
+                                results.push(format!("{}:{}:{}", relative_str, line_num + 1, line));
+                                // Add context lines after
+                                let end = (line_num + ctx + 1).min(lines.len());
+                                for (i, ctx_line) in
+                                    lines.iter().enumerate().take(end).skip(line_num + 1)
+                                {
+                                    results.push(format!(
+                                        "{}-{}- {}",
+                                        relative_str,
+                                        i + 1,
+                                        ctx_line
+                                    ));
+                                }
+                            } else {
+                                results.push(format!(
+                                    "{}:{}: {}",
+                                    relative_str,
+                                    line_num + 1,
+                                    line
+                                ));
+                            }
+                            result_count += 1;
+                        }
+                    }
                 }
             }
         }
@@ -1361,5 +1562,415 @@ mod tests {
     fn test_join_notebook_source_none() {
         let joined = ToolExecutor::join_notebook_source(None);
         assert!(joined.is_none());
+    }
+
+    // =========================================================================
+    // 10.3.1: read_file with offset/limit
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_read_file_with_offset_and_limit() {
+        let temp_dir = TempDir::new().unwrap();
+        let content = "line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\nline9\nline10\n";
+        std::fs::write(temp_dir.path().join("test.txt"), content).unwrap();
+        let executor = ToolExecutor::new(temp_dir.path().to_path_buf());
+
+        let result = executor
+            .read_file(&serde_json::json!({
+                "path": "test.txt",
+                "offset": 3,
+                "limit": 4
+            }))
+            .await
+            .unwrap();
+
+        match result {
+            ToolResult::Success(output) => {
+                // Should return lines 4-7 with cat -n style line numbers
+                assert!(
+                    output.contains("4\tline4"),
+                    "should contain line 4, got: {output}"
+                );
+                assert!(output.contains("5\tline5"), "should contain line 5");
+                assert!(output.contains("6\tline6"), "should contain line 6");
+                assert!(output.contains("7\tline7"), "should contain line 7");
+                assert!(!output.contains("line3"), "should not contain line 3");
+                assert!(!output.contains("line8"), "should not contain line 8");
+            }
+            other => panic!("Expected Success, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_read_file_with_offset_only() {
+        let temp_dir = TempDir::new().unwrap();
+        let content = "line1\nline2\nline3\nline4\nline5\n";
+        std::fs::write(temp_dir.path().join("test.txt"), content).unwrap();
+        let executor = ToolExecutor::new(temp_dir.path().to_path_buf());
+
+        let result = executor
+            .read_file(&serde_json::json!({
+                "path": "test.txt",
+                "offset": 2
+            }))
+            .await
+            .unwrap();
+
+        match result {
+            ToolResult::Success(output) => {
+                // Should return from line 3 onwards
+                assert!(
+                    output.contains("3\tline3"),
+                    "should contain line 3, got: {output}"
+                );
+                assert!(output.contains("5\tline5"), "should contain line 5");
+                assert!(!output.contains("1\tline1"), "should not contain line 1");
+            }
+            other => panic!("Expected Success, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_read_file_with_limit_only() {
+        let temp_dir = TempDir::new().unwrap();
+        let content = "line1\nline2\nline3\nline4\nline5\n";
+        std::fs::write(temp_dir.path().join("test.txt"), content).unwrap();
+        let executor = ToolExecutor::new(temp_dir.path().to_path_buf());
+
+        let result = executor
+            .read_file(&serde_json::json!({
+                "path": "test.txt",
+                "limit": 2
+            }))
+            .await
+            .unwrap();
+
+        match result {
+            ToolResult::Success(output) => {
+                assert!(
+                    output.contains("1\tline1"),
+                    "should contain line 1, got: {output}"
+                );
+                assert!(output.contains("2\tline2"), "should contain line 2");
+                assert!(!output.contains("3\tline3"), "should not contain line 3");
+            }
+            other => panic!("Expected Success, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_read_file_without_offset_limit_returns_full_content() {
+        let temp_dir = TempDir::new().unwrap();
+        let content = "hello\nworld\n";
+        std::fs::write(temp_dir.path().join("test.txt"), content).unwrap();
+        let executor = ToolExecutor::new(temp_dir.path().to_path_buf());
+
+        let result = executor
+            .read_file(&serde_json::json!({"path": "test.txt"}))
+            .await
+            .unwrap();
+
+        match result {
+            ToolResult::Success(output) => {
+                // Without offset/limit, returns full content with line numbers
+                assert!(
+                    output.contains("1\thello"),
+                    "should have line numbers, got: {output}"
+                );
+                assert!(output.contains("2\tworld"), "should contain line 2");
+            }
+            other => panic!("Expected Success, got {:?}", other),
+        }
+    }
+
+    // =========================================================================
+    // 10.3.2: edit with replace_all
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_edit_replace_all_replaces_all_occurrences() {
+        let temp_dir = TempDir::new().unwrap();
+        let content = "foo bar foo baz foo\n";
+        std::fs::write(temp_dir.path().join("test.txt"), content).unwrap();
+        let executor = ToolExecutor::new(temp_dir.path().to_path_buf());
+
+        let result = executor
+            .edit_file(&serde_json::json!({
+                "path": "test.txt",
+                "old_string": "foo",
+                "new_string": "qux",
+                "replace_all": true
+            }))
+            .await
+            .unwrap();
+
+        match result {
+            ToolResult::Success(msg) => {
+                assert!(msg.contains("test.txt"), "should mention file path");
+                // Verify file content
+                let new_content =
+                    std::fs::read_to_string(temp_dir.path().join("test.txt")).unwrap();
+                assert_eq!(new_content, "qux bar qux baz qux\n");
+            }
+            other => panic!("Expected Success, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_edit_without_replace_all_rejects_multiple() {
+        let temp_dir = TempDir::new().unwrap();
+        let content = "foo bar foo baz foo\n";
+        std::fs::write(temp_dir.path().join("test.txt"), content).unwrap();
+        let executor = ToolExecutor::new(temp_dir.path().to_path_buf());
+
+        let result = executor
+            .edit_file(&serde_json::json!({
+                "path": "test.txt",
+                "old_string": "foo",
+                "new_string": "qux"
+            }))
+            .await
+            .unwrap();
+
+        match result {
+            ToolResult::Error(msg) => {
+                assert!(
+                    msg.contains("3 matches"),
+                    "should report match count, got: {msg}"
+                );
+            }
+            other => panic!("Expected Error, got {:?}", other),
+        }
+    }
+
+    // =========================================================================
+    // 10.3.3: grep enrichment
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_grep_output_mode_files_with_matches() {
+        let temp_dir = TempDir::new().unwrap();
+        std::fs::write(temp_dir.path().join("a.txt"), "hello world\n").unwrap();
+        std::fs::write(temp_dir.path().join("b.txt"), "goodbye world\n").unwrap();
+        std::fs::write(temp_dir.path().join("c.txt"), "no match here\n").unwrap();
+        let executor = ToolExecutor::new(temp_dir.path().to_path_buf());
+
+        let result = executor
+            .grep_content(&serde_json::json!({
+                "pattern": "world",
+                "output_mode": "files_with_matches"
+            }))
+            .await
+            .unwrap();
+
+        match result {
+            ToolResult::Success(output) => {
+                assert!(
+                    output.contains("a.txt"),
+                    "should contain a.txt, got: {output}"
+                );
+                assert!(output.contains("b.txt"), "should contain b.txt");
+                assert!(!output.contains("c.txt"), "should not contain c.txt");
+                // files_with_matches should NOT include line numbers or content
+                assert!(!output.contains("hello"), "should not contain line content");
+            }
+            other => panic!("Expected Success, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_grep_output_mode_count() {
+        let temp_dir = TempDir::new().unwrap();
+        std::fs::write(temp_dir.path().join("a.txt"), "foo\nfoo\nbar\n").unwrap();
+        std::fs::write(temp_dir.path().join("b.txt"), "foo\nbaz\n").unwrap();
+        let executor = ToolExecutor::new(temp_dir.path().to_path_buf());
+
+        let result = executor
+            .grep_content(&serde_json::json!({
+                "pattern": "foo",
+                "output_mode": "count"
+            }))
+            .await
+            .unwrap();
+
+        match result {
+            ToolResult::Success(output) => {
+                assert!(
+                    output.contains("a.txt:2"),
+                    "should show a.txt:2, got: {output}"
+                );
+                assert!(output.contains("b.txt:1"), "should show b.txt:1");
+            }
+            other => panic!("Expected Success, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_grep_context_lines() {
+        let temp_dir = TempDir::new().unwrap();
+        std::fs::write(
+            temp_dir.path().join("test.txt"),
+            "aaa\nbbb\nccc\nTARGET\nddd\neee\nfff\n",
+        )
+        .unwrap();
+        let executor = ToolExecutor::new(temp_dir.path().to_path_buf());
+
+        let result = executor
+            .grep_content(&serde_json::json!({
+                "pattern": "TARGET",
+                "context_lines": 2
+            }))
+            .await
+            .unwrap();
+
+        match result {
+            ToolResult::Success(output) => {
+                assert!(
+                    output.contains("bbb"),
+                    "should contain context before, got: {output}"
+                );
+                assert!(output.contains("ccc"), "should contain context before");
+                assert!(output.contains("TARGET"), "should contain match");
+                assert!(output.contains("ddd"), "should contain context after");
+                assert!(output.contains("eee"), "should contain context after");
+            }
+            other => panic!("Expected Success, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_grep_file_type_filter() {
+        let temp_dir = TempDir::new().unwrap();
+        std::fs::write(temp_dir.path().join("code.rs"), "fn hello() {}\n").unwrap();
+        std::fs::write(temp_dir.path().join("notes.txt"), "fn hello() {}\n").unwrap();
+        let executor = ToolExecutor::new(temp_dir.path().to_path_buf());
+
+        let result = executor
+            .grep_content(&serde_json::json!({
+                "pattern": "hello",
+                "file_type": "rust"
+            }))
+            .await
+            .unwrap();
+
+        match result {
+            ToolResult::Success(output) => {
+                assert!(
+                    output.contains("code.rs"),
+                    "should find in .rs file, got: {output}"
+                );
+                assert!(
+                    !output.contains("notes.txt"),
+                    "should not find in .txt file"
+                );
+            }
+            other => panic!("Expected Success, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_grep_head_limit() {
+        let temp_dir = TempDir::new().unwrap();
+        // Create many matching lines
+        let content = (1..=20)
+            .map(|i| format!("match_{i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(temp_dir.path().join("test.txt"), &content).unwrap();
+        let executor = ToolExecutor::new(temp_dir.path().to_path_buf());
+
+        let result = executor
+            .grep_content(&serde_json::json!({
+                "pattern": "match_",
+                "head_limit": 5
+            }))
+            .await
+            .unwrap();
+
+        match result {
+            ToolResult::Success(output) => {
+                let lines: Vec<&str> = output.lines().collect();
+                assert!(
+                    lines.len() <= 5,
+                    "should return at most 5 results, got {}",
+                    lines.len()
+                );
+            }
+            other => panic!("Expected Success, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_grep_path_restricts_search() {
+        let temp_dir = TempDir::new().unwrap();
+        std::fs::create_dir_all(temp_dir.path().join("src")).unwrap();
+        std::fs::create_dir_all(temp_dir.path().join("tests")).unwrap();
+        std::fs::write(temp_dir.path().join("src/code.rs"), "fn target() {}\n").unwrap();
+        std::fs::write(temp_dir.path().join("tests/test.rs"), "fn target() {}\n").unwrap();
+        let executor = ToolExecutor::new(temp_dir.path().to_path_buf());
+
+        let result = executor
+            .grep_content(&serde_json::json!({
+                "pattern": "target",
+                "path": "src"
+            }))
+            .await
+            .unwrap();
+
+        match result {
+            ToolResult::Success(output) => {
+                assert!(
+                    output.contains("src/code.rs"),
+                    "should find in src/, got: {output}"
+                );
+                assert!(!output.contains("tests/"), "should not find in tests/");
+            }
+            other => panic!("Expected Success, got {:?}", other),
+        }
+    }
+
+    // =========================================================================
+    // 10.3.4: bash with timeout and description
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_bash_with_description_runs_normally() {
+        let temp_dir = TempDir::new().unwrap();
+        let executor = ToolExecutor::new(temp_dir.path().to_path_buf());
+
+        let result = executor
+            .execute_bash(&serde_json::json!({
+                "command": "echo hello",
+                "description": "Print a greeting"
+            }))
+            .await
+            .unwrap();
+
+        match result {
+            ToolResult::Success(output) => {
+                assert!(
+                    output.contains("hello"),
+                    "should run normally, got: {output}"
+                );
+            }
+            other => panic!("Expected Success, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_bash_with_timeout_caps_at_max() {
+        let temp_dir = TempDir::new().unwrap();
+        let executor = ToolExecutor::new(temp_dir.path().to_path_buf());
+
+        // Should not panic or error when specifying a valid timeout
+        let result = executor
+            .execute_bash(&serde_json::json!({
+                "command": "echo fast",
+                "timeout": 5000
+            }))
+            .await
+            .unwrap();
+
+        assert!(matches!(result, ToolResult::Success(_)));
     }
 }
