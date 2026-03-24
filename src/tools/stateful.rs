@@ -200,11 +200,12 @@ impl StatefulToolExecutor {
 
     /// Returns the current shell state.
     ///
-    /// # Panics
-    ///
-    /// Panics if the lock is poisoned.
+    /// Recovers gracefully from lock poisoning by accessing the inner data.
     pub fn shell_state(&self) -> std::sync::RwLockReadGuard<'_, ShellState> {
-        self.state.read().expect("shell state lock poisoned")
+        self.state.read().unwrap_or_else(|e| {
+            tracing::error!("Shell state read lock was poisoned, recovering");
+            e.into_inner()
+        })
     }
 
     /// Sets a custom execution policy for the tool executor.
@@ -245,13 +246,19 @@ impl StatefulToolExecutor {
 
         // Get current shell state BEFORE processing the command
         let (effective_cwd, env_vars) = {
-            let state = self.state.read().expect("shell state lock poisoned");
+            let state = self.state.read().unwrap_or_else(|e| {
+                tracing::error!("Shell state read lock was poisoned, recovering");
+                e.into_inner()
+            });
             (state.cwd.clone(), state.env.clone())
         };
 
         // For pure cd commands, update state and return success immediately
         if is_pure_cd {
-            let mut state = self.state.write().expect("shell state lock poisoned");
+            let mut state = self.state.write().unwrap_or_else(|e| {
+                tracing::error!("Shell state write lock was poisoned, recovering");
+                e.into_inner()
+            });
             state.process_command(command);
             return Ok(ToolResult::Success(format!(
                 "Changed directory to {}",
@@ -338,7 +345,10 @@ impl StatefulToolExecutor {
                     // Update shell state after successful command execution
                     // This handles compound commands like "cd foo && ls"
                     {
-                        let mut state = self.state.write().expect("shell state lock poisoned");
+                        let mut state = self.state.write().unwrap_or_else(|e| {
+                            tracing::error!("Shell state write lock was poisoned, recovering");
+                            e.into_inner()
+                        });
                         state.process_command(command);
                     }
 

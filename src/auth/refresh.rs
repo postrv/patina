@@ -267,7 +267,10 @@ impl TokenRefresher {
 
                 // Check if credentials need refresh
                 let needs_refresh = {
-                    let creds = credentials.lock().expect("credentials lock poisoned");
+                    let creds = credentials.lock().unwrap_or_else(|e| {
+                        tracing::error!("Credentials lock was poisoned, recovering");
+                        e.into_inner()
+                    });
                     should_refresh(&creds, refresh_buffer)
                 };
 
@@ -276,7 +279,10 @@ impl TokenRefresher {
 
                     // Clone credentials for refresh attempt
                     let creds_snapshot = {
-                        let creds = credentials.lock().expect("credentials lock poisoned");
+                        let creds = credentials.lock().unwrap_or_else(|e| {
+                            tracing::error!("Credentials lock was poisoned, recovering");
+                            e.into_inner()
+                        });
                         creds.clone()
                     };
 
@@ -286,15 +292,19 @@ impl TokenRefresher {
 
                             // Update stored credentials
                             {
-                                let mut creds =
-                                    credentials.lock().expect("credentials lock poisoned");
+                                let mut creds = credentials.lock().unwrap_or_else(|e| {
+                                    tracing::error!("Credentials lock was poisoned, recovering");
+                                    e.into_inner()
+                                });
                                 *creds = new_creds.clone();
                             }
 
                             // Reset backoff on success
                             {
-                                let mut backoff =
-                                    current_backoff.lock().expect("backoff lock poisoned");
+                                let mut backoff = current_backoff.lock().unwrap_or_else(|e| {
+                                    tracing::error!("Backoff lock was poisoned, recovering");
+                                    e.into_inner()
+                                });
                                 *backoff = INITIAL_BACKOFF;
                             }
 
@@ -305,8 +315,10 @@ impl TokenRefresher {
                         }
                         Err(e) => {
                             let backoff_duration = {
-                                let mut backoff =
-                                    current_backoff.lock().expect("backoff lock poisoned");
+                                let mut backoff = current_backoff.lock().unwrap_or_else(|e| {
+                                    tracing::error!("Backoff lock was poisoned, recovering");
+                                    e.into_inner()
+                                });
                                 let current = *backoff;
                                 // Double backoff, capped at max
                                 *backoff = (*backoff * 2).min(MAX_BACKOFF);
@@ -349,7 +361,10 @@ impl TokenRefresher {
     /// Useful for testing exponential backoff behavior.
     #[must_use]
     pub fn current_backoff(&self) -> Duration {
-        *self.current_backoff.lock().expect("backoff lock poisoned")
+        *self.current_backoff.lock().unwrap_or_else(|e| {
+            tracing::error!("Backoff lock was poisoned, recovering");
+            e.into_inner()
+        })
     }
 
     /// Returns a clone of the current credentials.
@@ -357,7 +372,10 @@ impl TokenRefresher {
     pub fn credentials(&self) -> OAuthCredentials {
         self.credentials
             .lock()
-            .expect("credentials lock poisoned")
+            .unwrap_or_else(|e| {
+                tracing::error!("Credentials lock was poisoned, recovering");
+                e.into_inner()
+            })
             .clone()
     }
 
@@ -365,7 +383,10 @@ impl TokenRefresher {
     ///
     /// Use this to update credentials from an external source.
     pub fn update_credentials(&self, credentials: OAuthCredentials) {
-        let mut creds = self.credentials.lock().expect("credentials lock poisoned");
+        let mut creds = self.credentials.lock().unwrap_or_else(|e| {
+            tracing::error!("Credentials lock was poisoned, recovering");
+            e.into_inner()
+        });
         *creds = credentials;
     }
 }
