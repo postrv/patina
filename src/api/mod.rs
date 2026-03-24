@@ -461,6 +461,78 @@ impl AnthropicClient {
         serde_json::from_str::<StreamLine>(json).ok()
     }
 
+    /// Processes a `content_block_start` SSE event.
+    ///
+    /// Updates `current_block_index` and `in_tool_use_block` tracking state,
+    /// then sends a `ToolUseStart` event if the block is a tool_use.
+    async fn process_content_block_start(
+        parsed: &StreamLine,
+        current_block_index: &mut usize,
+        in_tool_use_block: &mut bool,
+        tx: &mpsc::Sender<StreamEvent>,
+    ) {
+        let Some(ref content_block) = parsed.content_block else {
+            return;
+        };
+        *current_block_index = parsed.index.unwrap_or(0);
+        *in_tool_use_block = content_block.block_type == "tool_use";
+
+        if let Some(event) = Self::handle_content_block_start(content_block, *current_block_index) {
+            tx.send(event).await.ok();
+        }
+    }
+
+    /// Processes a `content_block_delta` SSE event.
+    ///
+    /// Sends either a `ContentDelta` or `ToolUseInputDelta` event depending
+    /// on the delta type.
+    async fn process_content_block_delta(
+        parsed: &StreamLine,
+        current_block_index: usize,
+        tx: &mpsc::Sender<StreamEvent>,
+    ) {
+        let Some(ref delta) = parsed.delta else {
+            return;
+        };
+        let block_index = parsed.index.unwrap_or(current_block_index);
+        if let Some(event) = Self::handle_content_block_delta(delta, block_index) {
+            tx.send(event).await.ok();
+        }
+    }
+
+    /// Processes a `content_block_stop` SSE event.
+    ///
+    /// Sends either a `ToolUseComplete` or `ContentBlockComplete` event, then
+    /// resets `in_tool_use_block` tracking.
+    async fn process_content_block_stop(
+        parsed: &StreamLine,
+        current_block_index: usize,
+        in_tool_use_block: &mut bool,
+        tx: &mpsc::Sender<StreamEvent>,
+    ) {
+        let block_index = parsed.index.unwrap_or(current_block_index);
+        let event = Self::handle_content_block_stop(block_index, *in_tool_use_block);
+        tx.send(event).await.ok();
+        *in_tool_use_block = false;
+    }
+
+    /// Processes a `message_delta` SSE event.
+    ///
+    /// Sends a `MessageComplete` event if the delta contains a stop reason.
+    async fn process_message_delta(parsed: &StreamLine, tx: &mpsc::Sender<StreamEvent>) {
+        let Some(ref delta) = parsed.delta else {
+            return;
+        };
+        if let Some(event) = Self::handle_message_delta(delta) {
+            tx.send(event).await.ok();
+        }
+    }
+
+    /// Processes a `message_stop` SSE event by sending `MessageStop`.
+    async fn process_message_stop(tx: &mpsc::Sender<StreamEvent>) {
+        tx.send(StreamEvent::MessageStop).await.ok();
+    }
+
     /// Processes the SSE stream from a successful response.
     ///
     /// This method parses the Server-Sent Events stream and converts them
@@ -495,49 +567,32 @@ impl AnthropicClient {
 
                 match parsed.event_type.as_str() {
                     "content_block_start" => {
-                        let Some(ref content_block) = parsed.content_block else {
-                            continue;
-                        };
-                        current_block_index = parsed.index.unwrap_or(0);
-                        in_tool_use_block = content_block.block_type == "tool_use";
-
-                        if let Some(event) =
-                            Self::handle_content_block_start(content_block, current_block_index)
-                        {
-                            tx.send(event).await.ok();
-                        }
+                        Self::process_content_block_start(
+                            &parsed,
+                            &mut current_block_index,
+                            &mut in_tool_use_block,
+                            &tx,
+                        )
+                        .await;
                     }
-
                     "content_block_delta" => {
-                        let Some(ref delta) = parsed.delta else {
-                            continue;
-                        };
-                        let block_index = parsed.index.unwrap_or(current_block_index);
-                        if let Some(event) = Self::handle_content_block_delta(delta, block_index) {
-                            tx.send(event).await.ok();
-                        }
+                        Self::process_content_block_delta(&parsed, current_block_index, &tx).await;
                     }
-
                     "content_block_stop" => {
-                        let block_index = parsed.index.unwrap_or(current_block_index);
-                        let event = Self::handle_content_block_stop(block_index, in_tool_use_block);
-                        tx.send(event).await.ok();
-                        in_tool_use_block = false;
+                        Self::process_content_block_stop(
+                            &parsed,
+                            current_block_index,
+                            &mut in_tool_use_block,
+                            &tx,
+                        )
+                        .await;
                     }
-
                     "message_delta" => {
-                        let Some(ref delta) = parsed.delta else {
-                            continue;
-                        };
-                        if let Some(event) = Self::handle_message_delta(delta) {
-                            tx.send(event).await.ok();
-                        }
+                        Self::process_message_delta(&parsed, &tx).await;
                     }
-
                     "message_stop" => {
-                        tx.send(StreamEvent::MessageStop).await.ok();
+                        Self::process_message_stop(&tx).await;
                     }
-
                     // Ignore other event types (message_start, ping, etc.)
                     _ => {}
                 }

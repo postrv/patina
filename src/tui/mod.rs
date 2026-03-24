@@ -3,6 +3,7 @@
 pub mod clipboard;
 pub mod scroll;
 pub mod selection;
+pub mod status_bar;
 pub mod theme;
 pub mod widgets;
 
@@ -741,127 +742,9 @@ fn render_messages(frame: &mut Frame, area: Rect, state: &AppState) -> RenderFee
 }
 
 fn render_status_bar(frame: &mut Frame, area: Rect, state: &AppState) {
-    let mut spans = Vec::new();
-
-    // Branch name (using verdigris for git branch indicator)
-    if let Some(branch) = state.worktree_branch() {
-        spans.push(Span::styled(
-            " ",
-            Style::default().fg(PatinaTheme::VERDIGRIS),
-        ));
-        spans.push(Span::styled(
-            branch,
-            Style::default()
-                .fg(PatinaTheme::VERDIGRIS_BRIGHT)
-                .add_modifier(Modifier::BOLD),
-        ));
-    }
-
-    // Modified count (dirty indicator - using warning color)
-    let modified = state.worktree_modified();
-    if modified > 0 {
-        spans.push(Span::raw(" "));
-        spans.push(Span::styled(
-            format!("●{}", modified),
-            Style::default().fg(PatinaTheme::WARNING),
-        ));
-    }
-
-    // Ahead indicator (using success/verdigris)
-    let ahead = state.worktree_ahead();
-    if ahead > 0 {
-        spans.push(Span::raw(" "));
-        spans.push(Span::styled(
-            format!("↑{}", ahead),
-            Style::default().fg(PatinaTheme::SUCCESS),
-        ));
-    }
-
-    // Behind indicator (using error color)
-    let behind = state.worktree_behind();
-    if behind > 0 {
-        spans.push(Span::raw(" "));
-        spans.push(Span::styled(
-            format!("↓{}", behind),
-            Style::default().fg(PatinaTheme::ERROR),
-        ));
-    }
-
-    // Focus area indicator (helps user know which area is active for selection)
-    let focus_indicator = match state.focus_area() {
-        crate::tui::selection::FocusArea::Content => "CONTENT",
-        crate::tui::selection::FocusArea::Input => "INPUT",
-    };
-    spans.push(Span::raw(" "));
-    spans.push(Span::styled(
-        format!("[{}]", focus_indicator),
-        Style::default().fg(
-            if state.focus_area() == crate::tui::selection::FocusArea::Content {
-                PatinaTheme::VERDIGRIS_BRIGHT
-            } else {
-                PatinaTheme::MUTED
-            },
-        ),
-    ));
-
-    // Selection range (only show when there's an active selection)
-    if let Some((start, end)) = state.selection().range() {
-        spans.push(Span::raw(" "));
-        spans.push(Span::styled(
-            format!("SEL:L{}-L{}", start.line, end.line),
-            Style::default().fg(PatinaTheme::SUCCESS),
-        ));
-    }
-
-    // Token budget display (color-coded based on usage)
-    let budget = state.token_budget();
-    if budget.used() > 0 {
-        spans.push(Span::raw(" "));
-        let budget_color = if budget.is_critical() {
-            PatinaTheme::ERROR
-        } else if budget.is_warning() {
-            PatinaTheme::WARNING
-        } else {
-            PatinaTheme::SUCCESS
-        };
-        spans.push(Span::styled(
-            format!("{}k/{}k", budget.used() / 1000, budget.limit() / 1000),
-            Style::default().fg(budget_color),
-        ));
-    }
-
-    // Context tokens indicator (shows injected context size)
-    let ctx_tokens = state.context_tokens_injected();
-    if ctx_tokens > 0 {
-        spans.push(Span::raw(" "));
-        spans.push(Span::styled(
-            format!("CTX:{}k", ctx_tokens / 1000),
-            Style::default().fg(PatinaTheme::VERDIGRIS),
-        ));
-    }
-
-    // Scroll indicator (right side)
-    let scroll = state.scroll_state();
-    let mode_char = match scroll.mode() {
-        crate::tui::scroll::AutoScrollMode::Follow => 'F',
-        crate::tui::scroll::AutoScrollMode::Manual => 'M',
-        crate::tui::scroll::AutoScrollMode::Paused => 'P',
-    };
-    let scroll_info = format!(
-        " [{}:{}↑ {}/{}]",
-        mode_char,
-        scroll.offset(),
-        scroll.viewport_height(),
-        scroll.content_height()
-    );
-    spans.push(Span::styled(
-        scroll_info,
-        Style::default().fg(PatinaTheme::MUTED),
-    ));
-
+    let spans = status_bar::build_status_bar_spans(state);
     let line = Line::from(spans);
     let status_bar = Paragraph::new(line).style(PatinaTheme::status_bar());
-
     frame.render_widget(status_bar, area);
 }
 

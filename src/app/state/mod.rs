@@ -1533,64 +1533,12 @@ impl AppState {
 
     pub fn append_chunk(&mut self, event: StreamEvent) -> Result<()> {
         match event {
-            StreamEvent::ContentDelta(text) => {
-                // Update timeline streaming entry
-                self.timeline.append_to_streaming(&text);
-                // Also forward to tool loop for tracking assistant text
-                self.tool_state.tool_loop.append_text(&text);
-                self.dirty.messages = true;
-            }
-            StreamEvent::MessageStop => {
-                // Only process if we're actually streaming (prevents duplicates)
-                // MessageComplete may have already handled this
-                if self.timeline.is_streaming() {
-                    self.timeline.finalize_streaming_as_message();
-                    // Get the finalized text for API messages
-                    if let Some(crate::types::ConversationEntry::AssistantMessage(text)) =
-                        self.timeline.entries().last()
-                    {
-                        self.api_messages.push(ApiMessageV2::assistant(text));
-                    }
-                }
-                self.loading = false;
-                self.streaming_rx = None;
-                self.dirty.messages = true;
-            }
+            StreamEvent::ContentDelta(text) => self.handle_content_delta(text),
+            StreamEvent::MessageStop => self.handle_message_stop(),
             StreamEvent::MessageComplete { stop_reason } => {
-                // For tool_use stop reasons, the assistant message will be added
-                // later by handle_tool_execution with full content blocks
-                let needs_tool_execution = stop_reason.needs_tool_execution();
-
-                if needs_tool_execution {
-                    // P0-1 FIX: For tool_use responses, finalize streaming for tool use.
-                    // The text is already in tool_loop.text_content (via append_text calls).
-                    // handle_tool_execution() will build the proper assistant message with
-                    // both text AND tool_use blocks, preventing duplicate messages.
-                    self.timeline.finalize_streaming_for_tool_use();
-                    tracing::debug!(
-                        "Tool use response - text stored in tool_loop, not adding to API yet"
-                    );
-                } else {
-                    // For normal responses, finalize streaming and add to API messages
-                    self.timeline.finalize_streaming_as_message();
-                    if let Some(crate::types::ConversationEntry::AssistantMessage(text)) =
-                        self.timeline.entries().last()
-                    {
-                        self.api_messages.push(ApiMessageV2::assistant(text));
-                    }
-                }
-                // Handle stop reason in tool loop
-                self.handle_message_complete(stop_reason)?;
-                self.loading = false;
-                self.streaming_rx = None;
-                self.dirty.messages = true;
+                self.handle_message_complete_event(stop_reason)?;
             }
-            StreamEvent::Error(e) => {
-                tracing::error!("Stream error: {}", e);
-                self.loading = false;
-                self.streaming_rx = None;
-                self.dirty.messages = true;
-            }
+            StreamEvent::Error(e) => self.handle_stream_error(e),
             StreamEvent::ToolUseStart { id, name, index } => {
                 self.handle_tool_use_start(id, name, index);
             }
@@ -1609,6 +1557,73 @@ impl AppState {
             }
         }
         Ok(())
+    }
+
+    /// Handles a `ContentDelta` stream event by appending text to the timeline
+    /// and forwarding it to the tool loop for assistant text tracking.
+    fn handle_content_delta(&mut self, text: String) {
+        self.timeline.append_to_streaming(&text);
+        self.tool_state.tool_loop.append_text(&text);
+        self.dirty.messages = true;
+    }
+
+    /// Handles a `MessageStop` stream event by finalizing the streaming entry
+    /// and adding the assistant message to the API conversation history.
+    ///
+    /// Only processes if currently streaming, to prevent duplicates when
+    /// `MessageComplete` has already handled finalization.
+    fn handle_message_stop(&mut self) {
+        if self.timeline.is_streaming() {
+            self.timeline.finalize_streaming_as_message();
+            if let Some(crate::types::ConversationEntry::AssistantMessage(text)) =
+                self.timeline.entries().last()
+            {
+                self.api_messages.push(ApiMessageV2::assistant(text));
+            }
+        }
+        self.loading = false;
+        self.streaming_rx = None;
+        self.dirty.messages = true;
+    }
+
+    /// Handles a `MessageComplete` stream event by finalizing the streaming entry
+    /// and processing the stop reason.
+    ///
+    /// For `tool_use` stop reasons, streaming is finalized without adding to API
+    /// messages (handled later by `handle_tool_execution`). For normal responses,
+    /// the assistant message is added to the API conversation history.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if tool loop state transition fails.
+    fn handle_message_complete_event(&mut self, stop_reason: StopReason) -> Result<()> {
+        let needs_tool_execution = stop_reason.needs_tool_execution();
+
+        if needs_tool_execution {
+            self.timeline.finalize_streaming_for_tool_use();
+            tracing::debug!("Tool use response - text stored in tool_loop, not adding to API yet");
+        } else {
+            self.timeline.finalize_streaming_as_message();
+            if let Some(crate::types::ConversationEntry::AssistantMessage(text)) =
+                self.timeline.entries().last()
+            {
+                self.api_messages.push(ApiMessageV2::assistant(text));
+            }
+        }
+        self.handle_message_complete(stop_reason)?;
+        self.loading = false;
+        self.streaming_rx = None;
+        self.dirty.messages = true;
+        Ok(())
+    }
+
+    /// Handles a stream `Error` event by logging the error and resetting
+    /// the streaming state.
+    fn handle_stream_error(&mut self, error: String) {
+        tracing::error!("Stream error: {}", error);
+        self.loading = false;
+        self.streaming_rx = None;
+        self.dirty.messages = true;
     }
 
     // ========================================================================

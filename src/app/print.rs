@@ -4,7 +4,10 @@
 //! the non-interactive flow: send a single prompt, stream the response
 //! to stdout, execute any requested tools, and exit.
 
+use std::sync::Arc;
+
 use anyhow::Result;
+use tokio::sync::mpsc;
 use tracing::warn;
 
 use crate::api::{LlmProvider, StreamEvent, ToolChoice};
@@ -28,7 +31,7 @@ pub(crate) enum PrintStreamResult {
 ///
 /// Returns the accumulated response text and the final result.
 pub(crate) async fn process_print_stream(
-    rx: &mut tokio::sync::mpsc::Receiver<StreamEvent>,
+    rx: &mut mpsc::Receiver<StreamEvent>,
     state: &mut AppState,
 ) -> Result<PrintStreamResult> {
     let mut response = String::new();
@@ -68,6 +71,85 @@ pub(crate) async fn process_print_stream(
     Ok(PrintStreamResult::Completed(response))
 }
 
+/// Creates a streaming channel and spawns the initial API call.
+///
+/// The user prompt must already be added to `state` before calling this.
+/// Returns the receiving end of the channel for stream event consumption.
+async fn setup_initial_stream(
+    state: &AppState,
+    client: &Arc<dyn LlmProvider>,
+) -> mpsc::Receiver<StreamEvent> {
+    let tools = state.all_tool_definitions();
+    let (tx, rx) = mpsc::channel(STREAMING_CHANNEL_BUFFER);
+    let api_messages = state.build_api_messages();
+    let client_clone = Arc::clone(client);
+
+    tokio::spawn(async move {
+        if let Err(e) = client_clone
+            .stream_message(&api_messages, Some(&tools), Some(&ToolChoice::Auto), tx)
+            .await
+        {
+            tracing::error!("API error: {}", e);
+        }
+    });
+
+    rx
+}
+
+/// Runs the tool-continuation cycle until no more tools are pending.
+///
+/// Each iteration: approve tools, execute them, send results back to the API,
+/// and stream the continuation response.
+async fn run_tool_continuation_cycle(
+    state: &mut AppState,
+    client: &Arc<dyn LlmProvider>,
+) -> Result<()> {
+    while matches!(state.tool_loop_state(), ToolLoopState::PendingApproval) {
+        // Auto-approve all tools in non-interactive mode
+        state.approve_all_tools()?;
+
+        // Execute the tools
+        let needs_permission = state.execute_pending_tools().await?;
+
+        // Check if any tools still need permission
+        if !needs_permission.is_empty() {
+            warn!(
+                "Tools need permission in print mode (skipping): {:?}",
+                needs_permission
+            );
+            break;
+        }
+
+        // Complete tool execution: build messages, add to history, truncate
+        tool_loop::complete_tool_cycle(state)?;
+
+        let (tx, mut rx) = mpsc::channel(STREAMING_CHANNEL_BUFFER);
+        let api_messages = state.prepare_api_messages_for_send(client.model()).await;
+        let client_clone = Arc::clone(client);
+        let tools = state.all_tool_definitions();
+
+        tokio::spawn(async move {
+            if let Err(e) = client_clone
+                .stream_message(&api_messages, Some(&tools), Some(&ToolChoice::Auto), tx)
+                .await
+            {
+                tracing::error!("API error during tool continuation: {}", e);
+            }
+        });
+
+        // Process the continuation using the same helper
+        match process_print_stream(&mut rx, state).await? {
+            PrintStreamResult::Completed(_) => {} // Continue loop if more tools
+            PrintStreamResult::Error(e) => {
+                warn!("Error during tool continuation: {}", e);
+                break;
+            }
+        }
+    }
+
+    Ok(())
+}
+
 /// Runs in print mode (non-interactive).
 ///
 /// This function:
@@ -79,8 +161,7 @@ pub(crate) async fn process_print_stream(
 ///
 /// This matches Claude Code's `-p` / `--print` flag behavior.
 pub(crate) async fn run_print_mode(config: &Config, prompt: &str) -> Result<()> {
-    let client: std::sync::Arc<dyn LlmProvider> =
-        std::sync::Arc::from(crate::api::provider::create_provider(config));
+    let client: Arc<dyn LlmProvider> = Arc::from(crate::api::provider::create_provider(config));
     let mut state = AppState::with_performance_config(
         config.working_dir.clone(),
         config.skip_permissions,
@@ -90,7 +171,6 @@ pub(crate) async fn run_print_mode(config: &Config, prompt: &str) -> Result<()> 
     );
 
     // Initialize compression orchestrator for CCG context management
-    // This enables auto-context injection in print mode when narsil is available
     initialize_compression_orchestrator(&mut state, config);
 
     // Initialize MCP servers from .mcp.json / ~/.claude.json
@@ -101,7 +181,7 @@ pub(crate) async fn run_print_mode(config: &Config, prompt: &str) -> Result<()> 
     // Refresh CCG context before the first API call (async, requires narsil MCP)
     state.refresh_build_context().await;
 
-    // Add the user's prompt (adds to both display and API messages via submit logic)
+    // Add the user's prompt
     let user_msg = ApiMessageV2::user(prompt);
     state.add_message(Message {
         role: Role::User,
@@ -109,26 +189,8 @@ pub(crate) async fn run_print_mode(config: &Config, prompt: &str) -> Result<()> 
     });
     state.api_messages_mut().push(user_msg);
 
-    // Set up streaming using build_api_messages which includes context injection
-    let tools = state.all_tool_definitions();
-    let (tx, mut rx) = tokio::sync::mpsc::channel(STREAMING_CHANNEL_BUFFER);
-    let api_messages = state.build_api_messages();
-    let client_clone = std::sync::Arc::clone(&client);
-    let tools_clone = tools.clone();
-
-    tokio::spawn(async move {
-        if let Err(e) = client_clone
-            .stream_message(
-                &api_messages,
-                Some(&tools_clone),
-                Some(&ToolChoice::Auto),
-                tx,
-            )
-            .await
-        {
-            tracing::error!("API error: {}", e);
-        }
-    });
+    // Stream the initial response
+    let mut rx = setup_initial_stream(&state, &client).await;
 
     // Collect and print the response
     let response = match process_print_stream(&mut rx, &mut state).await? {
@@ -147,49 +209,8 @@ pub(crate) async fn run_print_mode(config: &Config, prompt: &str) -> Result<()> 
             .push(ApiMessageV2::assistant(&response));
     }
 
-    // Handle any tool execution if needed
-    while matches!(state.tool_loop_state(), ToolLoopState::PendingApproval) {
-        // Auto-approve all tools in non-interactive mode
-        state.approve_all_tools()?;
-
-        // Execute the tools
-        let needs_permission = state.execute_pending_tools().await?;
-
-        // Check if any tools still need permission
-        if !needs_permission.is_empty() {
-            warn!(
-                "Tools need permission in print mode (skipping): {:?}",
-                needs_permission
-            );
-            break;
-        }
-
-        // Complete tool execution: build messages, add to history, truncate
-        tool_loop::complete_tool_cycle(&mut state)?;
-
-        let (tx, mut rx) = tokio::sync::mpsc::channel(STREAMING_CHANNEL_BUFFER);
-        let api_messages = state.prepare_api_messages_for_send(client.model()).await;
-        let client_clone = std::sync::Arc::clone(&client);
-        let tools = state.all_tool_definitions();
-
-        tokio::spawn(async move {
-            if let Err(e) = client_clone
-                .stream_message(&api_messages, Some(&tools), Some(&ToolChoice::Auto), tx)
-                .await
-            {
-                tracing::error!("API error during tool continuation: {}", e);
-            }
-        });
-
-        // Process the continuation using the same helper
-        match process_print_stream(&mut rx, &mut state).await? {
-            PrintStreamResult::Completed(_) => {} // Continue loop if more tools
-            PrintStreamResult::Error(e) => {
-                warn!("Error during tool continuation: {}", e);
-                break;
-            }
-        }
-    }
+    // Run tool continuation cycle until Claude is done
+    run_tool_continuation_cycle(&mut state, &client).await?;
 
     // Shut down MCP servers
     if let Some(manager) = state.mcp_manager_mut() {
