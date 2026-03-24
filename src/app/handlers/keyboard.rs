@@ -240,9 +240,11 @@ fn handle_slash_command(ctx: &mut AppContext<'_>, input: &str) {
 
     let plugin_info = SlashCommandHandler::build_plugin_info(ctx.state.plugins());
     let mcp_info = build_mcp_server_info(ctx.state);
+    let cost_summary = ctx.state.cost_summary();
     let handler = SlashCommandHandler::new(ctx.state.working_dir.clone())
         .with_plugins(plugin_info)
-        .with_mcp_info(mcp_info);
+        .with_mcp_info(mcp_info)
+        .with_cost_summary(cost_summary);
     let result = handler.handle(input);
 
     // Display the user's command in timeline

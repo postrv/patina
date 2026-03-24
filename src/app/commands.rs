@@ -82,6 +82,8 @@ pub struct SlashCommandHandler {
     plugins: Vec<PluginInfo>,
     /// Information about MCP servers.
     mcp_servers: Vec<McpServerInfo>,
+    /// Pre-formatted cost summary from AppState.
+    cost_summary: Option<String>,
 }
 
 impl SlashCommandHandler {
@@ -92,6 +94,7 @@ impl SlashCommandHandler {
             working_dir,
             plugins: Vec::new(),
             mcp_servers: Vec::new(),
+            cost_summary: None,
         }
     }
 
@@ -101,6 +104,13 @@ impl SlashCommandHandler {
     #[must_use]
     pub fn with_plugins(mut self, plugins: Vec<PluginInfo>) -> Self {
         self.plugins = plugins;
+        self
+    }
+
+    /// Sets the cost summary for the `/cost` command.
+    #[must_use]
+    pub fn with_cost_summary(mut self, summary: String) -> Self {
+        self.cost_summary = Some(summary);
         self
     }
 
@@ -522,12 +532,10 @@ impl SlashCommandHandler {
     /// and budget status. Actual cost data is provided by the TUI layer
     /// via `CostTracker`; this returns a placeholder directing the user.
     fn handle_cost(&self) -> CommandResult {
-        // Cost tracking is wired through AppState — this handler returns
-        // a stub that the TUI layer intercepts and replaces with real data.
         CommandResult::Executed(
-            "Cost tracking: No usage data recorded yet.\n\
-             API usage is tracked automatically as you interact with Claude."
-                .to_string(),
+            self.cost_summary
+                .clone()
+                .unwrap_or_else(|| "No usage data recorded yet.".to_string()),
         )
     }
 
@@ -2160,14 +2168,37 @@ mod tests {
     // =========================================================================
 
     #[test]
-    fn test_handle_cost() {
+    fn test_handle_cost_no_data() {
         let (handler, _temp) = create_handler_in_temp();
         let result = handler.handle("/cost");
         match result {
             CommandResult::Executed(output) => {
                 assert!(
-                    output.contains("Cost tracking"),
-                    "Should show cost info: {}",
+                    output.contains("No usage data"),
+                    "Should show no-data message: {}",
+                    output
+                );
+            }
+            other => panic!("Expected executed result: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_handle_cost_with_summary() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let handler = SlashCommandHandler::new(temp_dir.path().to_path_buf())
+            .with_cost_summary("Session cost: $0.0123\nRequests: 5".to_string());
+        let result = handler.handle("/cost");
+        match result {
+            CommandResult::Executed(output) => {
+                assert!(
+                    output.contains("$0.0123"),
+                    "Should show real cost: {}",
+                    output
+                );
+                assert!(
+                    output.contains("Requests: 5"),
+                    "Should show request count: {}",
                     output
                 );
             }

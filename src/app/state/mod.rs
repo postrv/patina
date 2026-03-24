@@ -30,6 +30,7 @@ use crate::app::STREAMING_CHANNEL_BUFFER;
 use crate::context::compression::{
     CompactionMetrics, CompactionMetricsSummary, CompressionOrchestrator,
 };
+use crate::enterprise::cost::{CostConfig, CostTracker, UsageRecord};
 use crate::hooks::HookManager;
 use crate::mcp::connection::McpConnection;
 use crate::narsil::context::ContextSuggestion;
@@ -214,6 +215,12 @@ pub struct AppState {
     /// Wrapped in `Arc` so spawned tool-execution tasks can share read access
     /// (the SDK uses interior mutability — `call_tool` is `&self`).
     mcp_manager: Option<std::sync::Arc<crate::mcp::manager::McpManager>>,
+
+    /// Cost tracker for session usage accounting.
+    cost_tracker: CostTracker,
+
+    /// Model name for cost tracking (needed when recording usage events).
+    current_model: String,
 
     /// Reasoning effort level for API requests.
     effort: EffortLevel,
@@ -417,6 +424,8 @@ impl AppState {
             },
             terminal_height: 24,
             mcp_manager: None,
+            cost_tracker: CostTracker::new(CostConfig::default()),
+            current_model: String::new(),
             effort: EffortLevel::Auto,
             thinking_budget: None,
             system_prompt: None,
@@ -1591,9 +1600,22 @@ impl AppState {
             StreamEvent::ThinkingComplete { .. } => {
                 tracing::debug!("Thinking block complete");
             }
-            StreamEvent::Usage(_usage) => {
-                // Token usage accounting will be wired in a later task.
-                tracing::debug!("Usage event received");
+            StreamEvent::Usage(usage) => {
+                let record = UsageRecord::with_cache(
+                    &self.current_model,
+                    usage.input_tokens,
+                    usage.output_tokens,
+                    usage.cache_read_input_tokens,
+                    usage.cache_creation_input_tokens,
+                    std::time::Duration::ZERO,
+                );
+                self.cost_tracker.record_usage(record);
+                tracing::debug!(
+                    "Usage recorded: {}in/{}out, session cost: ${:.4}",
+                    usage.input_tokens,
+                    usage.output_tokens,
+                    self.cost_tracker.session_cost(),
+                );
             }
         }
         Ok(())
@@ -2874,6 +2896,43 @@ impl AppState {
             tools.extend(manager.tool_definitions());
         }
         tools
+    }
+
+    /// Sets the current model name for cost tracking.
+    pub fn set_current_model(&mut self, model: String) {
+        self.current_model = model;
+    }
+
+    /// Returns a reference to the cost tracker.
+    #[must_use]
+    pub fn cost_tracker(&self) -> &CostTracker {
+        &self.cost_tracker
+    }
+
+    /// Returns a formatted cost summary for display.
+    #[must_use]
+    pub fn cost_summary(&self) -> String {
+        let stats = self.cost_tracker.statistics();
+        if stats.total_requests == 0 {
+            return "No usage data recorded yet.".to_string();
+        }
+        format!(
+            "Session cost: ${:.4}\n\
+             Requests: {}\n\
+             Input tokens: {}\n\
+             Output tokens: {}\n\
+             Cost by model:\n{}",
+            stats.total_cost,
+            stats.total_requests,
+            stats.total_input_tokens,
+            stats.total_output_tokens,
+            self.cost_tracker
+                .cost_by_model()
+                .iter()
+                .map(|(m, c)| format!("  {}: ${:.4}", m, c))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        )
     }
 
     /// Sets the reasoning effort level.

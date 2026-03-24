@@ -218,6 +218,7 @@ pub async fn run(config: Config) -> Result<()> {
     // Wire effort/thinking configuration from CLI into AppState
     state.set_effort(config.effort);
     state.set_thinking_budget(config.thinking_budget);
+    state.set_current_model(config.model.clone());
 
     // Initialize compression orchestrator for CCG context management
     initialize_compression_orchestrator(&mut state, &config);
