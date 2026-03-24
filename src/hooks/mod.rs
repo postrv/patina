@@ -8,7 +8,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
 use crate::shell::ShellConfig;
-use crate::tools::ToolExecutionPolicy;
+use crate::tools::{normalize_command, ToolExecutionPolicy};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum HookEvent {
@@ -212,10 +212,12 @@ impl HookExecutor {
         }
 
         // Security validation: check against dangerous command patterns
-        // Reuses the same patterns as ToolExecutionPolicy to ensure consistent security
+        // Reuses the same patterns as ToolExecutionPolicy to ensure consistent security.
+        // Normalize the command to defeat backslash-escape bypass attempts (e.g., r\m → rm).
+        let normalized = normalize_command(trimmed);
         let policy = ToolExecutionPolicy::default();
         for pattern in &policy.dangerous_patterns {
-            if pattern.is_match(trimmed) {
+            if pattern.is_match(trimmed) || pattern.is_match(&normalized) {
                 tracing::warn!(
                     command = %trimmed,
                     pattern = %pattern.as_str(),
@@ -702,4 +704,49 @@ struct HooksConfig {
     subagent_stop: Option<Vec<HookDefinition>>,
     #[serde(rename = "PreCompact")]
     pre_compact: Option<Vec<HookDefinition>>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verify that backslash-escaped dangerous commands are blocked after normalization.
+    #[tokio::test]
+    async fn test_hook_blocks_backslash_escaped_rm() {
+        let executor = HookExecutor::new();
+        // r\m -rf / should normalize to rm -rf / and be blocked
+        let result = executor.run_hook_command("r\\m -rf /", "").await.unwrap();
+        assert_eq!(result.exit_code, 2, "Escaped rm -rf should be blocked");
+        assert!(
+            result.stdout.contains("blocked by security policy"),
+            "Should indicate security block: {}",
+            result.stdout
+        );
+    }
+
+    /// Verify that backslash-escaped sudo is blocked.
+    #[tokio::test]
+    async fn test_hook_blocks_backslash_escaped_sudo() {
+        let executor = HookExecutor::new();
+        let result = executor
+            .run_hook_command("su\\do whoami", "")
+            .await
+            .unwrap();
+        assert_eq!(result.exit_code, 2, "Escaped sudo should be blocked");
+        assert!(
+            result.stdout.contains("blocked by security policy"),
+            "Should indicate security block: {}",
+            result.stdout
+        );
+    }
+
+    /// Verify that safe commands are not blocked.
+    #[tokio::test]
+    async fn test_hook_allows_safe_command() {
+        let executor = HookExecutor::new();
+        let result = executor.run_hook_command("echo hello", "").await.unwrap();
+        // Safe commands should either succeed (exit 0) or fail for other reasons,
+        // but NOT be blocked (exit 2) by security policy
+        assert_ne!(result.exit_code, 2, "Safe command should not be blocked");
+    }
 }

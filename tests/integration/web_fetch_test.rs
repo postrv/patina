@@ -353,7 +353,7 @@ async fn test_web_fetch_end_to_end_with_mock_server() {
         .await;
 
     // Create tool with testing config (allows localhost)
-    let tool = WebFetchTool::new(WebFetchConfig::for_testing());
+    let tool = WebFetchTool::new(WebFetchConfig::for_testing()).unwrap();
 
     // Fetch the mock endpoint
     let url = format!("{}/integration-test", mock_server.uri());
@@ -405,7 +405,7 @@ async fn test_web_fetch_preserves_json_content() {
         .mount(&mock_server)
         .await;
 
-    let tool = WebFetchTool::new(WebFetchConfig::for_testing());
+    let tool = WebFetchTool::new(WebFetchConfig::for_testing()).unwrap();
     let url = format!("{}/api/data", mock_server.uri());
     let result = tool.fetch(&url).await;
 
@@ -447,7 +447,7 @@ async fn test_web_fetch_follows_redirects() {
         .mount(&mock_server)
         .await;
 
-    let tool = WebFetchTool::new(WebFetchConfig::for_testing());
+    let tool = WebFetchTool::new(WebFetchConfig::for_testing()).unwrap();
     let url = format!("{}/redirect-start", mock_server.uri());
     let result = tool.fetch(&url).await;
 

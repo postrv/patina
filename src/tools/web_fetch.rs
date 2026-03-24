@@ -20,14 +20,14 @@
 //! use patina::tools::web_fetch::{WebFetchTool, WebFetchConfig};
 //!
 //! # async fn example() -> anyhow::Result<()> {
-//! let tool = WebFetchTool::new(WebFetchConfig::default());
+//! let tool = WebFetchTool::new(WebFetchConfig::default())?;
 //! let result = tool.fetch("https://example.com").await?;
 //! println!("Content: {}", result.content);
 //! # Ok(())
 //! # }
 //! ```
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use reqwest::redirect::Policy;
 use reqwest::Client;
 use std::net::IpAddr;
@@ -96,19 +96,18 @@ pub struct WebFetchTool {
 impl WebFetchTool {
     /// Creates a new web fetch tool with the given configuration.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if the HTTP client cannot be built (should not happen with default settings).
-    #[must_use]
-    pub fn new(config: WebFetchConfig) -> Self {
+    /// Returns an error if the HTTP client cannot be built.
+    pub fn new(config: WebFetchConfig) -> Result<Self> {
         let client = Client::builder()
             .timeout(config.timeout)
             .redirect(Policy::limited(config.max_redirects as usize))
             .user_agent("Patina/0.3.0")
             .build()
-            .expect("Failed to build HTTP client");
+            .context("Failed to build HTTP client")?;
 
-        Self { config, client }
+        Ok(Self { config, client })
     }
 
     /// Fetches content from the given URL.
@@ -332,5 +331,11 @@ mod tests {
         let markdown = WebFetchTool::html_to_markdown(html);
         // html2text should preserve link text
         assert!(markdown.contains("Example"));
+    }
+
+    #[test]
+    fn test_web_fetch_tool_new_returns_ok() {
+        let result = WebFetchTool::new(WebFetchConfig::default());
+        assert!(result.is_ok(), "Default config should produce Ok");
     }
 }

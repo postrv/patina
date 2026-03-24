@@ -11,7 +11,7 @@ use patina::tools::web_fetch::{WebFetchConfig, WebFetchResult, WebFetchTool};
 
 #[tokio::test]
 async fn test_fetch_rejects_file_urls() {
-    let tool = WebFetchTool::new(WebFetchConfig::default());
+    let tool = WebFetchTool::new(WebFetchConfig::default()).unwrap();
 
     let result = tool.fetch("file:///etc/passwd").await;
 
@@ -26,7 +26,7 @@ async fn test_fetch_rejects_file_urls() {
 
 #[tokio::test]
 async fn test_fetch_rejects_localhost_urls() {
-    let tool = WebFetchTool::new(WebFetchConfig::default());
+    let tool = WebFetchTool::new(WebFetchConfig::default()).unwrap();
 
     // Test localhost variations
     let localhost_urls = [
@@ -47,7 +47,7 @@ async fn test_fetch_rejects_localhost_urls() {
 
 #[tokio::test]
 async fn test_fetch_rejects_private_ip_urls() {
-    let tool = WebFetchTool::new(WebFetchConfig::default());
+    let tool = WebFetchTool::new(WebFetchConfig::default()).unwrap();
 
     // Test private IP ranges
     let private_urls = [
@@ -86,7 +86,7 @@ async fn test_fetch_valid_url_returns_content() {
         .await;
 
     // Use testing config to allow localhost (mock server)
-    let tool = WebFetchTool::new(WebFetchConfig::for_testing());
+    let tool = WebFetchTool::new(WebFetchConfig::for_testing()).unwrap();
     let result = tool.fetch(&format!("{}/test", mock_server.uri())).await;
 
     assert!(
@@ -101,7 +101,7 @@ async fn test_fetch_valid_url_returns_content() {
 
 #[tokio::test]
 async fn test_fetch_invalid_url_returns_error() {
-    let tool = WebFetchTool::new(WebFetchConfig::default());
+    let tool = WebFetchTool::new(WebFetchConfig::default()).unwrap();
 
     let result = tool.fetch("not-a-valid-url").await;
 
@@ -128,7 +128,7 @@ async fn test_fetch_timeout_returns_error() {
         allow_localhost: true, // Allow localhost for mock server
         ..Default::default()
     };
-    let tool = WebFetchTool::new(config);
+    let tool = WebFetchTool::new(config).unwrap();
     let result = tool.fetch(&format!("{}/slow", mock_server.uri())).await;
 
     assert!(result.is_err(), "Expected timeout error");
@@ -169,7 +169,7 @@ async fn test_fetch_converts_html_to_markdown() {
         .await;
 
     // Use testing config to allow localhost (mock server)
-    let tool = WebFetchTool::new(WebFetchConfig::for_testing());
+    let tool = WebFetchTool::new(WebFetchConfig::for_testing()).unwrap();
     let result = tool.fetch(&format!("{}/markdown", mock_server.uri())).await;
 
     assert!(result.is_ok());
@@ -212,7 +212,7 @@ async fn test_fetch_preserves_links_in_markdown() {
         .await;
 
     // Use testing config to allow localhost (mock server)
-    let tool = WebFetchTool::new(WebFetchConfig::for_testing());
+    let tool = WebFetchTool::new(WebFetchConfig::for_testing()).unwrap();
     let result = tool.fetch(&format!("{}/links", mock_server.uri())).await;
 
     assert!(result.is_ok());
@@ -243,7 +243,7 @@ async fn test_fetch_handles_non_html_content() {
         .await;
 
     // Use testing config to allow localhost (mock server)
-    let tool = WebFetchTool::new(WebFetchConfig::for_testing());
+    let tool = WebFetchTool::new(WebFetchConfig::for_testing()).unwrap();
     let result = tool.fetch(&format!("{}/api/data", mock_server.uri())).await;
 
     assert!(result.is_ok());
@@ -282,7 +282,7 @@ async fn test_fetch_respects_max_content_length() {
         allow_localhost: true,         // Allow localhost for mock server
         ..Default::default()
     };
-    let tool = WebFetchTool::new(config);
+    let tool = WebFetchTool::new(config).unwrap();
     let result = tool.fetch(&format!("{}/large", mock_server.uri())).await;
 
     // Should either error or truncate
@@ -326,7 +326,7 @@ async fn test_fetch_follows_redirects_limited() {
         allow_localhost: true, // Allow localhost for mock server
         ..Default::default()
     };
-    let tool = WebFetchTool::new(config);
+    let tool = WebFetchTool::new(config).unwrap();
     let result = tool
         .fetch(&format!("{}/redirect1", mock_server.uri()))
         .await;
@@ -355,7 +355,7 @@ async fn test_fetch_blocks_excessive_redirects() {
         allow_localhost: true, // Allow localhost for mock server
         ..Default::default()
     };
-    let tool = WebFetchTool::new(config);
+    let tool = WebFetchTool::new(config).unwrap();
     let result = tool.fetch(&format!("{}/loop", mock_server.uri())).await;
 
     assert!(result.is_err(), "Should fail on redirect loop");

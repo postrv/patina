@@ -516,21 +516,15 @@ pub fn translate_stream_event(chunk: &OpenAiStreamChunk) -> Vec<StreamEvent> {
         for tc_delta in tool_calls {
             let index = tc_delta.index as usize;
 
-            // Check if this is a tool call start (has id and function name)
-            let is_start = tc_delta.id.is_some()
-                && tc_delta.function.as_ref().is_some_and(|f| f.name.is_some());
-
-            if is_start {
-                let id = tc_delta.id.as_ref().unwrap().clone();
-                let name = tc_delta
-                    .function
-                    .as_ref()
-                    .unwrap()
-                    .name
-                    .as_ref()
-                    .unwrap()
-                    .clone();
-                events.push(StreamEvent::ToolUseStart { id, name, index });
+            // Emit ToolUseStart when all required fields are present
+            if let (Some(id), Some(func)) = (&tc_delta.id, &tc_delta.function) {
+                if let Some(name) = &func.name {
+                    events.push(StreamEvent::ToolUseStart {
+                        id: id.clone(),
+                        name: name.clone(),
+                        index,
+                    });
+                }
             }
 
             // Process argument fragments
@@ -1851,6 +1845,82 @@ data: [DONE]\n\n";
         assert!(
             body.get("tool_choice").is_none(),
             "tool_choice should be absent when None"
+        );
+    }
+
+    // =========================================================================
+    // translate_stream_event: Tool call safety (no unwrap panics)
+    // =========================================================================
+
+    #[test]
+    fn test_translate_tool_call_start_missing_id_no_panic() {
+        // Tool call delta with function but no id — should not emit ToolUseStart
+        let chunk = OpenAiStreamChunk {
+            id: "chunk1".to_string(),
+            object: "chat.completion.chunk".to_string(),
+            created: 0,
+            model: "test".to_string(),
+            choices: vec![OpenAiStreamChoice {
+                index: 0,
+                delta: OpenAiDelta {
+                    role: None,
+                    content: None,
+                    tool_calls: Some(vec![OpenAiToolCallDelta {
+                        index: 0,
+                        id: None, // Missing id
+                        call_type: Some("function".to_string()),
+                        function: Some(OpenAiFunctionCallDelta {
+                            name: Some("test_tool".to_string()),
+                            arguments: None,
+                        }),
+                    }]),
+                },
+                finish_reason: None,
+            }],
+            usage: None,
+        };
+
+        // Should not panic — just won't emit ToolUseStart
+        let events = translate_stream_event(&chunk);
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, StreamEvent::ToolUseStart { .. })),
+            "Should not emit ToolUseStart without id"
+        );
+    }
+
+    #[test]
+    fn test_translate_tool_call_start_missing_function_no_panic() {
+        // Tool call delta with id but no function — should not emit ToolUseStart
+        let chunk = OpenAiStreamChunk {
+            id: "chunk1".to_string(),
+            object: "chat.completion.chunk".to_string(),
+            created: 0,
+            model: "test".to_string(),
+            choices: vec![OpenAiStreamChoice {
+                index: 0,
+                delta: OpenAiDelta {
+                    role: None,
+                    content: None,
+                    tool_calls: Some(vec![OpenAiToolCallDelta {
+                        index: 0,
+                        id: Some("call_123".to_string()),
+                        call_type: Some("function".to_string()),
+                        function: None, // Missing function
+                    }]),
+                },
+                finish_reason: None,
+            }],
+            usage: None,
+        };
+
+        let events = translate_stream_event(&chunk);
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, StreamEvent::ToolUseStart { .. })),
+            "Should not emit ToolUseStart without function"
         );
     }
 }

@@ -871,7 +871,7 @@ impl ToolExecutor {
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow::anyhow!("Missing url"))?;
 
-        let tool = web_fetch::WebFetchTool::new(web_fetch::WebFetchConfig::default());
+        let tool = web_fetch::WebFetchTool::new(web_fetch::WebFetchConfig::default())?;
 
         match tool.fetch(url).await {
             Ok(result) => Ok(ToolResult::Success(format!(
