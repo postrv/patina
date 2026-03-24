@@ -2495,4 +2495,188 @@ mod tests {
         super::truncate_tool_results(&mut msg);
         assert_eq!(msg.content.as_text().unwrap(), "hello world");
     }
+
+    // ── format_tool_results_for_display tests ──
+
+    #[test]
+    fn test_format_tool_results_text_message() {
+        use crate::types::ApiMessageV2;
+
+        let msg = ApiMessageV2::user("plain text message");
+        assert_eq!(
+            super::format_tool_results_for_display(&msg),
+            "plain text message"
+        );
+    }
+
+    #[test]
+    fn test_format_tool_results_single_success() {
+        use crate::types::{ApiMessageV2, ContentBlock, MessageContent, ToolResultBlock};
+
+        let msg = ApiMessageV2 {
+            role: crate::types::Role::User,
+            content: MessageContent::Blocks(vec![ContentBlock::ToolResult(ToolResultBlock {
+                tool_use_id: "t1".to_string(),
+                content: "file contents here".to_string(),
+                is_error: false,
+            })]),
+        };
+        assert_eq!(
+            super::format_tool_results_for_display(&msg),
+            "[Tool result: file contents here]"
+        );
+    }
+
+    #[test]
+    fn test_format_tool_results_error_result() {
+        use crate::types::{ApiMessageV2, ContentBlock, MessageContent, ToolResultBlock};
+
+        let msg = ApiMessageV2 {
+            role: crate::types::Role::User,
+            content: MessageContent::Blocks(vec![ContentBlock::ToolResult(ToolResultBlock {
+                tool_use_id: "t1".to_string(),
+                content: "permission denied".to_string(),
+                is_error: true,
+            })]),
+        };
+        assert_eq!(
+            super::format_tool_results_for_display(&msg),
+            "[Tool result: Error: permission denied]"
+        );
+    }
+
+    #[test]
+    fn test_format_tool_results_multiple() {
+        use crate::types::{ApiMessageV2, ContentBlock, MessageContent, ToolResultBlock};
+
+        let msg = ApiMessageV2 {
+            role: crate::types::Role::User,
+            content: MessageContent::Blocks(vec![
+                ContentBlock::ToolResult(ToolResultBlock {
+                    tool_use_id: "t1".to_string(),
+                    content: "result one".to_string(),
+                    is_error: false,
+                }),
+                ContentBlock::ToolResult(ToolResultBlock {
+                    tool_use_id: "t2".to_string(),
+                    content: "result two".to_string(),
+                    is_error: false,
+                }),
+            ]),
+        };
+        assert_eq!(
+            super::format_tool_results_for_display(&msg),
+            "[Tool result: result one]\n[Tool result: result two]"
+        );
+    }
+
+    #[test]
+    fn test_format_tool_results_truncated() {
+        use crate::types::{ApiMessageV2, ContentBlock, MessageContent, ToolResultBlock};
+
+        let long_content = "x".repeat(600);
+        let msg = ApiMessageV2 {
+            role: crate::types::Role::User,
+            content: MessageContent::Blocks(vec![ContentBlock::ToolResult(ToolResultBlock {
+                tool_use_id: "t1".to_string(),
+                content: long_content,
+                is_error: false,
+            })]),
+        };
+        let result = super::format_tool_results_for_display(&msg);
+        assert!(result.contains("(truncated)"));
+        assert!(result.len() < 600);
+    }
+
+    #[test]
+    fn test_format_tool_results_no_tool_blocks() {
+        use crate::types::{ApiMessageV2, ContentBlock, MessageContent, ToolUseBlock};
+
+        let msg = ApiMessageV2 {
+            role: crate::types::Role::User,
+            content: MessageContent::Blocks(vec![ContentBlock::ToolUse(ToolUseBlock {
+                id: "t1".to_string(),
+                name: "bash".to_string(),
+                input: serde_json::json!({"command": "ls"}),
+            })]),
+        };
+        assert_eq!(
+            super::format_tool_results_for_display(&msg),
+            "[Tool results received]"
+        );
+    }
+
+    // ── complete_tool_cycle tests ──
+
+    /// Helper: sets up an AppState with tool loop driven through execution.
+    async fn state_with_executed_tools() -> crate::app::state::AppState {
+        use crate::app::state::AppState;
+        use crate::hooks::HookManager;
+        use crate::tools::HookedToolExecutor;
+
+        let temp_dir = tempfile::TempDir::new().expect("create temp dir");
+        let working_dir = temp_dir.path().to_path_buf();
+        let hooks = HookManager::new("test-session".to_string());
+        let executor = HookedToolExecutor::new(working_dir.clone(), hooks);
+
+        let mut state = AppState::new(
+            working_dir,
+            false,
+            crate::types::config::ParallelMode::Enabled,
+        );
+
+        // Drive tool loop through: streaming → tool_use → approve → execute
+        let tl = state.tool_loop_mut();
+        tl.start_streaming().unwrap();
+        tl.start_tool_use(0, "toolu_1".to_string(), "bash".to_string());
+        tl.append_tool_input(0, r#"{"command":"echo hello"}"#);
+        tl.complete_tool_use(0).unwrap();
+        tl.message_complete(crate::types::StopReason::ToolUse)
+            .unwrap();
+        tl.approve_all().unwrap();
+        tl.execute_pending(&executor, None).await.unwrap();
+
+        state
+    }
+
+    #[tokio::test]
+    async fn test_complete_tool_cycle_builds_messages() {
+        let mut state = state_with_executed_tools().await;
+        let api_count_before = state.api_messages().len();
+
+        super::complete_tool_cycle(&mut state).unwrap();
+
+        // Should add 2 messages: assistant (tool_use) + user (tool_result)
+        assert_eq!(
+            state.api_messages().len(),
+            api_count_before + 2,
+            "complete_tool_cycle should add assistant + user messages"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_complete_tool_cycle_adds_timeline_summary() {
+        let mut state = state_with_executed_tools().await;
+        let timeline_len_before = state.timeline().len();
+
+        super::complete_tool_cycle(&mut state).unwrap();
+
+        assert!(
+            state.timeline().len() > timeline_len_before,
+            "complete_tool_cycle should add a timeline entry"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_complete_tool_cycle_transitions_to_streaming() {
+        let mut state = state_with_executed_tools().await;
+
+        super::complete_tool_cycle(&mut state).unwrap();
+
+        assert_eq!(
+            *state.tool_loop_mut().state(),
+            ToolLoopState::Streaming,
+            "complete_tool_cycle should transition to Streaming"
+        );
+    }
 }

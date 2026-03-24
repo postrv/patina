@@ -695,4 +695,47 @@ mod tests {
             "Expected Key('x') to have priority over background, got {event}"
         );
     }
+
+    // ── start_tool_execution tests ──
+
+    #[test]
+    fn test_start_tool_execution_not_pending_is_noop() {
+        let client = test_client();
+        let mut state = test_state();
+        let session_mgr = test_session_manager();
+        let mut ctx = AppContext::new(Arc::new(client), &mut state, &session_mgr);
+
+        // Tool loop is in Idle state by default
+        assert!(ctx.start_tool_execution().is_ok());
+        // State should be unchanged — still not loading
+        assert!(!ctx.state.is_loading());
+    }
+
+    #[tokio::test]
+    async fn test_start_tool_execution_approves_and_sets_loading() {
+        let client = test_client();
+        let mut state = test_state();
+        let session_mgr = test_session_manager();
+
+        // Drive tool loop to PendingApproval state
+        {
+            let tl = state.tool_loop_mut();
+            tl.start_streaming().unwrap();
+            tl.start_tool_use(0, "toolu_1".to_string(), "bash".to_string());
+            tl.append_tool_input(0, r#"{"command":"echo hi"}"#);
+            tl.complete_tool_use(0).unwrap();
+            tl.message_complete(crate::types::StopReason::ToolUse)
+                .unwrap();
+        }
+
+        assert!(matches!(
+            state.tool_loop_state(),
+            crate::app::tool_loop::ToolLoopState::PendingApproval
+        ));
+
+        let mut ctx = AppContext::new(Arc::new(client), &mut state, &session_mgr);
+        ctx.start_tool_execution().unwrap();
+
+        assert!(ctx.state.is_loading());
+    }
 }

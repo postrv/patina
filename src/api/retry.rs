@@ -152,4 +152,171 @@ mod tests {
     fn test_base_backoff_value() {
         assert_eq!(BASE_BACKOFF_MS, 100);
     }
+
+    // ── send_with_retry integration tests ──
+
+    use wiremock::matchers::method;
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[tokio::test]
+    async fn test_send_with_retry_success_first_try() {
+        let mock_server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("ok"))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        let (tx, mut rx) = mpsc::channel(10);
+        let url = mock_server.uri();
+        let client = reqwest::Client::new();
+        send_with_retry(
+            || {
+                let c = client.clone();
+                let u = url.clone();
+                async move { Ok(c.get(&u).send().await?) }
+            },
+            |_response, _tx| async move { Ok(()) },
+            &tx,
+        )
+        .await
+        .unwrap();
+
+        // No error events should have been sent
+        drop(tx);
+        assert!(rx.recv().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_send_with_retry_retries_on_429() {
+        let mock_server = MockServer::start().await;
+        // First call: 429, second call: 200
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(429).set_body_string("rate limited"))
+            .up_to_n_times(1)
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("ok"))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        let (tx, mut rx) = mpsc::channel(10);
+        let url = mock_server.uri();
+        let client = reqwest::Client::new();
+
+        send_with_retry(
+            || {
+                let c = client.clone();
+                let u = url.clone();
+                async move { Ok(c.get(&u).send().await?) }
+            },
+            |_response, _tx| async { Ok(()) },
+            &tx,
+        )
+        .await
+        .unwrap();
+
+        // No error events — retry succeeded
+        drop(tx);
+        assert!(rx.recv().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_send_with_retry_retries_on_5xx() {
+        let mock_server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(500).set_body_string("server error"))
+            .up_to_n_times(1)
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("ok"))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        let (tx, mut rx) = mpsc::channel(10);
+        let url = mock_server.uri();
+        let client = reqwest::Client::new();
+
+        send_with_retry(
+            || {
+                let c = client.clone();
+                let u = url.clone();
+                async move { Ok(c.get(&u).send().await?) }
+            },
+            |_response, _tx| async { Ok(()) },
+            &tx,
+        )
+        .await
+        .unwrap();
+
+        drop(tx);
+        assert!(rx.recv().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_send_with_retry_non_retryable_4xx() {
+        let mock_server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(400).set_body_string("bad request"))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        let (tx, mut rx) = mpsc::channel(10);
+        let url = mock_server.uri();
+        let client = reqwest::Client::new();
+
+        send_with_retry(
+            || {
+                let c = client.clone();
+                let u = url.clone();
+                async move { Ok(c.get(&u).send().await?) }
+            },
+            |_response, _tx| async { Ok(()) },
+            &tx,
+        )
+        .await
+        .unwrap();
+
+        // Should get exactly one error event, no retries
+        let event = rx.recv().await.expect("should receive error event");
+        assert!(matches!(event, StreamEvent::Error(msg) if msg.contains("400")));
+    }
+
+    #[tokio::test]
+    async fn test_send_with_retry_exhausted() {
+        let mock_server = MockServer::start().await;
+        // All 3 attempts (initial + 2 retries) return 429
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(429).set_body_string("rate limited"))
+            .expect(3)
+            .mount(&mock_server)
+            .await;
+
+        let (tx, mut rx) = mpsc::channel(10);
+        let url = mock_server.uri();
+        let client = reqwest::Client::new();
+
+        send_with_retry(
+            || {
+                let c = client.clone();
+                let u = url.clone();
+                async move { Ok(c.get(&u).send().await?) }
+            },
+            |_response, _tx| async { Ok(()) },
+            &tx,
+        )
+        .await
+        .unwrap();
+
+        // Should get error after exhausting retries
+        let event = rx.recv().await.expect("should receive error event");
+        assert!(matches!(event, StreamEvent::Error(msg) if msg.contains("429")));
+    }
 }
