@@ -137,7 +137,7 @@ async fn apply_permission_response(
         response,
         PermissionResponse::AllowOnce | PermissionResponse::AllowAlways
     ) {
-        crate::app::start_tool_execution(ctx.state)?;
+        ctx.start_tool_execution()?;
     } else {
         // deny_all_tools() fails if the tool loop is already Idle, which
         // can happen when a PermissionResponse event arrives without a

@@ -613,95 +613,6 @@ async fn event_loop(
     Ok(())
 }
 
-/// Starts tool execution in the background (non-blocking).
-///
-/// This function:
-/// 1. Checks if we're in PendingApproval state
-/// 2. Auto-approves pending tools
-/// 3. Spawns tool execution in background task
-///
-/// The event loop continues to process input while tools execute.
-/// Tool results are received via the `recv_tool_result()` channel.
-///
-/// # Errors
-///
-/// Returns an error if tool approval fails.
-pub(crate) fn start_tool_execution(state: &mut AppState) -> Result<()> {
-    // Only process if we're in PendingApproval state
-    if !matches!(state.tool_loop_state(), ToolLoopState::PendingApproval) {
-        debug!("Tool loop not in PendingApproval state, skipping");
-        return Ok(());
-    }
-
-    debug!("Tool loop in PendingApproval state, auto-approving tools");
-
-    // Auto-approve all tools. Interactive permission prompts are
-    // handled by PermissionHandler in the dispatch chain.
-    state.approve_all_tools()?;
-
-    // Spawn tool execution in background - returns immediately
-    debug!("Spawning tool execution in background");
-    let _handle = state.spawn_tool_execution();
-
-    // Mark as loading so throbber animates during tool execution
-    state.set_loading(true);
-
-    Ok(())
-}
-
-/// Completes tool execution and sets up continuation streaming.
-///
-/// Called after all tools have completed execution. This function:
-/// 1. Finishes the tool execution and gets continuation data
-/// 2. Builds messages for conversation continuation
-/// 3. Sets up streaming channel for the API response
-///
-/// The event loop will receive API chunks via `recv_api_chunk()`.
-///
-/// # Errors
-///
-/// Returns an error if finishing tool execution or streaming setup fails.
-pub(crate) async fn finish_tool_execution_and_continue(
-    state: &mut AppState,
-    client: &std::sync::Arc<dyn LlmProvider>,
-) -> Result<()> {
-    use crate::api::ToolChoice;
-
-    // Complete tool execution: build messages, add to history, truncate, start streaming
-    complete_tool_cycle(state)?;
-
-    // SessionHandler observer saves when it sees the dirty flag.
-    state.mark_session_dirty();
-
-    debug!("Continuing conversation with tool results");
-
-    // Set up the streaming channel for the main event loop to receive
-    let (tx, rx) = tokio::sync::mpsc::channel(STREAMING_CHANNEL_BUFFER);
-    state.set_streaming_rx(rx);
-
-    // Mark as loading so throbber animates and current_response accumulates
-    state.set_loading(true);
-    state.set_current_response(String::new());
-
-    // Use prepare_api_messages_for_send() which compacts + truncates,
-    // instead of api_messages().to_vec() which sends the FULL untruncated
-    // conversation and causes token exhaustion on large codebases.
-    let api_messages = state.prepare_api_messages_for_send(client.model()).await;
-    let client_clone = std::sync::Arc::clone(client);
-    let tools = state.all_tool_definitions();
-
-    tokio::spawn(async move {
-        if let Err(e) = client_clone
-            .stream_message(&api_messages, Some(&tools), Some(&ToolChoice::Auto), tx)
-            .await
-        {
-            tracing::error!("API error during tool continuation: {}", e);
-        }
-    });
-
-    Ok(())
-}
-
 /// Completes tool execution and prepares the conversation for continuation.
 ///
 /// This is the shared logic between `run_print_mode()` and
@@ -716,7 +627,7 @@ pub(crate) async fn finish_tool_execution_and_continue(
 /// # Errors
 ///
 /// Returns an error if `finish_tool_execution()` or `start_streaming()` fails.
-fn complete_tool_cycle(state: &mut AppState) -> Result<()> {
+pub(crate) fn complete_tool_cycle(state: &mut AppState) -> Result<()> {
     let continuation = state.finish_tool_execution()?;
     let (assistant_msg, mut user_msg) = continuation.build_messages();
 

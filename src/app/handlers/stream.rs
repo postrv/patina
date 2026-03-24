@@ -27,10 +27,10 @@ use crate::app::tool_loop::ToolLoopState;
 /// 2. **Message completion** marks the session dirty so
 ///    [`SessionHandler`](super::session::SessionHandler) persists the state.
 /// 3. **Tool-use stop reason** triggers tool execution via
-///    [`start_tool_execution`](crate::app::start_tool_execution).
+///    [`AppContext::start_tool_execution`](crate::app::context::AppContext::start_tool_execution).
 /// 4. **Tool results** are recorded via [`AppState::record_tool_result`].
 /// 5. **All tools complete** triggers continuation streaming via
-///    [`finish_tool_execution_and_continue`](crate::app::finish_tool_execution_and_continue).
+///    [`AppContext::finish_tool_execution_and_continue`](crate::app::context::AppContext::finish_tool_execution_and_continue).
 ///
 /// # Examples
 ///
@@ -77,7 +77,7 @@ impl EventHandler for StreamHandler {
 
                     // Trigger tool execution if the stop reason requires it.
                     if is_tool_use_complete {
-                        crate::app::start_tool_execution(ctx.state)?;
+                        ctx.start_tool_execution()?;
                     }
 
                     Ok(Handled::CONSUMED)
@@ -94,8 +94,7 @@ impl EventHandler for StreamHandler {
                     if is_executing && ctx.state.all_tools_complete() {
                         debug!("All tools complete, setting up continuation");
                         ctx.state.clear_tool_result_rx();
-                        crate::app::finish_tool_execution_and_continue(ctx.state, &ctx.client)
-                            .await?;
+                        ctx.finish_tool_execution_and_continue().await?;
                     }
 
                     Ok(Handled::CONSUMED)

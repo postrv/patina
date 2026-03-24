@@ -6,15 +6,18 @@
 //! merges all event sources (crossterm, background channels, tick timer) into
 //! a unified [`AppEvent`](crate::app::events::AppEvent) stream.
 
+use anyhow::Result;
 use crossterm::event::{Event, KeyCode, KeyEventKind, KeyModifiers};
 use futures::StreamExt;
 use std::io;
 
 use std::sync::Arc;
+use tracing::debug;
 
 use crate::api::LlmProvider;
 use crate::app::events::AppEvent;
 use crate::app::state::{AppState, BackgroundEvent};
+use crate::app::tool_loop::ToolLoopState;
 use crate::session::SessionManager;
 
 /// Bundles shared references needed by event handlers.
@@ -115,6 +118,74 @@ impl<'a> AppContext<'a> {
     #[must_use]
     pub fn has_executing_tools(&self) -> bool {
         self.state.has_executing_tools()
+    }
+
+    /// Starts tool execution in the background (non-blocking).
+    ///
+    /// Checks if the tool loop is in `PendingApproval` state, auto-approves
+    /// pending tools, and spawns execution in a background task. The event
+    /// loop continues to process input while tools execute; results arrive
+    /// via [`AppEvent::ToolResult`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if tool approval fails.
+    pub fn start_tool_execution(&mut self) -> Result<()> {
+        if !matches!(self.state.tool_loop_state(), ToolLoopState::PendingApproval) {
+            debug!("Tool loop not in PendingApproval state, skipping");
+            return Ok(());
+        }
+
+        debug!("Tool loop in PendingApproval state, auto-approving tools");
+        self.state.approve_all_tools()?;
+
+        debug!("Spawning tool execution in background");
+        let _handle = self.state.spawn_tool_execution();
+
+        self.state.set_loading(true);
+        Ok(())
+    }
+
+    /// Completes tool execution and sets up continuation streaming.
+    ///
+    /// Called after all tools have completed execution. Uses
+    /// [`complete_tool_cycle`](super::complete_tool_cycle) for the shared
+    /// message-building logic, then sets up the streaming channel for the
+    /// API continuation response.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if finishing tool execution or streaming setup fails.
+    pub async fn finish_tool_execution_and_continue(&mut self) -> Result<()> {
+        use crate::api::ToolChoice;
+
+        super::complete_tool_cycle(self.state)?;
+
+        self.state.mark_session_dirty();
+        debug!("Continuing conversation with tool results");
+
+        let (tx, rx) = tokio::sync::mpsc::channel(super::STREAMING_CHANNEL_BUFFER);
+        self.state.set_streaming_rx(rx);
+        self.state.set_loading(true);
+        self.state.set_current_response(String::new());
+
+        let api_messages = self
+            .state
+            .prepare_api_messages_for_send(self.client.model())
+            .await;
+        let client_clone = Arc::clone(&self.client);
+        let tools = self.state.all_tool_definitions();
+
+        tokio::spawn(async move {
+            if let Err(e) = client_clone
+                .stream_message(&api_messages, Some(&tools), Some(&ToolChoice::Auto), tx)
+                .await
+            {
+                tracing::error!("API error during tool continuation: {}", e);
+            }
+        });
+
+        Ok(())
     }
 
     /// Receives the next application event from all event sources.
