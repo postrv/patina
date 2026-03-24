@@ -92,12 +92,12 @@ impl ToolSafetyClass {
 pub fn classify_tool(tool_name: &str) -> ToolSafetyClass {
     match tool_name {
         // ReadOnly tools - safe to parallelize
-        "read_file" | "glob" | "grep" | "list_files" | "web_fetch" | "web_search" => {
+        "read_file" | "glob" | "grep" | "list_files" | "web_fetch" | "web_search" | "lsp" => {
             ToolSafetyClass::ReadOnly
         }
 
         // Mutating tools - must run sequentially
-        "write_file" | "edit" => ToolSafetyClass::Mutating,
+        "write_file" | "edit" | "todo_write" => ToolSafetyClass::Mutating,
 
         // Bash is inherently unpredictable - classify as Unknown
         "bash" => ToolSafetyClass::Unknown,

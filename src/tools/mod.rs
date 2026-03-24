@@ -12,6 +12,7 @@
 
 mod executor;
 mod hooked;
+pub mod lsp;
 pub mod parallel;
 pub mod sandbox;
 mod security;

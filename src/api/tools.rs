@@ -362,6 +362,48 @@ pub fn vision_tool() -> ToolDefinition {
     )
 }
 
+/// Language Server Protocol tool for code navigation.
+///
+/// Provides go-to-definition, find-references, hover, and symbol search
+/// by communicating with language servers.
+#[must_use]
+pub fn lsp_tool() -> ToolDefinition {
+    ToolDefinition::new(
+        "lsp",
+        "Use a Language Server Protocol (LSP) server for code intelligence. \
+         Provides go-to-definition, find-references, hover information, and symbol search. \
+         Supports Rust (rust-analyzer), TypeScript/JavaScript (typescript-language-server), \
+         Python (pyright), and Go (gopls). Prefer narsil-mcp when available.",
+        json!({
+            "type": "object",
+            "properties": {
+                "operation": {
+                    "type": "string",
+                    "enum": ["go_to_definition", "find_references", "hover", "document_symbol", "workspace_symbol"],
+                    "description": "The LSP operation to perform"
+                },
+                "file": {
+                    "type": "string",
+                    "description": "Relative file path (required for all operations except workspace_symbol)"
+                },
+                "line": {
+                    "type": "integer",
+                    "description": "1-based line number (required for go_to_definition, find_references, hover)"
+                },
+                "column": {
+                    "type": "integer",
+                    "description": "1-based column number (required for go_to_definition, find_references, hover)"
+                },
+                "query": {
+                    "type": "string",
+                    "description": "Symbol name or pattern (required for workspace_symbol)"
+                }
+            },
+            "required": ["operation"]
+        }),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
