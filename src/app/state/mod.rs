@@ -22,9 +22,9 @@ pub use worktree::WorktreeStatus;
 
 use crate::agents::{AgentProgress, ConflictReport, SubagentSpawner};
 use crate::api::provider::RequestOptions;
-use crate::api::tokens::model_context_limit;
+use crate::api::tokens::{model_context_limit, ModelCapabilities};
 use crate::api::tools::default_tools;
-use crate::api::{LlmProvider, StreamEvent, TokenBudget, ToolChoice};
+use crate::api::{LlmProvider, StreamEvent, SystemBlock, ThinkingConfig, TokenBudget, ToolChoice};
 use crate::app::tool_loop::{ContinuationData, ToolLoop, ToolLoopState};
 use crate::app::STREAMING_CHANNEL_BUFFER;
 use crate::context::compression::{
@@ -40,6 +40,7 @@ use crate::tools::HookedToolExecutor;
 use crate::tui::scroll::ScrollState;
 use crate::tui::selection::{FocusArea, SelectionState};
 use crate::tui::widgets::{CompactionProgressState, ToolBlockState};
+use crate::types::config::EffortLevel;
 use crate::types::config::ParallelMode;
 use crate::types::content::StopReason;
 use crate::types::{ApiMessageV2, Message, Role, Timeline};
@@ -213,6 +214,15 @@ pub struct AppState {
     /// Wrapped in `Arc` so spawned tool-execution tasks can share read access
     /// (the SDK uses interior mutability — `call_tool` is `&self`).
     mcp_manager: Option<std::sync::Arc<crate::mcp::manager::McpManager>>,
+
+    /// Reasoning effort level for API requests.
+    effort: EffortLevel,
+
+    /// Optional explicit thinking budget that overrides effort level.
+    thinking_budget: Option<u32>,
+
+    /// System prompt text injected into API requests.
+    system_prompt: Option<String>,
 }
 
 #[derive(Default)]
@@ -407,6 +417,9 @@ impl AppState {
             },
             terminal_height: 24,
             mcp_manager: None,
+            effort: EffortLevel::Auto,
+            thinking_budget: None,
+            system_prompt: None,
         }
     }
 
@@ -1422,13 +1435,14 @@ impl AppState {
 
         let client = std::sync::Arc::clone(client);
         let tools = self.all_tool_definitions();
+        let options = self.build_request_options(client.model());
         tokio::spawn(async move {
             if let Err(e) = client
                 .stream_message(
                     &api_messages,
                     Some(&tools),
                     Some(&ToolChoice::Auto),
-                    &RequestOptions::default(),
+                    &options,
                     tx,
                 )
                 .await
@@ -2861,6 +2875,69 @@ impl AppState {
         }
         tools
     }
+
+    /// Sets the reasoning effort level.
+    pub fn set_effort(&mut self, effort: EffortLevel) {
+        self.effort = effort;
+    }
+
+    /// Sets the explicit thinking budget (overrides effort level).
+    pub fn set_thinking_budget(&mut self, budget: Option<u32>) {
+        self.thinking_budget = budget;
+    }
+
+    /// Sets the system prompt text for API requests.
+    pub fn set_system_prompt(&mut self, prompt: Option<String>) {
+        self.system_prompt = prompt;
+    }
+
+    /// Returns the current effort level.
+    #[must_use]
+    pub fn effort(&self) -> EffortLevel {
+        self.effort
+    }
+
+    /// Builds [`RequestOptions`] from the current state, gated by model capabilities.
+    ///
+    /// Determines the thinking budget from either the explicit `thinking_budget`
+    /// field (if set) or the `effort` level. Returns `None` for thinking if the
+    /// model doesn't support it. Wraps the system prompt in [`SystemBlock`]s with
+    /// cache control if the model supports it.
+    #[must_use]
+    pub fn build_request_options(&self, model: &str) -> RequestOptions {
+        let caps = ModelCapabilities::for_model(model);
+
+        // Determine thinking config
+        let thinking = if caps.supports_thinking {
+            let budget = self
+                .thinking_budget
+                .or_else(|| self.effort.thinking_budget());
+            budget.map(|b| ThinkingConfig {
+                config_type: "enabled".to_string(),
+                budget_tokens: b,
+            })
+        } else {
+            None
+        };
+
+        // Build system blocks with optional cache control
+        let system = self.system_prompt.as_ref().map(|prompt| {
+            let cache_control = if caps.supports_cache_control {
+                Some(crate::api::CacheControl {
+                    cache_type: "ephemeral".to_string(),
+                })
+            } else {
+                None
+            };
+            vec![SystemBlock {
+                block_type: "text".to_string(),
+                text: prompt.clone(),
+                cache_control,
+            }]
+        });
+
+        RequestOptions { thinking, system }
+    }
 }
 
 #[cfg(test)]
@@ -3635,5 +3712,74 @@ mod tests {
         ui.selection.end();
 
         assert_eq!(ui.extract_selected_text(), None);
+    }
+
+    #[test]
+    fn test_build_request_options_default_effort() {
+        let state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+        let opts = state.build_request_options("claude-sonnet-4-20250514");
+        // Auto effort → no thinking budget
+        assert!(opts.thinking.is_none());
+        // System prompt not set → no system blocks
+        assert!(opts.system.is_none());
+    }
+
+    #[test]
+    fn test_build_request_options_high_effort() {
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+        state.set_effort(EffortLevel::High);
+        let opts = state.build_request_options("claude-sonnet-4-20250514");
+        let thinking = opts
+            .thinking
+            .expect("High effort should produce thinking config");
+        assert_eq!(thinking.config_type, "enabled");
+        assert_eq!(thinking.budget_tokens, 16_000);
+    }
+
+    #[test]
+    fn test_build_request_options_explicit_budget_overrides_effort() {
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+        state.set_effort(EffortLevel::Medium);
+        state.set_thinking_budget(Some(50_000));
+        let opts = state.build_request_options("claude-sonnet-4-20250514");
+        let thinking = opts
+            .thinking
+            .expect("Explicit budget should produce thinking config");
+        assert_eq!(thinking.budget_tokens, 50_000);
+    }
+
+    #[test]
+    fn test_build_request_options_unsupported_model() {
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+        state.set_effort(EffortLevel::High);
+        let opts = state.build_request_options("unknown-model");
+        // Unknown model → no thinking support
+        assert!(opts.thinking.is_none());
+    }
+
+    #[test]
+    fn test_build_request_options_system_prompt_with_cache() {
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+        state.set_system_prompt(Some("You are a helpful assistant.".to_string()));
+        let opts = state.build_request_options("claude-sonnet-4-20250514");
+        let blocks = opts.system.expect("System prompt should produce blocks");
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].text, "You are a helpful assistant.");
+        assert!(
+            blocks[0].cache_control.is_some(),
+            "Claude 4 should get cache control"
+        );
+    }
+
+    #[test]
+    fn test_build_request_options_system_prompt_no_cache_for_old_model() {
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+        state.set_system_prompt(Some("Instructions".to_string()));
+        let opts = state.build_request_options("claude-3-haiku-20240307");
+        let blocks = opts.system.expect("System prompt should produce blocks");
+        assert!(
+            blocks[0].cache_control.is_none(),
+            "Haiku 3 should not get cache control"
+        );
     }
 }

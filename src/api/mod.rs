@@ -416,6 +416,69 @@ impl AnthropicClient {
         .await
     }
 
+    /// Sends a streaming message request with full request options.
+    ///
+    /// This method wires [`RequestOptions`] (thinking, system/cache) into the
+    /// API request body and conditionally adds the prompt-caching beta header.
+    ///
+    /// # Arguments
+    ///
+    /// * `messages` - The conversation messages
+    /// * `tools` - Optional tool definitions
+    /// * `tool_choice` - Optional tool selection constraint
+    /// * `options` - Request options (thinking config, system blocks)
+    /// * `tx` - Channel sender for streaming events
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the HTTP request fails.
+    pub async fn stream_message_v2_with_options(
+        &self,
+        messages: &[crate::types::ApiMessageV2],
+        tools: Option<&[ToolDefinition]>,
+        tool_choice: Option<&ToolChoice>,
+        options: &RequestOptions,
+        tx: mpsc::Sender<StreamEvent>,
+    ) -> Result<()> {
+        let request = ApiRequestV2 {
+            model: &self.model,
+            max_tokens: 8192,
+            stream: true,
+            messages,
+            system: options.system.as_deref(),
+            thinking: options.thinking.as_ref(),
+            tools,
+            tool_choice,
+        };
+
+        let has_cache_control = options
+            .system
+            .as_ref()
+            .is_some_and(|blocks| blocks.iter().any(|b| b.cache_control.is_some()));
+
+        let url = format!("{}/v1/messages", self.base_url);
+
+        retry::send_with_retry(
+            || async {
+                let mut req = self
+                    .client
+                    .post(&url)
+                    .header("x-api-key", self.api_key.expose_secret())
+                    .header("anthropic-version", "2023-06-01")
+                    .header("content-type", "application/json");
+
+                if has_cache_control {
+                    req = req.header("anthropic-beta", "prompt-caching-2024-07-31");
+                }
+
+                req.json(&request).send().await.map_err(Into::into)
+            },
+            |response, tx| async move { self.process_stream(response, tx).await },
+            &tx,
+        )
+        .await
+    }
+
     /// Handles a content_block_start event for tool_use blocks.
     ///
     /// Returns `Some(ToolUseStart)` if the content block is a tool_use with valid id and name.

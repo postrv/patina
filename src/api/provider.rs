@@ -330,11 +330,10 @@ impl LlmProvider for super::AnthropicClient {
         messages: &'a [ApiMessageV2],
         tools: Option<&'a [ToolDefinition]>,
         tool_choice: Option<&'a ToolChoice>,
-        _options: &'a RequestOptions,
+        options: &'a RequestOptions,
         tx: mpsc::Sender<StreamEvent>,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
-        // TODO(phase-8.1): Pass thinking/system options through to request building
-        Box::pin(self.stream_message_v2_with_tools(messages, tools, tool_choice, tx))
+        Box::pin(self.stream_message_v2_with_options(messages, tools, tool_choice, options, tx))
     }
 }
 
