@@ -116,3 +116,169 @@ impl AgentPanelState {
         !self.pending_conflicts.is_empty()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Helper: create an `AgentPanelState` with no spawner.
+    fn state() -> AgentPanelState {
+        AgentPanelState::new(None)
+    }
+
+    #[test]
+    fn test_update_progress_content_delta_existing() {
+        let mut s = state();
+        // Seed the agent with an IterationStarted so it already exists.
+        let iter = AgentProgress::IterationStarted {
+            iteration: 1,
+            max: 5,
+        };
+        s.update_progress("a1", "Agent-1", &iter);
+
+        // Now send a ContentDelta — should update last_content.
+        let delta = AgentProgress::ContentDelta("hello world".to_string());
+        s.update_progress("a1", "Agent-1", &delta);
+
+        assert_eq!(s.entries().len(), 1);
+        assert_eq!(s.entries()[0].last_content, "hello world");
+        // Status must remain Running from the earlier IterationStarted.
+        assert_eq!(
+            s.entries()[0].status,
+            AgentPanelStatus::Running {
+                iteration: 1,
+                max_iterations: 5,
+            }
+        );
+    }
+
+    #[test]
+    fn test_update_progress_content_delta_new() {
+        let mut s = state();
+        let delta = AgentProgress::ContentDelta("first message".to_string());
+        s.update_progress("new-agent", "NewAgent", &delta);
+
+        assert_eq!(s.entries().len(), 1);
+        let entry = &s.entries()[0];
+        assert_eq!(entry.agent_id, "new-agent");
+        assert_eq!(entry.agent_name, "NewAgent");
+        assert_eq!(entry.last_content, "first message");
+        // Default status for brand-new agent on ContentDelta.
+        assert_eq!(
+            entry.status,
+            AgentPanelStatus::Running {
+                iteration: 0,
+                max_iterations: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn test_update_progress_completed() {
+        let mut s = state();
+        let completed = AgentProgress::Completed {
+            output: "done".to_string(),
+            iterations_used: 3,
+        };
+        s.update_progress("a1", "Agent-1", &completed);
+
+        assert_eq!(s.entries().len(), 1);
+        let entry = &s.entries()[0];
+        assert_eq!(
+            entry.status,
+            AgentPanelStatus::Completed { iterations_used: 3 }
+        );
+        assert_eq!(entry.last_content, "done");
+    }
+
+    #[test]
+    fn test_update_progress_failed() {
+        let mut s = state();
+        let failed = AgentProgress::Failed {
+            error: "timeout".to_string(),
+            iterations_used: 2,
+        };
+        s.update_progress("a1", "Agent-1", &failed);
+
+        assert_eq!(s.entries().len(), 1);
+        let entry = &s.entries()[0];
+        assert_eq!(
+            entry.status,
+            AgentPanelStatus::Failed {
+                error: "timeout".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn test_content_delta_truncates_at_80() {
+        let mut s = state();
+        let long_text = "x".repeat(200);
+        let delta = AgentProgress::ContentDelta(long_text);
+        s.update_progress("a1", "Agent-1", &delta);
+
+        assert_eq!(s.entries()[0].last_content.len(), 80);
+    }
+
+    #[test]
+    fn test_completed_truncates_output() {
+        let mut s = state();
+        let long_output = "y".repeat(200);
+        let completed = AgentProgress::Completed {
+            output: long_output,
+            iterations_used: 1,
+        };
+        s.update_progress("a1", "Agent-1", &completed);
+
+        assert_eq!(s.entries()[0].last_content.len(), 80);
+    }
+
+    #[test]
+    fn test_multiple_agents_tracked() {
+        let mut s = state();
+        for i in 0..3 {
+            let id = format!("agent-{i}");
+            let name = format!("Agent {i}");
+            let iter = AgentProgress::IterationStarted {
+                iteration: i + 1,
+                max: 10,
+            };
+            s.update_progress(&id, &name, &iter);
+        }
+        assert_eq!(s.entries().len(), 3);
+
+        // Update the middle agent only.
+        let delta = AgentProgress::ContentDelta("middle update".to_string());
+        s.update_progress("agent-1", "Agent 1", &delta);
+
+        assert_eq!(s.entries()[1].last_content, "middle update");
+        // Other agents' content must be unchanged.
+        assert_eq!(s.entries()[0].last_content, "");
+        assert_eq!(s.entries()[2].last_content, "");
+    }
+
+    #[test]
+    fn test_completed_updates_last_content() {
+        let mut s = state();
+        // Seed with an iteration event.
+        let iter = AgentProgress::IterationStarted {
+            iteration: 1,
+            max: 5,
+        };
+        s.update_progress("a1", "Agent-1", &iter);
+        assert_eq!(s.entries()[0].last_content, "");
+
+        // Now complete — last_content should come from the Completed output.
+        let completed = AgentProgress::Completed {
+            output: "final result".to_string(),
+            iterations_used: 2,
+        };
+        s.update_progress("a1", "Agent-1", &completed);
+
+        assert_eq!(s.entries()[0].last_content, "final result");
+        assert_eq!(
+            s.entries()[0].status,
+            AgentPanelStatus::Completed { iterations_used: 2 }
+        );
+    }
+}

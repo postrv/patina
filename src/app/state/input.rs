@@ -195,3 +195,151 @@ impl Default for InputState {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::completion::{CompletionEntry, CompletionSource, CompletionState};
+
+    /// Helper: builds a `CompletionState` with two sample entries.
+    fn sample_completion() -> CompletionState {
+        CompletionState::new(vec![
+            CompletionEntry::new("help", "Show help", CompletionSource::Builtin),
+            CompletionEntry::new("mcp", "MCP status", CompletionSource::Builtin),
+        ])
+    }
+
+    #[test]
+    fn test_input_state_new_is_empty() {
+        let state = InputState::new();
+        assert_eq!(state.text, "");
+        assert_eq!(state.cursor_pos, 0);
+        assert!(state.completion.is_none());
+    }
+
+    #[test]
+    fn test_default_matches_new() {
+        let from_new = InputState::new();
+        let from_default = InputState::default();
+        assert_eq!(from_new.text, from_default.text);
+        assert_eq!(from_new.cursor_pos, from_default.cursor_pos);
+        assert!(from_new.completion.is_none());
+        assert!(from_default.completion.is_none());
+    }
+
+    #[test]
+    fn test_set_text_moves_cursor_to_end() {
+        let mut state = InputState::new();
+        state.set_text("hello".to_string());
+        assert_eq!(state.text(), "hello");
+        assert_eq!(state.cursor_position(), 5);
+    }
+
+    #[test]
+    fn test_set_text_with_unicode() {
+        let mut state = InputState::new();
+        // "café" has 4 chars but 5 bytes (é is 2 bytes in UTF-8)
+        state.set_text("café".to_string());
+        assert_eq!(state.cursor_position(), 4);
+        assert_eq!(state.text(), "café");
+    }
+
+    #[test]
+    fn test_set_cursor_position_clamps() {
+        let mut state = InputState::new();
+        state.set_text("abc".to_string());
+        state.set_cursor_position(999);
+        assert_eq!(state.cursor_position(), 3);
+    }
+
+    #[test]
+    fn test_set_cursor_position_zero() {
+        let mut state = InputState::new();
+        state.set_text("abc".to_string());
+        assert_eq!(state.cursor_position(), 3);
+        state.set_cursor_position(0);
+        assert_eq!(state.cursor_position(), 0);
+    }
+
+    #[test]
+    fn test_insert_char_mid_string_utf8() {
+        let mut state = InputState::new();
+        // Start with "aé" (2 chars), place cursor at position 1 (between 'a' and 'é')
+        state.set_text("aé".to_string());
+        state.set_cursor_position(1);
+        state.insert_char('X');
+        assert_eq!(state.text(), "aXé");
+        assert_eq!(state.cursor_position(), 2);
+    }
+
+    #[test]
+    fn test_insert_char_dismisses_completion_no_slash() {
+        let mut state = InputState::new();
+        state.set_text("hello".to_string());
+        state.completion = Some(sample_completion());
+        assert!(state.has_completion());
+
+        // Typing 'x' when text doesn't start with '/' should dismiss completion
+        state.insert_char('x');
+        assert!(!state.has_completion());
+        assert_eq!(state.text(), "hellox");
+    }
+
+    #[test]
+    fn test_delete_char_at_zero_is_noop() {
+        let mut state = InputState::new();
+        assert_eq!(state.cursor_position(), 0);
+        assert_eq!(state.text(), "");
+        state.delete_char();
+        assert_eq!(state.cursor_position(), 0);
+        assert_eq!(state.text(), "");
+    }
+
+    #[test]
+    fn test_take_clears_everything() {
+        let mut state = InputState::new();
+        state.set_text("some input".to_string());
+        state.completion = Some(sample_completion());
+
+        let taken = state.take();
+        assert_eq!(taken, "some input");
+        assert_eq!(state.text(), "");
+        assert_eq!(state.cursor_position(), 0);
+        assert!(state.completion.is_none());
+    }
+
+    #[test]
+    fn test_accept_completion_with_selection() {
+        let mut state = InputState::new();
+        state.set_text("/he".to_string());
+        state.completion = Some(sample_completion());
+
+        let accepted = state.accept_completion();
+        // The first entry in filtered list with default selection (0) is "help"
+        assert_eq!(accepted, Some("help".to_string()));
+        assert_eq!(state.text(), "/help ");
+        assert_eq!(state.cursor_position(), "/help ".chars().count());
+        assert!(!state.has_completion());
+    }
+
+    #[test]
+    fn test_accept_completion_empty_returns_none() {
+        let mut state = InputState::new();
+        // No completion set at all
+        let accepted = state.accept_completion();
+        assert!(accepted.is_none());
+    }
+
+    #[test]
+    fn test_is_empty_true_for_new() {
+        let state = InputState::new();
+        assert!(state.is_empty());
+    }
+
+    #[test]
+    fn test_is_empty_false_after_insert() {
+        let mut state = InputState::new();
+        state.insert_char('a');
+        assert!(!state.is_empty());
+    }
+}
