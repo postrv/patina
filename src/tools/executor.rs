@@ -15,8 +15,6 @@ use walkdir::WalkDir;
 use super::security::{normalize_command, ToolExecutionPolicy};
 use super::{vision, web_fetch, web_search};
 use crate::permissions::PermissionRequest;
-use crate::shell::ShellConfig;
-
 /// Tool executor with security policy enforcement.
 pub struct ToolExecutor {
     working_dir: PathBuf,
@@ -256,11 +254,14 @@ impl ToolExecutor {
         }
 
         // Spawn the command with kill_on_drop to ensure process cleanup on timeout
-        // Use platform-agnostic shell configuration (sh -c on Unix, cmd.exe /C on Windows)
-        let shell = ShellConfig::default();
-        let child = Command::new(&shell.command)
-            .args(&shell.args)
-            .arg(command)
+        // Apply OS-level sandboxing when available (macOS Seatbelt, Linux Landlock)
+        let sandbox = super::sandbox::create_sandbox();
+        let sandbox_config =
+            super::sandbox::SandboxConfig::for_working_dir(self.working_dir.clone());
+        let (program, args) = sandbox.wrap_command(command, &sandbox_config);
+
+        let child = Command::new(&program)
+            .args(&args)
             .current_dir(&self.working_dir)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

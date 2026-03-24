@@ -194,12 +194,20 @@ pub fn handle_init(workspace: &PathBuf, capabilities: &[String], session_id: &st
 /// [`IdeResponse::Error`] if the file cannot be read/written or
 /// path validation fails.
 pub fn handle_apply_edit(file: &std::path::Path, edits: &[TextEdit]) -> IdeResponse {
-    // Validate the path doesn't use traversal
+    // Validate the path doesn't use traversal or symlinks outside project
     let path_str = file.to_string_lossy();
     if path_str.contains("..") {
         return IdeResponse::Error {
             code: "PATH_TRAVERSAL".to_string(),
             message: format!("Path traversal rejected: {path_str}"),
+            request_id: None,
+        };
+    }
+    // Reject symlinks that could escape project boundaries
+    if file.is_symlink() {
+        return IdeResponse::Error {
+            code: "SYMLINK_REJECTED".to_string(),
+            message: format!("Symbolic links not allowed in edit paths: {path_str}"),
             request_id: None,
         };
     }

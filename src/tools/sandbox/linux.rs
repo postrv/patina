@@ -42,17 +42,25 @@ impl Sandbox for LinuxSandbox {
             return Ok(());
         }
 
-        // Note: Full Landlock implementation requires the `landlock` crate
-        // which is only available on Linux. The pre_exec() hook would apply
-        // Landlock rules in the child process. For now, we log the intent.
-        tracing::debug!(
-            allow_read = ?config.allow_read,
-            allow_write = ?config.allow_write,
-            allow_network = config.allow_network,
-            "Landlock sandbox configured (stub — full implementation requires landlock crate)"
+        // Landlock requires the `landlock` crate for full enforcement.
+        // Without it, we log a warning rather than silently claiming protection.
+        tracing::warn!(
+            "Landlock sandbox not enforced: full implementation requires the landlock crate. \
+             Running without OS-level sandboxing on Linux."
         );
 
         Ok(())
+    }
+
+    fn wrap_command(&self, command: &str, config: &SandboxConfig) -> (String, Vec<String>) {
+        if config.enabled && Self::is_landlock_supported() {
+            tracing::warn!("Linux Landlock sandbox not enforced (landlock crate required)");
+        }
+        // On Linux without landlock crate, return the command unchanged
+        (
+            "/bin/sh".to_string(),
+            vec!["-c".to_string(), command.to_string()],
+        )
     }
 
     fn is_available(&self) -> bool {

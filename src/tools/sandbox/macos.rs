@@ -81,11 +81,31 @@ impl Sandbox for MacOsSandbox {
         }
 
         let profile = Self::generate_profile(config);
-        // Wrap the command: sandbox-exec -p "<profile>" <original command>
-        // We modify the Command to prepend sandbox-exec
-        cmd.env("SANDBOX_PROFILE", profile);
-        tracing::debug!("Applied macOS Seatbelt sandbox");
+        cmd.env("PATINA_SANDBOX_PROFILE", profile);
+        tracing::debug!("Applied macOS Seatbelt sandbox env");
         Ok(())
+    }
+
+    fn wrap_command(&self, command: &str, config: &SandboxConfig) -> (String, Vec<String>) {
+        if !config.enabled || !self.is_available() {
+            return (
+                "/bin/sh".to_string(),
+                vec!["-c".to_string(), command.to_string()],
+            );
+        }
+
+        let profile = Self::generate_profile(config);
+        tracing::debug!("Wrapping command with sandbox-exec");
+        (
+            "/usr/bin/sandbox-exec".to_string(),
+            vec![
+                "-p".to_string(),
+                profile,
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                command.to_string(),
+            ],
+        )
     }
 
     fn is_available(&self) -> bool {

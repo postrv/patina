@@ -20,6 +20,13 @@ impl Sandbox for NoopSandbox {
         Ok(())
     }
 
+    fn wrap_command(&self, command: &str, _config: &SandboxConfig) -> (String, Vec<String>) {
+        (
+            "/bin/sh".to_string(),
+            vec!["-c".to_string(), command.to_string()],
+        )
+    }
+
     fn is_available(&self) -> bool {
         true
     }

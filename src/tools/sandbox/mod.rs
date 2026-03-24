@@ -42,6 +42,16 @@ pub trait Sandbox: Send + Sync {
     /// Returns an error if the sandbox cannot be applied.
     fn apply(&self, cmd: &mut tokio::process::Command, config: &SandboxConfig) -> Result<()>;
 
+    /// Wraps a shell command string with sandbox enforcement.
+    ///
+    /// On macOS, this prefixes with `sandbox-exec -p "<profile>"`.
+    /// On other platforms, returns the command unchanged.
+    ///
+    /// # Returns
+    ///
+    /// A tuple of `(program, args)` — the new command to execute.
+    fn wrap_command(&self, command: &str, config: &SandboxConfig) -> (String, Vec<String>);
+
     /// Returns whether this sandbox implementation is available on the current system.
     #[must_use]
     fn is_available(&self) -> bool;
