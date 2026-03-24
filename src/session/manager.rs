@@ -459,4 +459,33 @@ impl SessionManager {
 
         Ok(sorted)
     }
+
+    /// Forks a session, creating a new session with the same messages.
+    ///
+    /// The new session preserves the conversation history from the source
+    /// session and records the parent session ID for lineage tracking.
+    ///
+    /// # Arguments
+    ///
+    /// * `source_id` - The ID of the session to fork.
+    /// * `branch_name` - Optional branch name for the new session.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the source session cannot be loaded or the new
+    /// session cannot be saved.
+    pub async fn fork(&self, source_id: &str, branch_name: Option<String>) -> Result<String> {
+        let source = self.load(source_id).await?;
+
+        let mut forked = Session::new(source.working_dir().clone());
+        // Copy messages from source
+        for msg in source.messages() {
+            forked.add_message(msg.clone());
+        }
+        // Set lineage
+        forked.set_parent_session_id(Some(source_id.to_string()));
+        forked.set_branch_name(branch_name);
+
+        self.save(&forked).await
+    }
 }

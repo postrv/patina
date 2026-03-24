@@ -20,6 +20,7 @@ use tracing::{debug, info, warn};
 pub mod commands;
 pub mod completion;
 pub mod context;
+pub mod context_analysis;
 pub mod dispatch;
 pub mod events;
 pub mod handlers;

@@ -104,6 +104,20 @@ pub struct Session {
     /// skills that were active, enabling context restoration on resume.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     context: Option<SessionContext>,
+
+    /// Parent session ID for forked sessions.
+    ///
+    /// When present, indicates this session was forked from another session,
+    /// preserving the conversation history at the point of forking.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    parent_session_id: Option<String>,
+
+    /// Optional branch name for organizing related sessions.
+    ///
+    /// When present, groups this session with others under a logical branch,
+    /// e.g., "explore-auth-refactor".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    branch_name: Option<String>,
 }
 
 impl Session {
@@ -124,6 +138,8 @@ impl Session {
             worktree_session: None,
             ui_state: None,
             context: None,
+            parent_session_id: None,
+            branch_name: None,
         }
     }
 
@@ -229,6 +245,29 @@ impl Session {
     pub fn set_context(&mut self, context: Option<SessionContext>) {
         self.context = context;
         self.updated_at = SystemTime::now();
+    }
+
+    /// Returns the parent session ID, if this session was forked.
+    #[must_use]
+    pub fn parent_session_id(&self) -> Option<&str> {
+        self.parent_session_id.as_deref()
+    }
+
+    /// Returns the branch name, if assigned.
+    #[must_use]
+    pub fn branch_name(&self) -> Option<&str> {
+        self.branch_name.as_deref()
+    }
+
+    /// Sets the branch name for organizing related sessions.
+    pub fn set_branch_name(&mut self, name: Option<String>) {
+        self.branch_name = name;
+        self.updated_at = SystemTime::now();
+    }
+
+    /// Sets the parent session ID for forked sessions.
+    pub(crate) fn set_parent_session_id(&mut self, id: Option<String>) {
+        self.parent_session_id = id;
     }
 }
 
@@ -1173,5 +1212,127 @@ mod tests {
         let sorted = manager.list_sorted().await.unwrap();
         assert_eq!(sorted.len(), 2);
         assert!(sorted[0].updated_at >= sorted[1].updated_at);
+    }
+
+    // =========================================================================
+    // Session forking tests (Phase 8.7)
+    // =========================================================================
+
+    #[test]
+    fn test_session_parent_session_id_default_none() {
+        let session = Session::new(PathBuf::from("/test"));
+        assert!(session.parent_session_id().is_none());
+    }
+
+    #[test]
+    fn test_session_branch_name_default_none() {
+        let session = Session::new(PathBuf::from("/test"));
+        assert!(session.branch_name().is_none());
+    }
+
+    #[test]
+    fn test_session_set_branch_name() {
+        let mut session = Session::new(PathBuf::from("/test"));
+        session.set_branch_name(Some("explore-auth".to_string()));
+        assert_eq!(session.branch_name(), Some("explore-auth"));
+    }
+
+    #[test]
+    fn test_session_set_parent_session_id() {
+        let mut session = Session::new(PathBuf::from("/test"));
+        session.set_parent_session_id(Some("abc-123".to_string()));
+        assert_eq!(session.parent_session_id(), Some("abc-123"));
+    }
+
+    #[tokio::test]
+    async fn test_session_fork_creates_new_id() {
+        let temp_dir = TempDir::new().unwrap();
+        let manager = SessionManager::new(temp_dir.path().to_path_buf());
+
+        let mut source = Session::new(PathBuf::from("/project"));
+        source.add_message(test_message(Role::User, "Hello"));
+        source.add_message(test_message(Role::Assistant, "Hi there"));
+        let source_id = manager.save(&source).await.unwrap();
+
+        let forked_id = manager.fork(&source_id, None).await.unwrap();
+        assert_ne!(source_id, forked_id);
+    }
+
+    #[tokio::test]
+    async fn test_session_fork_preserves_messages() {
+        let temp_dir = TempDir::new().unwrap();
+        let manager = SessionManager::new(temp_dir.path().to_path_buf());
+
+        let mut source = Session::new(PathBuf::from("/project"));
+        source.add_message(test_message(Role::User, "Hello"));
+        source.add_message(test_message(Role::Assistant, "Hi there"));
+        let source_id = manager.save(&source).await.unwrap();
+
+        let forked_id = manager.fork(&source_id, None).await.unwrap();
+        let forked = manager.load(&forked_id).await.unwrap();
+
+        assert_eq!(forked.messages().len(), 2);
+        assert_eq!(forked.messages()[0].content, "Hello");
+        assert_eq!(forked.messages()[1].content, "Hi there");
+    }
+
+    #[tokio::test]
+    async fn test_session_fork_sets_parent_id() {
+        let temp_dir = TempDir::new().unwrap();
+        let manager = SessionManager::new(temp_dir.path().to_path_buf());
+
+        let mut source = Session::new(PathBuf::from("/project"));
+        source.add_message(test_message(Role::User, "Hello"));
+        let source_id = manager.save(&source).await.unwrap();
+
+        let forked_id = manager.fork(&source_id, None).await.unwrap();
+        let forked = manager.load(&forked_id).await.unwrap();
+
+        assert_eq!(forked.parent_session_id(), Some(source_id.as_str()));
+    }
+
+    #[tokio::test]
+    async fn test_session_fork_with_branch_name() {
+        let temp_dir = TempDir::new().unwrap();
+        let manager = SessionManager::new(temp_dir.path().to_path_buf());
+
+        let mut source = Session::new(PathBuf::from("/project"));
+        source.add_message(test_message(Role::User, "Hello"));
+        let source_id = manager.save(&source).await.unwrap();
+
+        let forked_id = manager
+            .fork(&source_id, Some("explore-auth".to_string()))
+            .await
+            .unwrap();
+        let forked = manager.load(&forked_id).await.unwrap();
+
+        assert_eq!(forked.branch_name(), Some("explore-auth"));
+    }
+
+    #[test]
+    fn test_session_fork_fields_serialization() {
+        let mut session = Session::new(PathBuf::from("/test"));
+        session.set_parent_session_id(Some("parent-id".to_string()));
+        session.set_branch_name(Some("my-branch".to_string()));
+
+        let json = serde_json::to_string(&session).unwrap();
+        let deserialized: Session = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(deserialized.parent_session_id(), Some("parent-id"));
+        assert_eq!(deserialized.branch_name(), Some("my-branch"));
+    }
+
+    #[test]
+    fn test_session_fork_fields_absent_in_json() {
+        // Sessions without fork fields should deserialize fine (serde default)
+        let json = r#"{
+            "messages": [],
+            "working_dir": "/test",
+            "created_at": {"secs_since_epoch": 0, "nanos_since_epoch": 0},
+            "updated_at": {"secs_since_epoch": 0, "nanos_since_epoch": 0}
+        }"#;
+        let session: Session = serde_json::from_str(json).unwrap();
+        assert!(session.parent_session_id().is_none());
+        assert!(session.branch_name().is_none());
     }
 }
