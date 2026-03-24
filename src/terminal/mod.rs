@@ -583,7 +583,7 @@ pub fn configure_iterm2_keybindings() -> Result<bool, String> {
                     .args(["-c", &format!("Add {} dict", full_path), &plist_path])
                     .output();
 
-                if add_dict.is_err() || !add_dict.unwrap().status.success() {
+                if !add_dict.is_ok_and(|o| o.status.success()) {
                     warn!("Failed to create dict for {}", description);
                     continue;
                 }
@@ -597,7 +597,7 @@ pub fn configure_iterm2_keybindings() -> Result<bool, String> {
                     ])
                     .output();
 
-                if set_action.is_err() || !set_action.unwrap().status.success() {
+                if !set_action.is_ok_and(|o| o.status.success()) {
                     warn!("Failed to set action for {}", description);
                     continue;
                 }
@@ -611,7 +611,7 @@ pub fn configure_iterm2_keybindings() -> Result<bool, String> {
                     ])
                     .output();
 
-                if set_text.is_err() || !set_text.unwrap().status.success() {
+                if !set_text.is_ok_and(|o| o.status.success()) {
                     warn!("Failed to set escape sequence for {}", description);
                     continue;
                 }
@@ -655,7 +655,7 @@ pub fn check_iterm2_bindings() -> usize {
             .args(["-c", &format!("Print {}", full_path), &plist_path])
             .output();
 
-        if check.is_ok() && check.unwrap().status.success() {
+        if check.is_ok_and(|o| o.status.success()) {
             configured += 1;
         }
     }

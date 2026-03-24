@@ -19,6 +19,7 @@
 //! ```
 
 use crate::error::{RctError, RctResult};
+use once_cell::sync::Lazy;
 use regex::Regex;
 use std::path::Path;
 
@@ -27,7 +28,7 @@ use std::path::Path;
 /// These commands have no legitimate use as MCP servers and could cause
 /// system damage or privilege escalation.
 #[cfg(unix)]
-fn always_blocked_commands() -> Vec<Regex> {
+static ALWAYS_BLOCKED: Lazy<Vec<Regex>> = Lazy::new(|| {
     vec![
         // Destructive file operations
         Regex::new(r"^rm$").unwrap(),
@@ -53,14 +54,14 @@ fn always_blocked_commands() -> Vec<Regex> {
         Regex::new(r"^netcat$").unwrap(),
         Regex::new(r"^ncat$").unwrap(),
     ]
-}
+});
 
 /// Commands that are ALWAYS blocked, even with absolute paths (Windows).
 ///
 /// These commands have no legitimate use as MCP servers and could cause
 /// system damage or privilege escalation.
 #[cfg(windows)]
-fn always_blocked_commands() -> Vec<Regex> {
+static ALWAYS_BLOCKED: Lazy<Vec<Regex>> = Lazy::new(|| {
     vec![
         // Registry manipulation (case-insensitive for Windows)
         Regex::new(r"(?i)^reg\.exe$").unwrap(),
@@ -76,7 +77,7 @@ fn always_blocked_commands() -> Vec<Regex> {
         Regex::new(r"(?i)^rmdir\.exe$").unwrap(),
         Regex::new(r"(?i)^rd\.exe$").unwrap(),
     ]
-}
+});
 
 /// Commands that require an absolute path to be used (Unix).
 ///
@@ -84,7 +85,7 @@ fn always_blocked_commands() -> Vec<Regex> {
 /// when specified with an absolute path, showing clear intent.
 /// Without an absolute path, they could be PATH-hijacked.
 #[cfg(unix)]
-fn require_absolute_path_commands() -> Vec<Regex> {
+static REQUIRE_ABSOLUTE_PATH: Lazy<Vec<Regex>> = Lazy::new(|| {
     vec![
         // Shell interpreters
         Regex::new(r"^(ba)?sh$").unwrap(),
@@ -101,7 +102,7 @@ fn require_absolute_path_commands() -> Vec<Regex> {
         Regex::new(r"^node$").unwrap(),
         Regex::new(r"^php$").unwrap(),
     ]
-}
+});
 
 /// Commands that require an absolute path to be used (Windows).
 ///
@@ -109,7 +110,7 @@ fn require_absolute_path_commands() -> Vec<Regex> {
 /// when specified with an absolute path, showing clear intent.
 /// Without an absolute path, they could be PATH-hijacked.
 #[cfg(windows)]
-fn require_absolute_path_commands() -> Vec<Regex> {
+static REQUIRE_ABSOLUTE_PATH: Lazy<Vec<Regex>> = Lazy::new(|| {
     vec![
         // Windows shell interpreters (case-insensitive)
         Regex::new(r"(?i)^cmd\.exe$").unwrap(),
@@ -130,11 +131,11 @@ fn require_absolute_path_commands() -> Vec<Regex> {
         Regex::new(r"(?i)^php\.exe$").unwrap(),
         Regex::new(r"(?i)^php$").unwrap(),
     ]
-}
+});
 
 /// Dangerous argument patterns that indicate shell injection attempts (Unix).
 #[cfg(unix)]
-fn dangerous_argument_patterns() -> Vec<Regex> {
+static DANGEROUS_ARG_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
     vec![
         // Shell command chaining
         Regex::new(r";\s*rm\s").unwrap(),
@@ -148,7 +149,7 @@ fn dangerous_argument_patterns() -> Vec<Regex> {
         Regex::new(r">\s*/dev/").unwrap(),
         Regex::new(r">\s*/etc/").unwrap(),
     ]
-}
+});
 
 /// Dangerous argument patterns that indicate shell injection attempts (Windows).
 ///
@@ -158,7 +159,7 @@ fn dangerous_argument_patterns() -> Vec<Regex> {
 /// - Destructive commands (del /s, format, rd /s)
 /// - Registry manipulation (reg delete, reg add)
 #[cfg(windows)]
-fn dangerous_argument_patterns() -> Vec<Regex> {
+static DANGEROUS_ARG_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
     vec![
         // PowerShell encoded commands (base64 bypass)
         Regex::new(r"(?i)-e(nc(odedcommand)?)?(\s|$)").unwrap(),
@@ -178,7 +179,7 @@ fn dangerous_argument_patterns() -> Vec<Regex> {
         Regex::new(r"(?i)&\s*del\s").unwrap(),
         Regex::new(r"(?i)&\s*format\s").unwrap(),
     ]
-}
+});
 
 /// Checks if a path is absolute on the current platform.
 ///
@@ -270,7 +271,7 @@ pub fn validate_mcp_command(command: &str, args: &[String]) -> RctResult<()> {
         .unwrap_or(command);
 
     // Check against always-blocked commands (even with absolute paths)
-    for pattern in always_blocked_commands() {
+    for pattern in ALWAYS_BLOCKED.iter() {
         if pattern.is_match(command_name) {
             return Err(RctError::mcp_validation(format!(
                 "security policy blocked '{}': command not allowed as MCP server",
@@ -281,7 +282,7 @@ pub fn validate_mcp_command(command: &str, args: &[String]) -> RctResult<()> {
 
     // Check against commands that require absolute paths
     // These are interpreters that are legitimate when explicitly specified
-    for pattern in require_absolute_path_commands() {
+    for pattern in REQUIRE_ABSOLUTE_PATH.iter() {
         if pattern.is_match(command_name) && !is_absolute {
             return Err(RctError::mcp_validation(format!(
                 "'{}' requires an absolute path (e.g., /bin/{}) to prevent PATH hijacking",
@@ -294,16 +295,15 @@ pub fn validate_mcp_command(command: &str, args: &[String]) -> RctResult<()> {
     // For interpreters, we skip argument validation because the script content
     // inherently contains shell constructs - that's the intended behavior.
     // The key protection is requiring an absolute path.
-    let is_interpreter = require_absolute_path_commands()
+    let is_interpreter = REQUIRE_ABSOLUTE_PATH
         .iter()
         .any(|pattern| pattern.is_match(command_name));
 
     // Only check arguments for shell injection patterns on non-interpreters
     // For interpreters like /bin/bash, the script content IS the intended execution
     if !is_interpreter {
-        let arg_patterns = dangerous_argument_patterns();
         for arg in args {
-            for pattern in &arg_patterns {
+            for pattern in DANGEROUS_ARG_PATTERNS.iter() {
                 if pattern.is_match(arg) {
                     return Err(RctError::mcp_validation(
                         "security policy blocked: potential shell injection in argument",

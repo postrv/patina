@@ -713,7 +713,7 @@ impl PerformanceConfig {
 /// # Examples
 ///
 /// ```no_run
-/// use patina::types::config::{CompressionConfig, Config, NarsilMode, ParallelMode, PerformanceConfig, ProviderConfig, ResumeMode};
+/// use patina::types::config::{CompressionConfig, Config, EffortLevel, NarsilMode, ParallelMode, PerformanceConfig, ProviderConfig, ResumeMode};
 /// use secrecy::SecretString;
 /// use std::path::PathBuf;
 ///
@@ -734,6 +734,8 @@ impl PerformanceConfig {
 ///     subagents_enabled: false,
 ///     ide_port: None,
 ///     auto_context_enabled: true,
+///     effort: EffortLevel::Auto,
+///     thinking_budget: None,
 ///     compression: CompressionConfig::default(),
 ///     provider: ProviderConfig::default(),
 ///     performance: PerformanceConfig::default(),
