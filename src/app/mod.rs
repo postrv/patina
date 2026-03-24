@@ -498,7 +498,7 @@ async fn run_print_mode(config: &Config, prompt: &str) -> Result<()> {
         }
 
         // Complete tool execution: build messages, add to history, truncate
-        complete_tool_cycle(&mut state)?;
+        tool_loop::complete_tool_cycle(&mut state)?;
 
         let (tx, mut rx) = tokio::sync::mpsc::channel(STREAMING_CHANNEL_BUFFER);
         let api_messages = state.prepare_api_messages_for_send(client.model()).await;
@@ -611,69 +611,6 @@ async fn event_loop(
     auto_save_session(state, session_manager).await;
 
     Ok(())
-}
-
-/// Completes tool execution and prepares the conversation for continuation.
-///
-/// This is the shared logic between `run_print_mode()` and
-/// `finish_tool_execution_and_continue()`. It:
-/// 1. Finishes tool execution and gets continuation data
-/// 2. Builds assistant and user messages from tool results
-/// 3. Adds both to the API message history
-/// 4. Truncates large tool results
-/// 5. Adds a display summary to the timeline
-/// 6. Transitions the tool loop to streaming state
-///
-/// # Errors
-///
-/// Returns an error if `finish_tool_execution()` or `start_streaming()` fails.
-pub(crate) fn complete_tool_cycle(state: &mut AppState) -> Result<()> {
-    let continuation = state.finish_tool_execution()?;
-    let (assistant_msg, mut user_msg) = continuation.build_messages();
-
-    state.api_messages_mut().push(assistant_msg);
-
-    crate::app::tool_loop::truncate_tool_results(&mut user_msg);
-
-    let tool_result_summary = format_tool_results_for_display(&user_msg);
-    state.add_message(Message {
-        role: Role::User,
-        content: tool_result_summary,
-    });
-    state.api_messages_mut().push(user_msg);
-
-    state.tool_loop_mut().start_streaming()?;
-    Ok(())
-}
-
-/// Formats tool results for display in the conversation history.
-///
-/// Extracts content from tool_result blocks and creates a human-readable summary.
-/// This is used for text-only display contexts.
-fn format_tool_results_for_display(user_msg: &ApiMessageV2) -> String {
-    match &user_msg.content {
-        crate::types::MessageContent::Text(s) => s.clone(),
-        crate::types::MessageContent::Blocks(blocks) => {
-            let mut parts = Vec::new();
-            for block in blocks {
-                if let Some(result) = block.as_tool_result() {
-                    // Truncate long results for display (UTF-8 safe)
-                    let content = if result.content.len() > 500 {
-                        crate::util::truncate_string_bytes(&result.content, 500, "... (truncated)")
-                    } else {
-                        result.content.clone()
-                    };
-                    let prefix = if result.is_error { "Error: " } else { "" };
-                    parts.push(format!("[Tool result: {}{}]", prefix, content));
-                }
-            }
-            if parts.is_empty() {
-                "[Tool results received]".to_string()
-            } else {
-                parts.join("\n")
-            }
-        }
-    }
 }
 
 /// Auto-saves the current session.

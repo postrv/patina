@@ -924,6 +924,72 @@ pub fn truncate_tool_results(msg: &mut crate::types::ApiMessageV2) {
     }
 }
 
+/// Formats tool results for display in the conversation history.
+///
+/// Extracts content from tool_result blocks and creates a human-readable summary.
+/// This is used for text-only display contexts (timeline messages).
+#[must_use]
+pub fn format_tool_results_for_display(user_msg: &crate::types::ApiMessageV2) -> String {
+    match &user_msg.content {
+        crate::types::MessageContent::Text(s) => s.clone(),
+        crate::types::MessageContent::Blocks(blocks) => {
+            let mut parts = Vec::new();
+            for block in blocks {
+                if let Some(result) = block.as_tool_result() {
+                    let content = if result.content.len() > 500 {
+                        crate::util::truncate_string_bytes(&result.content, 500, "... (truncated)")
+                    } else {
+                        result.content.clone()
+                    };
+                    let prefix = if result.is_error { "Error: " } else { "" };
+                    parts.push(format!("[Tool result: {}{}]", prefix, content));
+                }
+            }
+            if parts.is_empty() {
+                "[Tool results received]".to_string()
+            } else {
+                parts.join("\n")
+            }
+        }
+    }
+}
+
+/// Completes tool execution and prepares the conversation for continuation.
+///
+/// This is the shared logic between `run_print_mode()` and
+/// [`AppContext::finish_tool_execution_and_continue`](super::context::AppContext::finish_tool_execution_and_continue).
+/// It:
+/// 1. Finishes tool execution and gets continuation data
+/// 2. Builds assistant and user messages from tool results
+/// 3. Adds both to the API message history
+/// 4. Truncates large tool results
+/// 5. Adds a display summary to the timeline
+/// 6. Transitions the tool loop to streaming state
+///
+/// # Errors
+///
+/// Returns an error if `finish_tool_execution()` or `start_streaming()` fails.
+pub fn complete_tool_cycle(state: &mut super::state::AppState) -> anyhow::Result<()> {
+    use crate::types::{Message, Role};
+
+    let continuation = state.finish_tool_execution()?;
+    let (assistant_msg, mut user_msg) = continuation.build_messages();
+
+    state.api_messages_mut().push(assistant_msg);
+
+    truncate_tool_results(&mut user_msg);
+
+    let tool_result_summary = format_tool_results_for_display(&user_msg);
+    state.add_message(Message {
+        role: Role::User,
+        content: tool_result_summary,
+    });
+    state.api_messages_mut().push(user_msg);
+
+    state.tool_loop_mut().start_streaming()?;
+    Ok(())
+}
+
 /// Converts a `ToolUseBlock` to a `tools::ToolCall`.
 ///
 /// This bridges the API types to the executor types.

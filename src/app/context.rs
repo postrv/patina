@@ -149,7 +149,7 @@ impl<'a> AppContext<'a> {
     /// Completes tool execution and sets up continuation streaming.
     ///
     /// Called after all tools have completed execution. Uses
-    /// [`complete_tool_cycle`](super::complete_tool_cycle) for the shared
+    /// [`complete_tool_cycle`](super::tool_loop::complete_tool_cycle) for the shared
     /// message-building logic, then sets up the streaming channel for the
     /// API continuation response.
     ///
@@ -159,7 +159,7 @@ impl<'a> AppContext<'a> {
     pub async fn finish_tool_execution_and_continue(&mut self) -> Result<()> {
         use crate::api::ToolChoice;
 
-        super::complete_tool_cycle(self.state)?;
+        super::tool_loop::complete_tool_cycle(self.state)?;
 
         self.state.mark_session_dirty();
         debug!("Continuing conversation with tool results");
