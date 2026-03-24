@@ -128,6 +128,10 @@ struct ApiRequestV2<'a> {
     stream: bool,
     messages: &'a [crate::types::ApiMessageV2],
     #[serde(skip_serializing_if = "Option::is_none")]
+    system: Option<&'a [SystemBlock]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    thinking: Option<&'a ThinkingConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     tools: Option<&'a [ToolDefinition]>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_choice: Option<&'a ToolChoice>,
@@ -333,6 +337,8 @@ impl AnthropicClient {
             max_tokens: 8192,
             stream: true,
             messages,
+            system: None,
+            thinking: None,
             tools: Some(&tools),
             tool_choice: Some(&ToolChoice::Auto),
         };
@@ -384,6 +390,8 @@ impl AnthropicClient {
             max_tokens: 8192,
             stream: true,
             messages,
+            system: None,
+            thinking: None,
             tools,
             tool_choice,
         };

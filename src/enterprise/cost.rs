@@ -92,6 +92,29 @@ impl ModelPricing {
         let output_cost = (output_tokens as f64 / 1_000_000.0) * self.output_per_million;
         input_cost + output_cost
     }
+
+    /// Calculates the cost including prompt cache adjustments.
+    ///
+    /// Cache read tokens cost 10% of the regular input price.
+    /// Cache creation tokens cost 125% of the regular input price.
+    /// Regular input tokens are reduced by the cache amounts.
+    #[must_use]
+    pub fn calculate_cost_with_cache(
+        &self,
+        input_tokens: u32,
+        output_tokens: u32,
+        cache_read_tokens: u32,
+        cache_creation_tokens: u32,
+    ) -> f64 {
+        let regular_input = input_tokens.saturating_sub(cache_read_tokens + cache_creation_tokens);
+        let regular_input_cost = (regular_input as f64 / 1_000_000.0) * self.input_per_million;
+        let cache_read_cost =
+            (cache_read_tokens as f64 / 1_000_000.0) * self.input_per_million * 0.1;
+        let cache_creation_cost =
+            (cache_creation_tokens as f64 / 1_000_000.0) * self.input_per_million * 1.25;
+        let output_cost = (output_tokens as f64 / 1_000_000.0) * self.output_per_million;
+        regular_input_cost + cache_read_cost + cache_creation_cost + output_cost
+    }
 }
 
 /// Default pricing for known models.
@@ -195,6 +218,10 @@ pub struct UsageRecord {
     pub input_tokens: u32,
     /// Number of output tokens.
     pub output_tokens: u32,
+    /// Tokens read from the prompt cache (90% cheaper).
+    pub cache_read_input_tokens: u32,
+    /// Tokens written to the prompt cache (25% surcharge).
+    pub cache_creation_input_tokens: u32,
     /// Duration of the request.
     pub duration: Duration,
     /// Calculated cost in USD.
@@ -207,17 +234,40 @@ impl UsageRecord {
     /// Cost is calculated automatically based on model pricing.
     #[must_use]
     pub fn new(model: &str, input_tokens: u32, output_tokens: u32, duration: Duration) -> Self {
+        Self::with_cache(model, input_tokens, output_tokens, 0, 0, duration)
+    }
+
+    /// Creates a new usage record with prompt cache statistics.
+    ///
+    /// Cache read tokens cost 10% of regular input, cache creation
+    /// tokens cost 125% of regular input.
+    #[must_use]
+    pub fn with_cache(
+        model: &str,
+        input_tokens: u32,
+        output_tokens: u32,
+        cache_read_input_tokens: u32,
+        cache_creation_input_tokens: u32,
+        duration: Duration,
+    ) -> Self {
         let pricing = default_model_pricing();
         let model_pricing = pricing
             .get(model)
             .copied()
             .unwrap_or(DEFAULT_UNKNOWN_PRICING);
-        let cost = model_pricing.calculate_cost(input_tokens, output_tokens);
+        let cost = model_pricing.calculate_cost_with_cache(
+            input_tokens,
+            output_tokens,
+            cache_read_input_tokens,
+            cache_creation_input_tokens,
+        );
 
         Self {
             model: model.to_string(),
             input_tokens,
             output_tokens,
+            cache_read_input_tokens,
+            cache_creation_input_tokens,
             duration,
             cost,
         }
@@ -514,5 +564,84 @@ mod tests {
         let config = CostConfig::default();
         let tracker = CostTracker::new(config);
         assert_eq!(tracker.session_cost(), 0.0);
+    }
+
+    // =========================================================================
+    // Prompt caching cost tests
+    // =========================================================================
+
+    #[test]
+    fn test_calculate_cost_with_cache_read() {
+        // $3/1M input, $15/1M output (Sonnet pricing)
+        let pricing = ModelPricing::new(3.0, 15.0);
+
+        // 1M tokens all from cache read: 10% of $3 = $0.30
+        let cost = pricing.calculate_cost_with_cache(1_000_000, 0, 1_000_000, 0);
+        assert!((cost - 0.3).abs() < 0.001, "Cache read cost: {cost}");
+    }
+
+    #[test]
+    fn test_calculate_cost_with_cache_creation() {
+        let pricing = ModelPricing::new(3.0, 15.0);
+
+        // 1M tokens all cache creation: 125% of $3 = $3.75
+        let cost = pricing.calculate_cost_with_cache(1_000_000, 0, 0, 1_000_000);
+        assert!((cost - 3.75).abs() < 0.001, "Cache creation cost: {cost}");
+    }
+
+    #[test]
+    fn test_calculate_cost_with_cache_mixed() {
+        let pricing = ModelPricing::new(3.0, 15.0);
+
+        // 100k total input: 50k cache read, 20k cache creation, 30k regular
+        // Regular: 30k/1M * $3 = $0.09
+        // Cache read: 50k/1M * $3 * 0.1 = $0.015
+        // Cache creation: 20k/1M * $3 * 1.25 = $0.075
+        // Output: 10k/1M * $15 = $0.15
+        let cost = pricing.calculate_cost_with_cache(100_000, 10_000, 50_000, 20_000);
+        let expected = 0.09 + 0.015 + 0.075 + 0.15;
+        assert!(
+            (cost - expected).abs() < 0.001,
+            "Mixed cache cost: {cost}, expected: {expected}"
+        );
+    }
+
+    #[test]
+    fn test_usage_record_with_cache() {
+        let record = UsageRecord::with_cache(
+            "claude-3-sonnet-20240229",
+            100_000,
+            10_000,
+            50_000,
+            20_000,
+            Duration::from_secs(1),
+        );
+        assert_eq!(record.cache_read_input_tokens, 50_000);
+        assert_eq!(record.cache_creation_input_tokens, 20_000);
+        assert!(record.cost > 0.0);
+    }
+
+    #[test]
+    fn test_usage_record_without_cache_unchanged() {
+        let record_new = UsageRecord::new(
+            "claude-3-sonnet-20240229",
+            100_000,
+            10_000,
+            Duration::from_secs(1),
+        );
+        let record_cache = UsageRecord::with_cache(
+            "claude-3-sonnet-20240229",
+            100_000,
+            10_000,
+            0,
+            0,
+            Duration::from_secs(1),
+        );
+        assert!(
+            (record_new.cost - record_cache.cost).abs() < 0.001,
+            "No cache should equal regular: {} vs {}",
+            record_new.cost,
+            record_cache.cost
+        );
     }
 }
