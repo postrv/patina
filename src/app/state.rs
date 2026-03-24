@@ -616,6 +616,14 @@ impl UISelectionState {
         self.rendered_lines_cache = crate::tui::wrap_lines_to_strings(lines, width);
     }
 
+    /// Updates the cached rendered lines from pre-wrapped strings.
+    ///
+    /// This accepts lines already wrapped by the render pass (via `RenderFeedback`),
+    /// avoiding redundant wrapping computation.
+    pub fn update_rendered_lines_from_strings(&mut self, wrapped: &[String]) {
+        self.rendered_lines_cache = wrapped.to_vec();
+    }
+
     /// Extracts the selected text from the cached rendered lines.
     ///
     /// Returns `None` if there is no selection or the cache is empty.
@@ -2169,6 +2177,12 @@ impl AppState {
     /// Updates the cached rendered lines for copy operations.
     pub fn update_rendered_lines_cache(&mut self, lines: &[ratatui::text::Line<'_>], width: usize) {
         self.ui_selection.update_rendered_lines_cache(lines, width);
+    }
+
+    /// Updates the cached rendered lines from pre-wrapped strings (via `RenderFeedback`).
+    pub fn update_rendered_lines_from_feedback(&mut self, wrapped: &[String]) {
+        self.ui_selection
+            .update_rendered_lines_from_strings(wrapped);
     }
 
     /// Copies the current selection to clipboard using cached lines.

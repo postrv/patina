@@ -23,6 +23,21 @@ use crate::tui::widgets::continuous_progress::ContinuousProgressWidget;
 use crate::tui::widgets::permission_prompt::{PermissionPromptState, PermissionPromptWidget};
 use crate::types::{ConversationEntry, Timeline};
 
+/// Feedback from the render pass that must be applied to AppState.
+///
+/// `render_messages` computes layout metrics that the scroll and selection
+/// systems need. Instead of mutating `AppState` directly during rendering,
+/// this struct captures the computed values so they can be applied afterwards.
+#[derive(Debug, Clone)]
+pub struct RenderFeedback {
+    /// Wrapped lines from the timeline (for copy/paste line cache).
+    pub wrapped_lines: Vec<String>,
+    /// The viewport height in rows (excluding borders).
+    pub viewport_height: usize,
+    /// The total content height in wrapped rows.
+    pub content_height: usize,
+}
+
 /// Calculates the total number of displayed lines after wrapping.
 ///
 /// This accounts for line wrapping when content is wider than the viewport.
@@ -389,7 +404,13 @@ pub fn render(frame: &mut Frame, state: &mut AppState) {
         ])
         .split(frame.area());
 
-    render_messages(frame, chunks[0], state);
+    let feedback = render_messages(frame, chunks[0], state);
+
+    // Apply render feedback to state (scroll + selection systems need these)
+    state.update_rendered_lines_from_feedback(&feedback.wrapped_lines);
+    state.set_viewport_height(feedback.viewport_height);
+    state.update_content_height(feedback.content_height);
+
     render_status_bar(frame, chunks[1], state);
     render_input(frame, chunks[2], state);
 
@@ -647,7 +668,7 @@ fn render_permission_modal_dangerous(frame: &mut Frame, area: Rect, state: &Perm
     frame.render_widget(Paragraph::new(hints), chunks[8]);
 }
 
-fn render_messages(frame: &mut Frame, area: Rect, state: &mut AppState) {
+fn render_messages(frame: &mut Frame, area: Rect, state: &AppState) -> RenderFeedback {
     // Render using unified timeline
     let throbber = state.throbber_char();
     let timeline_entry_count = state.timeline().len();
@@ -665,22 +686,17 @@ fn render_messages(frame: &mut Frame, area: Rect, state: &mut AppState) {
     // Subtract 2 for borders (left and right)
     let content_width = area.width.saturating_sub(2) as usize;
 
-    // Update cached lines for copy/paste operations
-    // IMPORTANT: Cache the wrapped lines (visual lines) not logical lines,
-    // so that selection coordinates match the visual display
-    state.update_rendered_lines_cache(&lines, content_width);
+    // Wrap lines for copy/paste cache (visual lines, not logical lines)
+    let wrapped_lines = wrap_lines_to_strings(&lines, content_width);
 
     tracing::debug!(
-        cache_size = state.rendered_line_count(),
-        "render_messages: cache updated"
+        cache_size = wrapped_lines.len(),
+        "render_messages: wrapped lines computed"
     );
 
     // Calculate actual wrapped content height
     // Each Line may wrap to multiple displayed lines based on content width
     let wrapped_height = calculate_wrapped_height(&lines, content_width);
-
-    state.set_viewport_height(viewport_height);
-    state.update_content_height(wrapped_height);
 
     // Convert scroll offset: our model uses "offset from bottom" (0 = at bottom),
     // but ratatui Paragraph uses "offset from top" (0 = at top).
@@ -716,6 +732,12 @@ fn render_messages(frame: &mut Frame, area: Rect, state: &mut AppState) {
         .scroll((scroll_from_top as u16, 0));
 
     frame.render_widget(messages, area);
+
+    RenderFeedback {
+        wrapped_lines,
+        viewport_height,
+        content_height: wrapped_height,
+    }
 }
 
 fn render_status_bar(frame: &mut Frame, area: Rect, state: &AppState) {
