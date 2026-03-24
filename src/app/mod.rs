@@ -497,30 +497,8 @@ async fn run_print_mode(config: &Config, prompt: &str) -> Result<()> {
             break;
         }
 
-        // Finish execution and get continuation data
-        let continuation = state.finish_tool_execution()?;
-
-        // Build the messages for the conversation
-        let (assistant_msg, mut user_msg) = continuation.build_messages();
-
-        // Add to API message history for conversation continuation
-        // Note: The assistant message is NOT added to the timeline here because
-        // finalize_streaming_for_tool_use() already converted the streaming entry
-        // to an AssistantMessage. Adding it again would cause duplicate messages.
-        state.api_messages_mut().push(assistant_msg);
-
-        // Truncate large tool result content blocks before adding to conversation
-        crate::app::tool_loop::truncate_tool_results(&mut user_msg);
-
-        // Add tool results to both timeline (for display) and API (for continuation)
-        let tool_result_summary = format_tool_results_for_display(&user_msg);
-        state.add_message(Message {
-            role: Role::User,
-            content: tool_result_summary,
-        });
-        state.api_messages_mut().push(user_msg);
-
-        state.tool_loop_mut().start_streaming()?;
+        // Complete tool execution: build messages, add to history, truncate
+        complete_tool_cycle(&mut state)?;
 
         let (tx, mut rx) = tokio::sync::mpsc::channel(STREAMING_CHANNEL_BUFFER);
         let api_messages = state.prepare_api_messages_for_send(client.model()).await;
@@ -689,57 +667,13 @@ pub(crate) async fn finish_tool_execution_and_continue(
 ) -> Result<()> {
     use crate::api::ToolChoice;
 
-    // Finish execution and get continuation data
-    let continuation = state.finish_tool_execution()?;
-
-    // Build the messages for the conversation
-    let (assistant_msg, mut user_msg) = continuation.build_messages();
-
-    // P0-2: Debug logging to verify tool results reach API
-    if let Some(blocks) = assistant_msg.content.as_blocks() {
-        let tool_use_count = blocks.iter().filter(|b| b.is_tool_use()).count();
-        let text_count = blocks.iter().filter(|b| b.is_text()).count();
-        debug!(
-            text_blocks = text_count,
-            tool_use_blocks = tool_use_count,
-            "Assistant continuation message built"
-        );
-    }
-    if let Some(blocks) = user_msg.content.as_blocks() {
-        let tool_result_count = blocks.iter().filter(|b| b.is_tool_result()).count();
-        debug!(
-            tool_result_blocks = tool_result_count,
-            "User tool_result message built"
-        );
-    }
-
-    // Add to API message history for conversation continuation
-    // Note: The assistant message is NOT added to the timeline here because
-    // finalize_streaming_for_tool_use() already converted the streaming entry
-    // to an AssistantMessage. Adding it again would cause duplicate messages.
-    state.api_messages_mut().push(assistant_msg);
-
-    // Truncate large tool result content blocks before adding to conversation
-    // history. This prevents token explosion when tool results are very large
-    // (e.g., file reads, command output).
-    crate::app::tool_loop::truncate_tool_results(&mut user_msg);
-
-    // Add tool results to both timeline (for display) and API (for continuation)
-    let tool_result_summary = format_tool_results_for_display(&user_msg);
-    state.add_message(Message {
-        role: Role::User,
-        content: tool_result_summary,
-    });
-    state.api_messages_mut().push(user_msg);
+    // Complete tool execution: build messages, add to history, truncate, start streaming
+    complete_tool_cycle(state)?;
 
     // SessionHandler observer saves when it sees the dirty flag.
     state.mark_session_dirty();
 
-    // Continue the conversation with Claude using truncated API messages
     debug!("Continuing conversation with tool results");
-
-    // Start streaming the continuation - this sets state to Streaming
-    state.tool_loop_mut().start_streaming()?;
 
     // Set up the streaming channel for the main event loop to receive
     let (tx, rx) = tokio::sync::mpsc::channel(STREAMING_CHANNEL_BUFFER);
@@ -765,8 +699,39 @@ pub(crate) async fn finish_tool_execution_and_continue(
         }
     });
 
-    // Return immediately - the main event loop will receive chunks via recv_api_chunk()
-    // When another tool_use stop is received, this function will be called again
+    Ok(())
+}
+
+/// Completes tool execution and prepares the conversation for continuation.
+///
+/// This is the shared logic between `run_print_mode()` and
+/// `finish_tool_execution_and_continue()`. It:
+/// 1. Finishes tool execution and gets continuation data
+/// 2. Builds assistant and user messages from tool results
+/// 3. Adds both to the API message history
+/// 4. Truncates large tool results
+/// 5. Adds a display summary to the timeline
+/// 6. Transitions the tool loop to streaming state
+///
+/// # Errors
+///
+/// Returns an error if `finish_tool_execution()` or `start_streaming()` fails.
+fn complete_tool_cycle(state: &mut AppState) -> Result<()> {
+    let continuation = state.finish_tool_execution()?;
+    let (assistant_msg, mut user_msg) = continuation.build_messages();
+
+    state.api_messages_mut().push(assistant_msg);
+
+    crate::app::tool_loop::truncate_tool_results(&mut user_msg);
+
+    let tool_result_summary = format_tool_results_for_display(&user_msg);
+    state.add_message(Message {
+        role: Role::User,
+        content: tool_result_summary,
+    });
+    state.api_messages_mut().push(user_msg);
+
+    state.tool_loop_mut().start_streaming()?;
     Ok(())
 }
 
