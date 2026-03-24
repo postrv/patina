@@ -290,7 +290,7 @@ pub async fn run(config: Config) -> Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let client: std::sync::Arc<dyn LlmProvider> =
+    let mut client: std::sync::Arc<dyn LlmProvider> =
         std::sync::Arc::from(crate::api::provider::create_provider(&config));
 
     // Start IDE server if port is specified
@@ -309,7 +309,7 @@ pub async fn run(config: Config) -> Result<()> {
         state.submit_message(&client, prompt.clone()).await?;
     }
 
-    let result = event_loop(&mut terminal, &client, &mut state, &session_manager).await;
+    let result = event_loop(&mut terminal, &mut client, &mut state, &session_manager).await;
 
     // Shut down MCP servers before terminal cleanup
     if let Some(manager) = state.mcp_manager_mut() {
@@ -376,7 +376,7 @@ pub fn create_dispatcher() -> dispatch::EventDispatcher {
 /// Propagates errors from rendering, event handling, or session saving.
 async fn event_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
-    client: &std::sync::Arc<dyn LlmProvider>,
+    client: &mut std::sync::Arc<dyn LlmProvider>,
     state: &mut AppState,
     session_manager: &SessionManager,
 ) -> Result<()> {
@@ -400,6 +400,11 @@ async fn event_loop(
         let event = ctx.recv_event(&mut events, &mut tick_interval).await;
         let is_quit = event.is_quit();
         let _ = dispatcher.dispatch(&event, &mut ctx).await?;
+
+        // Propagate client changes (e.g., from /model command) back to the loop.
+        if !std::sync::Arc::ptr_eq(client, &ctx.client) {
+            *client = ctx.client.clone();
+        }
 
         if is_quit || ctx.state.wants_quit() {
             break;

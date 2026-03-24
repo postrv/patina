@@ -19,6 +19,7 @@
 //!     CommandResult::NotACommand => println!("Not a slash command"),
 //!     CommandResult::UnknownCommand(cmd) => println!("Unknown: {}", cmd),
 //!     CommandResult::Error(e) => println!("Error: {}", e),
+//!     CommandResult::Action(action) => println!("Action: {:?}", action),
 //! }
 //! ```
 
@@ -55,6 +56,20 @@ pub struct PluginInfo {
     pub skills: Vec<String>,
 }
 
+/// An action that requires state mutation, dispatched back to the event loop.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CommandAction {
+    /// Trigger context compaction with optional custom instructions.
+    Compact {
+        /// Optional instructions to guide the compaction summarization.
+        custom_instructions: Option<String>,
+    },
+    /// Clear the conversation history while preserving configuration.
+    Clear,
+    /// Switch to a different model by name or alias.
+    SetModel(String),
+}
+
 /// Result of handling a slash command.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CommandResult {
@@ -69,6 +84,9 @@ pub enum CommandResult {
 
     /// An error occurred while executing the command.
     Error(String),
+
+    /// The command requires a state mutation via the event loop.
+    Action(CommandAction),
 }
 
 /// Handler for slash commands in the TUI.
@@ -197,6 +215,9 @@ impl SlashCommandHandler {
             "memory" => self.handle_memory(&args),
             "plugins" => self.handle_plugins(),
             "terminal-setup" => self.handle_terminal_setup(),
+            "compact" => self.handle_compact(&args),
+            "clear" => CommandResult::Action(CommandAction::Clear),
+            "model" => self.handle_model(&args),
             _ => CommandResult::UnknownCommand(command_name.to_string()),
         }
     }
@@ -712,6 +733,10 @@ impl SlashCommandHandler {
   /agent <subcommand>       - Manage worktree agents
     Subcommands: new, list, status, merge, stop
 
+  /clear                    - Clear conversation history
+
+  /compact [instructions]   - Compact context window
+
   /continuous <subcommand>  - Manage continuous coding loop
     Subcommands: start, stop, status
 
@@ -727,6 +752,8 @@ impl SlashCommandHandler {
 
   /memory <subcommand>      - Manage persistent memory
     Subcommands: list, add, remove, search
+
+  /model <name>             - Switch model (sonnet, opus, haiku)
 
   /plugins                  - List loaded plugins
 
@@ -944,6 +971,47 @@ Other terminals:
                 CommandResult::Executed(help_text.to_string())
             }
 
+            Some("compact") => {
+                let help_text = r#"/compact - Compact context window
+
+Usage:
+  /compact                    Summarize old messages to free context space
+  /compact <instructions>     Compact with custom summarization guidance
+
+Examples:
+  /compact
+  /compact preserve code blocks and error messages"#;
+                CommandResult::Executed(help_text.to_string())
+            }
+
+            Some("clear") => {
+                let help_text = r#"/clear - Clear conversation history
+
+Usage:
+  /clear       Reset the conversation, keeping configuration and cost data
+
+Preserves: working directory, model, memory, MCP servers, plugins, cost tracker.
+Resets: messages, timeline, tool state, token budget, scroll position."#;
+                CommandResult::Executed(help_text.to_string())
+            }
+
+            Some("model") => {
+                let help_text = r#"/model - Switch the active model
+
+Usage:
+  /model                Show usage and current model
+  /model <name>         Switch to the specified model
+
+Model aliases:
+  sonnet    → claude-sonnet-4-20250514
+  opus      → claude-opus-4-20250514
+  haiku     → claude-haiku-4-5-20251001
+
+You can also use a full model ID:
+  /model claude-sonnet-4-5-20250929"#;
+                CommandResult::Executed(help_text.to_string())
+            }
+
             Some(cmd) => CommandResult::UnknownCommand(cmd.to_string()),
         }
     }
@@ -1033,11 +1101,39 @@ Other terminals:
         CommandResult::Executed(output)
     }
 
+    /// Handles the `/compact` command.
+    fn handle_compact(&self, args: &str) -> CommandResult {
+        let custom = if args.is_empty() {
+            None
+        } else {
+            Some(args.to_string())
+        };
+        CommandResult::Action(CommandAction::Compact {
+            custom_instructions: custom,
+        })
+    }
+
+    /// Handles the `/model` command.
+    fn handle_model(&self, args: &str) -> CommandResult {
+        if args.is_empty() {
+            return CommandResult::Executed(
+                "Usage: /model <name>\n\n\
+                 Aliases: sonnet, opus, haiku\n\
+                 Or a full model ID: claude-sonnet-4-20250514"
+                    .to_string(),
+            );
+        }
+        let model_name = resolve_model_alias(args.trim());
+        CommandResult::Action(CommandAction::SetModel(model_name))
+    }
+
     /// Returns available command names for tab completion.
     #[must_use]
     pub fn available_commands(&self) -> Vec<&'static str> {
         vec![
             "agent",
+            "clear",
+            "compact",
             "continuous",
             "context",
             "cost",
@@ -1046,6 +1142,7 @@ Other terminals:
             "help",
             "mcp",
             "memory",
+            "model",
             "plugins",
             "terminal-setup",
             "worktree",
@@ -1088,6 +1185,20 @@ Other terminals:
                 }
             })
             .collect()
+    }
+}
+
+/// Resolves a model alias to a full model ID.
+///
+/// Supported aliases: `sonnet`, `opus`, `haiku`. Any other input
+/// is returned as-is (assumed to be a full model ID).
+#[must_use]
+pub fn resolve_model_alias(alias: &str) -> String {
+    match alias {
+        "sonnet" => "claude-sonnet-4-20250514".to_string(),
+        "opus" => "claude-opus-4-20250514".to_string(),
+        "haiku" => "claude-haiku-4-5-20251001".to_string(),
+        other => other.to_string(),
     }
 }
 

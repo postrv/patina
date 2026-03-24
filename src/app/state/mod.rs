@@ -2556,12 +2556,24 @@ impl AppState {
         self.dirty.messages = true;
     }
 
-    /// Clears all conversation state (timeline, API messages, tool blocks).
+    /// Clears conversation history while preserving configuration.
+    ///
+    /// Resets messages, timeline, tool state, token budget, and scroll position.
+    /// Preserves working directory, model, memory, MCP servers, plugins, cost
+    /// tracker, system prompt, effort, and thinking budget.
     pub fn clear_conversation(&mut self) {
         self.api_messages.clear();
         self.tool_state.tool_blocks.clear();
+        self.tool_state.pending_permission = None;
         self.timeline = Timeline::new();
+        self.reset_tool_loop();
+        self.reset_token_budget();
+        self.thinking_buffer.clear();
+        self.scroll = crate::tui::scroll::ScrollState::new();
+        self.loading = false;
+        self.streaming_rx = None;
         self.dirty.messages = true;
+        self.mark_session_dirty();
     }
 
     // ========================================================================

@@ -212,6 +212,23 @@ impl AnthropicClient {
         }
     }
 
+    /// Creates a new client with the given model, reading API key from environment.
+    ///
+    /// Reads `ANTHROPIC_API_KEY` from environment. Returns an error if the
+    /// key is not set.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `ANTHROPIC_API_KEY` is not set.
+    pub fn with_model(model: &str) -> anyhow::Result<Self> {
+        let api_key = std::env::var("ANTHROPIC_API_KEY")
+            .map(SecretString::from)
+            .map_err(|_| anyhow::anyhow!("ANTHROPIC_API_KEY not set"))?;
+        let base_url =
+            std::env::var("ANTHROPIC_BASE_URL").unwrap_or_else(|_| DEFAULT_BASE_URL.to_string());
+        Ok(Self::new_with_base_url(api_key, model, &base_url))
+    }
+
     /// Returns the model identifier used by this client.
     ///
     /// This is used for calculating context limits during auto-compaction.

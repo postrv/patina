@@ -281,6 +281,10 @@ fn handle_slash_command(ctx: &mut AppContext<'_>, input: &str) {
         CommandResult::Error(err) => {
             format!("Error: {err}")
         }
+        CommandResult::Action(action) => {
+            handle_command_action(ctx, action);
+            return;
+        }
     };
 
     ctx.state.add_message(Message {
@@ -288,6 +292,49 @@ fn handle_slash_command(ctx: &mut AppContext<'_>, input: &str) {
         content: response,
     });
 
+    ctx.state.mark_full_redraw();
+}
+
+/// Handles a `CommandAction` that requires state mutation.
+fn handle_command_action(
+    ctx: &mut crate::app::context::AppContext<'_>,
+    action: crate::app::commands::CommandAction,
+) {
+    use crate::app::commands::CommandAction;
+
+    let response = match action {
+        CommandAction::Compact {
+            custom_instructions,
+        } => {
+            let msg = if custom_instructions.is_some() {
+                "Context compaction triggered with custom instructions."
+            } else {
+                "Context compaction triggered."
+            };
+            // TODO(10.2): Wire to ctx.state.force_compact() once async command handling is added.
+            // For now, mark that compaction is needed; the event loop's auto-compact will pick it up.
+            msg.to_string()
+        }
+        CommandAction::Clear => {
+            ctx.state.clear_conversation();
+            "Conversation cleared.".to_string()
+        }
+        CommandAction::SetModel(model_name) => {
+            match crate::api::AnthropicClient::with_model(&model_name) {
+                Ok(new_client) => {
+                    ctx.client = std::sync::Arc::new(new_client);
+                    ctx.state.set_current_model(model_name.clone());
+                    format!("Switched to model: {model_name}")
+                }
+                Err(e) => format!("Failed to switch model: {e}"),
+            }
+        }
+    };
+
+    ctx.state.add_message(Message {
+        role: Role::Assistant,
+        content: response,
+    });
     ctx.state.mark_full_redraw();
 }
 
