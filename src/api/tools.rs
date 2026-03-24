@@ -82,7 +82,10 @@ pub enum ToolChoice {
 
 /// Returns the default set of tools for Patina.
 ///
-/// Includes: bash, read_file, write_file, edit, list_files, glob, grep, web_fetch, web_search, analyze_image
+/// Returns the default set of built-in tools for agentic operation.
+///
+/// Includes: bash, read_file, write_file, edit, list_files, glob, grep,
+/// web_fetch, web_search, analyze_image, lsp, todo_write
 #[must_use]
 pub fn default_tools() -> Vec<ToolDefinition> {
     vec![
@@ -96,6 +99,8 @@ pub fn default_tools() -> Vec<ToolDefinition> {
         web_fetch_tool(),
         web_search_tool(),
         vision_tool(),
+        lsp_tool(),
+        todo_write_tool(),
     ]
 }
 
@@ -404,6 +409,44 @@ pub fn lsp_tool() -> ToolDefinition {
     )
 }
 
+/// Task management tool for persistent todo tracking.
+///
+/// Allows adding, completing, removing, and listing persistent tasks.
+/// Tasks are stored in a JSON file and survive across sessions.
+#[must_use]
+pub fn todo_write_tool() -> ToolDefinition {
+    ToolDefinition::new(
+        "todo_write",
+        "Manage persistent todo items for tracking implementation progress. \
+         Supports add, complete, remove, and list operations. \
+         Items persist across sessions in a local JSON file.",
+        json!({
+            "type": "object",
+            "properties": {
+                "operation": {
+                    "type": "string",
+                    "enum": ["add", "complete", "remove", "list"],
+                    "description": "The operation to perform"
+                },
+                "content": {
+                    "type": "string",
+                    "description": "Task content (required for add)"
+                },
+                "id": {
+                    "type": "string",
+                    "description": "Todo item ID or prefix (required for complete and remove)"
+                },
+                "priority": {
+                    "type": "string",
+                    "enum": ["high", "medium", "low"],
+                    "description": "Priority level for new items (default: medium)"
+                }
+            },
+            "required": ["operation"]
+        }),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -455,7 +498,7 @@ mod tests {
     fn test_default_tools_contains_all_tools() {
         let tools = default_tools();
 
-        assert_eq!(tools.len(), 10, "should have 10 default tools");
+        assert_eq!(tools.len(), 12, "should have 12 default tools");
 
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains(&"bash"), "should contain bash");
@@ -471,6 +514,8 @@ mod tests {
             names.contains(&"analyze_image"),
             "should contain analyze_image"
         );
+        assert!(names.contains(&"lsp"), "should contain lsp");
+        assert!(names.contains(&"todo_write"), "should contain todo_write");
     }
 
     #[test]

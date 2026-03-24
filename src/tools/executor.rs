@@ -207,6 +207,8 @@ impl ToolExecutor {
             "web_fetch" => self.web_fetch(&call.input).await,
             "web_search" => self.web_search(&call.input).await,
             "analyze_image" => self.analyze_image(&call.input).await,
+            "lsp" => self.execute_lsp(&call.input).await,
+            "todo_write" => self.execute_todo_write(&call.input).await,
             _ => Ok(ToolResult::Error(format!("Unknown tool: {}", call.name))),
         }
     }
@@ -1073,6 +1075,77 @@ impl ToolExecutor {
                 );
                 Ok(ToolResult::Error(format!("Failed to analyze image: {e}")))
             }
+        }
+    }
+
+    async fn execute_lsp(&self, input: &serde_json::Value) -> Result<ToolResult> {
+        let operation: super::lsp::LspOperation = serde_json::from_value(input.clone())
+            .map_err(|e| anyhow::anyhow!("Invalid LSP operation: {e}"))?;
+        let tool = super::lsp::LspTool::new(self.working_dir.clone());
+        match tool.execute(&operation).await {
+            Ok(result) => Ok(ToolResult::Success(super::lsp::LspTool::format_result(
+                &result,
+            ))),
+            Err(e) => Ok(ToolResult::Error(format!("LSP error: {e}"))),
+        }
+    }
+
+    async fn execute_todo_write(&self, input: &serde_json::Value) -> Result<ToolResult> {
+        let operation = input
+            .get("operation")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("Missing operation"))?;
+
+        let data_dir = directories::ProjectDirs::from("com", "patina", "patina")
+            .map(|d| d.data_dir().to_path_buf())
+            .unwrap_or_else(|| self.working_dir.join(".patina"));
+        let store = super::todo::TodoStore::new(data_dir.join("todos.json"));
+
+        match operation {
+            "add" => {
+                let content = input
+                    .get("content")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| anyhow::anyhow!("Missing content for add operation"))?;
+                let priority = input
+                    .get("priority")
+                    .and_then(|v| v.as_str())
+                    .map(|p| match p {
+                        "high" => super::todo::Priority::High,
+                        "low" => super::todo::Priority::Low,
+                        _ => super::todo::Priority::Medium,
+                    })
+                    .unwrap_or_default();
+                let item = store.add(content, priority)?;
+                Ok(ToolResult::Success(format!(
+                    "Added todo: [{}] {}",
+                    &item.id[..8],
+                    item.content
+                )))
+            }
+            "complete" => {
+                let id = input
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| anyhow::anyhow!("Missing id for complete operation"))?;
+                store.complete(id)?;
+                Ok(ToolResult::Success(format!("Completed todo: {id}")))
+            }
+            "remove" => {
+                let id = input
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| anyhow::anyhow!("Missing id for remove operation"))?;
+                store.remove(id)?;
+                Ok(ToolResult::Success(format!("Removed todo: {id}")))
+            }
+            "list" => {
+                let formatted = store.format_list()?;
+                Ok(ToolResult::Success(formatted))
+            }
+            other => Ok(ToolResult::Error(format!(
+                "Unknown todo_write operation: {other}"
+            ))),
         }
     }
 }
