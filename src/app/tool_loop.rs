@@ -1182,21 +1182,15 @@ impl ToolLoop {
 
         let mut needs_permission = Vec::new();
 
-        // Get IDs of tools to execute
-        let tool_ids: Vec<String> = self
+        // Collect approved tools upfront to avoid borrowing self during iteration
+        let approved_tools: Vec<(String, ToolUseBlock)> = self
             .pending_calls
             .values()
             .filter(|c| c.approved && !c.executed)
-            .map(|c| c.tool_use.id.clone())
+            .map(|c| (c.tool_use.id.clone(), c.tool_use.clone()))
             .collect();
 
-        for tool_id in tool_ids {
-            // Get the tool_use - we need to clone to avoid borrow issues
-            let tool_use = {
-                let call = self.pending_calls.get(&tool_id).unwrap();
-                call.tool_use.clone()
-            };
-
+        for (tool_id, tool_use) in approved_tools {
             match execute_tool(&tool_use, executor, mcp_manager).await {
                 Ok(result_block) => {
                     if let Some(call) = self.pending_calls.get_mut(&tool_id) {

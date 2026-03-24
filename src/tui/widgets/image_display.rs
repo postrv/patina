@@ -291,8 +291,8 @@ impl Widget for ImageDisplayWidget<'_> {
                 self.render_halfblock(area, buf);
             }
             GraphicsProtocol::Sixel | GraphicsProtocol::Kitty | GraphicsProtocol::ITerm2 => {
-                // TODO: Implement advanced graphics protocols
-                // For now, fall back to half-block
+                // Advanced protocols fall back to half-block rendering.
+                // Half-block provides universal terminal compatibility.
                 self.render_halfblock(area, buf);
             }
         }
