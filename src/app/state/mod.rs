@@ -36,6 +36,8 @@ use crate::app::STREAMING_CHANNEL_BUFFER;
 use crate::context::compression::{
     CompactionMetrics, CompactionMetricsSummary, CompressionOrchestrator,
 };
+use crate::api::multi_model::MultiModelClient;
+use crate::enterprise::audit::{AuditConfig, AuditLogger};
 use crate::enterprise::cost::{CostConfig, CostTracker, UsageRecord};
 use crate::hooks::HookManager;
 use crate::mcp::connection::McpConnection;
@@ -225,8 +227,15 @@ pub struct AppState {
     /// Cost tracker for session usage accounting.
     cost_tracker: CostTracker,
 
+    /// Audit logger for enterprise compliance tracking.
+    audit_logger: AuditLogger,
+
     /// Model name for cost tracking (needed when recording usage events).
     current_model: String,
+
+    /// Optional multi-model client for provider-aware model switching.
+    /// Configured at startup when multiple providers are available.
+    multi_model: Option<MultiModelClient>,
 
     /// Persistent memory store for cross-session context.
     memory_store: Option<crate::memory::store::MemoryStore>,
@@ -448,7 +457,9 @@ impl AppState {
             terminal_height: 24,
             mcp_manager: None,
             cost_tracker: CostTracker::new(CostConfig::default()),
+            audit_logger: AuditLogger::new(AuditConfig::default()),
             current_model: String::new(),
+            multi_model: None,
             memory_store: None,
             effort: EffortLevel::Auto,
             thinking_budget: None,
@@ -3180,6 +3191,28 @@ impl AppState {
     #[must_use]
     pub fn cost_tracker(&self) -> &CostTracker {
         &self.cost_tracker
+    }
+
+    /// Returns a reference to the audit logger.
+    #[must_use]
+    pub fn audit_logger(&self) -> &AuditLogger {
+        &self.audit_logger
+    }
+
+    /// Returns a mutable reference to the audit logger.
+    pub fn audit_logger_mut(&mut self) -> &mut AuditLogger {
+        &mut self.audit_logger
+    }
+
+    /// Returns the multi-model client, if configured.
+    #[must_use]
+    pub fn multi_model(&self) -> Option<&MultiModelClient> {
+        self.multi_model.as_ref()
+    }
+
+    /// Sets the multi-model client for provider-aware model switching.
+    pub fn set_multi_model(&mut self, client: MultiModelClient) {
+        self.multi_model = Some(client);
     }
 
     /// Returns a formatted cost summary for display.

@@ -40,7 +40,7 @@ use secrecy::SecretString;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 
-use crate::types::{ApiMessageV2, MessageContent};
+// ApiMessageV2 and MessageContent are used in tests via the re-exported functions
 
 /// Supported AI providers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -284,6 +284,7 @@ pub use crate::types::image::{contains_images, select_model_for_content};
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::{ApiMessageV2, MessageContent};
 
     #[test]
     fn test_model_provider_equality() {

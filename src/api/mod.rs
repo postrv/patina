@@ -2,7 +2,6 @@
 
 pub mod compaction;
 pub mod context;
-#[cfg(feature = "multi-model")]
 pub mod multi_model;
 pub mod provider;
 pub mod providers;
