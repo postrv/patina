@@ -126,6 +126,10 @@ impl LegacySseTransport {
         let base_url =
             reqwest::Url::parse(sse_url).map_err(|e| LegacySseError::InvalidUrl(e.to_string()))?;
 
+        // Validate the SSE URL against SSRF (no localhost/private IPs)
+        crate::util::url_validation::validate_url(sse_url, false)
+            .map_err(|e| LegacySseError::InvalidUrl(e.to_string()))?;
+
         // GET the SSE endpoint
         let response = http_client
             .get(sse_url)
@@ -161,6 +165,9 @@ impl LegacySseTransport {
                         if event_type == "endpoint" && !event_data.is_empty() {
                             let resolved = base_url
                                 .join(&event_data)
+                                .map_err(|e| LegacySseError::InvalidUrl(e.to_string()))?;
+                            // Validate the server-provided endpoint URL against SSRF
+                            crate::util::url_validation::validate_url(resolved.as_str(), false)
                                 .map_err(|e| LegacySseError::InvalidUrl(e.to_string()))?;
                             return Ok::<String, LegacySseError>(resolved.to_string());
                         }
@@ -339,6 +346,35 @@ mod tests {
     fn transport_is_send() {
         fn assert_send<T: Send>() {}
         assert_send::<LegacySseTransport>();
+    }
+
+    #[tokio::test]
+    async fn test_connect_rejects_private_ip() {
+        let result = LegacySseTransport::connect(
+            "http://169.254.169.254/latest/meta-data/",
+            &None,
+            Duration::from_secs(1),
+        )
+        .await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, LegacySseError::InvalidUrl(_)),
+            "Expected InvalidUrl for private IP, got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_connect_rejects_localhost() {
+        let result =
+            LegacySseTransport::connect("http://127.0.0.1/sse", &None, Duration::from_secs(1))
+                .await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, LegacySseError::InvalidUrl(_)),
+            "Expected InvalidUrl for localhost, got: {err}"
+        );
     }
 
     #[tokio::test]

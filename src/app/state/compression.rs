@@ -43,6 +43,12 @@ pub struct CompressionState {
 
     /// Token budget tracking for the current session.
     pub(crate) token_budget: TokenBudget,
+
+    /// Whether a manual compaction has been requested (e.g. via `/compact`).
+    pub(crate) compaction_requested: bool,
+
+    /// Optional custom instructions for the next compaction (set by `/compact`).
+    pub(crate) compaction_custom_instructions: Option<String>,
 }
 
 impl CompressionState {
@@ -235,6 +241,35 @@ impl CompressionState {
     pub fn compaction_metrics(&self) -> &CompactionMetrics {
         &self.compaction_metrics
     }
+
+    /// Returns whether a manual compaction has been requested.
+    #[must_use]
+    pub fn is_compaction_requested(&self) -> bool {
+        self.compaction_requested
+    }
+
+    /// Requests a manual compaction, optionally with custom instructions.
+    ///
+    /// The next call to `maybe_compact` (or similar) in the event loop
+    /// should check this flag and force compaction regardless of threshold.
+    pub fn request_compaction(&mut self, custom_instructions: Option<String>) {
+        self.compaction_requested = true;
+        self.compaction_custom_instructions = custom_instructions;
+    }
+
+    /// Takes the compaction request, clearing the flag and returning any
+    /// custom instructions that were provided.
+    ///
+    /// Returns `None` if no compaction was requested.
+    #[must_use]
+    pub fn take_compaction_request(&mut self) -> Option<Option<String>> {
+        if self.compaction_requested {
+            self.compaction_requested = false;
+            Some(self.compaction_custom_instructions.take())
+        } else {
+            None
+        }
+    }
 }
 
 #[cfg(test)]
@@ -256,6 +291,8 @@ mod tests {
             compaction_state: None,
             compaction_metrics: Arc::new(CompactionMetrics::new()),
             token_budget: TokenBudget::new(100_000),
+            compaction_requested: false,
+            compaction_custom_instructions: None,
         }
     }
 
@@ -393,5 +430,38 @@ mod tests {
         // Must not panic when compaction_state is None.
         state.update_compaction_progress(0.75);
         assert!(state.compaction_state().is_none());
+    }
+
+    #[test]
+    fn test_compression_state_request_compaction() {
+        let mut state = make_state();
+        assert!(!state.is_compaction_requested());
+
+        state.request_compaction(Some("focus on code".to_string()));
+        assert!(state.is_compaction_requested());
+
+        let instructions = state.take_compaction_request();
+        assert_eq!(instructions, Some(Some("focus on code".to_string())));
+        assert!(
+            !state.is_compaction_requested(),
+            "Flag should be cleared after take"
+        );
+    }
+
+    #[test]
+    fn test_compression_state_request_compaction_no_instructions() {
+        let mut state = make_state();
+        state.request_compaction(None);
+        assert!(state.is_compaction_requested());
+
+        let instructions = state.take_compaction_request();
+        assert_eq!(instructions, Some(None));
+        assert!(!state.is_compaction_requested());
+    }
+
+    #[test]
+    fn test_take_compaction_request_returns_none_when_not_requested() {
+        let mut state = make_state();
+        assert_eq!(state.take_compaction_request(), None);
     }
 }

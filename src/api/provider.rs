@@ -95,11 +95,10 @@ pub struct RequestOptions {
 ///
 /// * `config` - The application configuration containing provider settings.
 ///
-/// # Panics
+/// # Errors
 ///
-/// Panics if the provider config is invalid (e.g., OpenRouter without an API key).
-/// Call [`ProviderConfig::validate()`](crate::types::config::ProviderConfig::validate)
-/// before calling this function to handle errors gracefully.
+/// Returns an error if the provider config is invalid (e.g., OpenRouter without
+/// an API key, or Fallback with an invalid sub-provider).
 ///
 /// # Examples
 ///
@@ -113,42 +112,42 @@ pub struct RequestOptions {
 ///     "claude-sonnet-4",
 ///     std::path::PathBuf::from("."),
 /// );
-/// let provider = create_provider(&config);
+/// let provider = create_provider(&config)?;
 /// assert_eq!(provider.name(), "anthropic");
 /// ```
-#[must_use]
-pub fn create_provider(config: &crate::types::Config) -> Box<dyn LlmProvider> {
+pub fn create_provider(config: &crate::types::Config) -> Result<Box<dyn LlmProvider>> {
     create_provider_from_config(&config.provider, &config.api_key, &config.model)
 }
 
 /// Creates a provider from a [`ProviderConfig`], using the given API key and
 /// model as defaults for Anthropic providers.
 ///
-/// # Panics
+/// # Errors
 ///
-/// Panics if the provider config is invalid (e.g., OpenRouter without an API key,
-/// or Fallback with an empty chain).
-#[must_use]
+/// Returns an error if the provider config is invalid (e.g., OpenRouter without
+/// an API key or model, or Fallback with an invalid sub-provider).
 fn create_provider_from_config(
     provider_config: &crate::types::config::ProviderConfig,
     api_key: &secrecy::SecretString,
     model: &str,
-) -> Box<dyn LlmProvider> {
+) -> Result<Box<dyn LlmProvider>> {
     use crate::types::config::ProviderKind;
 
     match provider_config.kind {
-        ProviderKind::Anthropic => Box::new(super::AnthropicClient::new(api_key.clone(), model)),
+        ProviderKind::Anthropic => Ok(Box::new(super::AnthropicClient::new(
+            api_key.clone(),
+            model,
+        ))),
         ProviderKind::OpenRouter => {
             use crate::api::providers::openrouter::OpenRouterProvider;
 
             let or_key = provider_config
                 .openrouter_api_key
                 .clone()
-                .expect("OpenRouter provider requires an API key");
-            let or_model = provider_config
-                .openrouter_model
-                .as_deref()
-                .expect("OpenRouter provider requires a model identifier");
+                .ok_or_else(|| anyhow::anyhow!("OpenRouter provider requires an API key"))?;
+            let or_model = provider_config.openrouter_model.as_deref().ok_or_else(|| {
+                anyhow::anyhow!("OpenRouter provider requires a model identifier")
+            })?;
 
             let mut provider = OpenRouterProvider::new(or_key, or_model);
 
@@ -159,16 +158,16 @@ fn create_provider_from_config(
                 provider = provider.with_app_name(name.clone());
             }
 
-            Box::new(provider)
+            Ok(Box::new(provider))
         }
         ProviderKind::Fallback => {
             let providers: Vec<Box<dyn LlmProvider>> = provider_config
                 .fallback_chain
                 .iter()
                 .map(|pc| create_provider_from_config(pc, api_key, model))
-                .collect();
+                .collect::<Result<Vec<_>>>()?;
 
-            Box::new(FallbackProvider::new(providers))
+            Ok(Box::new(FallbackProvider::new(providers)))
         }
     }
 }
@@ -931,7 +930,7 @@ data: {"type":"message_stop"}
             std::path::PathBuf::from("."),
         );
 
-        let provider = create_provider(&config);
+        let provider = create_provider(&config).expect("should create Anthropic provider");
         assert_eq!(provider.name(), "anthropic");
         assert_eq!(provider.model(), "claude-sonnet-4");
     }
@@ -948,7 +947,7 @@ data: {"type":"message_stop"}
         )
         .with_provider(ProviderConfig::anthropic());
 
-        let provider = create_provider(&config);
+        let provider = create_provider(&config).expect("should create Anthropic provider");
         assert_eq!(provider.name(), "anthropic");
         assert_eq!(provider.model(), "claude-opus-4-20250514");
     }
@@ -968,7 +967,7 @@ data: {"type":"message_stop"}
             "anthropic/claude-sonnet-4",
         ));
 
-        let provider = create_provider(&config);
+        let provider = create_provider(&config).expect("should create OpenRouter provider");
         assert_eq!(provider.name(), "openrouter");
         assert_eq!(provider.model(), "anthropic/claude-sonnet-4");
     }
@@ -992,8 +991,35 @@ data: {"type":"message_stop"}
             .with_app_name("Patina"),
         );
 
-        let provider = create_provider(&config);
+        let provider = create_provider(&config).expect("should create OpenRouter provider");
         assert_eq!(provider.name(), "openrouter");
+    }
+
+    #[test]
+    fn test_create_provider_missing_openrouter_key_returns_error() {
+        use crate::types::config::{ProviderConfig, ProviderKind};
+
+        let config = crate::types::Config::new(
+            secrecy::SecretString::from("sk-ant-test"),
+            "claude-sonnet-4",
+            std::path::PathBuf::from("."),
+        )
+        .with_provider(ProviderConfig {
+            kind: ProviderKind::OpenRouter,
+            openrouter_api_key: None,
+            openrouter_model: Some("anthropic/claude-sonnet-4".to_string()),
+            site_url: None,
+            app_name: None,
+            fallback_chain: Vec::new(),
+        });
+
+        let result = create_provider(&config);
+        assert!(result.is_err());
+        let err = result.err().expect("already checked is_err").to_string();
+        assert!(
+            err.contains("API key"),
+            "Error should mention API key, got: {err}"
+        );
     }
 
     #[test]
@@ -1014,7 +1040,7 @@ data: {"type":"message_stop"}
             ),
         ]));
 
-        let provider = create_provider(&config);
+        let provider = create_provider(&config).expect("should create Fallback provider");
         assert_eq!(provider.name(), "fallback");
         // Model comes from primary (first) provider
         assert_eq!(provider.model(), "claude-sonnet-4");

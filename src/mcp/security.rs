@@ -21,6 +21,7 @@
 use crate::error::{RctError, RctResult};
 use once_cell::sync::Lazy;
 use regex::Regex;
+use std::collections::HashMap;
 use std::path::Path;
 
 /// Commands that are ALWAYS blocked, even with absolute paths (Unix).
@@ -316,6 +317,60 @@ pub fn validate_mcp_command(command: &str, args: &[String]) -> RctResult<()> {
     Ok(())
 }
 
+/// Environment variable names that are forbidden in MCP server processes.
+///
+/// These variables can be used to inject shared libraries into child processes,
+/// enabling arbitrary code execution. They must never be passed to MCP servers.
+static DANGEROUS_ENV_VARS: Lazy<Vec<&str>> = Lazy::new(|| {
+    vec![
+        "LD_PRELOAD",
+        "LD_LIBRARY_PATH",
+        "DYLD_INSERT_LIBRARIES",
+        "DYLD_FALLBACK_LIBRARY_PATH",
+        "DYLD_FRAMEWORK_PATH",
+    ]
+});
+
+/// Validates that MCP environment variables do not contain dangerous entries.
+///
+/// Rejects environment variables that could be used to inject shared libraries
+/// into the child process (e.g., `LD_PRELOAD`, `DYLD_INSERT_LIBRARIES`).
+///
+/// # Errors
+///
+/// Returns `RctError::McpValidation` if any dangerous environment variable is present.
+///
+/// # Examples
+///
+/// ```
+/// use patina::mcp::security::validate_mcp_env;
+/// use std::collections::HashMap;
+///
+/// // Normal variables are allowed
+/// let mut env = HashMap::new();
+/// env.insert("PATH".to_string(), "/usr/bin".to_string());
+/// assert!(validate_mcp_env(&env).is_ok());
+///
+/// // LD_PRELOAD is rejected
+/// let mut env = HashMap::new();
+/// env.insert("LD_PRELOAD".to_string(), "/tmp/evil.so".to_string());
+/// assert!(validate_mcp_env(&env).is_err());
+/// ```
+pub fn validate_mcp_env(env: &HashMap<String, String>) -> RctResult<()> {
+    for key in env.keys() {
+        let upper = key.to_uppercase();
+        for &dangerous in DANGEROUS_ENV_VARS.iter() {
+            if upper == dangerous {
+                return Err(RctError::mcp_validation(format!(
+                    "environment variable '{key}' is not allowed for MCP servers \
+                     (library injection risk)"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -431,5 +486,44 @@ mod tests {
             let result = validate_mcp_command(r"C:\Program Files\mcp-server.exe", &[]);
             assert!(result.is_ok());
         }
+    }
+
+    // =============================================================================
+    // validate_mcp_env tests - Environment variable validation
+    // =============================================================================
+
+    #[test]
+    fn test_validate_env_rejects_ld_preload() {
+        let mut env = HashMap::new();
+        env.insert("LD_PRELOAD".to_string(), "/tmp/evil.so".to_string());
+        let result = validate_mcp_env(&env);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string().to_lowercase();
+        assert!(err.contains("ld_preload"));
+        assert!(err.contains("injection"));
+    }
+
+    #[test]
+    fn test_validate_env_rejects_dyld_insert() {
+        let mut env = HashMap::new();
+        env.insert(
+            "DYLD_INSERT_LIBRARIES".to_string(),
+            "/tmp/evil.dylib".to_string(),
+        );
+        let result = validate_mcp_env(&env);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string().to_lowercase();
+        assert!(err.contains("dyld_insert_libraries"));
+        assert!(err.contains("injection"));
+    }
+
+    #[test]
+    fn test_validate_env_allows_normal_vars() {
+        let mut env = HashMap::new();
+        env.insert("PATH".to_string(), "/usr/bin:/bin".to_string());
+        env.insert("HOME".to_string(), "/home/user".to_string());
+        env.insert("API_KEY".to_string(), "sk-test-123".to_string());
+        let result = validate_mcp_env(&env);
+        assert!(result.is_ok());
     }
 }

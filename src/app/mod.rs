@@ -291,7 +291,7 @@ pub async fn run(config: Config) -> Result<()> {
     let mut terminal = Terminal::new(backend)?;
 
     let mut client: std::sync::Arc<dyn LlmProvider> =
-        std::sync::Arc::from(crate::api::provider::create_provider(&config));
+        std::sync::Arc::from(crate::api::provider::create_provider(&config)?);
 
     // Start IDE server if port is specified
     if let Some(port) = config.ide_port {

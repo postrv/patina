@@ -391,8 +391,9 @@ impl ParallelExecutor {
                 let sem = semaphore.clone();
                 let exec = execute_fn.clone();
                 async move {
-                    // Acquire semaphore permit
-                    let _permit = sem.acquire().await.expect("semaphore closed");
+                    // Acquire semaphore permit; if the semaphore is closed,
+                    // fall through and execute anyway rather than panicking.
+                    let _permit = sem.acquire().await.ok();
                     let result = exec(&name, input).await;
                     IndexedResult { index, result }
                 }

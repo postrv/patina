@@ -307,12 +307,11 @@ fn handle_command_action(
             custom_instructions,
         } => {
             let msg = if custom_instructions.is_some() {
-                "Context compaction triggered with custom instructions."
+                "Context compaction requested with custom instructions."
             } else {
-                "Context compaction triggered."
+                "Context compaction requested."
             };
-            // TODO(10.2): Wire to ctx.state.force_compact() once async command handling is added.
-            // For now, mark that compaction is needed; the event loop's auto-compact will pick it up.
+            ctx.state.force_compact(custom_instructions);
             msg.to_string()
         }
         CommandAction::Clear => {

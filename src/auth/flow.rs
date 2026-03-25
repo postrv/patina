@@ -410,9 +410,10 @@ struct TokenResponse {
 
 /// Generates a cryptographically random state parameter for CSRF protection.
 ///
-/// The state is base64url encoded to ensure it contains only safe characters.
+/// Uses `OsRng` directly to guarantee OS-level entropy, suitable for
+/// security-critical CSRF tokens per RFC 6749 Section 10.12.
 fn generate_state() -> String {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rngs::OsRng;
     let random_bytes: Vec<u8> = (0..STATE_LENGTH).map(|_| rng.gen()).collect();
     URL_SAFE_NO_PAD.encode(random_bytes)
 }

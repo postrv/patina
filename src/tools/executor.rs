@@ -1310,7 +1310,7 @@ impl ToolExecutor {
         let data_dir = directories::ProjectDirs::from("com", "patina", "patina")
             .map(|d| d.data_dir().to_path_buf())
             .unwrap_or_else(|| self.working_dir.join(".patina"));
-        let store = super::todo::TodoStore::new(data_dir.join("todos.json"));
+        let store = super::todo::TodoStore::new(super::todo::default_todo_path(&data_dir));
 
         match operation {
             "add" => {

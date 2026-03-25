@@ -433,6 +433,8 @@ impl AppState {
                 context_token_budget: 10_000,
                 context_tokens_injected: 0,
                 compaction_metrics: Arc::new(CompactionMetrics::new()),
+                compaction_requested: false,
+                compaction_custom_instructions: None,
             },
             plugin_registry,
             agent_panel: AgentPanelState::new(subagent_spawner),
@@ -1851,6 +1853,22 @@ impl AppState {
         self.dirty.full = true;
     }
 
+    /// Requests a manual compaction, to be executed on the next event loop tick.
+    ///
+    /// This sets a flag that `maybe_compact` will check, bypassing the
+    /// automatic threshold so that compaction runs unconditionally.
+    /// Called by the `/compact` slash command handler.
+    pub fn force_compact(&mut self, custom_instructions: Option<String>) {
+        self.compression.request_compaction(custom_instructions);
+        self.dirty.full = true;
+    }
+
+    /// Returns whether a manual compaction has been requested.
+    #[must_use]
+    pub fn is_compaction_requested(&self) -> bool {
+        self.compression.is_compaction_requested()
+    }
+
     /// Returns a reference to the compaction metrics.
     #[must_use]
     pub fn compaction_metrics(&self) -> &CompactionMetrics {
@@ -1892,9 +1910,8 @@ impl AppState {
     /// compaction to keep the budget accurate.
     pub fn sync_token_budget(&mut self) {
         let tokens = self.estimate_conversation_tokens();
-        self.compression.token_budget.reset();
-        self.compression.token_budget.add_usage(tokens);
-        self.dirty.full = true;
+        self.reset_token_budget();
+        self.add_token_usage(tokens);
     }
 
     /// Checks if compaction should be triggered and performs it if needed.
@@ -1934,8 +1951,11 @@ impl AppState {
         let current_tokens = self.estimate_conversation_tokens();
         let threshold_tokens = (context_limit as f64 * f64::from(threshold)) as usize;
 
-        // Check if we're under threshold
-        if current_tokens < threshold_tokens {
+        // Check for a manual compaction request (bypasses threshold)
+        let forced = self.compression.take_compaction_request().is_some();
+
+        // Check if we're under threshold and no forced compaction
+        if !forced && current_tokens < threshold_tokens {
             tracing::debug!(
                 current = current_tokens,
                 threshold = threshold_tokens,
@@ -1944,15 +1964,17 @@ impl AppState {
             return Ok(false);
         }
 
+        let trigger = if forced { "manual" } else { "auto" };
         tracing::info!(
             current = current_tokens,
             threshold = threshold_tokens,
-            "Starting auto-compaction"
+            trigger,
+            "Starting compaction"
         );
 
-        // Show compaction progress (auto-triggered)
+        // Show compaction progress
         let target_tokens = context_limit / 2; // Target 50% of context
-        self.start_compaction(target_tokens, current_tokens, true);
+        self.start_compaction(target_tokens, current_tokens, !forced);
 
         // Uses NoOpSummarizer until the LlmProvider trait (Sprint 2) enables
         // wiring a real summarizer without coupling to AnthropicClient.
@@ -4184,6 +4206,60 @@ mod tests {
         assert!(
             blocks[0].cache_control.is_none(),
             "Haiku 3 should not get cache control"
+        );
+    }
+
+    #[test]
+    fn test_force_compact_sets_request_flag() {
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+        state.dirty.clear();
+
+        assert!(
+            !state.is_compaction_requested(),
+            "No compaction should be requested initially"
+        );
+
+        state.force_compact(Some("summarize briefly".to_string()));
+
+        assert!(
+            state.is_compaction_requested(),
+            "Compaction should be requested after force_compact"
+        );
+        assert!(
+            state.dirty.full,
+            "Dirty flag should be set by force_compact"
+        );
+    }
+
+    #[test]
+    fn test_force_compact_no_instructions() {
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+        state.force_compact(None);
+
+        assert!(state.is_compaction_requested());
+
+        // Verify the request can be consumed
+        let request = state.compression.take_compaction_request();
+        assert_eq!(request, Some(None));
+        assert!(!state.is_compaction_requested());
+    }
+
+    #[test]
+    fn test_sync_token_budget_sets_dirty_flag() {
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+        // Add a message so there are tokens to count
+        state.api_messages.push(ApiMessageV2::user("Hello, world!"));
+
+        state.dirty.clear();
+        state.sync_token_budget();
+
+        assert!(
+            state.dirty.full,
+            "sync_token_budget should set the dirty flag via add_token_usage"
+        );
+        assert!(
+            state.token_budget().used() > 0,
+            "Token budget should reflect the conversation tokens"
         );
     }
 }

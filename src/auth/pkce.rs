@@ -86,10 +86,10 @@ impl PkceChallenge {
 
 /// Generates a cryptographically random code verifier.
 ///
-/// The verifier is base64url encoded to ensure it contains only
-/// unreserved URI characters as required by RFC 7636.
+/// Uses `OsRng` directly to guarantee OS-level entropy, suitable for
+/// security-critical PKCE verifiers per RFC 7636.
 fn generate_verifier() -> String {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rngs::OsRng;
     let random_bytes: Vec<u8> = (0..VERIFIER_LENGTH).map(|_| rng.gen()).collect();
     URL_SAFE_NO_PAD.encode(random_bytes)
 }

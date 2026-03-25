@@ -25,7 +25,7 @@
 //! ```
 
 use crate::mcp::handler::{McpEvent, PatinaClientHandler};
-use crate::mcp::security::validate_mcp_command;
+use crate::mcp::security::{validate_mcp_command, validate_mcp_env};
 use anyhow::{anyhow, Context, Result};
 use rmcp::model::{CallToolRequestParams, CallToolResult, Tool};
 use rmcp::service::{RoleClient, RunningService, ServiceExt};
@@ -81,6 +81,9 @@ impl McpConnection {
     ) -> Result<Self> {
         // Validate command security
         validate_mcp_command(command, args)?;
+
+        // Validate environment variables against library injection attacks
+        validate_mcp_env(env)?;
 
         // Build the tokio Command.
         // Redirect stderr to null to prevent child process output (e.g. MCP
@@ -221,6 +224,10 @@ impl McpConnection {
     ) -> Result<Self> {
         use rmcp::transport::streamable_http_client::StreamableHttpClientTransportConfig;
         use rmcp::transport::StreamableHttpClientTransport;
+
+        // Validate the URL against SSRF (no localhost/private IPs)
+        crate::util::url_validation::validate_url(url, false)
+            .with_context(|| format!("URL validation failed for MCP HTTP server '{name}'"))?;
 
         let mut config = StreamableHttpClientTransportConfig::with_uri(url);
 
@@ -418,6 +425,27 @@ impl McpConnection {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn test_connect_http_rejects_private_ip() {
+        let result = McpConnection::connect_http(
+            "bad-server",
+            "http://169.254.169.254/latest/meta-data/",
+            &None,
+            Duration::from_secs(2),
+        )
+        .await;
+        assert!(result.is_err());
+        let err = result
+            .err()
+            .expect("already checked is_err")
+            .to_string()
+            .to_lowercase();
+        assert!(
+            err.contains("private") || err.contains("url validation"),
+            "Expected SSRF rejection, got: {err}"
+        );
+    }
 
     #[tokio::test]
     async fn test_connect_stdio_invalid_command_fails() {
