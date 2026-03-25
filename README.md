@@ -19,8 +19,8 @@ A high-performance terminal client for the Claude API, written in Rust. Designed
 - **Full MCP support** - Connect any MCP server via stdio, streamable HTTP, or legacy SSE transports
 - **Autonomous agent orchestration** - Spawn parallel sub-agents in isolated git worktrees
 - **Continuous coding loop** - Run tasks autonomously with stagnation detection and quality gates
-- **2,800+ tests** with 85%+ code coverage
-- **Zero unsafe code** - Pure safe Rust (~92,000 LOC)
+- **4,000+ tests** with 85%+ code coverage
+- **Zero unsafe code** - Pure safe Rust (~102,000 LOC)
 - **Cross-platform** - Linux, macOS, Windows
 - **Security-first** - Defense-in-depth with command filtering, path validation, and session integrity
 
@@ -39,6 +39,8 @@ A high-performance terminal client for the Claude API, written in Rust. Designed
 | **Context Compaction** | Automatic summarization when context window fills |
 | **Context Compression** | Intelligent context building with token budgeting and narsil-mcp integration |
 | **MCP Support** | Full Model Context Protocol with stdio, HTTP, and legacy SSE transports |
+| **Plan Mode** | Interactive plan review with approve/reject before multi-step execution |
+| **Background Execution** | Run long-running bash commands in background with task management |
 | **Slash Command Completion** | Tab-completion popup for slash commands |
 
 ### Autonomous Agents
@@ -51,19 +53,26 @@ A high-performance terminal client for the Claude API, written in Rust. Designed
 | **Stagnation Detection** | Multi-factor scoring detects stuck agents and triggers recovery |
 | **Quality Gates** | Automated clippy, test, and format checks with timeout enforcement |
 
-### Built-in Tools
+### Built-in Tools (16)
 
 | Tool | Description |
 |------|-------------|
-| `bash` | Execute shell commands with security filtering |
-| `read_file` | Read file contents with path traversal protection |
-| `write_file` | Write files with validation |
-| `edit` | Edit files with diff-based changes |
-| `glob` | File discovery with pattern matching |
-| `grep` | Content search with regex support |
+| `bash` | Execute shell commands with timeout, security filtering, and background execution |
+| `read_file` | Read file contents with optional line-range selection (offset/limit) |
+| `write_file` | Write files with path validation |
+| `edit` | Search-and-replace editing with optional `replace_all` mode |
+| `list_files` | List files and directories at a given path |
+| `glob` | File discovery with glob pattern matching |
+| `grep` | Content search with regex, output modes, context lines, file type filters |
 | `web_fetch` | Fetch and convert web pages to markdown |
 | `web_search` | Search the web via DuckDuckGo |
-| `vision` | Analyze images (PNG, JPEG, GIF, WebP) |
+| `analyze_image` | Analyze images using Claude's vision (PNG, JPEG, GIF, WebP) |
+| `lsp` | Language Server Protocol operations (go-to-definition, references, hover) |
+| `todo_write` | Persistent task tracking with add/complete/remove/list operations |
+| `plan` | Present a structured plan for user review before execution |
+| `ask_user` | Ask the user a question with structured choices or free-text input |
+| `task_output` | Get output from a background bash task |
+| `task_stop` | Stop a running background bash task |
 
 ### Extensibility
 
@@ -73,7 +82,7 @@ A high-performance terminal client for the Claude API, written in Rust. Designed
 | **Plugin System** | TOML-based plugins with auto-discovery |
 | **Skills Engine** | Context-aware suggestions via SKILL.md files |
 | **Hooks** | 11 lifecycle events (PreToolUse, PostToolUse, SessionStart, etc.) |
-| **Slash Commands** | `/mcp`, `/worktree`, `/agent`, `/continuous`, `/help`, and user-defined workflows |
+| **Slash Commands** | 15 built-in commands including `/model`, `/compact`, `/clear`, `/agent`, `/continuous` |
 
 ### Developer Experience
 
@@ -167,21 +176,42 @@ patina --provider openrouter --model anthropic/claude-sonnet-4
 | `a` | Allow always (save rule) |
 | `n` / `Esc` | Deny |
 
-## Slash Commands
+**Plan Review (when model proposes a plan):**
+
+| Key | Action |
+|-----|--------|
+| `Enter` | Approve plan |
+| `Esc` / `n` | Reject plan |
+| `Up` / `Down` | Navigate steps |
+
+**Question Prompt (when model asks a question):**
+
+| Key | Action |
+|-----|--------|
+| `Enter` | Submit response |
+| `Esc` | Cancel |
+| `Up` / `Down` | Navigate options |
+| `Tab` | Toggle between options and free-text |
+
+## Slash Commands (15)
 
 | Command | Description |
 |---------|-------------|
+| `/help` | Show available commands and usage |
+| `/model <name>` | Switch model mid-conversation (aliases: sonnet, opus, haiku) |
+| `/compact [instructions]` | Trigger context compaction with optional custom instructions |
+| `/clear` | Clear conversation history, preserving configuration |
+| `/context` | Show context window usage and token counts |
+| `/cost` | Show session cost and token usage |
+| `/export` | Export conversation as markdown or JSON |
+| `/memory` | Manage persistent memory (list, add, remove, search) |
 | `/mcp` | Show MCP server status and connected tools |
-| `/worktree new <name>` | Create new git worktree |
-| `/worktree list` | List all worktrees |
-| `/worktree switch <name>` | Switch to worktree |
-| `/worktree remove <name>` | Remove worktree |
-| `/worktree status` | Show worktree status |
-| `/agent spawn <task>` | Spawn a sub-agent in an isolated worktree |
-| `/agent list` | List running agents |
-| `/agent merge <name>` | Merge agent changes back |
 | `/continuous` | Start autonomous coding loop with quality gates |
-| `/help` | Show available commands |
+| `/agent <subcommand>` | Manage sub-agents (spawn, list, merge, stop) |
+| `/worktree <subcommand>` | Manage git worktrees (new, list, switch, remove, status) |
+| `/plugins` | List loaded plugins with their capabilities |
+| `/terminal-setup` | Configure terminal key bindings |
+| `/fork` | Fork session into a new branch |
 
 Slash commands support tab completion -- start typing `/` and press Tab to see available options.
 
@@ -342,14 +372,17 @@ src/
 │   ├── state.rs      # Application state
 │   ├── context.rs    # Handler context (shared state bundle)
 │   ├── dispatch.rs   # Priority-ordered event dispatcher
-│   └── handlers/     # Focused event handlers
+│   └── handlers/     # Focused event handlers (9 + 1 observer)
+│       ├── permission# Tool approval prompts
+│       ├── plan      # Interactive plan review
+│       ├── question  # User question prompts
+│       ├── completion# Slash command tab-completion
 │       ├── keyboard  # Input, copy/paste, selection
 │       ├── stream    # API streaming events
-│       ├── session   # Session persistence
-│       ├── permission# Tool approval prompts
-│       ├── tick      # UI refresh, throbber animation
 │       ├── agent     # Sub-agent lifecycle
-│       └── continuous# Autonomous loop control
+│       ├── continuous# Autonomous loop control
+│       ├── tick      # UI refresh, throbber animation
+│       └── session   # Session persistence (observer)
 ├── api/              # LLM providers (Anthropic, OpenRouter, fallback)
 ├── tui/              # Terminal UI (ratatui), image display
 ├── tools/            # Tool execution, security, parallel execution
@@ -395,10 +428,15 @@ tail -f /tmp/patina.log
 | Version | 1.0.0 |
 | MSRV | Rust 1.85 |
 | Edition | 2021 |
-| Tests | 2,800+ |
+| Tests | 4,000+ |
 | Coverage | 85%+ |
 | Unsafe | 0 blocks |
-| LOC | ~92,000 |
+| LOC (src) | ~102,000 |
+| LOC (total) | ~134,000 |
+| Dependencies | 528 |
+| Built-in tools | 16 |
+| Slash commands | 15 |
+| Event handlers | 9 + 1 observer |
 
 ### Key Dependencies
 
@@ -489,4 +527,4 @@ Copyright (c) 2026 Laurence Avent
 
 **Laurence Avent** ([@postrv](https://github.com/postrv))
 
-<!-- METRICS:tests=2800,loc=92000 -->
+<!-- METRICS:tests=4084,loc=102459,tools=16,commands=15,handlers=9,deps=528 -->
