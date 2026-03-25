@@ -41,7 +41,7 @@ impl SkillEngine {
         Self { skills: Vec::new() }
     }
 
-    pub fn load_from_dir(&mut self, dir: &PathBuf) -> anyhow::Result<()> {
+    pub fn load_from_dir(&mut self, dir: &std::path::Path) -> anyhow::Result<()> {
         if !dir.exists() {
             return Ok(());
         }
@@ -60,7 +60,7 @@ impl SkillEngine {
         Ok(())
     }
 
-    fn parse_skill_file(&self, path: &PathBuf) -> anyhow::Result<Skill> {
+    fn parse_skill_file(&self, path: &std::path::Path) -> anyhow::Result<Skill> {
         let content = std::fs::read_to_string(path)?;
 
         let (frontmatter, body) = if let Some(after_open) = content.strip_prefix("---") {
@@ -93,7 +93,7 @@ impl SkillEngine {
             description: config.description.clone(),
             instructions: body.to_string(),
             config,
-            source_path: path.clone(),
+            source_path: path.to_path_buf(),
         })
     }
 
@@ -192,7 +192,7 @@ impl SkillEngine {
     #[must_use]
     pub fn get_context_for_task(&self, task_description: &str) -> String {
         let matched_skills = self.match_skills(task_description);
-        self.format_context(&matched_skills)
+        self.format_skills(&matched_skills)
     }
 
     /// Generates context string from skills matched by file path.
@@ -215,11 +215,18 @@ impl SkillEngine {
     #[must_use]
     pub fn get_context_for_file(&self, file_path: &str) -> String {
         let matched_skills = self.match_skills_for_file(file_path);
-        self.format_context(&matched_skills)
+        self.format_skills(&matched_skills)
     }
 
     /// Formats a list of matched skills into a context string.
-    fn format_context(&self, skills: &[&Skill]) -> String {
+    ///
+    /// Each skill is rendered with its name, allowed tools (if any), and instructions.
+    ///
+    /// # Arguments
+    ///
+    /// * `skills` - Slice of skill references to format
+    #[must_use]
+    pub fn format_skills(&self, skills: &[&Skill]) -> String {
         if skills.is_empty() {
             return String::new();
         }

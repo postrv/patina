@@ -739,6 +739,7 @@ impl PerformanceConfig {
 ///     compression: CompressionConfig::default(),
 ///     provider: ProviderConfig::default(),
 ///     performance: PerformanceConfig::default(),
+///     update_check_enabled: true,
 /// };
 /// ```
 pub struct Config {
@@ -878,6 +879,14 @@ pub struct Config {
     /// concurrent agents. Used when creating [`ParallelExecutor`] and
     /// [`WorktreeAgentManager`] instances.
     pub performance: PerformanceConfig,
+
+    /// Whether to check for updates on startup.
+    ///
+    /// When true (default), Patina checks the release server for available
+    /// updates in the background and shows a notification in the status bar.
+    ///
+    /// Disable with `--no-update-check` CLI flag.
+    pub update_check_enabled: bool,
 }
 
 impl Config {
@@ -929,6 +938,7 @@ impl Config {
             compression: CompressionConfig::default(),
             provider: ProviderConfig::default(),
             performance: PerformanceConfig::default(),
+            update_check_enabled: true,
         }
     }
 
@@ -1303,6 +1313,7 @@ mod tests {
             compression: CompressionConfig::default(),
             provider: ProviderConfig::default(),
             performance: PerformanceConfig::default(),
+            update_check_enabled: true,
         };
 
         assert_eq!(config.model(), "claude-opus-4-20250514");
@@ -1333,6 +1344,7 @@ mod tests {
             compression: CompressionConfig::default(),
             provider: ProviderConfig::default(),
             performance: PerformanceConfig::default(),
+            update_check_enabled: true,
         };
 
         assert_eq!(config.working_dir(), &path);

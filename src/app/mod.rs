@@ -304,6 +304,33 @@ pub async fn run(config: Config) -> Result<()> {
         info!("IDE server started on port {}", port);
     }
 
+    // Start background update check if enabled
+    if config.update_check_enabled {
+        let version = env!("CARGO_PKG_VERSION").to_string();
+        tokio::spawn(async move {
+            match crate::update::UpdateChecker::new(&version, crate::update::ReleaseChannel::Stable)
+            {
+                Ok(checker) => match checker.check_for_updates().await {
+                    Ok(Some(manifest)) => {
+                        info!("Update available: v{}", manifest.version);
+                        // NOTE: Update notification is logged; the event loop can poll this
+                        // via a channel in a future enhancement. For now, the log message
+                        // serves as the notification mechanism.
+                    }
+                    Ok(None) => {
+                        debug!("Patina is up to date (v{})", version);
+                    }
+                    Err(e) => {
+                        debug!("Update check failed: {}", e);
+                    }
+                },
+                Err(e) => {
+                    debug!("Could not create update checker: {}", e);
+                }
+            }
+        });
+    }
+
     // If there's an initial prompt, submit it immediately
     if let Some(ref prompt) = config.initial_prompt {
         state.submit_message(&client, prompt.clone()).await?;

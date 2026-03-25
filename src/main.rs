@@ -138,6 +138,10 @@ struct Args {
     #[arg(long)]
     no_auto_context: bool,
 
+    /// Disable automatic update checking on startup.
+    #[arg(long)]
+    no_update_check: bool,
+
     /// LLM provider to use: "anthropic" (default), "openrouter", or "fallback".
     #[arg(long, value_name = "PROVIDER")]
     provider: Option<String>,
@@ -268,6 +272,7 @@ async fn main() -> Result<()> {
         compression: CompressionConfig::default(),
         provider: provider_config,
         performance: patina::types::config::PerformanceConfig::default(),
+        update_check_enabled: !args.no_update_check,
     })
     .await
 }

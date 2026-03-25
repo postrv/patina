@@ -375,6 +375,9 @@ impl AppState {
             PluginRegistry::new()
         };
 
+        // Load skills from standard directories
+        let skill_engine = Self::load_skills(&working_dir);
+
         // Initialize subagent spawner if enabled
         let subagent_spawner = if subagents_enabled {
             Some(SubagentSpawner::new())
@@ -438,7 +441,13 @@ impl AppState {
             mcp_manager: None,
             cost_tracker: CostTracker::new(CostConfig::default()),
             audit_logger: AuditLogger::new(AuditConfig::default()),
-            model_config: ModelConfigState::new(),
+            model_config: {
+                let mut mc = ModelConfigState::new();
+                if let Some(engine) = skill_engine {
+                    mc.set_skill_engine(engine);
+                }
+                mc
+            },
             thinking_buffer: String::new(),
             pending_plan: None,
             pending_question: None,
@@ -476,6 +485,43 @@ impl AppState {
         }
 
         registry
+    }
+
+    /// Loads skills from standard directories.
+    ///
+    /// Searches for skills in:
+    /// - `~/.config/patina/skills/`
+    /// - `./.patina/skills/` (project-local)
+    /// - `./.claude/skills/` (project instructions directory)
+    fn load_skills(working_dir: &std::path::Path) -> Option<crate::skills::SkillEngine> {
+        let mut engine = crate::skills::SkillEngine::new();
+
+        let mut search_paths: Vec<PathBuf> = Vec::new();
+
+        // User config directory
+        if let Some(base_dirs) = directories::BaseDirs::new() {
+            search_paths.push(base_dirs.config_dir().join("patina/skills"));
+        }
+
+        // Project-local skills
+        search_paths.push(working_dir.join(".patina/skills"));
+
+        // .claude/skills (Claude Code convention)
+        search_paths.push(working_dir.join(".claude/skills"));
+
+        for path in &search_paths {
+            if let Err(e) = engine.load_from_dir(path) {
+                tracing::debug!("Skills directory {:?}: {}", path, e);
+            }
+        }
+
+        let count = engine.all_skills().len();
+        if count > 0 {
+            tracing::info!("Loaded {} skill(s)", count);
+            Some(engine)
+        } else {
+            None
+        }
     }
 
     /// Returns a reference to the plugin registry.
@@ -1252,6 +1298,17 @@ impl AppState {
     /// Called from the event loop on startup and on resize events.
     pub fn set_terminal_height(&mut self, height: u16) {
         self.display.terminal_height = height;
+    }
+
+    /// Returns the latest available update version, if any.
+    #[must_use]
+    pub fn update_available(&self) -> Option<&str> {
+        self.display.update_available.as_deref()
+    }
+
+    /// Sets the available update version from background update check.
+    pub fn set_update_available(&mut self, version: String) {
+        self.display.set_update_available(version);
     }
 
     /// Adds a message to the conversation timeline and display.
@@ -3291,6 +3348,25 @@ impl AppState {
                     prompt_text.push_str("\n\n");
                 }
                 prompt_text.push_str(&memory_text);
+            }
+        }
+
+        // Append always-active skill context if skill engine is configured
+        if let Some(engine) = &self.model_config.skill_engine {
+            let always_active: Vec<&crate::skills::Skill> = engine
+                .all_skills()
+                .iter()
+                .filter(|s| s.config.triggers.always_active)
+                .collect();
+            if !always_active.is_empty() {
+                let skill_context = engine.format_skills(&always_active);
+                if !skill_context.is_empty() {
+                    if !prompt_text.is_empty() {
+                        prompt_text.push_str("\n\n");
+                    }
+                    prompt_text.push_str("# Active Skills\n\n");
+                    prompt_text.push_str(&skill_context);
+                }
             }
         }
 

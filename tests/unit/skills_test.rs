@@ -56,7 +56,7 @@ Use this skill for testing purposes.
 
     let mut engine = SkillEngine::new();
     engine
-        .load_from_dir(&temp_dir.path().to_path_buf())
+        .load_from_dir(temp_dir.path())
         .expect("Should load skills");
 
     let skills = engine.all_skills();
@@ -92,7 +92,7 @@ Instructions only.
 
     let mut engine = SkillEngine::new();
     engine
-        .load_from_dir(&temp_dir.path().to_path_buf())
+        .load_from_dir(temp_dir.path())
         .expect("Should load skills");
 
     let skills = engine.all_skills();
@@ -121,7 +121,7 @@ The name should be derived from the directory name.
 
     let mut engine = SkillEngine::new();
     engine
-        .load_from_dir(&temp_dir.path().to_path_buf())
+        .load_from_dir(temp_dir.path())
         .expect("Should load skills");
 
     let skills = engine.all_skills();
@@ -163,7 +163,7 @@ Second skill instructions.
 
     let mut engine = SkillEngine::new();
     engine
-        .load_from_dir(&temp_dir.path().to_path_buf())
+        .load_from_dir(temp_dir.path())
         .expect("Should load skills");
 
     let skills = engine.all_skills();
@@ -195,7 +195,7 @@ Valid instructions.
 
     let mut engine = SkillEngine::new();
     engine
-        .load_from_dir(&temp_dir.path().to_path_buf())
+        .load_from_dir(temp_dir.path())
         .expect("Should load skills");
 
     let skills = engine.all_skills();
@@ -245,7 +245,7 @@ Trigger test instructions.
 
     let mut engine = SkillEngine::new();
     engine
-        .load_from_dir(&temp_dir.path().to_path_buf())
+        .load_from_dir(temp_dir.path())
         .expect("Should load skills");
 
     let skills = engine.all_skills();
@@ -301,7 +301,7 @@ Tool instructions.
 
     let mut engine = SkillEngine::new();
     engine
-        .load_from_dir(&temp_dir.path().to_path_buf())
+        .load_from_dir(temp_dir.path())
         .expect("Should load skills");
 
     let skill = &engine.all_skills()[0];
@@ -329,7 +329,7 @@ Default test.
 
     let mut engine = SkillEngine::new();
     engine
-        .load_from_dir(&temp_dir.path().to_path_buf())
+        .load_from_dir(temp_dir.path())
         .expect("Should load skills");
 
     let skill = &engine.all_skills()[0];
@@ -394,7 +394,7 @@ Final paragraph with [a link](https://example.com).
 
     let mut engine = SkillEngine::new();
     engine
-        .load_from_dir(&temp_dir.path().to_path_buf())
+        .load_from_dir(temp_dir.path())
         .expect("Should load skills");
 
     let skill = &engine.all_skills()[0];
@@ -439,7 +439,7 @@ Valid instructions.
     let mut engine = SkillEngine::new();
     // Should not fail - just skip invalid skills
     engine
-        .load_from_dir(&temp_dir.path().to_path_buf())
+        .load_from_dir(temp_dir.path())
         .expect("Should continue despite invalid skill");
 
     let skills = engine.all_skills();
@@ -458,7 +458,7 @@ fn test_skill_frontmatter_extraction_whitespace() {
 
     let mut engine = SkillEngine::new();
     engine
-        .load_from_dir(&temp_dir.path().to_path_buf())
+        .load_from_dir(temp_dir.path())
         .expect("Should load skills");
 
     let skill = &engine.all_skills()[0];
@@ -484,7 +484,7 @@ Instructions.
 
     let mut engine = SkillEngine::new();
     engine
-        .load_from_dir(&temp_dir.path().to_path_buf())
+        .load_from_dir(temp_dir.path())
         .expect("Should load skills");
 
     let skill = &engine.all_skills()[0];
@@ -568,7 +568,7 @@ Generic instructions.
 
     let mut engine = SkillEngine::new();
     engine
-        .load_from_dir(&temp_dir.path().to_path_buf())
+        .load_from_dir(temp_dir.path())
         .expect("Should load skills");
 
     // Test matching "rust" keyword
@@ -626,7 +626,7 @@ Infrastructure skill.
 
     let mut engine = SkillEngine::new();
     engine
-        .load_from_dir(&temp_dir.path().to_path_buf())
+        .load_from_dir(temp_dir.path())
         .expect("Should load skills");
 
     // Test lowercase matches uppercase keyword
@@ -685,7 +685,7 @@ Conditional instructions.
 
     let mut engine = SkillEngine::new();
     engine
-        .load_from_dir(&temp_dir.path().to_path_buf())
+        .load_from_dir(temp_dir.path())
         .expect("Should load skills");
 
     // Always active skill should match any task
@@ -749,7 +749,7 @@ Skill 3 instructions.
 
     let mut engine = SkillEngine::new();
     engine
-        .load_from_dir(&temp_dir.path().to_path_buf())
+        .load_from_dir(temp_dir.path())
         .expect("Should load skills");
 
     // Both skill-1 and skill-2 should match "database"
@@ -778,7 +778,7 @@ Security skill instructions.
 
     let mut engine = SkillEngine::new();
     engine
-        .load_from_dir(&temp_dir.path().to_path_buf())
+        .load_from_dir(temp_dir.path())
         .expect("Should load skills");
 
     // Should match based on description words
@@ -830,7 +830,7 @@ JavaScript file skill instructions.
 
     let mut engine = SkillEngine::new();
     engine
-        .load_from_dir(&temp_dir.path().to_path_buf())
+        .load_from_dir(temp_dir.path())
         .expect("Should load skills");
 
     // Test file pattern matching for Rust file
@@ -891,7 +891,7 @@ Test file skill instructions.
 
     let mut engine = SkillEngine::new();
     engine
-        .load_from_dir(&temp_dir.path().to_path_buf())
+        .load_from_dir(temp_dir.path())
         .expect("Should load skills");
 
     // Test suffix pattern
@@ -946,7 +946,7 @@ When creating commits:
 
     let mut engine = SkillEngine::new();
     engine
-        .load_from_dir(&temp_dir.path().to_path_buf())
+        .load_from_dir(temp_dir.path())
         .expect("Should load skills");
 
     // Get context for matched skills
@@ -1000,7 +1000,7 @@ Use descriptive test names.
 
     let mut engine = SkillEngine::new();
     engine
-        .load_from_dir(&temp_dir.path().to_path_buf())
+        .load_from_dir(temp_dir.path())
         .expect("Should load skills");
 
     // Task that matches both skills
@@ -1044,7 +1044,7 @@ Python instructions here.
 
     let mut engine = SkillEngine::new();
     engine
-        .load_from_dir(&temp_dir.path().to_path_buf())
+        .load_from_dir(temp_dir.path())
         .expect("Should load skills");
 
     // Task that doesn't match any skill
@@ -1082,7 +1082,7 @@ Use the Edit tool to modify existing files.
 
     let mut engine = SkillEngine::new();
     engine
-        .load_from_dir(&temp_dir.path().to_path_buf())
+        .load_from_dir(temp_dir.path())
         .expect("Should load skills");
 
     let context = engine.get_context_for_task("Help me work with files");
@@ -1125,7 +1125,7 @@ When editing Cargo.toml:
 
     let mut engine = SkillEngine::new();
     engine
-        .load_from_dir(&temp_dir.path().to_path_buf())
+        .load_from_dir(temp_dir.path())
         .expect("Should load skills");
 
     let context = engine.get_context_for_file("Cargo.toml");

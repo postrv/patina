@@ -20,6 +20,9 @@ pub struct DisplayState {
     /// Cached terminal height for scroll calculations.
     /// Updated on resize events; defaults to 24 for headless/test environments.
     pub(crate) terminal_height: u16,
+
+    /// Latest available version from background update check, if newer.
+    pub(crate) update_available: Option<String>,
 }
 
 impl DisplayState {
@@ -31,6 +34,7 @@ impl DisplayState {
             loading: false,
             throbber_frame: 0,
             terminal_height: 24,
+            update_available: None,
         }
     }
 
@@ -82,6 +86,17 @@ impl DisplayState {
     /// Sets the cached terminal height.
     pub fn set_terminal_height(&mut self, height: u16) {
         self.terminal_height = height;
+    }
+
+    /// Returns the available update version, if any.
+    #[must_use]
+    pub fn update_available(&self) -> Option<&str> {
+        self.update_available.as_deref()
+    }
+
+    /// Sets the available update version from background check.
+    pub fn set_update_available(&mut self, version: String) {
+        self.update_available = Some(version);
     }
 }
 
@@ -141,5 +156,18 @@ mod tests {
         let state = DisplayState::new();
         let scroll = state.scroll_state();
         assert_eq!(scroll.offset(), 0);
+    }
+
+    #[test]
+    fn test_update_available_defaults_to_none() {
+        let state = DisplayState::new();
+        assert!(state.update_available().is_none());
+    }
+
+    #[test]
+    fn test_set_update_available() {
+        let mut state = DisplayState::new();
+        state.set_update_available("2.0.0".to_string());
+        assert_eq!(state.update_available(), Some("2.0.0"));
     }
 }

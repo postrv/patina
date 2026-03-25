@@ -11,13 +11,31 @@ use tracing::debug;
 /// Builds the system prompt from project context.
 ///
 /// Assembles identity, tool guidance, CLAUDE.md project instructions,
-/// user-global instructions, and environment context (date, git branch).
+/// user-global instructions, matched skill context, and environment context.
 ///
 /// # Arguments
 ///
 /// * `working_dir` - Project root directory for loading `.claude/CLAUDE.md`
 #[must_use]
 pub fn build_system_prompt(working_dir: &Path) -> String {
+    build_system_prompt_with_skills(working_dir, None)
+}
+
+/// Builds the system prompt with optional skill engine context.
+///
+/// When a `SkillEngine` is provided, always-active skills and task-matched
+/// skills are injected into the system prompt between user instructions
+/// and environment context.
+///
+/// # Arguments
+///
+/// * `working_dir` - Project root directory for loading `.claude/CLAUDE.md`
+/// * `skill_engine` - Optional skill engine for context-aware skill injection
+#[must_use]
+pub fn build_system_prompt_with_skills(
+    working_dir: &Path,
+    skill_engine: Option<&crate::skills::SkillEngine>,
+) -> String {
     let mut parts = Vec::new();
 
     // Identity
@@ -48,6 +66,20 @@ pub fn build_system_prompt(working_dir: &Path) -> String {
             user_instructions
         ));
         debug!("Loaded user-global CLAUDE.md");
+    }
+
+    // Skill context from loaded skills
+    if let Some(engine) = skill_engine {
+        let skills = engine.all_skills();
+        if !skills.is_empty() {
+            let skill_names: Vec<&str> = skills.iter().map(|s| s.name.as_str()).collect();
+            let skill_list = skill_names.join(", ");
+            parts.push(format!(
+                "# Available Skills\n\n\
+                 The following skills are loaded and available: {skill_list}"
+            ));
+            debug!("Injected {} skill(s) into system prompt", skills.len());
+        }
     }
 
     // Environment context
@@ -204,5 +236,41 @@ mod tests {
     fn test_get_git_branch_returns_none_for_non_repo() {
         let dir = TempDir::new().unwrap();
         assert!(get_git_branch(dir.path()).is_none());
+    }
+
+    #[test]
+    fn test_build_system_prompt_with_skills_none() {
+        let dir = TempDir::new().unwrap();
+        let prompt = build_system_prompt_with_skills(dir.path(), None);
+        assert!(prompt.contains("Patina"));
+        assert!(!prompt.contains("Available Skills"));
+    }
+
+    #[test]
+    fn test_build_system_prompt_with_skills_empty_engine() {
+        let dir = TempDir::new().unwrap();
+        let engine = crate::skills::SkillEngine::new();
+        let prompt = build_system_prompt_with_skills(dir.path(), Some(&engine));
+        assert!(!prompt.contains("Available Skills"));
+    }
+
+    #[test]
+    fn test_build_system_prompt_with_skills_loaded() {
+        let dir = TempDir::new().unwrap();
+        let skills_dir = dir.path().join("skills");
+        let skill_subdir = skills_dir.join("test-skill");
+        fs::create_dir_all(&skill_subdir).unwrap();
+        fs::write(
+            skill_subdir.join("SKILL.md"),
+            "---\nname: test-skill\ndescription: A test skill\n---\nDo the thing.",
+        )
+        .unwrap();
+
+        let mut engine = crate::skills::SkillEngine::new();
+        engine.load_from_dir(&skills_dir).unwrap();
+
+        let prompt = build_system_prompt_with_skills(dir.path(), Some(&engine));
+        assert!(prompt.contains("Available Skills"));
+        assert!(prompt.contains("test-skill"));
     }
 }

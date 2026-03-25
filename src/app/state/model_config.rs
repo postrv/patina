@@ -1,8 +1,9 @@
 /// Model configuration state extracted from AppState.
 ///
 /// Groups fields related to model selection, effort level, thinking budget,
-/// multi-model support, memory store, and system prompt.
+/// multi-model support, memory store, system prompt, and skill engine.
 use crate::api::multi_model::MultiModelClient;
+use crate::skills::SkillEngine;
 use crate::types::config::EffortLevel;
 
 pub struct ModelConfigState {
@@ -23,6 +24,9 @@ pub struct ModelConfigState {
 
     /// System prompt text injected into API requests.
     pub(crate) system_prompt: Option<String>,
+
+    /// Skill engine for context-aware skill matching and injection.
+    pub(crate) skill_engine: Option<SkillEngine>,
 }
 
 impl ModelConfigState {
@@ -36,6 +40,7 @@ impl ModelConfigState {
             effort: EffortLevel::Auto,
             thinking_budget: None,
             system_prompt: None,
+            skill_engine: None,
         }
     }
 
@@ -109,6 +114,17 @@ impl ModelConfigState {
     pub fn system_prompt(&self) -> Option<&str> {
         self.system_prompt.as_deref()
     }
+
+    /// Returns the skill engine, if configured.
+    #[must_use]
+    pub fn skill_engine(&self) -> Option<&SkillEngine> {
+        self.skill_engine.as_ref()
+    }
+
+    /// Sets the skill engine.
+    pub fn set_skill_engine(&mut self, engine: SkillEngine) {
+        self.skill_engine = Some(engine);
+    }
 }
 
 impl Default for ModelConfigState {
@@ -130,6 +146,7 @@ mod tests {
         assert_eq!(state.effort(), EffortLevel::Auto);
         assert!(state.thinking_budget().is_none());
         assert!(state.system_prompt().is_none());
+        assert!(state.skill_engine().is_none());
     }
 
     #[test]
@@ -162,5 +179,14 @@ mod tests {
         assert_eq!(state.system_prompt(), Some("You are helpful."));
         state.set_system_prompt(None);
         assert!(state.system_prompt().is_none());
+    }
+
+    #[test]
+    fn test_skill_engine() {
+        let mut state = ModelConfigState::new();
+        assert!(state.skill_engine().is_none());
+        state.set_skill_engine(SkillEngine::new());
+        assert!(state.skill_engine().is_some());
+        assert!(state.skill_engine().unwrap().all_skills().is_empty());
     }
 }

@@ -21,14 +21,8 @@ pub mod context;
 pub mod integration;
 pub mod security;
 
-pub use context::{
-    extract_code_references, CodeReference, ContextKind, ContextSuggestion, LineRef,
-};
-pub use integration::{
-    build_context_suggestion_from_callers, build_context_suggestion_from_dependencies,
-    detect_all_capabilities, parse_callers_response, parse_dependencies_response,
-    parse_security_findings, security_verdict_from_findings, CallerInfo, DependencyInfo,
-    NarsilCapabilities, NarsilCapability, NarsilIntegration, ParallelCapabilityResult,
-    SecurityFinding, ServerCapabilityResult,
-};
+// Re-export types used by external modules (app, context, tools).
+// Internal-only types remain accessible via their submodule paths.
+pub use context::ContextSuggestion;
+pub use integration::{NarsilCapabilities, NarsilCapability, NarsilIntegration};
 pub use security::SecurityVerdict;

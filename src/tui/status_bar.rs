@@ -221,6 +221,30 @@ pub fn scroll_spans(
     )]
 }
 
+/// Produces an update-available notification span.
+///
+/// Returns an empty vec when no update is available.
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// let spans = update_spans(Some("2.0.0"));
+/// assert_eq!(spans.len(), 2);
+/// ```
+#[must_use]
+pub fn update_spans(version: Option<&str>) -> Vec<Span<'static>> {
+    let Some(version) = version else {
+        return Vec::new();
+    };
+    vec![
+        Span::raw(" "),
+        Span::styled(
+            format!("UPD:{version}"),
+            Style::default().fg(PatinaTheme::WARNING),
+        ),
+    ]
+}
+
 /// Collects all status bar spans from `AppState` by delegating to pure sub-functions.
 ///
 /// This is the single integration point between `AppState` and the status bar
@@ -257,6 +281,7 @@ pub fn build_status_bar_spans(state: &AppState) -> Vec<Span<'static>> {
     ));
 
     spans.extend(context_spans(state.context_tokens_injected()));
+    spans.extend(update_spans(state.update_available()));
 
     let scroll = state.scroll_state();
     spans.extend(scroll_spans(
@@ -418,5 +443,19 @@ mod tests {
         let spans = scroll_spans(AutoScrollMode::Paused, 5, 30, 80);
         assert_eq!(spans.len(), 1);
         assert_eq!(spans[0].content, " [P:5↑ 30/80]");
+    }
+
+    #[test]
+    fn update_spans_none_returns_empty() {
+        let spans = update_spans(None);
+        assert!(spans.is_empty());
+    }
+
+    #[test]
+    fn update_spans_some_returns_indicator() {
+        let spans = update_spans(Some("2.0.0"));
+        assert_eq!(spans.len(), 2);
+        assert_eq!(spans[1].content, "UPD:2.0.0");
+        assert_eq!(spans[1].style.fg, Some(PatinaTheme::WARNING));
     }
 }
