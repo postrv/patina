@@ -308,3 +308,218 @@ impl Default for SubagentOrchestrator {
         Self::new()
     }
 }
+
+/// A message sent between agents via the [`AgentRegistry`].
+///
+/// # Examples
+///
+/// ```
+/// use patina::agents::AgentMessage;
+///
+/// let msg = AgentMessage {
+///     from: "agent-1".to_string(),
+///     content: "Hello from agent 1".to_string(),
+/// };
+/// assert_eq!(msg.from, "agent-1");
+/// ```
+#[derive(Debug, Clone)]
+pub struct AgentMessage {
+    /// The ID or name of the sending agent.
+    pub from: String,
+    /// The message content to deliver.
+    pub content: String,
+}
+
+/// Thread-safe registry for inter-agent communication.
+///
+/// Agents register themselves with a message channel on spawn and unregister
+/// on completion. The `SendMessage` tool uses this registry to route messages
+/// between running agents.
+///
+/// # Examples
+///
+/// ```
+/// use patina::agents::{AgentMessage, AgentRegistry};
+///
+/// let registry = AgentRegistry::new();
+/// let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+/// registry.register("agent-1".to_string(), tx);
+/// assert!(registry.is_registered("agent-1"));
+/// ```
+pub struct AgentRegistry {
+    agents: std::sync::RwLock<HashMap<String, tokio::sync::mpsc::Sender<AgentMessage>>>,
+}
+
+impl AgentRegistry {
+    /// Creates a new empty agent registry.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            agents: std::sync::RwLock::new(HashMap::new()),
+        }
+    }
+
+    /// Registers an agent with a message channel.
+    ///
+    /// If an agent with the same ID is already registered, its channel is replaced.
+    pub fn register(&self, id: String, sender: tokio::sync::mpsc::Sender<AgentMessage>) {
+        let mut agents = self.agents.write().unwrap_or_else(|e| e.into_inner());
+        agents.insert(id, sender);
+    }
+
+    /// Unregisters an agent, removing its message channel.
+    ///
+    /// Returns `true` if the agent was found and removed.
+    pub fn unregister(&self, id: &str) -> bool {
+        let mut agents = self.agents.write().unwrap_or_else(|e| e.into_inner());
+        agents.remove(id).is_some()
+    }
+
+    /// Sends a message to a registered agent.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the target agent is not registered or the channel is closed.
+    pub async fn send_message(&self, to: &str, message: AgentMessage) -> Result<()> {
+        let sender = {
+            let agents = self.agents.read().unwrap_or_else(|e| e.into_inner());
+            agents.get(to).cloned()
+        };
+
+        match sender {
+            Some(tx) => tx
+                .send(message)
+                .await
+                .map_err(|e| anyhow::anyhow!("Failed to send message to agent '{}': {}", to, e)),
+            None => Err(anyhow::anyhow!("Agent '{}' is not registered", to)),
+        }
+    }
+
+    /// Returns `true` if an agent with the given ID is registered.
+    #[must_use]
+    pub fn is_registered(&self, id: &str) -> bool {
+        let agents = self.agents.read().unwrap_or_else(|e| e.into_inner());
+        agents.contains_key(id)
+    }
+
+    /// Returns the IDs of all registered agents.
+    #[must_use]
+    pub fn list_agents(&self) -> Vec<String> {
+        let agents = self.agents.read().unwrap_or_else(|e| e.into_inner());
+        agents.keys().cloned().collect()
+    }
+}
+
+impl Default for AgentRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl std::fmt::Debug for AgentRegistry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let agents = self.agents.read().unwrap_or_else(|e| e.into_inner());
+        f.debug_struct("AgentRegistry")
+            .field("agent_count", &agents.len())
+            .field("agent_ids", &agents.keys().collect::<Vec<_>>())
+            .finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_orchestrator_spawn_and_status() {
+        let mut orch = SubagentOrchestrator::new();
+        let config = SubagentConfig {
+            name: "test".to_string(),
+            description: "test agent".to_string(),
+            system_prompt: "You are a test.".to_string(),
+            allowed_tools: vec!["read_file".to_string()],
+            max_turns: 5,
+        };
+        let id = orch.spawn(config);
+        assert_eq!(orch.get_status(id), Some("pending"));
+        assert!(orch.is_tool_allowed(id, "read_file"));
+        assert!(!orch.is_tool_allowed(id, "bash"));
+    }
+
+    #[test]
+    fn test_orchestrator_concurrency_limit() {
+        let orch = SubagentOrchestrator::new().with_max_concurrent(2);
+        assert_eq!(orch.max_concurrent(), 2);
+        assert!(orch.can_spawn());
+    }
+
+    #[tokio::test]
+    async fn test_registry_register_and_send() {
+        let registry = AgentRegistry::new();
+        let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+        registry.register("agent-1".to_string(), tx);
+
+        assert!(registry.is_registered("agent-1"));
+
+        let msg = AgentMessage {
+            from: "agent-2".to_string(),
+            content: "Hello from agent 2".to_string(),
+        };
+        registry.send_message("agent-1", msg).await.unwrap();
+
+        let received = rx.recv().await.unwrap();
+        assert_eq!(received.from, "agent-2");
+        assert_eq!(received.content, "Hello from agent 2");
+    }
+
+    #[tokio::test]
+    async fn test_registry_send_to_unknown_agent() {
+        let registry = AgentRegistry::new();
+        let msg = AgentMessage {
+            from: "sender".to_string(),
+            content: "hello".to_string(),
+        };
+        let result = registry.send_message("nonexistent", msg).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not registered"));
+    }
+
+    #[test]
+    fn test_registry_unregister() {
+        let registry = AgentRegistry::new();
+        let (tx, _rx) = tokio::sync::mpsc::channel(16);
+        registry.register("agent-1".to_string(), tx);
+        assert!(registry.is_registered("agent-1"));
+
+        assert!(registry.unregister("agent-1"));
+        assert!(!registry.is_registered("agent-1"));
+        assert!(!registry.unregister("agent-1"));
+    }
+
+    #[test]
+    fn test_registry_list_agents() {
+        let registry = AgentRegistry::new();
+        let (tx1, _rx1) = tokio::sync::mpsc::channel(16);
+        let (tx2, _rx2) = tokio::sync::mpsc::channel(16);
+        registry.register("alpha".to_string(), tx1);
+        registry.register("beta".to_string(), tx2);
+
+        let mut agents = registry.list_agents();
+        agents.sort();
+        assert_eq!(agents, vec!["alpha", "beta"]);
+    }
+
+    #[test]
+    fn test_registry_debug_format() {
+        let registry = AgentRegistry::new();
+        let debug_str = format!("{:?}", registry);
+        assert!(debug_str.contains("AgentRegistry"));
+        assert!(debug_str.contains("agent_count"));
+    }
+
+    #[test]
+    fn test_registry_default() {
+        let registry = AgentRegistry::default();
+        assert!(registry.list_agents().is_empty());
+    }
+}

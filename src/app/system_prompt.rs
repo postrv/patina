@@ -154,6 +154,8 @@ Use the appropriate tool for each task:
 - **write_file**: Create new files
 - **edit**: Modify existing files with precise string replacements
 - **multi_edit**: Apply edits to multiple files in one operation
+- **notebook_edit**: Edit Jupyter notebook cells by index
+- **send_message**: Send messages to other active agents
 - **grep**: Search file contents with regex patterns
 - **glob**: Find files by name patterns
 - **list_files**: List directory contents

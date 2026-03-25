@@ -85,7 +85,8 @@ pub enum ToolChoice {
 /// Returns the default set of built-in tools for agentic operation.
 ///
 /// Includes: bash, read_file, write_file, edit, multi_edit, list_files, glob, grep,
-/// web_fetch, web_search, analyze_image, lsp, todo_write
+/// web_fetch, web_search, analyze_image, lsp, todo_write, plan, ask_user,
+/// task_output, task_stop, send_message, notebook_edit
 #[must_use]
 pub fn default_tools() -> Vec<ToolDefinition> {
     vec![
@@ -106,6 +107,8 @@ pub fn default_tools() -> Vec<ToolDefinition> {
         ask_user_tool(),
         task_output_tool(),
         task_stop_tool(),
+        send_message_tool(),
+        notebook_edit_tool(),
     ]
 }
 
@@ -663,6 +666,69 @@ pub fn ask_user_tool() -> ToolDefinition {
     )
 }
 
+/// Creates the send_message tool definition.
+///
+/// Sends a message to another active agent for inter-agent communication.
+#[must_use]
+pub fn send_message_tool() -> ToolDefinition {
+    ToolDefinition::new(
+        "send_message",
+        "Send a message to another active agent. Use this to communicate with running \
+         subagents by their ID or name. The message is delivered as a user turn to the \
+         target agent's conversation.",
+        json!({
+            "type": "object",
+            "properties": {
+                "to": {
+                    "type": "string",
+                    "description": "The ID or name of the target agent"
+                },
+                "message": {
+                    "type": "string",
+                    "description": "The message content to send"
+                }
+            },
+            "required": ["to", "message"]
+        }),
+    )
+}
+
+/// Creates the notebook_edit tool definition.
+///
+/// Edits a specific cell in a Jupyter notebook (.ipynb) file.
+#[must_use]
+pub fn notebook_edit_tool() -> ToolDefinition {
+    ToolDefinition::new(
+        "notebook_edit",
+        "Edit a specific cell in a Jupyter notebook (.ipynb) file. Identify cells by \
+         their zero-based index. Can replace cell source content, change cell type, \
+         or insert new cells.",
+        json!({
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "The relative path to the .ipynb notebook file"
+                },
+                "cell_index": {
+                    "type": "integer",
+                    "description": "Zero-based index of the cell to edit. Use -1 to append a new cell."
+                },
+                "new_source": {
+                    "type": "string",
+                    "description": "The new source content for the cell"
+                },
+                "cell_type": {
+                    "type": "string",
+                    "enum": ["code", "markdown", "raw"],
+                    "description": "Optionally change the cell type (code, markdown, or raw)"
+                }
+            },
+            "required": ["path", "cell_index", "new_source"]
+        }),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -714,7 +780,7 @@ mod tests {
     fn test_default_tools_contains_all_tools() {
         let tools = default_tools();
 
-        assert_eq!(tools.len(), 17, "should have 17 default tools");
+        assert_eq!(tools.len(), 19, "should have 19 default tools");
 
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains(&"bash"), "should contain bash");
@@ -737,6 +803,14 @@ mod tests {
         assert!(names.contains(&"ask_user"), "should contain ask_user");
         assert!(names.contains(&"task_output"), "should contain task_output");
         assert!(names.contains(&"task_stop"), "should contain task_stop");
+        assert!(
+            names.contains(&"send_message"),
+            "should contain send_message"
+        );
+        assert!(
+            names.contains(&"notebook_edit"),
+            "should contain notebook_edit"
+        );
     }
 
     #[test]
@@ -1147,5 +1221,60 @@ mod tests {
             "task_stop should have task_id"
         );
         assert_eq!(schema["required"], json!(["task_id"]));
+    }
+
+    // =========================================================================
+    // 12.3.2: send_message tool schema
+    // =========================================================================
+
+    #[test]
+    fn test_send_message_tool_schema() {
+        let tool = send_message_tool();
+        assert_eq!(tool.name, "send_message");
+
+        let schema = &tool.input_schema;
+        assert_eq!(schema["type"], "object");
+        assert!(
+            schema["properties"]["to"].is_object(),
+            "send_message should have 'to' property"
+        );
+        assert!(
+            schema["properties"]["message"].is_object(),
+            "send_message should have 'message' property"
+        );
+        assert_eq!(schema["required"], json!(["to", "message"]));
+    }
+
+    // =========================================================================
+    // 12.3.3: notebook_edit tool schema
+    // =========================================================================
+
+    #[test]
+    fn test_notebook_edit_tool_schema() {
+        let tool = notebook_edit_tool();
+        assert_eq!(tool.name, "notebook_edit");
+
+        let schema = &tool.input_schema;
+        assert_eq!(schema["type"], "object");
+        assert!(
+            schema["properties"]["path"].is_object(),
+            "notebook_edit should have 'path' property"
+        );
+        assert!(
+            schema["properties"]["cell_index"].is_object(),
+            "notebook_edit should have 'cell_index' property"
+        );
+        assert!(
+            schema["properties"]["new_source"].is_object(),
+            "notebook_edit should have 'new_source' property"
+        );
+        assert!(
+            schema["properties"]["cell_type"].is_object(),
+            "notebook_edit should have 'cell_type' property"
+        );
+        assert_eq!(
+            schema["required"],
+            json!(["path", "cell_index", "new_source"])
+        );
     }
 }

@@ -15,11 +15,15 @@ use walkdir::WalkDir;
 
 use super::security::{normalize_command, ToolExecutionPolicy};
 use super::{vision, web_fetch, web_search};
+use crate::agents::AgentRegistry;
 use crate::permissions::PermissionRequest;
+use std::sync::Arc;
+
 /// Tool executor with security policy enforcement.
 pub struct ToolExecutor {
     working_dir: PathBuf,
     pub(crate) policy: ToolExecutionPolicy,
+    agent_registry: Option<Arc<AgentRegistry>>,
 }
 
 #[derive(Debug)]
@@ -116,11 +120,21 @@ impl ToolExecutor {
         Self {
             working_dir,
             policy: ToolExecutionPolicy::default(),
+            agent_registry: None,
         }
     }
 
     pub fn with_policy(mut self, policy: ToolExecutionPolicy) -> Self {
         self.policy = policy;
+        self
+    }
+
+    /// Sets the agent registry for inter-agent communication.
+    ///
+    /// When set, the `send_message` tool can route messages between agents.
+    #[must_use]
+    pub fn with_agent_registry(mut self, registry: Arc<AgentRegistry>) -> Self {
+        self.agent_registry = Some(registry);
         self
     }
 
@@ -385,6 +399,8 @@ impl ToolExecutor {
             "analyze_image" => self.analyze_image(&call.input).await,
             "lsp" => self.execute_lsp(&call.input).await,
             "todo_write" => self.execute_todo_write(&call.input).await,
+            "send_message" => self.send_message(&call.input).await,
+            "notebook_edit" => self.notebook_edit(&call.input).await,
             _ => Ok(ToolResult::Error(format!("Unknown tool: {}", call.name))),
         }
     }
@@ -748,6 +764,187 @@ impl ToolExecutor {
         } else {
             Ok(ToolResult::Success(summary))
         }
+    }
+
+    /// Sends a message to another active agent via the agent registry.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ToolResult::Error` if:
+    /// - No agent registry is configured
+    /// - The target agent is not registered
+    /// - The message channel is closed
+    async fn send_message(&self, input: &serde_json::Value) -> Result<ToolResult> {
+        let to = input
+            .get("to")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("Missing 'to' parameter"))?;
+        let message = input
+            .get("message")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("Missing 'message' parameter"))?;
+
+        let registry = match &self.agent_registry {
+            Some(r) => r,
+            None => {
+                return Ok(ToolResult::Error(
+                    "Agent messaging is not available: no agent registry configured".to_string(),
+                ));
+            }
+        };
+
+        let agent_msg = crate::agents::AgentMessage {
+            from: "user".to_string(),
+            content: message.to_string(),
+        };
+
+        match registry.send_message(to, agent_msg).await {
+            Ok(()) => Ok(ToolResult::Success(format!("Message sent to agent '{to}'"))),
+            Err(e) => Ok(ToolResult::Error(format!(
+                "Failed to send message to agent '{to}': {e}"
+            ))),
+        }
+    }
+
+    /// Edits a specific cell in a Jupyter notebook (.ipynb) file.
+    ///
+    /// Supports replacing cell source content, changing cell type,
+    /// and appending new cells (cell_index = -1).
+    ///
+    /// # Errors
+    ///
+    /// Returns `ToolResult::Error` if:
+    /// - The path is invalid or outside the working directory
+    /// - The file is not a valid .ipynb notebook
+    /// - The cell index is out of bounds
+    async fn notebook_edit(&self, input: &serde_json::Value) -> Result<ToolResult> {
+        let path_str = input
+            .get("path")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("Missing 'path' parameter"))?;
+        let cell_index = input
+            .get("cell_index")
+            .and_then(|v| v.as_i64())
+            .ok_or_else(|| anyhow::anyhow!("Missing 'cell_index' parameter"))?;
+        let new_source = input
+            .get("new_source")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("Missing 'new_source' parameter"))?;
+        let cell_type = input.get("cell_type").and_then(|v| v.as_str());
+
+        // Validate path
+        let full_path = match self.validate_file_write_path(path_str).await {
+            Ok(p) => p,
+            Err(e) => return Ok(e),
+        };
+
+        // Verify .ipynb extension
+        if !path_str.to_lowercase().ends_with(".ipynb") {
+            return Ok(ToolResult::Error(
+                "notebook_edit only works on .ipynb files".to_string(),
+            ));
+        }
+
+        // Read and parse the notebook
+        let content = match tokio::fs::read_to_string(&full_path).await {
+            Ok(c) => c,
+            Err(e) => {
+                return Ok(ToolResult::Error(format!("Failed to read notebook: {e}")));
+            }
+        };
+
+        let mut notebook: serde_json::Value = match serde_json::from_str(&content) {
+            Ok(v) => v,
+            Err(e) => {
+                return Ok(ToolResult::Error(format!(
+                    "Failed to parse notebook JSON: {e}"
+                )));
+            }
+        };
+
+        // Validate cells array exists
+        if notebook.get("cells").and_then(|c| c.as_array()).is_none() {
+            return Ok(ToolResult::Error(
+                "Notebook has no 'cells' array".to_string(),
+            ));
+        }
+
+        // Build source as array of lines (Jupyter format)
+        let line_count = new_source.lines().count();
+        let source_lines: Vec<serde_json::Value> = new_source
+            .lines()
+            .enumerate()
+            .map(|(i, line)| {
+                if i < line_count - 1 {
+                    serde_json::Value::String(format!("{line}\n"))
+                } else {
+                    serde_json::Value::String(line.to_string())
+                }
+            })
+            .collect();
+
+        // Perform mutation in a scoped block to release mutable borrow before serialization
+        let result_msg = {
+            let cells = notebook["cells"].as_array_mut().unwrap();
+
+            if cell_index == -1 {
+                // Append new cell
+                let new_cell_type = cell_type.unwrap_or("code");
+                let mut new_cell = serde_json::json!({
+                    "cell_type": new_cell_type,
+                    "metadata": {},
+                    "source": source_lines,
+                });
+                if new_cell_type == "code" {
+                    new_cell["outputs"] = serde_json::json!([]);
+                    new_cell["execution_count"] = serde_json::Value::Null;
+                }
+                cells.push(new_cell);
+                format!(
+                    "Appended new {new_cell_type} cell at index {}",
+                    cells.len() - 1
+                )
+            } else {
+                let idx = cell_index as usize;
+                if idx >= cells.len() {
+                    return Ok(ToolResult::Error(format!(
+                        "Cell index {idx} out of bounds (notebook has {} cells)",
+                        cells.len()
+                    )));
+                }
+
+                let cell = &mut cells[idx];
+                cell["source"] = serde_json::Value::Array(source_lines);
+
+                if let Some(ct) = cell_type {
+                    cell["cell_type"] = serde_json::Value::String(ct.to_string());
+                    if ct == "code" {
+                        if cell.get("outputs").is_none() {
+                            cell["outputs"] = serde_json::json!([]);
+                            cell["execution_count"] = serde_json::Value::Null;
+                        }
+                    } else if let Some(obj) = cell.as_object_mut() {
+                        obj.remove("outputs");
+                        obj.remove("execution_count");
+                    }
+                }
+
+                let type_info = cell_type
+                    .map(|ct| format!(" (type changed to {ct})"))
+                    .unwrap_or_default();
+                format!("Updated cell {idx}{type_info}")
+            }
+        };
+
+        // Create backup and write (mutable borrow on cells is now dropped)
+        if full_path.exists() {
+            let _ = self.create_backup(&full_path).await;
+        }
+        let pretty = serde_json::to_string_pretty(&notebook)
+            .map_err(|e| anyhow::anyhow!("Failed to serialize notebook: {e}"))?;
+        tokio::fs::write(&full_path, pretty).await?;
+
+        Ok(ToolResult::Success(result_msg))
     }
 
     /// Formats file content with cat -n style line numbers and optional offset/limit.
@@ -2653,5 +2850,223 @@ mod tests {
         let input = serde_json::json!({ "edits": [] });
         let result = executor.multi_edit(&input).await.unwrap();
         assert!(matches!(result, ToolResult::Error(_)));
+    }
+
+    // =========================================================================
+    // 12.3.2: send_message tests
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_send_message_no_registry() {
+        let executor = ToolExecutor::new(PathBuf::from("/tmp"));
+        let input = serde_json::json!({
+            "to": "agent-1",
+            "message": "hello"
+        });
+        let result = executor.send_message(&input).await.unwrap();
+        match result {
+            ToolResult::Error(msg) => assert!(msg.contains("not available")),
+            _ => panic!("Expected error when no registry configured"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_send_message_with_registry_success() {
+        let registry = Arc::new(AgentRegistry::new());
+        let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+        registry.register("agent-1".to_string(), tx);
+
+        let executor =
+            ToolExecutor::new(PathBuf::from("/tmp")).with_agent_registry(Arc::clone(&registry));
+        let input = serde_json::json!({
+            "to": "agent-1",
+            "message": "do the thing"
+        });
+        let result = executor.send_message(&input).await.unwrap();
+        match result {
+            ToolResult::Success(msg) => assert!(msg.contains("agent-1")),
+            _ => panic!("Expected success"),
+        }
+
+        let received = rx.recv().await.unwrap();
+        assert_eq!(received.content, "do the thing");
+    }
+
+    #[tokio::test]
+    async fn test_send_message_to_unknown_agent() {
+        let registry = Arc::new(AgentRegistry::new());
+        let executor =
+            ToolExecutor::new(PathBuf::from("/tmp")).with_agent_registry(Arc::clone(&registry));
+        let input = serde_json::json!({
+            "to": "nonexistent",
+            "message": "hello"
+        });
+        let result = executor.send_message(&input).await.unwrap();
+        match result {
+            ToolResult::Error(msg) => assert!(msg.contains("nonexistent")),
+            _ => panic!("Expected error for unknown agent"),
+        }
+    }
+
+    // =========================================================================
+    // 12.3.3: notebook_edit tests
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_notebook_edit_update_cell() {
+        let dir = TempDir::new().unwrap();
+        let notebook = serde_json::json!({
+            "nbformat": 4,
+            "nbformat_minor": 5,
+            "metadata": {"kernelspec": {"language": "python"}},
+            "cells": [
+                {
+                    "cell_type": "code",
+                    "metadata": {},
+                    "source": ["print('hello')"],
+                    "outputs": [],
+                    "execution_count": 1
+                }
+            ]
+        });
+        let nb_path = dir.path().join("test.ipynb");
+        std::fs::write(&nb_path, serde_json::to_string_pretty(&notebook).unwrap()).unwrap();
+
+        let executor = ToolExecutor::new(dir.path().to_path_buf());
+        let input = serde_json::json!({
+            "path": "test.ipynb",
+            "cell_index": 0,
+            "new_source": "print('world')"
+        });
+        let result = executor.notebook_edit(&input).await.unwrap();
+        match &result {
+            ToolResult::Success(msg) => assert!(msg.contains("Updated cell 0")),
+            other => panic!("Expected success, got: {other:?}"),
+        }
+
+        // Verify the file was updated
+        let updated: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&nb_path).unwrap()).unwrap();
+        let source = updated["cells"][0]["source"][0].as_str().unwrap();
+        assert_eq!(source, "print('world')");
+    }
+
+    #[tokio::test]
+    async fn test_notebook_edit_append_cell() {
+        let dir = TempDir::new().unwrap();
+        let notebook = serde_json::json!({
+            "nbformat": 4,
+            "nbformat_minor": 5,
+            "metadata": {},
+            "cells": [
+                {
+                    "cell_type": "markdown",
+                    "metadata": {},
+                    "source": ["# Title"]
+                }
+            ]
+        });
+        let nb_path = dir.path().join("test.ipynb");
+        std::fs::write(&nb_path, serde_json::to_string_pretty(&notebook).unwrap()).unwrap();
+
+        let executor = ToolExecutor::new(dir.path().to_path_buf());
+        let input = serde_json::json!({
+            "path": "test.ipynb",
+            "cell_index": -1,
+            "new_source": "x = 42\nprint(x)",
+            "cell_type": "code"
+        });
+        let result = executor.notebook_edit(&input).await.unwrap();
+        match &result {
+            ToolResult::Success(msg) => assert!(msg.contains("Appended")),
+            other => panic!("Expected success, got: {other:?}"),
+        }
+
+        let updated: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&nb_path).unwrap()).unwrap();
+        let cells = updated["cells"].as_array().unwrap();
+        assert_eq!(cells.len(), 2);
+        assert_eq!(cells[1]["cell_type"], "code");
+    }
+
+    #[tokio::test]
+    async fn test_notebook_edit_out_of_bounds() {
+        let dir = TempDir::new().unwrap();
+        let notebook = serde_json::json!({
+            "nbformat": 4,
+            "metadata": {},
+            "cells": [{"cell_type": "code", "metadata": {}, "source": [], "outputs": []}]
+        });
+        let nb_path = dir.path().join("test.ipynb");
+        std::fs::write(&nb_path, serde_json::to_string_pretty(&notebook).unwrap()).unwrap();
+
+        let executor = ToolExecutor::new(dir.path().to_path_buf());
+        let input = serde_json::json!({
+            "path": "test.ipynb",
+            "cell_index": 5,
+            "new_source": "nope"
+        });
+        let result = executor.notebook_edit(&input).await.unwrap();
+        assert!(matches!(result, ToolResult::Error(_)));
+    }
+
+    #[tokio::test]
+    async fn test_notebook_edit_non_ipynb_rejected() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(dir.path().join("file.txt"), "text").unwrap();
+
+        let executor = ToolExecutor::new(dir.path().to_path_buf());
+        let input = serde_json::json!({
+            "path": "file.txt",
+            "cell_index": 0,
+            "new_source": "nope"
+        });
+        let result = executor.notebook_edit(&input).await.unwrap();
+        match result {
+            ToolResult::Error(msg) => assert!(msg.contains(".ipynb")),
+            _ => panic!("Expected error for non-ipynb file"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_notebook_edit_change_cell_type() {
+        let dir = TempDir::new().unwrap();
+        let notebook = serde_json::json!({
+            "nbformat": 4,
+            "metadata": {},
+            "cells": [
+                {
+                    "cell_type": "code",
+                    "metadata": {},
+                    "source": ["# A comment"],
+                    "outputs": [],
+                    "execution_count": null
+                }
+            ]
+        });
+        let nb_path = dir.path().join("test.ipynb");
+        std::fs::write(&nb_path, serde_json::to_string_pretty(&notebook).unwrap()).unwrap();
+
+        let executor = ToolExecutor::new(dir.path().to_path_buf());
+        let input = serde_json::json!({
+            "path": "test.ipynb",
+            "cell_index": 0,
+            "new_source": "# A markdown heading",
+            "cell_type": "markdown"
+        });
+        let result = executor.notebook_edit(&input).await.unwrap();
+        match &result {
+            ToolResult::Success(msg) => {
+                assert!(msg.contains("Updated cell 0"));
+                assert!(msg.contains("type changed to markdown"));
+            }
+            other => panic!("Expected success, got: {other:?}"),
+        }
+
+        let updated: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&nb_path).unwrap()).unwrap();
+        assert_eq!(updated["cells"][0]["cell_type"], "markdown");
+        // outputs should be removed for markdown cells
+        assert!(updated["cells"][0].get("outputs").is_none());
     }
 }

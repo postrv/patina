@@ -97,7 +97,12 @@ pub fn classify_tool(tool_name: &str) -> ToolSafetyClass {
         }
 
         // Mutating tools - must run sequentially
-        "write_file" | "edit" | "multi_edit" | "todo_write" => ToolSafetyClass::Mutating,
+        "write_file" | "edit" | "multi_edit" | "todo_write" | "notebook_edit" => {
+            ToolSafetyClass::Mutating
+        }
+
+        // Inter-agent communication - side-effecting, classify as Unknown
+        "send_message" => ToolSafetyClass::Unknown,
 
         // Bash is inherently unpredictable - classify as Unknown
         "bash" => ToolSafetyClass::Unknown,
