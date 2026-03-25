@@ -1,10 +1,12 @@
 /// Session tracking state extracted from AppState.
 ///
-/// Groups the session ID and dirty flag for auto-save functionality.
+/// Groups the session ID, name, and dirty flag for auto-save functionality.
 #[derive(Debug, Clone, Default)]
 pub struct SessionTracking {
     /// Current session ID, assigned on first save or restore.
     id: Option<String>,
+    /// Optional custom session name set by `/rename`.
+    name: Option<String>,
     /// Whether the session needs to be saved.
     dirty: bool,
 }
@@ -43,5 +45,17 @@ impl SessionTracking {
     #[must_use]
     pub fn is_dirty(&self) -> bool {
         self.dirty
+    }
+
+    /// Returns the custom session name, if one has been set.
+    #[must_use]
+    pub fn name(&self) -> Option<&str> {
+        self.name.as_deref()
+    }
+
+    /// Sets or clears the custom session name.
+    pub fn set_name(&mut self, name: Option<String>) {
+        self.name = name;
+        self.dirty = true;
     }
 }

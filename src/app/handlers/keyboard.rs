@@ -328,6 +328,50 @@ fn handle_command_action(
                 Err(e) => format!("Failed to switch model: {e}"),
             }
         }
+        CommandAction::CopyToClipboard { message_index } => {
+            // Find the message to copy
+            let messages = ctx.state.messages();
+            let msg = match message_index {
+                Some(idx) => messages.get(idx),
+                None => messages.iter().rev().find(|m| m.role == Role::Assistant),
+            };
+            match msg {
+                Some(m) => {
+                    // Attempt to copy to clipboard via pbcopy (macOS) or xclip (Linux)
+                    let copy_cmd = if cfg!(target_os = "macos") {
+                        "pbcopy"
+                    } else {
+                        "xclip -selection clipboard"
+                    };
+                    match std::process::Command::new("sh")
+                        .args(["-c", copy_cmd])
+                        .stdin(std::process::Stdio::piped())
+                        .spawn()
+                        .and_then(|mut child| {
+                            use std::io::Write;
+                            if let Some(stdin) = child.stdin.as_mut() {
+                                stdin.write_all(m.content.as_bytes())?;
+                            }
+                            child.wait()
+                        }) {
+                        Ok(_) => "Copied to clipboard.".to_string(),
+                        Err(e) => format!("Failed to copy: {e}"),
+                    }
+                }
+                None => "No message to copy.".to_string(),
+            }
+        }
+        CommandAction::RenameSession(name) => {
+            ctx.state.set_session_name(Some(name.clone()));
+            format!("Session renamed to: {name}")
+        }
+        CommandAction::SetColor(color) => {
+            ctx.state.set_prompt_color(Some(color.clone()));
+            format!("Prompt color set to: {color}")
+        }
+        CommandAction::SideQuestion(question) => {
+            format!("(btw) {question}")
+        }
     };
 
     ctx.state.add_message(Message {

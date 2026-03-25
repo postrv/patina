@@ -23,6 +23,9 @@ pub struct DisplayState {
 
     /// Latest available version from background update check, if newer.
     pub(crate) update_available: Option<String>,
+
+    /// Custom prompt bar color set by `/color`.
+    pub(crate) prompt_color: Option<String>,
 }
 
 impl DisplayState {
@@ -35,6 +38,7 @@ impl DisplayState {
             throbber_frame: 0,
             terminal_height: 24,
             update_available: None,
+            prompt_color: None,
         }
     }
 
@@ -97,6 +101,17 @@ impl DisplayState {
     /// Sets the available update version from background check.
     pub fn set_update_available(&mut self, version: String) {
         self.update_available = Some(version);
+    }
+
+    /// Returns the custom prompt bar color, if set.
+    #[must_use]
+    pub fn prompt_color(&self) -> Option<&str> {
+        self.prompt_color.as_deref()
+    }
+
+    /// Sets or clears the custom prompt bar color.
+    pub fn set_prompt_color(&mut self, color: Option<String>) {
+        self.prompt_color = color;
     }
 }
 

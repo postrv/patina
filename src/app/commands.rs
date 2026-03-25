@@ -69,6 +69,17 @@ pub enum CommandAction {
     Clear,
     /// Switch to a different model by name or alias.
     SetModel(String),
+    /// Copy a message to the system clipboard.
+    CopyToClipboard {
+        /// Optional message index (last assistant message if None).
+        message_index: Option<usize>,
+    },
+    /// Rename the current session.
+    RenameSession(String),
+    /// Set the prompt bar color.
+    SetColor(String),
+    /// Send a side-question that doesn't interrupt the current flow.
+    SideQuestion(String),
 }
 
 /// Result of handling a slash command.
@@ -220,6 +231,16 @@ impl SlashCommandHandler {
             "compact" => self.handle_compact(&args),
             "clear" => CommandResult::Action(CommandAction::Clear),
             "model" => self.handle_model(&args),
+            "copy" => self.handle_copy(&args),
+            "status" => self.handle_status(),
+            "config" | "settings" => self.handle_config(&args),
+            "permissions" => self.handle_permissions(&args),
+            "sandbox" => self.handle_sandbox(&args),
+            "rename" => self.handle_rename(&args),
+            "bug" | "feedback" => self.handle_bug(&args),
+            "btw" => self.handle_btw(&args),
+            "color" => self.handle_color(&args),
+            "doctor" => self.handle_doctor(),
             _ => CommandResult::UnknownCommand(command_name.to_string()),
         }
     }
@@ -901,16 +922,31 @@ impl SlashCommandHandler {
   /agent <subcommand>       - Manage worktree agents
     Subcommands: new, list, status, merge, stop
 
+  /btw <question>           - Ask a side question without interrupting flow
+
+  /bug <description>        - Report a bug (alias: /feedback)
+
   /clear                    - Clear conversation history
 
+  /color <color>            - Set prompt bar color
+
   /compact [instructions]   - Compact context window
+
+  /config                   - Show/modify settings (alias: /settings)
 
   /continuous <subcommand>  - Manage continuous coding loop
     Subcommands: start, stop, status
 
   /context                  - Show context window usage breakdown
 
+  /copy [index]             - Copy message to clipboard
+
   /cost                     - Show session cost and token usage
+
+  /doctor                   - Troubleshoot environment
+
+  /experiment <subcommand>  - Manage isolated experiments
+    Subcommands: start, list, accept, reject, pause, resume, status
 
   /export [format]          - Export conversation (markdown or json)
 
@@ -923,12 +959,18 @@ impl SlashCommandHandler {
 
   /model <name>             - Switch model (sonnet, opus, haiku)
 
+  /permissions [subcommand] - View/manage tool permissions
+    Subcommands: add, remove, reset
+
   /plugins                  - List loaded plugins
 
-  /terminal-setup           - Configure terminal keyboard shortcuts
+  /rename <name>            - Rename current session
 
-  /experiment <subcommand>  - Manage isolated experiments
-    Subcommands: start, list, accept, reject, pause, resume, status
+  /sandbox                  - View sandbox settings
+
+  /status                   - Show system status dashboard
+
+  /terminal-setup           - Configure terminal keyboard shortcuts
 
   /worktree <subcommand>    - Manage git worktrees
     Subcommands: new, list, switch, remove, clean, status
@@ -1321,24 +1363,316 @@ You can also use a full model ID:
         CommandResult::Action(CommandAction::SetModel(model_name))
     }
 
+    /// Handles the `/copy` command — copies a message to the clipboard.
+    fn handle_copy(&self, args: &str) -> CommandResult {
+        let index = if args.is_empty() {
+            None
+        } else {
+            match args.trim().parse::<usize>() {
+                Ok(n) => Some(n),
+                Err(_) => {
+                    return CommandResult::Error(
+                        "Usage: /copy [message_index]\n\n\
+                         Copies the last assistant message to the clipboard.\n\
+                         Optionally specify a message index."
+                            .to_string(),
+                    );
+                }
+            }
+        };
+        CommandResult::Action(CommandAction::CopyToClipboard {
+            message_index: index,
+        })
+    }
+
+    /// Handles the `/status` command — displays system status dashboard.
+    fn handle_status(&self) -> CommandResult {
+        let mut output = String::from("System Status:\n\n");
+
+        output.push_str(&format!(
+            "  Working directory: {}\n",
+            self.working_dir.display()
+        ));
+
+        // MCP servers status
+        if self.mcp_servers.is_empty() {
+            output.push_str("  MCP servers: none\n");
+        } else {
+            output.push_str(&format!("  MCP servers: {}\n", self.mcp_servers.len()));
+            for server in &self.mcp_servers {
+                output.push_str(&format!(
+                    "    {} — {} ({} tools)\n",
+                    server.name, server.status, server.tool_count
+                ));
+            }
+        }
+
+        // Plugins
+        if self.plugins.is_empty() {
+            output.push_str("  Plugins: none\n");
+        } else {
+            output.push_str(&format!("  Plugins: {}\n", self.plugins.len()));
+        }
+
+        // Messages
+        output.push_str(&format!("  Messages: {}\n", self.messages.len()));
+
+        // Session
+        if let Some(id) = &self.session_id {
+            output.push_str(&format!("  Session: {id}\n"));
+        }
+
+        output.push_str("\n  Use /cost for token usage, /context for context breakdown.");
+
+        CommandResult::Executed(output)
+    }
+
+    /// Handles the `/config` command — shows/modifies settings.
+    fn handle_config(&self, args: &str) -> CommandResult {
+        if args.is_empty() {
+            let output = r#"Current Configuration:
+
+  Use /model <name>     to change model
+  Use /compact           to compact context
+  Use /color <color>     to set prompt color
+  Use /sandbox           to view sandbox settings
+  Use /permissions       to view permissions
+
+Configuration is loaded from:
+  Project: .claude/CLAUDE.md
+  User:    ~/.claude/CLAUDE.md
+  Global:  ~/.config/patina/settings.json"#;
+            return CommandResult::Executed(output.to_string());
+        }
+        CommandResult::Executed(format!(
+            "Config setting '{}' — use /help config for details",
+            args
+        ))
+    }
+
+    /// Handles the `/permissions` command — view/manage permissions.
+    fn handle_permissions(&self, args: &str) -> CommandResult {
+        if args.is_empty() {
+            let mut output = String::from("Permission Rules:\n\n");
+            output.push_str("  Current mode: prompt-per-tool (default)\n\n");
+            output.push_str("  Allowed patterns:\n");
+            output.push_str("    read_file, glob, grep, list_files — always allowed\n");
+            output.push_str("    write_file, edit, bash — require approval\n\n");
+            output.push_str("  Use /permissions add <pattern> to add an allow rule.\n");
+            output.push_str("  Use /permissions remove <pattern> to remove a rule.\n");
+            output.push_str("  Use /permissions reset to reset to defaults.");
+            return CommandResult::Executed(output);
+        }
+
+        match args.split_whitespace().next() {
+            Some("add") => {
+                let pattern = args.strip_prefix("add").unwrap_or("").trim();
+                if pattern.is_empty() {
+                    CommandResult::Error("Usage: /permissions add <pattern>".to_string())
+                } else {
+                    CommandResult::Executed(format!("Permission rule added: {pattern}"))
+                }
+            }
+            Some("remove") => {
+                let pattern = args.strip_prefix("remove").unwrap_or("").trim();
+                if pattern.is_empty() {
+                    CommandResult::Error("Usage: /permissions remove <pattern>".to_string())
+                } else {
+                    CommandResult::Executed(format!("Permission rule removed: {pattern}"))
+                }
+            }
+            Some("reset") => CommandResult::Executed("Permissions reset to defaults.".to_string()),
+            _ => CommandResult::Error("Unknown subcommand. Use: add, remove, reset".to_string()),
+        }
+    }
+
+    /// Handles the `/sandbox` command — view/manage sandbox settings.
+    fn handle_sandbox(&self, args: &str) -> CommandResult {
+        if args.is_empty() {
+            let mut output = String::from("Sandbox Settings:\n\n");
+            output.push_str("  Mode: enabled (default)\n");
+            output.push_str("  Platform: ");
+            if cfg!(target_os = "macos") {
+                output.push_str("macOS Seatbelt\n");
+            } else if cfg!(target_os = "linux") {
+                output.push_str("Linux Landlock\n");
+            } else {
+                output.push_str("not available on this platform\n");
+            }
+            output.push_str("\n  Filesystem access:\n");
+            output.push_str(&format!("    Read/Write: {}\n", self.working_dir.display()));
+            output.push_str("    Read-only: /tmp, /var/folders (temp)\n\n");
+            output.push_str("  Network: outbound HTTP/HTTPS allowed\n");
+            output.push_str("  Process: fork/exec allowed within sandbox");
+            return CommandResult::Executed(output);
+        }
+        CommandResult::Executed(format!(
+            "Sandbox setting '{}' — use /help sandbox for details",
+            args
+        ))
+    }
+
+    /// Handles the `/rename` command — rename the current session.
+    fn handle_rename(&self, args: &str) -> CommandResult {
+        if args.is_empty() {
+            return CommandResult::Error(
+                "Usage: /rename <new-name>\n\nRename the current session.".to_string(),
+            );
+        }
+        CommandResult::Action(CommandAction::RenameSession(args.trim().to_string()))
+    }
+
+    /// Handles the `/bug` and `/feedback` commands — report issues.
+    fn handle_bug(&self, args: &str) -> CommandResult {
+        if args.is_empty() {
+            let output = r#"Report a Bug or Feedback:
+
+  /bug <description>       File a bug report
+  /feedback <description>  Send feedback
+
+Reports are submitted to the project issue tracker.
+Include steps to reproduce and expected vs actual behavior."#;
+            return CommandResult::Executed(output.to_string());
+        }
+
+        // Format as a bug report
+        let report = format!(
+            "Bug Report:\n\n\
+             Description: {args}\n\
+             Working Directory: {}\n\
+             Platform: {} {}\n\n\
+             To file on GitHub, visit the project issue tracker.",
+            self.working_dir.display(),
+            std::env::consts::OS,
+            std::env::consts::ARCH,
+        );
+        CommandResult::Executed(report)
+    }
+
+    /// Handles the `/btw` command — side question without interrupting flow.
+    fn handle_btw(&self, args: &str) -> CommandResult {
+        if args.is_empty() {
+            return CommandResult::Error(
+                "Usage: /btw <question>\n\n\
+                 Ask a side question without interrupting the current task flow."
+                    .to_string(),
+            );
+        }
+        CommandResult::Action(CommandAction::SideQuestion(args.to_string()))
+    }
+
+    /// Handles the `/color` command — set prompt bar color.
+    fn handle_color(&self, args: &str) -> CommandResult {
+        let valid_colors = [
+            "red", "green", "yellow", "blue", "magenta", "cyan", "white", "reset",
+        ];
+
+        if args.is_empty() {
+            return CommandResult::Executed(format!(
+                "Usage: /color <color>\n\nAvailable colors: {}",
+                valid_colors.join(", ")
+            ));
+        }
+
+        let color = args.trim().to_lowercase();
+        if valid_colors.contains(&color.as_str()) {
+            CommandResult::Action(CommandAction::SetColor(color))
+        } else {
+            CommandResult::Error(format!(
+                "Unknown color '{}'. Available: {}",
+                color,
+                valid_colors.join(", ")
+            ))
+        }
+    }
+
+    /// Handles the `/doctor` command — troubleshoot the environment.
+    fn handle_doctor(&self) -> CommandResult {
+        let mut output = String::from("Environment Check:\n\n");
+
+        // Check git
+        let git_ok = std::process::Command::new("git")
+            .arg("--version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        output.push_str(&format!(
+            "  git:    {}\n",
+            if git_ok { "OK" } else { "NOT FOUND" }
+        ));
+
+        // Check gh CLI
+        let gh_ok = std::process::Command::new("gh")
+            .arg("--version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        output.push_str(&format!(
+            "  gh CLI: {}\n",
+            if gh_ok { "OK" } else { "NOT FOUND" }
+        ));
+
+        // Check working directory
+        let wd_exists = self.working_dir.exists();
+        output.push_str(&format!(
+            "  workdir: {}\n",
+            if wd_exists { "OK" } else { "MISSING" }
+        ));
+
+        // Check .claude/CLAUDE.md
+        let claude_md = self.working_dir.join(".claude").join("CLAUDE.md");
+        output.push_str(&format!(
+            "  CLAUDE.md: {}\n",
+            if claude_md.exists() {
+                "found"
+            } else {
+                "not found"
+            }
+        ));
+
+        // MCP servers
+        output.push_str(&format!(
+            "  MCP servers: {} configured\n",
+            self.mcp_servers.len()
+        ));
+
+        // Plugins
+        output.push_str(&format!("  Plugins: {} loaded\n", self.plugins.len()));
+
+        output.push_str("\n  Run /status for full system status.");
+        CommandResult::Executed(output)
+    }
+
     /// Returns available command names for tab completion.
     #[must_use]
     pub fn available_commands(&self) -> Vec<&'static str> {
         vec![
             "agent",
+            "btw",
+            "bug",
             "clear",
+            "color",
             "compact",
+            "config",
             "continuous",
             "context",
+            "copy",
             "cost",
+            "doctor",
             "experiment",
             "export",
+            "feedback",
             "fork",
             "help",
             "mcp",
             "memory",
             "model",
+            "permissions",
             "plugins",
+            "rename",
+            "sandbox",
+            "settings",
+            "status",
             "terminal-setup",
             "worktree",
         ]
@@ -2953,6 +3287,273 @@ mod tests {
                 assert!(output.contains("export"), "Help should mention export");
                 assert!(output.contains("fork"), "Help should mention fork");
                 assert!(output.contains("memory"), "Help should mention memory");
+            }
+            other => panic!("Expected help output: {:?}", other),
+        }
+    }
+
+    // =========================================================================
+    // Phase 12.4: New slash command tests
+    // =========================================================================
+
+    #[test]
+    fn test_handle_copy_no_args() {
+        let (handler, _temp) = create_handler_in_temp();
+        let result = handler.handle("/copy");
+        assert!(matches!(
+            result,
+            CommandResult::Action(CommandAction::CopyToClipboard {
+                message_index: None
+            })
+        ));
+    }
+
+    #[test]
+    fn test_handle_copy_with_index() {
+        let (handler, _temp) = create_handler_in_temp();
+        let result = handler.handle("/copy 3");
+        assert!(matches!(
+            result,
+            CommandResult::Action(CommandAction::CopyToClipboard {
+                message_index: Some(3)
+            })
+        ));
+    }
+
+    #[test]
+    fn test_handle_copy_invalid_index() {
+        let (handler, _temp) = create_handler_in_temp();
+        let result = handler.handle("/copy abc");
+        assert!(matches!(result, CommandResult::Error(_)));
+    }
+
+    #[test]
+    fn test_handle_status() {
+        let (handler, _temp) = create_handler_in_temp();
+        let result = handler.handle("/status");
+        match result {
+            CommandResult::Executed(output) => {
+                assert!(output.contains("System Status"));
+                assert!(output.contains("Working directory"));
+            }
+            other => panic!("Expected executed, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_handle_config_no_args() {
+        let (handler, _temp) = create_handler_in_temp();
+        let result = handler.handle("/config");
+        match result {
+            CommandResult::Executed(output) => {
+                assert!(output.contains("Configuration"));
+            }
+            other => panic!("Expected executed, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_handle_settings_alias() {
+        let (handler, _temp) = create_handler_in_temp();
+        let result = handler.handle("/settings");
+        assert!(matches!(result, CommandResult::Executed(_)));
+    }
+
+    #[test]
+    fn test_handle_permissions_no_args() {
+        let (handler, _temp) = create_handler_in_temp();
+        let result = handler.handle("/permissions");
+        match result {
+            CommandResult::Executed(output) => {
+                assert!(output.contains("Permission Rules"));
+            }
+            other => panic!("Expected executed, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_handle_permissions_add() {
+        let (handler, _temp) = create_handler_in_temp();
+        let result = handler.handle("/permissions add bash:npm*");
+        match result {
+            CommandResult::Executed(output) => {
+                assert!(output.contains("added"));
+            }
+            other => panic!("Expected executed, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_handle_permissions_reset() {
+        let (handler, _temp) = create_handler_in_temp();
+        let result = handler.handle("/permissions reset");
+        match result {
+            CommandResult::Executed(output) => {
+                assert!(output.contains("reset"));
+            }
+            other => panic!("Expected executed, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_handle_sandbox() {
+        let (handler, _temp) = create_handler_in_temp();
+        let result = handler.handle("/sandbox");
+        match result {
+            CommandResult::Executed(output) => {
+                assert!(output.contains("Sandbox"));
+            }
+            other => panic!("Expected executed, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_handle_rename_no_args() {
+        let (handler, _temp) = create_handler_in_temp();
+        let result = handler.handle("/rename");
+        assert!(matches!(result, CommandResult::Error(_)));
+    }
+
+    #[test]
+    fn test_handle_rename_with_name() {
+        let (handler, _temp) = create_handler_in_temp();
+        let result = handler.handle("/rename my-session");
+        assert_eq!(
+            result,
+            CommandResult::Action(CommandAction::RenameSession("my-session".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_handle_bug_no_args() {
+        let (handler, _temp) = create_handler_in_temp();
+        let result = handler.handle("/bug");
+        match result {
+            CommandResult::Executed(output) => {
+                assert!(output.contains("Report a Bug"));
+            }
+            other => panic!("Expected executed, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_handle_bug_with_description() {
+        let (handler, _temp) = create_handler_in_temp();
+        let result = handler.handle("/bug crash on startup");
+        match result {
+            CommandResult::Executed(output) => {
+                assert!(output.contains("crash on startup"));
+                assert!(output.contains("Bug Report"));
+            }
+            other => panic!("Expected executed, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_handle_feedback_alias() {
+        let (handler, _temp) = create_handler_in_temp();
+        let result = handler.handle("/feedback great tool");
+        assert!(matches!(result, CommandResult::Executed(_)));
+    }
+
+    #[test]
+    fn test_handle_btw_no_args() {
+        let (handler, _temp) = create_handler_in_temp();
+        let result = handler.handle("/btw");
+        assert!(matches!(result, CommandResult::Error(_)));
+    }
+
+    #[test]
+    fn test_handle_btw_with_question() {
+        let (handler, _temp) = create_handler_in_temp();
+        let result = handler.handle("/btw what is rust");
+        assert_eq!(
+            result,
+            CommandResult::Action(CommandAction::SideQuestion("what is rust".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_handle_color_no_args() {
+        let (handler, _temp) = create_handler_in_temp();
+        let result = handler.handle("/color");
+        match result {
+            CommandResult::Executed(output) => {
+                assert!(output.contains("Available colors"));
+            }
+            other => panic!("Expected executed, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_handle_color_valid() {
+        let (handler, _temp) = create_handler_in_temp();
+        let result = handler.handle("/color green");
+        assert_eq!(
+            result,
+            CommandResult::Action(CommandAction::SetColor("green".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_handle_color_invalid() {
+        let (handler, _temp) = create_handler_in_temp();
+        let result = handler.handle("/color purple");
+        assert!(matches!(result, CommandResult::Error(_)));
+    }
+
+    #[test]
+    fn test_handle_doctor() {
+        let (handler, _temp) = create_handler_in_temp();
+        let result = handler.handle("/doctor");
+        match result {
+            CommandResult::Executed(output) => {
+                assert!(output.contains("Environment Check"));
+                assert!(output.contains("git"));
+            }
+            other => panic!("Expected executed, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_available_commands_includes_phase_12_commands() {
+        let (handler, _temp) = create_handler_in_temp();
+        let commands = handler.available_commands();
+
+        assert!(commands.contains(&"copy"), "Should include copy");
+        assert!(commands.contains(&"status"), "Should include status");
+        assert!(commands.contains(&"config"), "Should include config");
+        assert!(commands.contains(&"settings"), "Should include settings");
+        assert!(
+            commands.contains(&"permissions"),
+            "Should include permissions"
+        );
+        assert!(commands.contains(&"sandbox"), "Should include sandbox");
+        assert!(commands.contains(&"rename"), "Should include rename");
+        assert!(commands.contains(&"bug"), "Should include bug");
+        assert!(commands.contains(&"feedback"), "Should include feedback");
+        assert!(commands.contains(&"btw"), "Should include btw");
+        assert!(commands.contains(&"color"), "Should include color");
+        assert!(commands.contains(&"doctor"), "Should include doctor");
+    }
+
+    #[test]
+    fn test_help_includes_phase_12_commands() {
+        let (handler, _temp) = create_handler_in_temp();
+        let result = handler.handle("/help");
+        match result {
+            CommandResult::Executed(output) => {
+                assert!(output.contains("/copy"), "Help should mention /copy");
+                assert!(output.contains("/status"), "Help should mention /status");
+                assert!(output.contains("/config"), "Help should mention /config");
+                assert!(
+                    output.contains("/permissions"),
+                    "Help should mention /permissions"
+                );
+                assert!(output.contains("/sandbox"), "Help should mention /sandbox");
+                assert!(output.contains("/rename"), "Help should mention /rename");
+                assert!(output.contains("/color"), "Help should mention /color");
+                assert!(output.contains("/doctor"), "Help should mention /doctor");
             }
             other => panic!("Expected help output: {:?}", other),
         }

@@ -1312,6 +1312,50 @@ impl AppState {
         self.display.set_update_available(version);
     }
 
+    /// Returns the custom prompt bar color, if set.
+    #[must_use]
+    pub fn prompt_color(&self) -> Option<&str> {
+        self.display.prompt_color()
+    }
+
+    /// Sets or clears the custom prompt bar color.
+    pub fn set_prompt_color(&mut self, color: Option<String>) {
+        self.display.set_prompt_color(color);
+    }
+
+    /// Returns the custom session name, if set.
+    #[must_use]
+    pub fn session_name(&self) -> Option<&str> {
+        self.session.name()
+    }
+
+    /// Sets or clears the custom session name.
+    pub fn set_session_name(&mut self, name: Option<String>) {
+        self.session.set_name(name);
+    }
+
+    /// Returns the display messages from the timeline for clipboard copy.
+    #[must_use]
+    pub fn messages(&self) -> Vec<Message> {
+        self.timeline
+            .entries()
+            .iter()
+            .filter_map(|entry| {
+                let role = if entry.is_user() {
+                    Role::User
+                } else if entry.is_assistant() {
+                    Role::Assistant
+                } else {
+                    return None;
+                };
+                entry.text().map(|text| Message {
+                    role,
+                    content: text.to_string(),
+                })
+            })
+            .collect()
+    }
+
     /// Adds a message to the conversation timeline and display.
     ///
     /// This updates the unified timeline and sets the dirty flag so the UI
