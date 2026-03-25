@@ -2,9 +2,12 @@
 
 mod agent_panel;
 mod background;
+pub mod background_tasks;
 mod compression;
 mod continuous;
 mod input;
+pub mod plan;
+pub mod question;
 mod session_tracking;
 mod tool_execution;
 mod ui_selection;
@@ -12,9 +15,12 @@ mod worktree;
 
 pub use agent_panel::AgentPanelState;
 pub use background::*;
+pub use background_tasks::BackgroundTaskRegistry;
 pub use compression::CompressionState;
 pub use continuous::ContinuousLoopState;
 pub use input::InputState;
+pub use plan::{PlanState, PlanStep};
+pub use question::QuestionState;
 pub use session_tracking::SessionTracking;
 pub use tool_execution::ToolExecutionState;
 pub use ui_selection::UISelectionState;
@@ -236,6 +242,15 @@ pub struct AppState {
 
     /// Buffer for accumulating thinking text from stream events.
     thinking_buffer: String,
+
+    /// Pending plan awaiting user review (plan tool intercept).
+    pending_plan: Option<PlanState>,
+
+    /// Pending question awaiting user response (ask_user tool intercept).
+    pending_question: Option<QuestionState>,
+
+    /// Registry for background bash tasks (run_in_background).
+    background_tasks: BackgroundTaskRegistry,
 }
 
 #[derive(Default)]
@@ -437,6 +452,9 @@ impl AppState {
             thinking_budget: None,
             system_prompt: None,
             thinking_buffer: String::new(),
+            pending_plan: None,
+            pending_question: None,
+            background_tasks: BackgroundTaskRegistry::new(),
         }
     }
 
@@ -2183,6 +2201,119 @@ impl AppState {
         self.dirty.full = true;
     }
 
+    // --- Plan review state ---
+
+    /// Returns the pending plan, if any.
+    #[must_use]
+    pub fn pending_plan(&self) -> Option<&PlanState> {
+        self.pending_plan.as_ref()
+    }
+
+    /// Returns a mutable reference to the pending plan, if any.
+    #[must_use]
+    pub fn pending_plan_mut(&mut self) -> Option<&mut PlanState> {
+        self.pending_plan.as_mut()
+    }
+
+    /// Returns true if there's a pending plan awaiting user review.
+    #[must_use]
+    pub fn has_pending_plan(&self) -> bool {
+        self.pending_plan.is_some()
+    }
+
+    /// Sets a pending plan for user review.
+    ///
+    /// The UI should display this as a modal plan review overlay.
+    pub fn set_pending_plan(&mut self, plan: PlanState) {
+        self.pending_plan = Some(plan);
+        self.dirty.full = true;
+    }
+
+    /// Approves the pending plan, returning a success tool result block.
+    ///
+    /// Clears the pending plan state.
+    ///
+    /// # Returns
+    ///
+    /// The tool result block to send back to the API, or `None` if no plan is pending.
+    pub fn approve_plan(&mut self) -> Option<crate::types::ToolResultBlock> {
+        let plan = self.pending_plan.take()?;
+        self.dirty.full = true;
+        Some(plan.approve())
+    }
+
+    /// Rejects the pending plan, returning an error tool result block.
+    ///
+    /// Clears the pending plan state.
+    ///
+    /// # Returns
+    ///
+    /// The tool result block to send back to the API, or `None` if no plan is pending.
+    pub fn reject_plan(&mut self) -> Option<crate::types::ToolResultBlock> {
+        let plan = self.pending_plan.take()?;
+        self.dirty.full = true;
+        Some(plan.reject())
+    }
+
+    // --- Question prompt state ---
+
+    /// Returns the pending question, if any.
+    #[must_use]
+    pub fn pending_question(&self) -> Option<&QuestionState> {
+        self.pending_question.as_ref()
+    }
+
+    /// Returns a mutable reference to the pending question, if any.
+    #[must_use]
+    pub fn pending_question_mut(&mut self) -> Option<&mut QuestionState> {
+        self.pending_question.as_mut()
+    }
+
+    /// Returns true if there's a pending question awaiting user response.
+    #[must_use]
+    pub fn has_pending_question(&self) -> bool {
+        self.pending_question.is_some()
+    }
+
+    /// Sets a pending question for user response.
+    ///
+    /// The UI should display this as a modal question prompt.
+    pub fn set_pending_question(&mut self, question: QuestionState) {
+        self.pending_question = Some(question);
+        self.dirty.full = true;
+    }
+
+    /// Submits the pending question response, returning a success tool result block.
+    ///
+    /// Clears the pending question state.
+    pub fn submit_question(&mut self) -> Option<crate::types::ToolResultBlock> {
+        let question = self.pending_question.take()?;
+        self.dirty.full = true;
+        Some(question.submit())
+    }
+
+    /// Cancels the pending question, returning an error tool result block.
+    ///
+    /// Clears the pending question state.
+    pub fn cancel_question(&mut self) -> Option<crate::types::ToolResultBlock> {
+        let question = self.pending_question.take()?;
+        self.dirty.full = true;
+        Some(question.cancel())
+    }
+
+    // --- Background task state ---
+
+    /// Returns a reference to the background task registry.
+    #[must_use]
+    pub fn background_tasks(&self) -> &BackgroundTaskRegistry {
+        &self.background_tasks
+    }
+
+    /// Returns a mutable reference to the background task registry.
+    pub fn background_tasks_mut(&mut self) -> &mut BackgroundTaskRegistry {
+        &mut self.background_tasks
+    }
+
     // --- Completion state (delegates to InputState) ---
 
     /// Returns the active completion state, if any.
@@ -2671,7 +2802,165 @@ impl AppState {
             return None;
         }
 
-        // Mark all as executing
+        // Intercept interactive tools (plan, ask_user) before spawning background work.
+        // These tools require user input via modal UI and cannot execute in background.
+        let mut intercepted = Vec::new();
+        let mut remaining = Vec::new();
+        for (id, tool_use) in pending {
+            match tool_use.name.as_str() {
+                "plan" => {
+                    if let Some(plan) = PlanState::from_tool_input(id.clone(), &tool_use.input) {
+                        self.set_pending_plan(plan);
+                        intercepted.push(id);
+                    } else {
+                        // Malformed plan input — return error via channel
+                        let result = crate::types::ToolResultBlock {
+                            tool_use_id: id.clone(),
+                            content: "Invalid plan format: expected title and steps".to_string(),
+                            is_error: true,
+                        };
+                        let tx_clone = tx.clone();
+                        let id_clone = id.clone();
+                        tokio::spawn(async move {
+                            let _ = tx_clone.send((id_clone, result)).await;
+                        });
+                        intercepted.push(id);
+                    }
+                }
+                "ask_user" => {
+                    if let Some(question) =
+                        crate::app::state::question::QuestionState::from_tool_input(
+                            id.clone(),
+                            &tool_use.input,
+                        )
+                    {
+                        self.set_pending_question(question);
+                        intercepted.push(id);
+                    } else {
+                        let result = crate::types::ToolResultBlock {
+                            tool_use_id: id.clone(),
+                            content: "Invalid ask_user format: expected question field".to_string(),
+                            is_error: true,
+                        };
+                        let tx_clone = tx.clone();
+                        let id_clone = id.clone();
+                        tokio::spawn(async move {
+                            let _ = tx_clone.send((id_clone, result)).await;
+                        });
+                        intercepted.push(id);
+                    }
+                }
+                "bash"
+                    if tool_use
+                        .input
+                        .get("run_in_background")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false) =>
+                {
+                    let command = tool_use
+                        .input
+                        .get("command")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let task_id = self.background_tasks.spawn(command, &self.working_dir);
+                    let result = crate::types::ToolResultBlock {
+                        tool_use_id: id.clone(),
+                        content: format!("Background task {task_id} started"),
+                        is_error: false,
+                    };
+                    let tx_clone = tx.clone();
+                    let id_clone = id.clone();
+                    tokio::spawn(async move {
+                        let _ = tx_clone.send((id_clone, result)).await;
+                    });
+                    intercepted.push(id);
+                }
+                "task_output" => {
+                    let task_id_val = tool_use
+                        .input
+                        .get("task_id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let bg = &self.background_tasks;
+                    let output_buf = bg
+                        .tasks_ref()
+                        .get(&task_id_val)
+                        .map(|t| (Arc::clone(&t.output_buffer), Arc::clone(&t.completed)));
+                    let tool_id_clone = id.clone();
+                    let tx_clone = tx.clone();
+                    tokio::spawn(async move {
+                        let result = match output_buf {
+                            Some((buf, completed)) => {
+                                let content = buf.lock().await;
+                                let status = if completed.load(std::sync::atomic::Ordering::Acquire)
+                                {
+                                    "completed"
+                                } else {
+                                    "running"
+                                };
+                                crate::types::ToolResultBlock {
+                                    tool_use_id: tool_id_clone.clone(),
+                                    content: format!(
+                                        "[Task {task_id_val} ({status})]\n{}",
+                                        *content
+                                    ),
+                                    is_error: false,
+                                }
+                            }
+                            None => crate::types::ToolResultBlock {
+                                tool_use_id: tool_id_clone.clone(),
+                                content: format!("No task with ID '{task_id_val}'"),
+                                is_error: true,
+                            },
+                        };
+                        let _ = tx_clone.send((tool_id_clone, result)).await;
+                    });
+                    intercepted.push(id);
+                }
+                "task_stop" => {
+                    let task_id_val = tool_use
+                        .input
+                        .get("task_id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let result_msg = self.background_tasks.stop(&task_id_val);
+                    let result = match result_msg {
+                        Ok(msg) => crate::types::ToolResultBlock {
+                            tool_use_id: id.clone(),
+                            content: msg,
+                            is_error: false,
+                        },
+                        Err(msg) => crate::types::ToolResultBlock {
+                            tool_use_id: id.clone(),
+                            content: msg,
+                            is_error: true,
+                        },
+                    };
+                    let tx_clone = tx.clone();
+                    let id_clone = id.clone();
+                    tokio::spawn(async move {
+                        let _ = tx_clone.send((id_clone, result)).await;
+                    });
+                    intercepted.push(id);
+                }
+                _ => remaining.push((id, tool_use)),
+            }
+        }
+
+        // Mark intercepted tools as executing (they'll complete when user responds)
+        for id in &intercepted {
+            self.tool_state.executing_tool_ids.insert(id.clone());
+        }
+
+        let pending = remaining;
+        if pending.is_empty() && intercepted.is_empty() {
+            return None;
+        }
+
+        // Mark remaining as executing
         for (id, _) in &pending {
             self.tool_state.executing_tool_ids.insert(id.clone());
         }

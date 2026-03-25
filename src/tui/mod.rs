@@ -436,6 +436,26 @@ pub fn render(frame: &mut Frame, state: &mut AppState) {
     if let Some(request) = state.pending_permission() {
         render_permission_modal(frame, request);
     }
+
+    // Render plan review overlay if there's a pending plan
+    if let Some(plan) = state.pending_plan() {
+        let area = frame.area();
+        let modal_area = widgets::PlanReviewWidget::modal_area(area, plan.step_count());
+        let widget = widgets::PlanReviewWidget::new(plan);
+        frame.render_widget(widget, modal_area);
+    }
+
+    // Render question prompt overlay if there's a pending question
+    if let Some(question) = state.pending_question() {
+        let area = frame.area();
+        let modal_area = widgets::QuestionPromptWidget::modal_area(
+            area,
+            question.options.len(),
+            question.allow_free_text,
+        );
+        let widget = widgets::QuestionPromptWidget::new(question);
+        frame.render_widget(widget, modal_area);
+    }
 }
 
 /// Renders the compaction progress overlay.

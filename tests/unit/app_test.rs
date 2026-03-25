@@ -83,12 +83,12 @@ fn test_initialize_compression_orchestrator_auto_mode_no_code_files() {
 // =========================================================================
 
 #[test]
-fn create_dispatcher_returns_seven_handlers_and_one_observer() {
+fn create_dispatcher_returns_nine_handlers_and_one_observer() {
     let dispatcher = create_dispatcher();
     assert_eq!(
         dispatcher.handler_count(),
-        7,
-        "Dispatcher must have 7 handlers: Permission, Completion, Keyboard, Stream, Agent, Continuous, Tick"
+        9,
+        "Dispatcher must have 9 handlers: Permission, Plan, Question, Completion, Keyboard, Stream, Agent, Continuous, Tick"
     );
     assert_eq!(
         dispatcher.observer_count(),

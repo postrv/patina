@@ -9,6 +9,8 @@ pub mod completion;
 pub mod continuous;
 pub mod keyboard;
 pub mod permission;
+pub mod plan;
+pub mod question;
 pub mod session;
 pub mod stream;
 pub mod tick;

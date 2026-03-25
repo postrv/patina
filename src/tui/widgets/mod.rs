@@ -7,6 +7,8 @@ pub mod completion_menu;
 pub mod continuous_progress;
 pub mod image_display;
 pub mod permission_prompt;
+pub mod plan_review;
+pub mod question_prompt;
 pub mod subagent;
 pub mod tool_block;
 pub mod worktree_picker;
@@ -23,6 +25,8 @@ pub use permission_prompt::{
     handle_key_input as handle_permission_key, PermissionPromptState, PermissionPromptWidget,
     SelectedOption as PermissionSelectedOption,
 };
+pub use plan_review::PlanReviewWidget;
+pub use question_prompt::QuestionPromptWidget;
 pub use subagent::{
     SubagentDisplayInfo, SubagentDisplayStatus, SubagentPanelState, SubagentPanelWidget,
 };

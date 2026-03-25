@@ -347,6 +347,8 @@ pub async fn run(config: Config) -> Result<()> {
 pub fn create_dispatcher() -> dispatch::EventDispatcher {
     dispatch::EventDispatcher::new(vec![
         Box::new(handlers::permission::PermissionHandler),
+        Box::new(handlers::plan::PlanHandler),
+        Box::new(handlers::question::QuestionHandler),
         Box::new(handlers::completion::CompletionHandler),
         Box::new(handlers::keyboard::KeyboardHandler),
         Box::new(handlers::stream::StreamHandler),

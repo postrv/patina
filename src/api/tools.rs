@@ -101,6 +101,10 @@ pub fn default_tools() -> Vec<ToolDefinition> {
         vision_tool(),
         lsp_tool(),
         todo_write_tool(),
+        plan_tool(),
+        ask_user_tool(),
+        task_output_tool(),
+        task_stop_tool(),
     ]
 }
 
@@ -128,6 +132,10 @@ pub fn bash_tool() -> ToolDefinition {
                 "description": {
                     "type": "string",
                     "description": "A brief description of what this command does"
+                },
+                "run_in_background": {
+                    "type": "boolean",
+                    "description": "Run the command in the background and return a task ID immediately"
                 }
             },
             "required": ["command"]
@@ -489,6 +497,126 @@ pub fn todo_write_tool() -> ToolDefinition {
     )
 }
 
+/// Creates the plan tool definition.
+///
+/// Presents a structured plan to the user for review before execution.
+/// The plan is intercepted by `AppState` and displayed as a modal overlay.
+#[must_use]
+pub fn plan_tool() -> ToolDefinition {
+    ToolDefinition::new(
+        "plan",
+        "Present a structured plan to the user for review before executing a complex task. \
+         The user can approve or reject the plan. Use this when a task requires multiple \
+         steps and you want confirmation before proceeding.",
+        json!({
+            "type": "object",
+            "properties": {
+                "title": {
+                    "type": "string",
+                    "description": "A brief title summarizing the plan"
+                },
+                "steps": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "description": {
+                                "type": "string",
+                                "description": "Description of what this step will do"
+                            },
+                            "tool_calls": {
+                                "type": "array",
+                                "items": { "type": "string" },
+                                "description": "Tool names this step intends to use"
+                            }
+                        },
+                        "required": ["description"]
+                    },
+                    "description": "Ordered list of steps in the plan"
+                }
+            },
+            "required": ["title", "steps"]
+        }),
+    )
+}
+
+/// Creates the task_output tool definition.
+///
+/// Retrieves output from a background task started with `run_in_background`.
+#[must_use]
+pub fn task_output_tool() -> ToolDefinition {
+    ToolDefinition::new(
+        "task_output",
+        "Get the output of a background task started with run_in_background. \
+         Returns the buffered stdout/stderr and whether the task is still running.",
+        json!({
+            "type": "object",
+            "properties": {
+                "task_id": {
+                    "type": "string",
+                    "description": "The task ID returned by the background bash command"
+                }
+            },
+            "required": ["task_id"]
+        }),
+    )
+}
+
+/// Creates the task_stop tool definition.
+///
+/// Stops a running background task.
+#[must_use]
+pub fn task_stop_tool() -> ToolDefinition {
+    ToolDefinition::new(
+        "task_stop",
+        "Stop a running background task. Aborts the process and returns confirmation.",
+        json!({
+            "type": "object",
+            "properties": {
+                "task_id": {
+                    "type": "string",
+                    "description": "The task ID of the background task to stop"
+                }
+            },
+            "required": ["task_id"]
+        }),
+    )
+}
+
+/// Creates the ask_user tool definition.
+///
+/// Asks the user a question with optional structured choices.
+/// The question is intercepted by `AppState` and displayed as a modal prompt.
+#[must_use]
+pub fn ask_user_tool() -> ToolDefinition {
+    ToolDefinition::new(
+        "ask_user",
+        "Ask the user a question when you need clarification or a decision. \
+         Supports both free-text responses and structured choices. \
+         Use this when you are uncertain about the user's intent or need to \
+         choose between alternatives.",
+        json!({
+            "type": "object",
+            "properties": {
+                "question": {
+                    "type": "string",
+                    "description": "The question to ask the user"
+                },
+                "options": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Optional list of choices for the user to select from"
+                },
+                "allow_free_text": {
+                    "type": "boolean",
+                    "description": "Whether to allow free-text input in addition to options (default: true)"
+                }
+            },
+            "required": ["question"]
+        }),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -540,7 +668,7 @@ mod tests {
     fn test_default_tools_contains_all_tools() {
         let tools = default_tools();
 
-        assert_eq!(tools.len(), 12, "should have 12 default tools");
+        assert_eq!(tools.len(), 16, "should have 16 default tools");
 
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains(&"bash"), "should contain bash");
@@ -558,6 +686,10 @@ mod tests {
         );
         assert!(names.contains(&"lsp"), "should contain lsp");
         assert!(names.contains(&"todo_write"), "should contain todo_write");
+        assert!(names.contains(&"plan"), "should contain plan");
+        assert!(names.contains(&"ask_user"), "should contain ask_user");
+        assert!(names.contains(&"task_output"), "should contain task_output");
+        assert!(names.contains(&"task_stop"), "should contain task_stop");
     }
 
     #[test]
@@ -873,5 +1005,100 @@ mod tests {
             schema["properties"]["description"]["type"], "string",
             "description should be string"
         );
+    }
+
+    // =========================================================================
+    // 10.5: plan tool schema
+    // =========================================================================
+
+    #[test]
+    fn test_plan_tool_schema() {
+        let tool = plan_tool();
+        assert_eq!(tool.name, "plan");
+
+        let schema = &tool.input_schema;
+        assert_eq!(schema["type"], "object");
+        assert!(
+            schema["properties"]["title"].is_object(),
+            "plan should have title"
+        );
+        assert!(
+            schema["properties"]["steps"].is_object(),
+            "plan should have steps"
+        );
+        assert_eq!(schema["required"], json!(["title", "steps"]));
+        assert_eq!(schema["properties"]["steps"]["type"], "array");
+    }
+
+    // =========================================================================
+    // 10.6: ask_user tool schema
+    // =========================================================================
+
+    #[test]
+    fn test_ask_user_tool_schema() {
+        let tool = ask_user_tool();
+        assert_eq!(tool.name, "ask_user");
+
+        let schema = &tool.input_schema;
+        assert_eq!(schema["type"], "object");
+        assert!(
+            schema["properties"]["question"].is_object(),
+            "ask_user should have question"
+        );
+        assert!(
+            schema["properties"]["options"].is_object(),
+            "ask_user should have options"
+        );
+        assert!(
+            schema["properties"]["allow_free_text"].is_object(),
+            "ask_user should have allow_free_text"
+        );
+        assert_eq!(schema["required"], json!(["question"]));
+    }
+
+    // =========================================================================
+    // 10.7: background task tool schemas
+    // =========================================================================
+
+    #[test]
+    fn test_bash_schema_has_run_in_background() {
+        let tool = bash_tool();
+        let schema = &tool.input_schema;
+        assert!(
+            schema["properties"]["run_in_background"].is_object(),
+            "bash should have run_in_background"
+        );
+        assert_eq!(
+            schema["properties"]["run_in_background"]["type"], "boolean",
+            "run_in_background should be boolean"
+        );
+    }
+
+    #[test]
+    fn test_task_output_tool_schema() {
+        let tool = task_output_tool();
+        assert_eq!(tool.name, "task_output");
+
+        let schema = &tool.input_schema;
+        assert_eq!(schema["type"], "object");
+        assert!(
+            schema["properties"]["task_id"].is_object(),
+            "task_output should have task_id"
+        );
+        assert_eq!(schema["required"], json!(["task_id"]));
+    }
+
+    #[test]
+    fn test_task_stop_tool_schema() {
+        let tool = task_stop_tool();
+        assert_eq!(tool.name, "task_stop");
+
+        let schema = &tool.input_schema;
+        assert_eq!(schema["type"], "object");
+        assert!(
+            schema["properties"]["task_id"].is_object(),
+            "task_stop should have task_id"
+        );
+        assert_eq!(schema["required"], json!(["task_id"]));
     }
 }
