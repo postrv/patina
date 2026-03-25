@@ -990,4 +990,31 @@ mod tests {
         // ClaudeSummarizer would also satisfy this if we had a client
         // accepts_summarizer(ClaudeSummarizer::new(client));
     }
+
+    #[test]
+    fn test_compaction_threshold_calculates_correctly() {
+        let config = CompactionConfig::new();
+        // Default threshold is 0.8
+        let threshold = config.compaction_threshold(100_000);
+        assert_eq!(threshold, 80_000, "80% of 100k should be 80k");
+
+        let threshold_small = config.compaction_threshold(1000);
+        assert_eq!(threshold_small, 800, "80% of 1000 should be 800");
+
+        let threshold_zero = config.compaction_threshold(0);
+        assert_eq!(threshold_zero, 0, "80% of 0 should be 0");
+    }
+
+    #[test]
+    fn test_with_auto_compact_threshold_sets_value() {
+        let config = CompactionConfig::new().with_auto_compact_threshold(0.5);
+        let threshold = config.compaction_threshold(10_000);
+        assert_eq!(threshold, 5_000, "50% of 10k should be 5k");
+    }
+
+    #[test]
+    #[should_panic(expected = "Auto-compact threshold must be between 0.0 and 1.0")]
+    fn test_with_auto_compact_threshold_rejects_out_of_range() {
+        let _config = CompactionConfig::new().with_auto_compact_threshold(1.5);
+    }
 }

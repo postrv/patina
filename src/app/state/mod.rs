@@ -27,6 +27,7 @@ pub use ui_selection::UISelectionState;
 pub use worktree::WorktreeStatus;
 
 use crate::agents::{AgentProgress, ConflictReport, SubagentSpawner};
+use crate::api::multi_model::MultiModelClient;
 use crate::api::provider::RequestOptions;
 use crate::api::tokens::{model_context_limit, ModelCapabilities};
 use crate::api::tools::default_tools;
@@ -36,7 +37,6 @@ use crate::app::STREAMING_CHANNEL_BUFFER;
 use crate::context::compression::{
     CompactionMetrics, CompactionMetricsSummary, CompressionOrchestrator,
 };
-use crate::api::multi_model::MultiModelClient;
 use crate::enterprise::audit::{AuditConfig, AuditLogger};
 use crate::enterprise::cost::{CostConfig, CostTracker, UsageRecord};
 use crate::hooks::HookManager;
@@ -3302,7 +3302,11 @@ impl AppState {
         };
 
         // Build system prompt text, appending memory if available
-        let mut prompt_text = self.system_prompt.clone().unwrap_or_default();
+        let mut prompt_text = self
+            .system_prompt
+            .as_deref()
+            .unwrap_or_default()
+            .to_string();
         if let Some(store) = &self.memory_store {
             let memory_text = store.render_for_system_prompt();
             if !memory_text.is_empty() {
@@ -4281,5 +4285,68 @@ mod tests {
             state.token_budget().used() > 0,
             "Token budget should reflect the conversation tokens"
         );
+    }
+
+    #[test]
+    fn test_add_api_message_adds_to_both_stores() {
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+        assert!(state.api_messages().is_empty());
+        assert_eq!(state.timeline().len(), 0);
+
+        let msg = ApiMessageV2::user("Hello from API message");
+        state.add_api_message(msg);
+
+        assert_eq!(state.api_messages().len(), 1, "Should add to api_messages");
+        assert!(!state.timeline().is_empty(), "Should add to timeline");
+    }
+
+    #[test]
+    fn test_has_mcp_manager_returns_false_when_no_manager() {
+        let state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+        assert!(
+            !state.has_mcp_manager(),
+            "Fresh state should not have an MCP manager"
+        );
+    }
+
+    #[test]
+    fn test_memory_store_mut_returns_none_when_not_set() {
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+        assert!(
+            state.memory_store_mut().is_none(),
+            "Fresh state should have no memory store"
+        );
+    }
+
+    #[test]
+    fn test_background_tasks_mut_returns_mutable_ref() {
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+        // Verify we get a valid mutable reference by checking the registry
+        let registry = state.background_tasks_mut();
+        assert_eq!(
+            registry.count(),
+            0,
+            "Fresh registry should have no active tasks"
+        );
+    }
+
+    #[test]
+    fn test_take_conflict_reports_drains_reports() {
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+
+        // Initially empty
+        let reports = state.take_conflict_reports();
+        assert!(reports.is_empty(), "Should start with no conflict reports");
+
+        // Add a conflict report
+        state.add_conflict_report(ConflictReport::empty());
+
+        // First take should return the report
+        let reports = state.take_conflict_reports();
+        assert_eq!(reports.len(), 1, "Should have one conflict report");
+
+        // Second take should be empty (drained)
+        let reports = state.take_conflict_reports();
+        assert!(reports.is_empty(), "Should be empty after drain");
     }
 }

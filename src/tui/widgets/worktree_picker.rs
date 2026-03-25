@@ -395,4 +395,90 @@ mod tests {
         assert_eq!(status.modified, 2);
         assert_eq!(status.ahead, 3);
     }
+
+    #[test]
+    fn test_set_worktrees_updates_list() {
+        let mut state = WorktreePickerState::new(vec![]);
+        assert!(state.worktrees().is_empty());
+
+        let worktrees = vec![
+            WorktreeInfo {
+                name: "main".to_string(),
+                path: "/repo".into(),
+                branch: "main".to_string(),
+                is_main: true,
+                is_locked: false,
+                is_prunable: false,
+            },
+            WorktreeInfo {
+                name: "feature".to_string(),
+                path: "/repo-wt".into(),
+                branch: "feat/x".to_string(),
+                is_main: false,
+                is_locked: false,
+                is_prunable: false,
+            },
+        ];
+
+        state.set_worktrees(worktrees);
+        assert_eq!(
+            state.worktrees().len(),
+            2,
+            "Should have two worktrees after set"
+        );
+        assert_eq!(state.worktrees()[0].name, "main");
+        assert_eq!(state.worktrees()[1].name, "feature");
+    }
+
+    #[test]
+    fn test_set_worktrees_clamps_selection() {
+        let initial = vec![
+            WorktreeInfo {
+                name: "a".to_string(),
+                path: "/a".into(),
+                branch: "a".to_string(),
+                is_main: false,
+                is_locked: false,
+                is_prunable: false,
+            },
+            WorktreeInfo {
+                name: "b".to_string(),
+                path: "/b".into(),
+                branch: "b".to_string(),
+                is_main: false,
+                is_locked: false,
+                is_prunable: false,
+            },
+            WorktreeInfo {
+                name: "c".to_string(),
+                path: "/c".into(),
+                branch: "c".to_string(),
+                is_main: false,
+                is_locked: false,
+                is_prunable: false,
+            },
+        ];
+
+        let mut state = WorktreePickerState::new(initial);
+        // Move selection to index 2
+        state.select_next();
+        state.select_next();
+        assert_eq!(state.selected_index(), 2);
+
+        // Replace with a shorter list - selection should be clamped
+        let shorter = vec![WorktreeInfo {
+            name: "only".to_string(),
+            path: "/only".into(),
+            branch: "main".to_string(),
+            is_main: true,
+            is_locked: false,
+            is_prunable: false,
+        }];
+        state.set_worktrees(shorter);
+        assert_eq!(
+            state.selected_index(),
+            0,
+            "Selection should clamp to last valid index"
+        );
+    }
 }

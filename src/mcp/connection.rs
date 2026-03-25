@@ -588,6 +588,28 @@ mod tests {
         assert!(!conn.is_connected());
     }
 
+    #[test]
+    fn test_drain_events_returns_empty_when_no_events() {
+        let mut conn = McpConnection::disconnected("test-drain");
+        let events = conn.drain_events();
+        assert!(
+            events.is_empty(),
+            "Freshly created connection should have no pending events"
+        );
+    }
+
+    #[test]
+    fn test_tools_arc_returns_arc() {
+        let conn = McpConnection::disconnected("test-arc");
+        let arc = conn.tools_arc();
+        // The Arc should be readable and contain an empty tool list
+        let tools = arc.read().expect("RwLock should not be poisoned");
+        assert!(
+            tools.is_empty(),
+            "Disconnected connection should have empty tool list"
+        );
+    }
+
     #[tokio::test]
     async fn test_connect_stdio_timeout() {
         let mock_path = std::env::current_dir()

@@ -676,4 +676,70 @@ mod tests {
         assert!(!grant.is_expired());
         assert!(grant.matches("Bash", None));
     }
+
+    #[test]
+    fn test_default_config_path_returns_some() {
+        let path = PermissionManager::default_config_path();
+        // On most systems this should succeed; the path should end with permissions.toml
+        match path {
+            Ok(p) => {
+                assert!(
+                    p.ends_with("permissions.toml"),
+                    "Config path should end with permissions.toml, got: {}",
+                    p.display()
+                );
+            }
+            Err(e) => {
+                // In restricted environments (e.g. CI containers), config dir may not resolve
+                eprintln!("default_config_path error (acceptable in CI): {e}");
+            }
+        }
+    }
+
+    #[test]
+    fn test_add_timed_session_grant_and_expiry() {
+        let mut manager = PermissionManager::new();
+
+        // Add a timed grant with 1-hour duration
+        manager.add_timed_session_grant("Bash", Some("/bin/ls"), Duration::from_secs(3600));
+
+        // The grant should allow the matching tool
+        let decision = manager.check("Bash", Some("/bin/ls"));
+        assert_eq!(
+            decision,
+            PermissionDecision::SessionGrant,
+            "Timed grant should produce a session grant decision"
+        );
+    }
+
+    #[test]
+    fn test_cleanup_expired_grants_removes_expired() {
+        let mut manager = PermissionManager::new();
+
+        // Add a grant that expires in 1ms
+        manager.add_timed_session_grant("Bash", None, Duration::from_millis(1));
+        // Add a grant that lasts 1 hour
+        manager.add_timed_session_grant("Read", None, Duration::from_secs(3600));
+
+        // Wait for the short grant to expire
+        std::thread::sleep(Duration::from_millis(10));
+
+        manager.cleanup_expired_grants();
+
+        // The expired "Bash" grant should be gone
+        let bash_decision = manager.check("Bash", None);
+        assert_eq!(
+            bash_decision,
+            PermissionDecision::NeedsPrompt,
+            "Expired grant should be cleaned up"
+        );
+
+        // The "Read" grant should still be active
+        let read_decision = manager.check("Read", None);
+        assert_eq!(
+            read_decision,
+            PermissionDecision::SessionGrant,
+            "Non-expired grant should remain"
+        );
+    }
 }

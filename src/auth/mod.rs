@@ -746,4 +746,48 @@ mod tests {
             "Manager should not have OAuth after clear"
         );
     }
+
+    #[test]
+    fn test_set_force_api_key_sets_the_flag() {
+        let mut manager = AuthManager::new();
+
+        // By default, force_api_key is false
+        manager.set_force_api_key(true);
+
+        // When force_api_key is set and an API key is provided,
+        // get_auth should prefer the API key over OAuth
+        manager.set_api_key(SecretString::new("sk-test-forced".into()));
+        manager.set_force_api_key(true);
+
+        // Verify the flag is set by attempting to get auth synchronously -
+        // with force_api_key=true and an API key set, get_auth should return ApiKey
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let auth = rt.block_on(manager.get_auth()).unwrap();
+        assert!(
+            auth.is_api_key(),
+            "With force_api_key=true, should return API key auth"
+        );
+    }
+
+    #[test]
+    fn test_set_error_on_load_triggers_load_error() {
+        let mut mock = storage::MockCredentialStorage::new();
+
+        // Set an error to be returned on next load
+        mock.set_error_on_load(Some(storage::StorageError::KeyringUnavailable(
+            "test error".to_string(),
+        )));
+
+        // The load should now fail
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let result = rt.block_on(storage::CredentialStorage::load(&mock));
+        assert!(result.is_err(), "Load should fail with configured error");
+
+        // Subsequent loads should succeed (error is one-shot)
+        let result2 = rt.block_on(storage::CredentialStorage::load(&mock));
+        assert!(
+            result2.is_ok(),
+            "Second load should succeed after one-shot error"
+        );
+    }
 }

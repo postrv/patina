@@ -3275,4 +3275,30 @@ mod tests {
             sequential_result.symbol_tokens()
         );
     }
+
+    #[test]
+    fn test_into_result_transfers_ownership() {
+        use crate::context::compression::types::{
+            CompressionLevel, CompressionResult, ContextSource,
+        };
+
+        let inner = CompressionResult::new(
+            "# Project manifest".to_string(),
+            CompressionLevel::Manifest,
+            ContextSource::Constructed,
+        );
+        let content_before = inner.content().to_string();
+
+        let build_result = BuildContextResult::new(inner, 100, 200, 50);
+
+        // Verify accessors before consuming
+        assert_eq!(build_result.manifest_tokens(), 100);
+        assert_eq!(build_result.architecture_tokens(), 200);
+        assert_eq!(build_result.symbol_tokens(), 50);
+        assert_eq!(build_result.total_tokens(), 350);
+
+        // Consume via into_result and verify ownership transfer
+        let owned = build_result.into_result();
+        assert_eq!(owned.content(), content_before);
+    }
 }

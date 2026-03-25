@@ -2679,4 +2679,53 @@ mod tests {
             "complete_tool_cycle should transition to Streaming"
         );
     }
+
+    #[test]
+    fn test_approve_tool_approves_single() {
+        let mut loop_state = ToolLoop::new();
+        loop_state.start_streaming().unwrap();
+
+        // Add two tool uses
+        loop_state.start_tool_use(0, "toolu_a".to_string(), "bash".to_string());
+        loop_state.append_tool_input(0, r#"{"command":"ls"}"#);
+        loop_state.complete_tool_use(0).unwrap();
+
+        loop_state.start_tool_use(1, "toolu_b".to_string(), "read_file".to_string());
+        loop_state.append_tool_input(1, r#"{"path":"f.txt"}"#);
+        loop_state.complete_tool_use(1).unwrap();
+
+        loop_state.message_complete(StopReason::ToolUse).unwrap();
+
+        // Approve only the first tool
+        loop_state.approve_tool("toolu_a").unwrap();
+
+        // Verify the first tool is approved
+        let call_a = loop_state
+            .pending_calls()
+            .get("toolu_a")
+            .expect("tool a exists");
+        assert!(call_a.approved, "toolu_a should be approved");
+
+        // Verify the second tool is NOT approved
+        let call_b = loop_state
+            .pending_calls()
+            .get("toolu_b")
+            .expect("tool b exists");
+        assert!(!call_b.approved, "toolu_b should not be approved");
+    }
+
+    #[test]
+    fn test_approve_tool_returns_error_for_unknown_id() {
+        let mut loop_state = ToolLoop::new();
+        loop_state.start_streaming().unwrap();
+
+        loop_state.start_tool_use(0, "toolu_x".to_string(), "bash".to_string());
+        loop_state.append_tool_input(0, "{}");
+        loop_state.complete_tool_use(0).unwrap();
+
+        loop_state.message_complete(StopReason::ToolUse).unwrap();
+
+        let result = loop_state.approve_tool("nonexistent");
+        assert!(result.is_err(), "Should error for unknown tool ID");
+    }
 }

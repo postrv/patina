@@ -1047,4 +1047,17 @@ mod tests {
         restore_env("SSH_CLIENT", original_ssh_client);
         restore_env("TMUX", original_tmux);
     }
+
+    #[test]
+    fn test_check_iterm2_bindings_returns_count() {
+        let count = check_iterm2_bindings();
+        // On non-macOS or non-iTerm2 environments, returns 0.
+        // On macOS with iTerm2, returns the number of configured bindings.
+        // Either way it must be a valid usize and not panic.
+        assert!(
+            count <= ITERM2_KEY_BINDINGS.len(),
+            "Binding count ({count}) should not exceed total bindings ({})",
+            ITERM2_KEY_BINDINGS.len()
+        );
+    }
 }

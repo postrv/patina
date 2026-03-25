@@ -373,4 +373,20 @@ mod tests {
         assert!(names.contains(&"b".to_string()));
         assert!(names.contains(&"c".to_string()));
     }
+
+    #[test]
+    fn test_context_mut_returns_mutable_ref() {
+        let ctx = PluginContext::new(std::path::PathBuf::from("/work"));
+        let mut host = PluginHost::new(ctx);
+
+        // Modify context through the mutable reference
+        host.context_mut().set_env("MY_VAR", "my_value");
+
+        // Verify modification persists
+        assert_eq!(
+            host.context().get_env("MY_VAR"),
+            Some("my_value"),
+            "Environment variable set via context_mut should be readable"
+        );
+    }
 }

@@ -399,4 +399,19 @@ mod tests {
             Some(PatinaTheme::USER_TEXT)
         );
     }
+
+    #[test]
+    fn test_code_inline_style_has_foreground() {
+        let style = PatinaTheme::code_inline();
+        assert_eq!(
+            style.fg,
+            Some(PatinaTheme::VERDIGRIS_BRIGHT),
+            "Inline code should use VERDIGRIS_BRIGHT foreground"
+        );
+        assert_eq!(
+            style.bg,
+            Some(PatinaTheme::BG_CODE),
+            "Inline code should use BG_CODE background"
+        );
+    }
 }

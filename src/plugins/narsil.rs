@@ -342,6 +342,24 @@ mod tests {
         assert!(dirs.contains(&".git"));
     }
 
+    #[test]
+    fn test_should_enable_narsil_returns_bool() {
+        let dir = TempDir::new().unwrap();
+        // Empty dir has no code files, so should_enable_narsil returns false
+        // regardless of whether narsil binary is on PATH
+        let result = should_enable_narsil(dir.path());
+        assert!(!result, "Empty directory should not enable narsil");
+    }
+
+    #[test]
+    fn test_should_enable_narsil_with_code_files() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("main.rs"), "fn main() {}").unwrap();
+        // Result depends on whether narsil binary is actually available,
+        // but the function should not panic and should return a valid bool
+        let _result: bool = should_enable_narsil(dir.path());
+    }
+
     // Note: is_narsil_available() is not tested here because it depends
     // on the actual system state (whether narsil-mcp is installed).
     // Integration tests can verify this behavior in environments where
