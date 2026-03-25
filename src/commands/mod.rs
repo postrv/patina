@@ -2,6 +2,7 @@
 
 pub mod agent;
 pub mod continuous;
+pub mod experiment;
 pub mod worktree;
 
 use serde::Deserialize;

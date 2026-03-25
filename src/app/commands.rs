@@ -26,8 +26,9 @@
 use crate::agents::worktree_agent::{AgentInfo, WorktreeAgentManager, WorktreeAgentStatus};
 use crate::commands::agent::{parse_agent_command, AgentCommand};
 use crate::commands::continuous::{parse_continuous_command, ContinuousCommand};
+use crate::commands::experiment::{parse_experiment_command, ExperimentCommand};
 use crate::commands::worktree::{parse_worktree_command, WorktreeCommand};
-use crate::worktree::{WorktreeInfo, WorktreeManager};
+use crate::worktree::{Experiment, WorktreeInfo, WorktreeManager};
 use std::path::PathBuf;
 
 /// Information about an MCP server for display purposes.
@@ -206,6 +207,7 @@ impl SlashCommandHandler {
             "agent" => self.handle_agent(&args),
             "continuous" => self.handle_continuous(&args),
             "mcp" => self.handle_mcp(),
+            "experiment" => self.handle_experiment(&args),
             "worktree" => self.handle_worktree(&args),
             "cost" => self.handle_cost(),
             "context" => self.handle_context(),
@@ -575,6 +577,172 @@ impl SlashCommandHandler {
         }
     }
 
+    /// Handles the `/experiment` command.
+    fn handle_experiment(&self, args: &str) -> CommandResult {
+        let experiment_cmd = match parse_experiment_command(args) {
+            Ok(cmd) => cmd,
+            Err(e) => return CommandResult::Error(e.to_string()),
+        };
+
+        // Create worktree manager - handle potential failure
+        let manager = match WorktreeManager::new(&self.working_dir) {
+            Ok(m) => m,
+            Err(e) => {
+                return CommandResult::Error(format!(
+                    "Failed to initialize worktree manager: {}",
+                    e
+                ))
+            }
+        };
+
+        match experiment_cmd {
+            ExperimentCommand::Start { name } => match Experiment::start(&manager, &name) {
+                Ok(exp) => CommandResult::Executed(format!(
+                    "Started experiment '{}' at {}",
+                    name,
+                    exp.worktree_path().display()
+                )),
+                Err(e) => CommandResult::Error(format!("Failed to start experiment: {}", e)),
+            },
+
+            ExperimentCommand::List => match Experiment::list(&manager) {
+                Ok(experiments) if experiments.is_empty() => {
+                    CommandResult::Executed("No experiments found.".to_string())
+                }
+                Ok(experiments) => {
+                    let output = experiments
+                        .iter()
+                        .map(|exp| {
+                            format!(
+                                "  {} [{}] (branch: {})\n    Path: {}",
+                                exp.name(),
+                                exp.state(),
+                                exp.experiment_branch(),
+                                exp.worktree_path().display()
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    CommandResult::Executed(format!("Experiments:\n{}", output))
+                }
+                Err(e) => CommandResult::Error(format!("Failed to list experiments: {}", e)),
+            },
+
+            ExperimentCommand::Accept { name } => {
+                let experiments = match Experiment::list(&manager) {
+                    Ok(e) => e,
+                    Err(e) => {
+                        return CommandResult::Error(format!("Failed to list experiments: {}", e))
+                    }
+                };
+
+                match experiments.into_iter().find(|e| e.name() == name) {
+                    Some(exp) => match exp.accept() {
+                        Ok(result) => CommandResult::Executed(format!(
+                            "Accepted experiment '{}'. Merged {} commit(s).",
+                            name, result.commits_merged
+                        )),
+                        Err(e) => {
+                            CommandResult::Error(format!("Failed to accept experiment: {}", e))
+                        }
+                    },
+                    None => CommandResult::Error(format!("Experiment '{}' not found.", name)),
+                }
+            }
+
+            ExperimentCommand::Reject { name } => {
+                let experiments = match Experiment::list(&manager) {
+                    Ok(e) => e,
+                    Err(e) => {
+                        return CommandResult::Error(format!("Failed to list experiments: {}", e))
+                    }
+                };
+
+                match experiments.into_iter().find(|e| e.name() == name) {
+                    Some(exp) => match exp.reject() {
+                        Ok(_result) => CommandResult::Executed(format!(
+                            "Rejected experiment '{}'. Changes discarded.",
+                            name
+                        )),
+                        Err(e) => {
+                            CommandResult::Error(format!("Failed to reject experiment: {}", e))
+                        }
+                    },
+                    None => CommandResult::Error(format!("Experiment '{}' not found.", name)),
+                }
+            }
+
+            ExperimentCommand::Pause { name } => {
+                let experiments = match Experiment::list(&manager) {
+                    Ok(e) => e,
+                    Err(e) => {
+                        return CommandResult::Error(format!("Failed to list experiments: {}", e))
+                    }
+                };
+
+                match experiments.into_iter().find(|e| e.name() == name) {
+                    Some(exp) => match exp.pause() {
+                        Ok(_exp) => {
+                            CommandResult::Executed(format!("Paused experiment '{}'.", name))
+                        }
+                        Err(e) => {
+                            CommandResult::Error(format!("Failed to pause experiment: {}", e))
+                        }
+                    },
+                    None => CommandResult::Error(format!("Experiment '{}' not found.", name)),
+                }
+            }
+
+            ExperimentCommand::Resume { name } => {
+                let experiments = match Experiment::list(&manager) {
+                    Ok(e) => e,
+                    Err(e) => {
+                        return CommandResult::Error(format!("Failed to list experiments: {}", e))
+                    }
+                };
+
+                match experiments.into_iter().find(|e| e.name() == name) {
+                    Some(exp) => match exp.resume() {
+                        Ok(_exp) => {
+                            CommandResult::Executed(format!("Resumed experiment '{}'.", name))
+                        }
+                        Err(e) => {
+                            CommandResult::Error(format!("Failed to resume experiment: {}", e))
+                        }
+                    },
+                    None => CommandResult::Error(format!("Experiment '{}' not found.", name)),
+                }
+            }
+
+            ExperimentCommand::Status { name } => {
+                let experiments = match Experiment::list(&manager) {
+                    Ok(e) => e,
+                    Err(e) => {
+                        return CommandResult::Error(format!("Failed to list experiments: {}", e))
+                    }
+                };
+
+                match experiments.into_iter().find(|e| e.name() == name) {
+                    Some(exp) => {
+                        let desc = exp
+                            .description()
+                            .map_or(String::new(), |d| format!("\n  Description: {}", d));
+                        CommandResult::Executed(format!(
+                            "Experiment '{}':\n  State: {}\n  Branch: {}\n  Original branch: {}\n  Path: {}{}",
+                            exp.name(),
+                            exp.state(),
+                            exp.experiment_branch(),
+                            exp.original_branch(),
+                            exp.worktree_path().display(),
+                            desc,
+                        ))
+                    }
+                    None => CommandResult::Error(format!("Experiment '{}' not found.", name)),
+                }
+            }
+        }
+    }
+
     /// Handles the `/cost` command.
     ///
     /// Displays session cost summary including total, per-model breakdown,
@@ -759,6 +927,9 @@ impl SlashCommandHandler {
 
   /terminal-setup           - Configure terminal keyboard shortcuts
 
+  /experiment <subcommand>  - Manage isolated experiments
+    Subcommands: start, list, accept, reject, pause, resume, status
+
   /worktree <subcommand>    - Manage git worktrees
     Subcommands: new, list, switch, remove, clean, status
 
@@ -834,6 +1005,29 @@ Examples:
   /agent status auth-fix
   /agent merge auth-fix
   /agent stop auth-fix"#;
+                CommandResult::Executed(help_text.to_string())
+            }
+
+            Some("experiment") => {
+                let help_text = r#"/experiment - Manage isolated experiments
+
+Subcommands:
+  start <name>   Start a new experiment in an isolated worktree
+  list           List all experiments
+  accept <name>  Accept experiment, merging changes back
+  reject <name>  Reject experiment, discarding changes
+  pause <name>   Pause an active experiment
+  resume <name>  Resume a paused experiment
+  status <name>  Show detailed status of an experiment
+
+Experiments create isolated worktrees for risky changes.
+Accept merges them back; reject discards them cleanly.
+
+Examples:
+  /experiment start risky-refactor
+  /experiment list
+  /experiment accept risky-refactor
+  /experiment reject risky-refactor"#;
                 CommandResult::Executed(help_text.to_string())
             }
 
@@ -1137,6 +1331,7 @@ You can also use a full model ID:
             "continuous",
             "context",
             "cost",
+            "experiment",
             "export",
             "fork",
             "help",

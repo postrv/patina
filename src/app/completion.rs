@@ -273,6 +273,11 @@ impl CompletionProvider for BuiltinCommandProvider {
                 CompletionSource::Builtin,
             ),
             CompletionEntry::new(
+                "experiment",
+                "Manage isolated experiments",
+                CompletionSource::Builtin,
+            ),
+            CompletionEntry::new(
                 "export",
                 "Export conversation (markdown/json)",
                 CompletionSource::Builtin,
@@ -590,7 +595,7 @@ mod tests {
     fn builtin_provider_returns_all_commands() {
         let provider = BuiltinCommandProvider;
         let candidates = provider.candidates();
-        assert_eq!(candidates.len(), 12);
+        assert_eq!(candidates.len(), 13);
         for entry in &candidates {
             assert_eq!(entry.source, CompletionSource::Builtin);
             assert!(!entry.description.is_empty());
@@ -606,6 +611,7 @@ mod tests {
         assert!(names.contains(&"continuous"));
         assert!(names.contains(&"context"));
         assert!(names.contains(&"cost"));
+        assert!(names.contains(&"experiment"));
         assert!(names.contains(&"export"));
         assert!(names.contains(&"fork"));
         assert!(names.contains(&"help"));
@@ -663,6 +669,6 @@ mod tests {
         let builtin = BuiltinCommandProvider;
         let mcp = McpToolProvider::new(vec![("tool1".to_string(), "srv".to_string())]);
         let all = collect_candidates(&[&builtin, &mcp]);
-        assert_eq!(all.len(), 13); // 12 builtin + 1 mcp
+        assert_eq!(all.len(), 14); // 13 builtin + 1 mcp
     }
 }
