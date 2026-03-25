@@ -58,6 +58,78 @@ pub enum LegacySseError {
     StreamEnded,
 }
 
+/// The result of parsing a single SSE line.
+///
+/// SSE lines follow the format defined in the
+/// [SSE specification](https://html.spec.whatwg.org/multipage/server-sent-events.html):
+/// - `event: <type>` sets the event type
+/// - `data: <value>` appends to the event data
+/// - Empty lines dispatch the buffered event
+/// - Lines starting with `:` are comments
+#[derive(Debug, PartialEq, Eq)]
+enum SseLineEvent<'a> {
+    /// An `event:` field was parsed, carrying the event type.
+    EventType(&'a str),
+    /// A `data:` field was parsed, carrying the data value.
+    Data(&'a str),
+    /// An empty line was encountered, signaling event dispatch.
+    Dispatch,
+    /// A comment or unrecognized field — should be ignored.
+    Ignored,
+}
+
+/// Parses a single SSE line into a structured event.
+///
+/// Handles the standard SSE field prefixes (`event:`, `data:`) and
+/// recognizes blank lines as dispatch signals. Comments (`:` prefix)
+/// and unknown fields (`id:`, `retry:`) are returned as `Ignored`.
+///
+/// # Arguments
+///
+/// * `line` - A single line from the SSE stream (without the trailing newline)
+#[must_use]
+fn parse_sse_line(line: &str) -> SseLineEvent<'_> {
+    if line.is_empty() {
+        return SseLineEvent::Dispatch;
+    }
+    if let Some(rest) = line.strip_prefix("event:") {
+        SseLineEvent::EventType(rest.strip_prefix(' ').unwrap_or(rest))
+    } else if let Some(rest) = line.strip_prefix("data:") {
+        SseLineEvent::Data(rest.strip_prefix(' ').unwrap_or(rest))
+    } else {
+        // Lines starting with ':' are comments; 'id:', 'retry:' are ignored
+        SseLineEvent::Ignored
+    }
+}
+
+/// Applies a parsed SSE line event to the event type and data buffers.
+///
+/// Updates `event_type` and `event_data` according to the SSE specification:
+/// - `EventType` replaces the current event type
+/// - `Data` appends to the data buffer (with newline separator for multi-line data)
+/// - `Dispatch` and `Ignored` do not modify the buffers (dispatch is handled by callers)
+///
+/// # Arguments
+///
+/// * `event` - The parsed SSE line event
+/// * `event_type` - Mutable reference to the current event type buffer
+/// * `event_data` - Mutable reference to the current event data buffer
+fn apply_sse_line(event: SseLineEvent<'_>, event_type: &mut String, event_data: &mut String) {
+    match event {
+        SseLineEvent::EventType(t) => {
+            event_type.clear();
+            event_type.push_str(t);
+        }
+        SseLineEvent::Data(d) => {
+            if !event_data.is_empty() {
+                event_data.push('\n');
+            }
+            event_data.push_str(d);
+        }
+        SseLineEvent::Dispatch | SseLineEvent::Ignored => {}
+    }
+}
+
 /// A transport for MCP servers using the legacy SSE protocol.
 ///
 /// Connects to an SSE endpoint, receives a POST URL via an `endpoint` event,
@@ -110,18 +182,7 @@ impl LegacySseTransport {
         timeout: Duration,
     ) -> Result<Self, LegacySseError> {
         let http_client = reqwest::Client::new();
-
-        let mut custom_headers = HeaderMap::new();
-        if let Some(hdrs) = headers {
-            for (k, v) in hdrs {
-                if let (Ok(name), Ok(val)) = (
-                    k.parse::<reqwest::header::HeaderName>(),
-                    v.parse::<reqwest::header::HeaderValue>(),
-                ) {
-                    custom_headers.insert(name, val);
-                }
-            }
-        }
+        let custom_headers = crate::mcp::parse_custom_headers(headers);
 
         let base_url =
             reqwest::Url::parse(sse_url).map_err(|e| LegacySseError::InvalidUrl(e.to_string()))?;
@@ -146,49 +207,16 @@ impl LegacySseTransport {
         let mut event_type = String::new();
         let mut event_data = String::new();
 
-        // Wait for the `endpoint` event with timeout.
-        // The async block borrows the stream/buffers; after it completes,
-        // ownership returns so they can be moved to the background task.
-        let post_endpoint = tokio::time::timeout(timeout, async {
-            while let Some(chunk_result) = stream.next().await {
-                let chunk = chunk_result.map_err(LegacySseError::Http)?;
-                line_buffer.push_str(&String::from_utf8_lossy(&chunk));
-
-                while let Some(newline_pos) = line_buffer.find('\n') {
-                    let line = line_buffer[..newline_pos]
-                        .trim_end_matches('\r')
-                        .to_string();
-                    line_buffer = line_buffer[newline_pos + 1..].to_string();
-
-                    if line.is_empty() {
-                        // Blank line dispatches the buffered event
-                        if event_type == "endpoint" && !event_data.is_empty() {
-                            let resolved = base_url
-                                .join(&event_data)
-                                .map_err(|e| LegacySseError::InvalidUrl(e.to_string()))?;
-                            // Validate the server-provided endpoint URL against SSRF
-                            crate::util::url_validation::validate_url(resolved.as_str(), false)
-                                .map_err(|e| LegacySseError::InvalidUrl(e.to_string()))?;
-                            return Ok::<String, LegacySseError>(resolved.to_string());
-                        }
-                        event_type.clear();
-                        event_data.clear();
-                    } else if let Some(rest) = line.strip_prefix("event:") {
-                        event_type = rest.strip_prefix(' ').unwrap_or(rest).to_string();
-                    } else if let Some(rest) = line.strip_prefix("data:") {
-                        let value = rest.strip_prefix(' ').unwrap_or(rest);
-                        if !event_data.is_empty() {
-                            event_data.push('\n');
-                        }
-                        event_data.push_str(value);
-                    }
-                    // Lines starting with ':' are comments — ignored
-                }
-            }
-            Err(LegacySseError::StreamEnded)
-        })
-        .await
-        .map_err(|_| LegacySseError::EndpointTimeout)??;
+        // Wait for the `endpoint` event with timeout
+        let post_endpoint = wait_for_endpoint_event(
+            &mut stream,
+            &mut line_buffer,
+            &mut event_type,
+            &mut event_data,
+            &base_url,
+            timeout,
+        )
+        .await?;
 
         let post_url = Arc::new(post_endpoint);
         let (tx, rx) = mpsc::channel(256);
@@ -257,9 +285,75 @@ impl Transport<RoleClient> for LegacySseTransport {
     }
 }
 
+/// Waits for an `endpoint` SSE event on the stream, with a timeout.
+///
+/// Reads SSE events from the byte stream, parsing each line for `event:` and
+/// `data:` fields. When an `endpoint` event with non-empty data is received,
+/// resolves the data against the base URL and validates it against SSRF.
+///
+/// # Arguments
+///
+/// * `stream` - The SSE byte stream to read from
+/// * `line_buffer` - Shared line buffer (may contain partial data from previous reads)
+/// * `event_type` - Shared event type buffer
+/// * `event_data` - Shared event data buffer
+/// * `base_url` - The base URL for resolving relative endpoint paths
+/// * `timeout` - Maximum time to wait for the endpoint event
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - The stream ends before the endpoint event (`StreamEnded`)
+/// - The timeout expires (`EndpointTimeout`)
+/// - The resolved URL is invalid or blocked by SSRF validation (`InvalidUrl`)
+async fn wait_for_endpoint_event(
+    stream: &mut (impl futures::Stream<Item = Result<Bytes, reqwest::Error>> + Unpin),
+    line_buffer: &mut String,
+    event_type: &mut String,
+    event_data: &mut String,
+    base_url: &reqwest::Url,
+    timeout: Duration,
+) -> Result<String, LegacySseError> {
+    tokio::time::timeout(timeout, async {
+        while let Some(chunk_result) = stream.next().await {
+            let chunk = chunk_result.map_err(LegacySseError::Http)?;
+            line_buffer.push_str(&String::from_utf8_lossy(&chunk));
+
+            while let Some(newline_pos) = line_buffer.find('\n') {
+                let line = line_buffer[..newline_pos]
+                    .trim_end_matches('\r')
+                    .to_string();
+                *line_buffer = line_buffer[newline_pos + 1..].to_string();
+
+                let event = parse_sse_line(&line);
+                match event {
+                    SseLineEvent::Dispatch => {
+                        if event_type.as_str() == "endpoint" && !event_data.is_empty() {
+                            let resolved = base_url
+                                .join(event_data)
+                                .map_err(|e| LegacySseError::InvalidUrl(e.to_string()))?;
+                            // Validate the server-provided endpoint URL against SSRF
+                            crate::util::url_validation::validate_url(resolved.as_str(), false)
+                                .map_err(|e| LegacySseError::InvalidUrl(e.to_string()))?;
+                            return Ok::<String, LegacySseError>(resolved.to_string());
+                        }
+                        event_type.clear();
+                        event_data.clear();
+                    }
+                    other => apply_sse_line(other, event_type, event_data),
+                }
+            }
+        }
+        Err(LegacySseError::StreamEnded)
+    })
+    .await
+    .map_err(|_| LegacySseError::EndpointTimeout)?
+}
+
 /// Reads SSE events from the stream and sends parsed JSON-RPC messages to the channel.
 ///
 /// Processes `message` events (or events with no explicit type) as JSON-RPC messages.
+/// Uses the shared `parse_sse_line` helper for consistent SSE parsing.
 /// Stops when the stream ends, a read error occurs, or the channel is closed.
 async fn sse_reader_loop(
     stream: &mut (impl futures::Stream<Item = Result<Bytes, reqwest::Error>> + Unpin),
@@ -285,37 +379,30 @@ async fn sse_reader_loop(
                 .to_string();
             *line_buffer = line_buffer[newline_pos + 1..].to_string();
 
-            if line.is_empty() {
-                // Blank line dispatches the buffered event
-                let is_message = event_type == "message" || event_type.is_empty();
-                if is_message && !event_data.is_empty() {
-                    match serde_json::from_str::<ServerJsonRpcMessage>(event_data) {
-                        Ok(msg) => {
-                            if tx.send(msg).await.is_err() {
-                                return; // Channel closed, receiver dropped
+            let event = parse_sse_line(&line);
+            match event {
+                SseLineEvent::Dispatch => {
+                    let is_message = event_type.as_str() == "message" || event_type.is_empty();
+                    if is_message && !event_data.is_empty() {
+                        match serde_json::from_str::<ServerJsonRpcMessage>(event_data) {
+                            Ok(msg) => {
+                                if tx.send(msg).await.is_err() {
+                                    return; // Channel closed, receiver dropped
+                                }
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    error = %e,
+                                    "Failed to parse SSE message as JSON-RPC"
+                                );
                             }
                         }
-                        Err(e) => {
-                            tracing::warn!(
-                                error = %e,
-                                "Failed to parse SSE message as JSON-RPC"
-                            );
-                        }
                     }
+                    event_type.clear();
+                    event_data.clear();
                 }
-                event_type.clear();
-                event_data.clear();
-            } else if let Some(rest) = line.strip_prefix("event:") {
-                *event_type = rest.strip_prefix(' ').unwrap_or(rest).to_string();
-            } else if let Some(rest) = line.strip_prefix("data:") {
-                let value = rest.strip_prefix(' ').unwrap_or(rest);
-                if !event_data.is_empty() {
-                    event_data.push('\n');
-                }
-                event_data.push_str(value);
+                other => apply_sse_line(other, event_type, event_data),
             }
-            // Lines starting with ':' are comments — ignored
-            // Lines starting with 'id:' or 'retry:' — ignored
         }
     }
 }
@@ -577,5 +664,89 @@ mod tests {
         let msg = rx.try_recv().expect("Should have received a message");
         let json = serde_json::to_value(&msg).unwrap();
         assert_eq!(json["id"], 5);
+    }
+
+    #[test]
+    fn parse_sse_line_event_type() {
+        assert_eq!(
+            parse_sse_line("event: message"),
+            SseLineEvent::EventType("message")
+        );
+        assert_eq!(
+            parse_sse_line("event:endpoint"),
+            SseLineEvent::EventType("endpoint")
+        );
+    }
+
+    #[test]
+    fn parse_sse_line_data() {
+        assert_eq!(
+            parse_sse_line("data: hello world"),
+            SseLineEvent::Data("hello world")
+        );
+        assert_eq!(
+            parse_sse_line("data:compact"),
+            SseLineEvent::Data("compact")
+        );
+    }
+
+    #[test]
+    fn parse_sse_line_dispatch() {
+        assert_eq!(parse_sse_line(""), SseLineEvent::Dispatch);
+    }
+
+    #[test]
+    fn parse_sse_line_ignored() {
+        assert_eq!(parse_sse_line(": this is a comment"), SseLineEvent::Ignored);
+        assert_eq!(parse_sse_line("id: 42"), SseLineEvent::Ignored);
+        assert_eq!(parse_sse_line("retry: 5000"), SseLineEvent::Ignored);
+        assert_eq!(parse_sse_line("unknown field"), SseLineEvent::Ignored);
+    }
+
+    #[test]
+    fn apply_sse_line_sets_event_type() {
+        let mut event_type = String::new();
+        let mut event_data = String::new();
+        apply_sse_line(
+            SseLineEvent::EventType("message"),
+            &mut event_type,
+            &mut event_data,
+        );
+        assert_eq!(event_type, "message");
+        assert!(event_data.is_empty());
+    }
+
+    #[test]
+    fn apply_sse_line_appends_data() {
+        let mut event_type = String::new();
+        let mut event_data = String::new();
+        apply_sse_line(
+            SseLineEvent::Data("line1"),
+            &mut event_type,
+            &mut event_data,
+        );
+        apply_sse_line(
+            SseLineEvent::Data("line2"),
+            &mut event_type,
+            &mut event_data,
+        );
+        assert_eq!(event_data, "line1\nline2");
+    }
+
+    #[test]
+    fn test_parse_custom_headers_via_shared() {
+        let headers = Some(HashMap::from([
+            ("Authorization".to_string(), "Bearer token".to_string()),
+            ("X-Custom".to_string(), "value".to_string()),
+        ]));
+        let result = crate::mcp::parse_custom_headers(&headers);
+        assert_eq!(result.len(), 2);
+        assert_eq!(result.get("authorization").unwrap(), "Bearer token");
+    }
+
+    #[test]
+    fn test_parse_custom_headers_none() {
+        let result = crate::mcp::parse_custom_headers(&None);
+        assert!(result.is_empty());
     }
 }

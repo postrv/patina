@@ -271,7 +271,33 @@ pub fn validate_mcp_command(command: &str, args: &[String]) -> RctResult<()> {
         .and_then(|n| n.to_str())
         .unwrap_or(command);
 
-    // Check against always-blocked commands (even with absolute paths)
+    check_blocked_command(command_name)?;
+    check_requires_absolute(command_name, is_absolute)?;
+
+    // Check if this is a known interpreter (shell or script interpreter).
+    // For interpreters, we skip argument validation because the script content
+    // inherently contains shell constructs - that is the intended behavior.
+    // The key protection is requiring an absolute path.
+    let is_interpreter = REQUIRE_ABSOLUTE_PATH
+        .iter()
+        .any(|pattern| pattern.is_match(command_name));
+
+    if !is_interpreter {
+        check_argument_injection(args)?;
+    }
+
+    Ok(())
+}
+
+/// Checks whether a command name matches the always-blocked list.
+///
+/// These commands (e.g., `rm`, `sudo`, `dd`) have no legitimate use as MCP
+/// servers and are blocked even when specified with an absolute path.
+///
+/// # Errors
+///
+/// Returns `RctError::McpValidation` if the command is on the block list.
+fn check_blocked_command(command_name: &str) -> RctResult<()> {
     for pattern in ALWAYS_BLOCKED.iter() {
         if pattern.is_match(command_name) {
             return Err(RctError::mcp_validation(format!(
@@ -280,9 +306,19 @@ pub fn validate_mcp_command(command: &str, args: &[String]) -> RctResult<()> {
             )));
         }
     }
+    Ok(())
+}
 
-    // Check against commands that require absolute paths
-    // These are interpreters that are legitimate when explicitly specified
+/// Checks whether a command requires an absolute path and enforces it.
+///
+/// Interpreter commands (e.g., `bash`, `python`, `node`) are allowed only
+/// when specified with an absolute path to prevent PATH hijacking attacks.
+///
+/// # Errors
+///
+/// Returns `RctError::McpValidation` if the command requires but lacks an
+/// absolute path.
+fn check_requires_absolute(command_name: &str, is_absolute: bool) -> RctResult<()> {
     for pattern in REQUIRE_ABSOLUTE_PATH.iter() {
         if pattern.is_match(command_name) && !is_absolute {
             return Err(RctError::mcp_validation(format!(
@@ -291,29 +327,29 @@ pub fn validate_mcp_command(command: &str, args: &[String]) -> RctResult<()> {
             )));
         }
     }
+    Ok(())
+}
 
-    // Check if this is a known interpreter (shell or script interpreter)
-    // For interpreters, we skip argument validation because the script content
-    // inherently contains shell constructs - that's the intended behavior.
-    // The key protection is requiring an absolute path.
-    let is_interpreter = REQUIRE_ABSOLUTE_PATH
-        .iter()
-        .any(|pattern| pattern.is_match(command_name));
-
-    // Only check arguments for shell injection patterns on non-interpreters
-    // For interpreters like /bin/bash, the script content IS the intended execution
-    if !is_interpreter {
-        for arg in args {
-            for pattern in DANGEROUS_ARG_PATTERNS.iter() {
-                if pattern.is_match(arg) {
-                    return Err(RctError::mcp_validation(
-                        "security policy blocked: potential shell injection in argument",
-                    ));
-                }
+/// Checks arguments for shell injection patterns.
+///
+/// Scans each argument against known dangerous patterns such as command
+/// chaining (`;`), command substitution (`$()`), backticks, and dangerous
+/// redirects. This check is skipped for known interpreter commands.
+///
+/// # Errors
+///
+/// Returns `RctError::McpValidation` if any argument matches a dangerous
+/// pattern.
+fn check_argument_injection(args: &[String]) -> RctResult<()> {
+    for arg in args {
+        for pattern in DANGEROUS_ARG_PATTERNS.iter() {
+            if pattern.is_match(arg) {
+                return Err(RctError::mcp_validation(
+                    "security policy blocked: potential shell injection in argument",
+                ));
             }
         }
     }
-
     Ok(())
 }
 

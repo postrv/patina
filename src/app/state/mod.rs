@@ -46,7 +46,7 @@ use crate::session::Session;
 use crate::tools::HookedToolExecutor;
 use crate::types::config::EffortLevel;
 use crate::types::config::ParallelMode;
-use crate::types::content::StopReason;
+use crate::types::content::{StopReason, ToolResultBlock, ToolUseBlock};
 use crate::types::ui_state::{
     CompactionProgressState, FocusArea, ScrollState, SelectionState, ToolBlockState,
 };
@@ -2794,38 +2794,29 @@ impl AppState {
         self.tool_state.tool_loop.add_tool_use(tool_use);
     }
 
-    /// Spawns tool execution in the background.
+    /// Intercepts special tools that need synchronous or UI-driven handling.
     ///
-    /// Returns immediately with a handle to the background task.
-    /// Results are sent through the tool_result_rx channel.
+    /// Separates tools into intercepted (handled immediately) and remaining
+    /// (to be executed in background). Intercepted tools include:
+    /// - `plan`: Requires modal UI for user approval
+    /// - `ask_user`: Requires modal UI for user response
+    /// - `bash` with `run_in_background`: Spawned as a background task
+    /// - `task_output`: Reads output from a background task
+    /// - `task_stop`: Stops a background task
+    ///
+    /// # Arguments
+    ///
+    /// * `pending` - Tools awaiting execution
+    /// * `tx` - Channel sender for tool results (used for error/immediate results)
     ///
     /// # Returns
     ///
-    /// `Some(JoinHandle)` if tools were spawned, `None` if no tools pending.
-    #[must_use]
-    pub fn spawn_tool_execution(
+    /// A tuple of (intercepted tool IDs, remaining tools for background execution).
+    fn intercept_special_tools(
         &mut self,
-    ) -> Option<tokio::task::JoinHandle<Vec<(String, crate::types::ToolResultBlock)>>> {
-        // Create channel for results
-        let (tx, rx) = mpsc::channel(100);
-        self.tool_state.tool_result_rx = Some(rx);
-
-        // Get pending tools
-        let pending: Vec<_> = self
-            .tool_state
-            .tool_loop
-            .pending_calls()
-            .iter()
-            .filter(|(_, call)| !call.executed)
-            .map(|(id, call)| (id.clone(), call.tool_use.clone()))
-            .collect();
-
-        if pending.is_empty() {
-            return None;
-        }
-
-        // Intercept interactive tools (plan, ask_user) before spawning background work.
-        // These tools require user input via modal UI and cannot execute in background.
+        pending: Vec<(String, ToolUseBlock)>,
+        tx: &mpsc::Sender<(String, ToolResultBlock)>,
+    ) -> (Vec<String>, Vec<(String, ToolUseBlock)>) {
         let mut intercepted = Vec::new();
         let mut remaining = Vec::new();
         for (id, tool_use) in pending {
@@ -2835,12 +2826,10 @@ impl AppState {
                         self.set_pending_plan(plan);
                         intercepted.push(id);
                     } else {
-                        // Malformed plan input — return error via channel
-                        let result = crate::types::ToolResultBlock {
-                            tool_use_id: id.clone(),
-                            content: "Invalid plan format: expected title and steps".to_string(),
-                            is_error: true,
-                        };
+                        let result = ToolResultBlock::error(
+                            &id,
+                            "Invalid plan format: expected title and steps",
+                        );
                         let tx_clone = tx.clone();
                         let id_clone = id.clone();
                         tokio::spawn(async move {
@@ -2851,19 +2840,15 @@ impl AppState {
                 }
                 "ask_user" => {
                     if let Some(question) =
-                        crate::app::state::question::QuestionState::from_tool_input(
-                            id.clone(),
-                            &tool_use.input,
-                        )
+                        QuestionState::from_tool_input(id.clone(), &tool_use.input)
                     {
                         self.set_pending_question(question);
                         intercepted.push(id);
                     } else {
-                        let result = crate::types::ToolResultBlock {
-                            tool_use_id: id.clone(),
-                            content: "Invalid ask_user format: expected question field".to_string(),
-                            is_error: true,
-                        };
+                        let result = ToolResultBlock::error(
+                            &id,
+                            "Invalid ask_user format: expected question field",
+                        );
                         let tx_clone = tx.clone();
                         let id_clone = id.clone();
                         tokio::spawn(async move {
@@ -2886,11 +2871,8 @@ impl AppState {
                         .unwrap_or("")
                         .to_string();
                     let task_id = self.background_tasks.spawn(command, &self.working_dir);
-                    let result = crate::types::ToolResultBlock {
-                        tool_use_id: id.clone(),
-                        content: format!("Background task {task_id} started"),
-                        is_error: false,
-                    };
+                    let result =
+                        ToolResultBlock::success(&id, format!("Background task {task_id} started"));
                     let tx_clone = tx.clone();
                     let id_clone = id.clone();
                     tokio::spawn(async move {
@@ -2905,8 +2887,8 @@ impl AppState {
                         .and_then(|v| v.as_str())
                         .unwrap_or("")
                         .to_string();
-                    let bg = &self.background_tasks;
-                    let output_buf = bg
+                    let output_buf = self
+                        .background_tasks
                         .tasks_ref()
                         .get(&task_id_val)
                         .map(|t| (Arc::clone(&t.output_buffer), Arc::clone(&t.completed)));
@@ -2922,20 +2904,15 @@ impl AppState {
                                 } else {
                                     "running"
                                 };
-                                crate::types::ToolResultBlock {
-                                    tool_use_id: tool_id_clone.clone(),
-                                    content: format!(
-                                        "[Task {task_id_val} ({status})]\n{}",
-                                        *content
-                                    ),
-                                    is_error: false,
-                                }
+                                ToolResultBlock::success(
+                                    &tool_id_clone,
+                                    format!("[Task {task_id_val} ({status})]\n{}", *content),
+                                )
                             }
-                            None => crate::types::ToolResultBlock {
-                                tool_use_id: tool_id_clone.clone(),
-                                content: format!("No task with ID '{task_id_val}'"),
-                                is_error: true,
-                            },
+                            None => ToolResultBlock::error(
+                                &tool_id_clone,
+                                format!("No task with ID '{task_id_val}'"),
+                            ),
                         };
                         let _ = tx_clone.send((tool_id_clone, result)).await;
                     });
@@ -2950,16 +2927,8 @@ impl AppState {
                         .to_string();
                     let result_msg = self.background_tasks.stop(&task_id_val);
                     let result = match result_msg {
-                        Ok(msg) => crate::types::ToolResultBlock {
-                            tool_use_id: id.clone(),
-                            content: msg,
-                            is_error: false,
-                        },
-                        Err(msg) => crate::types::ToolResultBlock {
-                            tool_use_id: id.clone(),
-                            content: msg,
-                            is_error: true,
-                        },
+                        Ok(msg) => ToolResultBlock::success(&id, msg),
+                        Err(msg) => ToolResultBlock::error(&id, msg),
                     };
                     let tx_clone = tx.clone();
                     let id_clone = id.clone();
@@ -2971,13 +2940,47 @@ impl AppState {
                 _ => remaining.push((id, tool_use)),
             }
         }
+        (intercepted, remaining)
+    }
+
+    /// Spawns tool execution in the background.
+    ///
+    /// Returns immediately with a handle to the background task.
+    /// Results are sent through the tool_result_rx channel.
+    ///
+    /// # Returns
+    ///
+    /// `Some(JoinHandle)` if tools were spawned, `None` if no tools pending.
+    #[must_use]
+    pub fn spawn_tool_execution(
+        &mut self,
+    ) -> Option<tokio::task::JoinHandle<Vec<(String, ToolResultBlock)>>> {
+        // Create channel for results
+        let (tx, rx) = mpsc::channel(100);
+        self.tool_state.tool_result_rx = Some(rx);
+
+        // Get pending tools
+        let pending: Vec<_> = self
+            .tool_state
+            .tool_loop
+            .pending_calls()
+            .iter()
+            .filter(|(_, call)| !call.executed)
+            .map(|(id, call)| (id.clone(), call.tool_use.clone()))
+            .collect();
+
+        if pending.is_empty() {
+            return None;
+        }
+
+        // Intercept interactive and special tools before spawning background work
+        let (intercepted, pending) = self.intercept_special_tools(pending, &tx);
 
         // Mark intercepted tools as executing (they'll complete when user responds)
         for id in &intercepted {
             self.tool_state.executing_tool_ids.insert(id.clone());
         }
 
-        let pending = remaining;
         if pending.is_empty() && intercepted.is_empty() {
             return None;
         }
@@ -2994,82 +2997,15 @@ impl AppState {
         let handle = tokio::spawn(async move {
             use crate::app::tool_loop::tool_use_to_call;
             use crate::mcp::manager::is_mcp_tool;
-            use crate::tools::ToolResult as TR;
 
             let mut results = Vec::new();
             for (tool_id, tool_use) in pending {
-                // Route MCP-namespaced tools through the MCP manager
                 let result_block = if is_mcp_tool(&tool_use.name) {
-                    match &mcp_manager {
-                        Some(mgr) => {
-                            match mgr.call_tool(&tool_use.name, tool_use.input.clone()).await {
-                                Ok(TR::Success(output)) => crate::types::ToolResultBlock {
-                                    tool_use_id: tool_id.clone(),
-                                    content: output,
-                                    is_error: false,
-                                },
-                                Ok(TR::Error(msg)) => crate::types::ToolResultBlock {
-                                    tool_use_id: tool_id.clone(),
-                                    content: msg,
-                                    is_error: true,
-                                },
-                                Ok(TR::Cancelled) => crate::types::ToolResultBlock {
-                                    tool_use_id: tool_id.clone(),
-                                    content: "Tool execution cancelled".to_string(),
-                                    is_error: true,
-                                },
-                                Ok(TR::NeedsPermission(perm)) => crate::types::ToolResultBlock {
-                                    tool_use_id: tool_id.clone(),
-                                    content: format!("Permission required: {perm:?}"),
-                                    is_error: true,
-                                },
-                                Err(e) => crate::types::ToolResultBlock {
-                                    tool_use_id: tool_id.clone(),
-                                    content: format!("MCP tool error: {e}"),
-                                    is_error: true,
-                                },
-                            }
-                        }
-                        None => crate::types::ToolResultBlock {
-                            tool_use_id: tool_id.clone(),
-                            content: format!(
-                                "MCP tool '{}' called but no MCP manager available",
-                                tool_use.name
-                            ),
-                            is_error: true,
-                        },
-                    }
+                    execute_mcp_tool(&tool_id, &tool_use, &mcp_manager).await
                 } else {
-                    // Built-in tool path
                     let call = tool_use_to_call(&tool_use);
                     let result = executor.execute(call).await;
-                    match &result {
-                        Ok(TR::Success(output)) => crate::types::ToolResultBlock {
-                            tool_use_id: tool_id.clone(),
-                            content: output.clone(),
-                            is_error: false,
-                        },
-                        Ok(TR::Error(error)) => crate::types::ToolResultBlock {
-                            tool_use_id: tool_id.clone(),
-                            content: error.clone(),
-                            is_error: true,
-                        },
-                        Ok(TR::Cancelled) => crate::types::ToolResultBlock {
-                            tool_use_id: tool_id.clone(),
-                            content: "Tool execution cancelled".to_string(),
-                            is_error: true,
-                        },
-                        Ok(TR::NeedsPermission(perm)) => crate::types::ToolResultBlock {
-                            tool_use_id: tool_id.clone(),
-                            content: format!("Permission required: {perm:?}"),
-                            is_error: true,
-                        },
-                        Err(e) => crate::types::ToolResultBlock {
-                            tool_use_id: tool_id.clone(),
-                            content: e.to_string(),
-                            is_error: true,
-                        },
-                    }
+                    execute_builtin_tool_result(&tool_id, result)
                 };
 
                 // Send through channel (ignore error if receiver dropped)
@@ -3363,6 +3299,57 @@ impl AppState {
         };
 
         RequestOptions { thinking, system }
+    }
+}
+
+/// Executes an MCP-namespaced tool via the MCP manager.
+///
+/// Routes the tool call through the MCP manager and converts the result
+/// into a `ToolResultBlock`. If no MCP manager is available, returns an
+/// error result.
+///
+/// # Arguments
+///
+/// * `tool_id` - The unique tool use ID for result correlation
+/// * `tool_use` - The tool use block containing name and input
+/// * `mcp_manager` - Optional reference to the MCP manager
+async fn execute_mcp_tool(
+    tool_id: &str,
+    tool_use: &ToolUseBlock,
+    mcp_manager: &Option<Arc<crate::mcp::manager::McpManager>>,
+) -> ToolResultBlock {
+    match mcp_manager {
+        Some(mgr) => match mgr.call_tool(&tool_use.name, tool_use.input.clone()).await {
+            Ok(ref tr) => ToolResultBlock::from_result(tool_id, tr),
+            Err(e) => ToolResultBlock::error(tool_id, format!("MCP tool error: {e}")),
+        },
+        None => ToolResultBlock::error(
+            tool_id,
+            format!(
+                "MCP tool '{}' called but no MCP manager available",
+                tool_use.name
+            ),
+        ),
+    }
+}
+
+/// Converts a built-in tool execution result into a `ToolResultBlock`.
+///
+/// Maps the `Result<ToolResult, Error>` from the tool executor into the
+/// corresponding success or error `ToolResultBlock`.
+///
+/// # Arguments
+///
+/// * `tool_id` - The unique tool use ID for result correlation
+/// * `result` - The tool execution result
+#[must_use]
+fn execute_builtin_tool_result(
+    tool_id: &str,
+    result: std::result::Result<crate::tools::ToolResult, anyhow::Error>,
+) -> ToolResultBlock {
+    match result {
+        Ok(ref tr) => ToolResultBlock::from_result(tool_id, tr),
+        Err(e) => ToolResultBlock::error(tool_id, e.to_string()),
     }
 }
 
