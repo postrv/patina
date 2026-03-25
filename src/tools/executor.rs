@@ -376,6 +376,7 @@ impl ToolExecutor {
             "read_file" => self.read_file(&call.input).await,
             "write_file" => self.write_file(&call.input).await,
             "edit" => self.edit_file(&call.input).await,
+            "multi_edit" => self.multi_edit(&call.input).await,
             "list_files" => self.list_files(&call.input).await,
             "glob" => self.glob_files(&call.input).await,
             "grep" => self.grep_content(&call.input).await,
@@ -700,6 +701,53 @@ impl ToolExecutor {
         };
 
         Ok(ToolResult::Success(summary))
+    }
+
+    /// Applies edits to multiple files in one operation.
+    ///
+    /// Each edit is applied sequentially using the same logic as `edit_file`.
+    /// Results are collected per-edit. Failures in one edit do not prevent
+    /// subsequent edits from being attempted.
+    async fn multi_edit(&self, input: &serde_json::Value) -> Result<ToolResult> {
+        let edits = input
+            .get("edits")
+            .and_then(|v| v.as_array())
+            .ok_or_else(|| anyhow::anyhow!("Missing edits array"))?;
+
+        if edits.is_empty() {
+            return Ok(ToolResult::Error("No edits provided".to_string()));
+        }
+
+        let mut results = Vec::new();
+        let mut success_count = 0;
+        let mut error_count = 0;
+
+        for (i, edit) in edits.iter().enumerate() {
+            match self.edit_file(edit).await? {
+                ToolResult::Success(msg) => {
+                    success_count += 1;
+                    results.push(format!("Edit {}: OK — {msg}", i + 1));
+                }
+                ToolResult::Error(msg) => {
+                    error_count += 1;
+                    results.push(format!("Edit {}: ERROR — {msg}", i + 1));
+                }
+                other => {
+                    results.push(format!("Edit {}: {other:?}", i + 1));
+                }
+            }
+        }
+
+        let summary = format!(
+            "Multi-edit complete: {success_count} succeeded, {error_count} failed\n\n{}",
+            results.join("\n")
+        );
+
+        if error_count > 0 && success_count == 0 {
+            Ok(ToolResult::Error(summary))
+        } else {
+            Ok(ToolResult::Success(summary))
+        }
     }
 
     /// Formats file content with cat -n style line numbers and optional offset/limit.
@@ -2546,5 +2594,64 @@ mod tests {
             }
             other => panic!("Expected Success, got {:?}", other),
         }
+    }
+
+    #[tokio::test]
+    async fn test_multi_edit_applies_two_edits() {
+        let dir = TempDir::new().unwrap();
+        let file1 = dir.path().join("a.txt");
+        let file2 = dir.path().join("b.txt");
+        std::fs::write(&file1, "hello world").unwrap();
+        std::fs::write(&file2, "foo bar").unwrap();
+
+        let executor = ToolExecutor::new(dir.path().to_path_buf());
+        let input = serde_json::json!({
+            "edits": [
+                { "path": "a.txt", "old_string": "hello", "new_string": "hi" },
+                { "path": "b.txt", "old_string": "foo", "new_string": "baz" }
+            ]
+        });
+        let result = executor.multi_edit(&input).await.unwrap();
+        match result {
+            ToolResult::Success(msg) => {
+                assert!(msg.contains("2 succeeded"));
+                assert!(msg.contains("0 failed"));
+            }
+            other => panic!("Expected Success, got {other:?}"),
+        }
+        assert_eq!(std::fs::read_to_string(&file1).unwrap(), "hi world");
+        assert_eq!(std::fs::read_to_string(&file2).unwrap(), "baz bar");
+    }
+
+    #[tokio::test]
+    async fn test_multi_edit_partial_failure() {
+        let dir = TempDir::new().unwrap();
+        let file1 = dir.path().join("a.txt");
+        std::fs::write(&file1, "hello world").unwrap();
+
+        let executor = ToolExecutor::new(dir.path().to_path_buf());
+        let input = serde_json::json!({
+            "edits": [
+                { "path": "a.txt", "old_string": "hello", "new_string": "hi" },
+                { "path": "nonexistent.txt", "old_string": "x", "new_string": "y" }
+            ]
+        });
+        let result = executor.multi_edit(&input).await.unwrap();
+        match result {
+            ToolResult::Success(msg) => {
+                assert!(msg.contains("1 succeeded"));
+                assert!(msg.contains("1 failed"));
+            }
+            other => panic!("Expected Success (partial), got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_multi_edit_empty_edits() {
+        let dir = TempDir::new().unwrap();
+        let executor = ToolExecutor::new(dir.path().to_path_buf());
+        let input = serde_json::json!({ "edits": [] });
+        let result = executor.multi_edit(&input).await.unwrap();
+        assert!(matches!(result, ToolResult::Error(_)));
     }
 }

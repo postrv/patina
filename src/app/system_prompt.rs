@@ -153,6 +153,7 @@ Use the appropriate tool for each task:
 - **read_file**: Read file contents (prefer over bash cat/head/tail)
 - **write_file**: Create new files
 - **edit**: Modify existing files with precise string replacements
+- **multi_edit**: Apply edits to multiple files in one operation
 - **grep**: Search file contents with regex patterns
 - **glob**: Find files by name patterns
 - **list_files**: List directory contents

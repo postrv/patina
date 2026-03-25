@@ -84,7 +84,7 @@ pub enum ToolChoice {
 ///
 /// Returns the default set of built-in tools for agentic operation.
 ///
-/// Includes: bash, read_file, write_file, edit, list_files, glob, grep,
+/// Includes: bash, read_file, write_file, edit, multi_edit, list_files, glob, grep,
 /// web_fetch, web_search, analyze_image, lsp, todo_write
 #[must_use]
 pub fn default_tools() -> Vec<ToolDefinition> {
@@ -93,6 +93,7 @@ pub fn default_tools() -> Vec<ToolDefinition> {
         read_file_tool(),
         write_file_tool(),
         edit_tool(),
+        multi_edit_tool(),
         list_files_tool(),
         glob_tool(),
         grep_tool(),
@@ -583,6 +584,51 @@ pub fn task_stop_tool() -> ToolDefinition {
     )
 }
 
+/// Creates the multi_edit tool definition.
+///
+/// Applies edits to multiple files in one operation.
+#[must_use]
+pub fn multi_edit_tool() -> ToolDefinition {
+    ToolDefinition::new(
+        "multi_edit",
+        "Apply edits to multiple files in one operation. Each edit replaces a specific string \
+         in a file. All edits are applied sequentially. If an edit fails, previously applied \
+         edits are not rolled back.",
+        json!({
+            "type": "object",
+            "properties": {
+                "edits": {
+                    "type": "array",
+                    "description": "List of edits to apply",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "path": {
+                                "type": "string",
+                                "description": "The relative path to the file to edit"
+                            },
+                            "old_string": {
+                                "type": "string",
+                                "description": "The exact string to find and replace"
+                            },
+                            "new_string": {
+                                "type": "string",
+                                "description": "The string to replace old_string with"
+                            },
+                            "replace_all": {
+                                "type": "boolean",
+                                "description": "Replace all occurrences (default: false)"
+                            }
+                        },
+                        "required": ["path", "old_string", "new_string"]
+                    }
+                }
+            },
+            "required": ["edits"]
+        }),
+    )
+}
+
 /// Creates the ask_user tool definition.
 ///
 /// Asks the user a question with optional structured choices.
@@ -668,13 +714,14 @@ mod tests {
     fn test_default_tools_contains_all_tools() {
         let tools = default_tools();
 
-        assert_eq!(tools.len(), 16, "should have 16 default tools");
+        assert_eq!(tools.len(), 17, "should have 17 default tools");
 
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains(&"bash"), "should contain bash");
         assert!(names.contains(&"read_file"), "should contain read_file");
         assert!(names.contains(&"write_file"), "should contain write_file");
         assert!(names.contains(&"edit"), "should contain edit");
+        assert!(names.contains(&"multi_edit"), "should contain multi_edit");
         assert!(names.contains(&"list_files"), "should contain list_files");
         assert!(names.contains(&"glob"), "should contain glob");
         assert!(names.contains(&"grep"), "should contain grep");
