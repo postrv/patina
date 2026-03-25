@@ -41,6 +41,9 @@ use tokio::sync::mpsc;
 /// Wraps `RunningService<RoleClient, PatinaClientHandler>` with a shared
 /// tool list and event channel. The tool list is updated automatically
 /// when the server sends `notifications/tools/list_changed`.
+///
+/// The event receiver is wrapped in a `Mutex` so that `drain_events` can
+/// be called via `&self` (needed when the connection is behind an `Arc`).
 pub struct McpConnection {
     /// Human-readable server name.
     name: String,
@@ -48,8 +51,8 @@ pub struct McpConnection {
     client: Option<RunningService<RoleClient, PatinaClientHandler>>,
     /// Shared tool list, kept in sync by the handler.
     tools: Arc<RwLock<Vec<Tool>>>,
-    /// Receiver for events from the handler.
-    event_rx: mpsc::Receiver<McpEvent>,
+    /// Receiver for events from the handler. Wrapped in `Mutex` for `&self` access.
+    event_rx: std::sync::Mutex<mpsc::Receiver<McpEvent>>,
 }
 
 impl McpConnection {
@@ -129,7 +132,7 @@ impl McpConnection {
             name: name.to_string(),
             client: Some(client),
             tools,
-            event_rx,
+            event_rx: std::sync::Mutex::new(event_rx),
         })
     }
 
@@ -200,7 +203,7 @@ impl McpConnection {
             name: name.to_string(),
             client: Some(client),
             tools,
-            event_rx,
+            event_rx: std::sync::Mutex::new(event_rx),
         })
     }
 
@@ -274,7 +277,7 @@ impl McpConnection {
             name: name.to_string(),
             client: Some(client),
             tools,
-            event_rx,
+            event_rx: std::sync::Mutex::new(event_rx),
         })
     }
 
@@ -368,9 +371,13 @@ impl McpConnection {
     /// Drains all pending events from the handler channel.
     ///
     /// Returns immediately with whatever events are buffered. Non-blocking.
-    pub fn drain_events(&mut self) -> Vec<McpEvent> {
+    /// Takes `&self` (not `&mut self`) so it can be called through an `Arc`.
+    pub fn drain_events(&self) -> Vec<McpEvent> {
+        let Ok(mut rx) = self.event_rx.lock() else {
+            return Vec::new();
+        };
         let mut events = Vec::new();
-        while let Ok(event) = self.event_rx.try_recv() {
+        while let Ok(event) = rx.try_recv() {
             events.push(event);
         }
         events
@@ -417,7 +424,7 @@ impl McpConnection {
             name: name.to_string(),
             client: None,
             tools: Arc::new(RwLock::new(Vec::new())),
-            event_rx,
+            event_rx: std::sync::Mutex::new(event_rx),
         }
     }
 }
@@ -590,12 +597,19 @@ mod tests {
 
     #[test]
     fn test_drain_events_returns_empty_when_no_events() {
-        let mut conn = McpConnection::disconnected("test-drain");
+        let conn = McpConnection::disconnected("test-drain");
         let events = conn.drain_events();
         assert!(
             events.is_empty(),
             "Freshly created connection should have no pending events"
         );
+    }
+
+    #[test]
+    fn test_drain_events_takes_shared_ref() {
+        // Verify drain_events works with &self (not &mut self) — needed for Arc access
+        let conn = McpConnection::disconnected("test-shared");
+        let _events = conn.drain_events();
     }
 
     #[test]

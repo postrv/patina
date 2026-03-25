@@ -1,8 +1,8 @@
-//! Tick handler for throbber animation.
+//! Tick handler for throbber animation and MCP event polling.
 //!
-//! [`TickHandler`] processes [`AppEvent::Tick`] events by advancing the
-//! throbber animation frame. This is the simplest handler — one line of
-//! logic — extracted from the event loop to validate the handler pattern.
+//! [`TickHandler`] processes [`AppEvent::Tick`] events by:
+//! 1. Advancing the throbber animation frame
+//! 2. Draining pending MCP server events (tool list changes, progress, logs)
 
 use std::future::Future;
 use std::pin::Pin;
@@ -13,11 +13,11 @@ use crate::app::context::AppContext;
 use crate::app::dispatch::{EventHandler, Handled};
 use crate::app::events::AppEvent;
 
-/// Handles periodic tick events for the throbber animation.
+/// Handles periodic tick events for animation and background polling.
 ///
-/// When the application is loading or executing tools, a periodic timer
-/// fires [`AppEvent::Tick`]. This handler advances the throbber animation
-/// frame via [`AppState::tick_throbber`](crate::app::state::AppState::tick_throbber).
+/// On each [`AppEvent::Tick`]:
+/// 1. Advances the throbber animation frame
+/// 2. Drains MCP events from all connected servers, logging them
 ///
 /// # Examples
 ///
@@ -39,6 +39,7 @@ impl EventHandler for TickHandler {
         Box::pin(async move {
             if matches!(event, AppEvent::Tick) {
                 ctx.state.tick_throbber();
+                process_mcp_events(ctx);
                 Ok(Handled::CONSUMED)
             } else {
                 Ok(Handled::IGNORED)
@@ -48,6 +49,64 @@ impl EventHandler for TickHandler {
 
     fn name(&self) -> &str {
         "tick"
+    }
+}
+
+/// Drains and processes pending MCP events from all connected servers.
+///
+/// Handles each event type:
+/// - `ToolListChanged` — logged; tools are already refreshed by the handler
+/// - `ResourceListChanged` / `PromptListChanged` — logged for awareness
+/// - `ProgressUpdate` — logged at debug level
+/// - `LogMessage` — forwarded to tracing at the appropriate level
+fn process_mcp_events(ctx: &mut AppContext<'_>) {
+    let Some(manager) = ctx.state.mcp_manager() else {
+        return;
+    };
+
+    let events = manager.drain_all_events();
+    if events.is_empty() {
+        return;
+    }
+
+    for event in events {
+        match event {
+            crate::mcp::handler::McpEvent::ToolListChanged { server_name } => {
+                tracing::info!(server = %server_name, "MCP server tool list changed");
+            }
+            crate::mcp::handler::McpEvent::ResourceListChanged { server_name } => {
+                tracing::debug!(server = %server_name, "MCP server resource list changed");
+            }
+            crate::mcp::handler::McpEvent::PromptListChanged { server_name } => {
+                tracing::debug!(server = %server_name, "MCP server prompt list changed");
+            }
+            crate::mcp::handler::McpEvent::ProgressUpdate {
+                server_name,
+                progress,
+                total,
+                message,
+            } => {
+                tracing::debug!(
+                    server = %server_name,
+                    progress,
+                    ?total,
+                    ?message,
+                    "MCP server progress"
+                );
+            }
+            crate::mcp::handler::McpEvent::LogMessage {
+                server_name,
+                level,
+                data,
+            } => {
+                tracing::debug!(
+                    server = %server_name,
+                    level = %level,
+                    "MCP server log: {}",
+                    data
+                );
+            }
+        }
     }
 }
 

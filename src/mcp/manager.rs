@@ -286,6 +286,22 @@ impl McpManager {
             .map(|s| (s.name.as_str(), &s.status, s.tool_count()))
             .collect()
     }
+
+    /// Drains all pending events from all connected servers.
+    ///
+    /// Iterates over each managed server and collects buffered
+    /// [`McpEvent`](crate::mcp::handler::McpEvent) values.
+    /// Non-blocking — returns immediately with whatever events are queued.
+    #[must_use]
+    pub fn drain_all_events(&self) -> Vec<crate::mcp::handler::McpEvent> {
+        let mut events = Vec::new();
+        for server in &self.servers {
+            if let Some(conn) = &server.connection {
+                events.extend(conn.drain_events());
+            }
+        }
+        events
+    }
 }
 
 /// Starts a single stdio MCP server via `McpConnection`.
@@ -754,5 +770,19 @@ mod tests {
         let manager = McpManager::start_all(HashMap::new(), Duration::from_secs(1)).await;
         // This compiles only if call_tool takes &self
         let _result = manager.call_tool("a__b", serde_json::json!({})).await;
+    }
+
+    #[tokio::test]
+    async fn drain_all_events_empty_manager_returns_empty() {
+        let manager = McpManager::start_all(HashMap::new(), Duration::from_secs(1)).await;
+        let events = manager.drain_all_events();
+        assert!(events.is_empty(), "Empty manager should yield no events");
+    }
+
+    #[tokio::test]
+    async fn drain_all_events_takes_shared_ref() {
+        let manager = McpManager::start_all(HashMap::new(), Duration::from_secs(1)).await;
+        // Verify this compiles with &self (not &mut self) — needed for Arc access
+        let _events = manager.drain_all_events();
     }
 }

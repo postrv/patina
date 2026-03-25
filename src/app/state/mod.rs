@@ -5,7 +5,9 @@ mod background;
 pub mod background_tasks;
 mod compression;
 mod continuous;
+mod display;
 mod input;
+mod model_config;
 pub mod plan;
 pub mod question;
 mod session_tracking;
@@ -18,7 +20,9 @@ pub use background::*;
 pub use background_tasks::BackgroundTaskRegistry;
 pub use compression::CompressionState;
 pub use continuous::ContinuousLoopState;
+pub use display::DisplayState;
 pub use input::InputState;
+pub use model_config::ModelConfigState;
 pub use plan::{PlanState, PlanStep};
 pub use question::QuestionState;
 pub use session_tracking::SessionTracking;
@@ -172,10 +176,9 @@ pub struct AppState {
     input_state: InputState,
     pub working_dir: PathBuf,
 
-    /// Smart scroll state with auto-follow behavior.
-    scroll: ScrollState,
-    loading: bool,
-    throbber_frame: usize,
+    /// Display, scroll, and animation state.
+    display: DisplayState,
+
     streaming_rx: Option<mpsc::Receiver<StreamEvent>>,
 
     dirty: DirtyFlags,
@@ -214,10 +217,6 @@ pub struct AppState {
     /// All continuous coding loop state grouped together.
     continuous: ContinuousLoopState,
 
-    /// Cached terminal height for scroll calculations.
-    /// Updated on resize events; defaults to 24 for headless/test environments.
-    terminal_height: u16,
-
     /// Optional MCP server manager for external tool servers.
     /// Set during app startup if `.mcp.json` or `~/.claude.json` contains server entries.
     /// Wrapped in `Arc` so spawned tool-execution tasks can share read access
@@ -230,24 +229,8 @@ pub struct AppState {
     /// Audit logger for enterprise compliance tracking.
     audit_logger: AuditLogger,
 
-    /// Model name for cost tracking (needed when recording usage events).
-    current_model: String,
-
-    /// Optional multi-model client for provider-aware model switching.
-    /// Configured at startup when multiple providers are available.
-    multi_model: Option<MultiModelClient>,
-
-    /// Persistent memory store for cross-session context.
-    memory_store: Option<crate::memory::store::MemoryStore>,
-
-    /// Reasoning effort level for API requests.
-    effort: EffortLevel,
-
-    /// Optional explicit thinking budget that overrides effort level.
-    thinking_budget: Option<u32>,
-
-    /// System prompt text injected into API requests.
-    system_prompt: Option<String>,
+    /// Model selection, effort, and thinking configuration.
+    model_config: ModelConfigState,
 
     /// Buffer for accumulating thinking text from stream events.
     thinking_buffer: String,
@@ -403,9 +386,7 @@ impl AppState {
             api_messages: Vec::new(),
             input_state: InputState::new(),
             working_dir,
-            scroll: ScrollState::new(),
-            loading: false,
-            throbber_frame: 0,
+            display: DisplayState::new(),
             streaming_rx: None,
             dirty: DirtyFlags {
                 full: true,
@@ -454,16 +435,10 @@ impl AppState {
                 checking_gate: None,
                 gate_results: Vec::new(),
             },
-            terminal_height: 24,
             mcp_manager: None,
             cost_tracker: CostTracker::new(CostConfig::default()),
             audit_logger: AuditLogger::new(AuditConfig::default()),
-            current_model: String::new(),
-            multi_model: None,
-            memory_store: None,
-            effort: EffortLevel::Auto,
-            thinking_budget: None,
-            system_prompt: None,
+            model_config: ModelConfigState::new(),
             thinking_buffer: String::new(),
             pending_plan: None,
             pending_question: None,
@@ -1066,7 +1041,7 @@ impl AppState {
     /// This provides backward compatibility with TUI rendering.
     #[must_use]
     pub fn scroll_offset(&self) -> usize {
-        self.scroll.offset()
+        self.display.scroll.offset()
     }
 
     /// Scrolls up by the specified number of lines.
@@ -1074,16 +1049,16 @@ impl AppState {
     /// This switches to Manual mode, preserving the scroll position
     /// during streaming updates.
     pub fn scroll_up(&mut self, lines: usize) {
-        let before = self.scroll.offset();
-        self.scroll.scroll_up(lines);
-        let after = self.scroll.offset();
+        let before = self.display.scroll.offset();
+        self.display.scroll.scroll_up(lines);
+        let after = self.display.scroll.offset();
         tracing::debug!(
             lines,
             before,
             after,
-            mode = ?self.scroll.mode(),
-            content_height = self.scroll.content_height(),
-            viewport_height = self.scroll.viewport_height(),
+            mode = ?self.display.scroll.mode(),
+            content_height = self.display.scroll.content_height(),
+            viewport_height = self.display.scroll.viewport_height(),
             cache_size = self.ui_selection.rendered_lines_cache.len(),
             timeline_entries = self.timeline.len(),
             "scroll_up"
@@ -1095,14 +1070,14 @@ impl AppState {
     ///
     /// If scrolling to the bottom, resumes Follow mode for auto-scroll.
     pub fn scroll_down(&mut self, lines: usize) {
-        let before = self.scroll.offset();
-        self.scroll.scroll_down(lines);
-        let after = self.scroll.offset();
+        let before = self.display.scroll.offset();
+        self.display.scroll.scroll_down(lines);
+        let after = self.display.scroll.offset();
         tracing::debug!(
             lines,
             before,
             after,
-            mode = ?self.scroll.mode(),
+            mode = ?self.display.scroll.mode(),
             "scroll_down"
         );
         self.dirty.messages = true;
@@ -1112,7 +1087,7 @@ impl AppState {
     ///
     /// This resumes Follow mode for auto-scroll.
     pub fn scroll_to_bottom(&mut self, content_height: usize) {
-        self.scroll.scroll_to_bottom(content_height);
+        self.display.scroll.scroll_to_bottom(content_height);
         self.dirty.messages = true;
     }
 
@@ -1120,7 +1095,7 @@ impl AppState {
     ///
     /// This switches to Manual mode.
     pub fn scroll_to_top(&mut self) {
-        self.scroll.scroll_to_top();
+        self.display.scroll.scroll_to_top();
         self.dirty.messages = true;
     }
 
@@ -1128,21 +1103,21 @@ impl AppState {
     ///
     /// In Follow mode, this auto-scrolls to show new content.
     pub fn update_content_height(&mut self, height: usize) {
-        self.scroll.set_content_height(height);
-        if self.scroll.mode().should_auto_scroll() {
+        self.display.scroll.set_content_height(height);
+        if self.display.scroll.mode().should_auto_scroll() {
             self.dirty.messages = true;
         }
     }
 
     /// Updates the viewport height for scroll calculations.
     pub fn set_viewport_height(&mut self, height: usize) {
-        self.scroll.set_viewport_height(height);
+        self.display.scroll.set_viewport_height(height);
     }
 
     /// Returns the scroll state for read access.
     #[must_use]
     pub fn scroll_state(&self) -> &ScrollState {
-        &self.scroll
+        &self.display.scroll
     }
 
     /// Returns a reference to the UI selection state.
@@ -1225,7 +1200,7 @@ impl AppState {
     }
 
     pub fn is_loading(&self) -> bool {
-        self.loading
+        self.display.loading
     }
 
     /// Signals that the application should exit the event loop.
@@ -1244,12 +1219,12 @@ impl AppState {
     }
 
     pub fn tick_throbber(&mut self) {
-        self.throbber_frame = (self.throbber_frame + 1) % 4;
+        self.display.throbber_frame = (self.display.throbber_frame + 1) % 4;
         self.dirty.messages = true;
     }
 
     pub fn throbber_char(&self) -> char {
-        ['⠋', '⠙', '⠹', '⠸'][self.throbber_frame]
+        ['⠋', '⠙', '⠹', '⠸'][self.display.throbber_frame]
     }
 
     pub fn needs_render(&self) -> bool {
@@ -1269,14 +1244,14 @@ impl AppState {
     /// Defaults to 24 if no resize event has been received.
     #[must_use]
     pub fn terminal_height(&self) -> u16 {
-        self.terminal_height
+        self.display.terminal_height
     }
 
     /// Updates the cached terminal height.
     ///
     /// Called from the event loop on startup and on resize events.
     pub fn set_terminal_height(&mut self, height: u16) {
-        self.terminal_height = height;
+        self.display.terminal_height = height;
     }
 
     /// Adds a message to the conversation timeline and display.
@@ -1455,7 +1430,7 @@ impl AppState {
         let user_msg = ApiMessageV2::user(&api_content);
         self.api_messages.push(user_msg);
 
-        self.loading = true;
+        self.display.loading = true;
         // Start streaming in timeline
         if self.timeline.try_push_streaming().is_err() {
             tracing::warn!("Timeline already streaming when submitting message");
@@ -1590,7 +1565,7 @@ impl AppState {
     ///
     /// When loading is true, the throbber animates and content accumulates.
     pub fn set_loading(&mut self, loading: bool) {
-        self.loading = loading;
+        self.display.loading = loading;
         self.dirty.messages = true;
     }
 
@@ -1647,7 +1622,7 @@ impl AppState {
             }
             StreamEvent::Usage(usage) => {
                 let record = UsageRecord::with_cache(
-                    &self.current_model,
+                    &self.model_config.current_model,
                     usage.input_tokens,
                     usage.output_tokens,
                     usage.cache_read_input_tokens,
@@ -1688,7 +1663,7 @@ impl AppState {
                 self.api_messages.push(ApiMessageV2::assistant(text));
             }
         }
-        self.loading = false;
+        self.display.loading = false;
         self.streaming_rx = None;
         self.dirty.messages = true;
     }
@@ -1718,7 +1693,7 @@ impl AppState {
             }
         }
         self.handle_message_complete(stop_reason)?;
-        self.loading = false;
+        self.display.loading = false;
         self.streaming_rx = None;
         self.dirty.messages = true;
         Ok(())
@@ -1728,7 +1703,7 @@ impl AppState {
     /// the streaming state.
     fn handle_stream_error(&mut self, error: String) {
         tracing::error!("Stream error: {}", error);
-        self.loading = false;
+        self.display.loading = false;
         self.streaming_rx = None;
         self.dirty.messages = true;
     }
@@ -2140,7 +2115,7 @@ impl AppState {
 
         // Capture UI state (use scroll offset for backward compatibility)
         let ui_state = UiState::with_state(
-            self.scroll.offset(),
+            self.display.scroll.offset(),
             self.input_state.text().to_string(),
             self.input_state.cursor_position(),
         );
@@ -2171,7 +2146,7 @@ impl AppState {
 
         // Restore UI state if available
         if let Some(ui_state) = session.ui_state() {
-            self.scroll.restore_offset(ui_state.scroll_offset());
+            self.display.scroll.restore_offset(ui_state.scroll_offset());
             self.input_state
                 .set_text(ui_state.input_buffer().to_string());
             self.input_state
@@ -2655,7 +2630,7 @@ impl AppState {
     ///
     /// This creates a streaming entry in the timeline.
     pub fn set_streaming(&mut self, _streaming: bool) {
-        self.loading = true;
+        self.display.loading = true;
 
         // Add streaming entry to timeline
         if self.timeline.try_push_streaming().is_err() {
@@ -2681,7 +2656,7 @@ impl AppState {
     pub fn finalize_streaming_as_message(&mut self) {
         // Finalize timeline streaming entry
         self.timeline.finalize_streaming_as_message();
-        self.loading = false;
+        self.display.loading = false;
         self.dirty.messages = true;
     }
 
@@ -2733,8 +2708,8 @@ impl AppState {
         self.reset_tool_loop();
         self.reset_token_budget();
         self.thinking_buffer.clear();
-        self.scroll = crate::tui::scroll::ScrollState::new();
-        self.loading = false;
+        self.display.scroll = crate::tui::scroll::ScrollState::new();
+        self.display.loading = false;
         self.streaming_rx = None;
         self.dirty.messages = true;
         self.mark_session_dirty();
@@ -3184,7 +3159,7 @@ impl AppState {
 
     /// Sets the current model name for cost tracking.
     pub fn set_current_model(&mut self, model: String) {
-        self.current_model = model;
+        self.model_config.current_model = model;
     }
 
     /// Returns a reference to the cost tracker.
@@ -3207,12 +3182,12 @@ impl AppState {
     /// Returns the multi-model client, if configured.
     #[must_use]
     pub fn multi_model(&self) -> Option<&MultiModelClient> {
-        self.multi_model.as_ref()
+        self.model_config.multi_model.as_ref()
     }
 
     /// Sets the multi-model client for provider-aware model switching.
     pub fn set_multi_model(&mut self, client: MultiModelClient) {
-        self.multi_model = Some(client);
+        self.model_config.multi_model = Some(client);
     }
 
     /// Returns a formatted cost summary for display.
@@ -3243,39 +3218,39 @@ impl AppState {
 
     /// Sets the memory store.
     pub fn set_memory_store(&mut self, store: crate::memory::store::MemoryStore) {
-        self.memory_store = Some(store);
+        self.model_config.memory_store = Some(store);
     }
 
     /// Returns a reference to the memory store.
     #[must_use]
     pub fn memory_store(&self) -> Option<&crate::memory::store::MemoryStore> {
-        self.memory_store.as_ref()
+        self.model_config.memory_store.as_ref()
     }
 
     /// Returns a mutable reference to the memory store.
     pub fn memory_store_mut(&mut self) -> Option<&mut crate::memory::store::MemoryStore> {
-        self.memory_store.as_mut()
+        self.model_config.memory_store.as_mut()
     }
 
     /// Sets the reasoning effort level.
     pub fn set_effort(&mut self, effort: EffortLevel) {
-        self.effort = effort;
+        self.model_config.effort = effort;
     }
 
     /// Sets the explicit thinking budget (overrides effort level).
     pub fn set_thinking_budget(&mut self, budget: Option<u32>) {
-        self.thinking_budget = budget;
+        self.model_config.thinking_budget = budget;
     }
 
     /// Sets the system prompt text for API requests.
     pub fn set_system_prompt(&mut self, prompt: Option<String>) {
-        self.system_prompt = prompt;
+        self.model_config.system_prompt = prompt;
     }
 
     /// Returns the current effort level.
     #[must_use]
     pub fn effort(&self) -> EffortLevel {
-        self.effort
+        self.model_config.effort
     }
 
     /// Builds [`RequestOptions`] from the current state, gated by model capabilities.
@@ -3291,8 +3266,9 @@ impl AppState {
         // Determine thinking config
         let thinking = if caps.supports_thinking {
             let budget = self
+                .model_config
                 .thinking_budget
-                .or_else(|| self.effort.thinking_budget());
+                .or_else(|| self.model_config.effort.thinking_budget());
             budget.map(|b| ThinkingConfig {
                 config_type: "enabled".to_string(),
                 budget_tokens: b,
@@ -3303,11 +3279,12 @@ impl AppState {
 
         // Build system prompt text, appending memory if available
         let mut prompt_text = self
+            .model_config
             .system_prompt
             .as_deref()
             .unwrap_or_default()
             .to_string();
-        if let Some(store) = &self.memory_store {
+        if let Some(store) = &self.model_config.memory_store {
             let memory_text = store.render_for_system_prompt();
             if !memory_text.is_empty() {
                 if !prompt_text.is_empty() {
@@ -3405,7 +3382,7 @@ mod tests {
     fn test_restore_from_session_without_ui_state() {
         let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
         // Set some initial state
-        state.scroll.restore_offset(100);
+        state.display.scroll.restore_offset(100);
         *state.input_mut() = "existing".to_string();
         state.input_state.set_cursor_position(8);
 
@@ -3424,7 +3401,7 @@ mod tests {
     #[test]
     fn test_to_session_preserves_ui_state() {
         let mut state = AppState::new(PathBuf::from("/project"), false, ParallelMode::Enabled);
-        state.scroll.restore_offset(42);
+        state.display.scroll.restore_offset(42);
         *state.input_mut() = "draft text".to_string();
         state.input_state.set_cursor_position(5);
 
@@ -3441,7 +3418,7 @@ mod tests {
         // Create state with data
         let mut state = AppState::new(PathBuf::from("/project"), false, ParallelMode::Enabled);
         state.add_message(test_message(Role::User, "Test message"));
-        state.scroll.restore_offset(100);
+        state.display.scroll.restore_offset(100);
         *state.input_mut() = "unsent input".to_string();
         state.input_state.set_cursor_position(6);
 

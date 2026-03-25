@@ -34,7 +34,7 @@
 
 use crate::api::tokens::estimate_messages_tokens;
 use crate::api::AnthropicClient;
-use crate::types::{ApiMessageV2, Message, Role, StreamEvent};
+use crate::types::{ApiMessageV2, Role, StreamEvent};
 use anyhow::Result;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -223,17 +223,14 @@ impl ClaudeSummarizer {
             formatted_messages
         );
 
-        // Create the request message
-        let request_messages = vec![Message {
-            role: Role::User,
-            content: prompt,
-        }];
+        // Create the request message using V2 API
+        let request_messages = vec![ApiMessageV2::user(prompt)];
 
         // Create channel for streaming response
         let (tx, mut rx) = mpsc::channel::<StreamEvent>(64);
 
-        // Make the API request
-        self.client.stream_message(&request_messages, tx).await?;
+        // Make the API request via V2 streaming (no tools needed for summarization)
+        self.client.stream_message_v2(&request_messages, tx).await?;
 
         // Collect the response content
         let mut response = String::new();
@@ -1016,5 +1013,22 @@ mod tests {
     #[should_panic(expected = "Auto-compact threshold must be between 0.0 and 1.0")]
     fn test_with_auto_compact_threshold_rejects_out_of_range() {
         let _config = CompactionConfig::new().with_auto_compact_threshold(1.5);
+    }
+
+    #[test]
+    fn test_summarizer_uses_v2_message_type() {
+        // Verify that summarization builds ApiMessageV2 (not legacy Message).
+        // This documents the V1→V2 migration: compaction now uses
+        // stream_message_v2 which accepts ApiMessageV2.
+        let msg = ApiMessageV2::user("Summarize this conversation");
+        assert_eq!(msg.role, Role::User);
+        match &msg.content {
+            crate::types::MessageContent::Text(t) => {
+                assert!(t.contains("Summarize"));
+            }
+            crate::types::MessageContent::Blocks(_) => {
+                panic!("ApiMessageV2::user() should produce Text content");
+            }
+        }
     }
 }
