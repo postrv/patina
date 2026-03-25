@@ -489,3 +489,183 @@ impl SessionManager {
         self.save(&forked).await
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::session::Session;
+    use crate::types::Message;
+    use tempfile::TempDir;
+
+    fn make_session(working_dir: PathBuf) -> Session {
+        let mut session = Session::new(working_dir);
+        session.add_message(Message {
+            role: crate::types::Role::User,
+            content: "Hello".to_string(),
+        });
+        session.add_message(Message {
+            role: crate::types::Role::Assistant,
+            content: "Hi there!".to_string(),
+        });
+        session
+    }
+
+    #[tokio::test]
+    async fn test_save_and_load_round_trip() {
+        let dir = TempDir::new().unwrap();
+        let mgr = SessionManager::new(dir.path().to_path_buf());
+        let session = make_session(PathBuf::from("/tmp/test"));
+
+        let id = mgr.save(&session).await.unwrap();
+        assert!(!id.is_empty());
+
+        let loaded = mgr.load(&id).await.unwrap();
+        assert_eq!(loaded.messages().len(), 2);
+        assert_eq!(loaded.messages()[0].content, "Hello");
+        assert_eq!(loaded.messages()[1].content, "Hi there!");
+    }
+
+    #[tokio::test]
+    async fn test_load_nonexistent_returns_error() {
+        let dir = TempDir::new().unwrap();
+        let mgr = SessionManager::new(dir.path().to_path_buf());
+
+        let result = mgr.load("nonexistent-id").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_load_corrupted_integrity_fails() {
+        let dir = TempDir::new().unwrap();
+        let mgr = SessionManager::new(dir.path().to_path_buf());
+        let session = make_session(PathBuf::from("/tmp/test"));
+
+        let id = mgr.save(&session).await.unwrap();
+
+        // Corrupt the file
+        let path = dir.path().join(format!("{id}.json"));
+        let mut content = tokio::fs::read_to_string(&path).await.unwrap();
+        content = content.replace("Hello", "CORRUPTED");
+        tokio::fs::write(&path, &content).await.unwrap();
+
+        let result = mgr.load(&id).await;
+        assert!(
+            result.is_err(),
+            "Corrupted session should fail integrity check"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_list_sessions() {
+        let dir = TempDir::new().unwrap();
+        let mgr = SessionManager::new(dir.path().to_path_buf());
+
+        // Empty dir
+        let ids = mgr.list().await.unwrap();
+        assert!(ids.is_empty());
+
+        // Save two sessions
+        let s1 = make_session(PathBuf::from("/tmp/a"));
+        let s2 = make_session(PathBuf::from("/tmp/b"));
+        let id1 = mgr.save(&s1).await.unwrap();
+        let id2 = mgr.save(&s2).await.unwrap();
+
+        let ids = mgr.list().await.unwrap();
+        assert_eq!(ids.len(), 2);
+        assert!(ids.contains(&id1));
+        assert!(ids.contains(&id2));
+    }
+
+    #[tokio::test]
+    async fn test_delete_session() {
+        let dir = TempDir::new().unwrap();
+        let mgr = SessionManager::new(dir.path().to_path_buf());
+        let session = make_session(PathBuf::from("/tmp/test"));
+
+        let id = mgr.save(&session).await.unwrap();
+        assert!(mgr.load(&id).await.is_ok());
+
+        mgr.delete(&id).await.unwrap();
+        assert!(mgr.load(&id).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_update_session() {
+        let dir = TempDir::new().unwrap();
+        let mgr = SessionManager::new(dir.path().to_path_buf());
+        let session = make_session(PathBuf::from("/tmp/test"));
+
+        let id = mgr.save(&session).await.unwrap();
+
+        // Add a message and update
+        let mut updated = mgr.load(&id).await.unwrap();
+        updated.add_message(Message {
+            role: crate::types::Role::User,
+            content: "Follow-up".to_string(),
+        });
+        mgr.update(&id, &updated).await.unwrap();
+
+        let reloaded = mgr.load(&id).await.unwrap();
+        assert_eq!(reloaded.messages().len(), 3);
+        assert_eq!(reloaded.messages()[2].content, "Follow-up");
+    }
+
+    #[tokio::test]
+    async fn test_fork_session() {
+        let dir = TempDir::new().unwrap();
+        let mgr = SessionManager::new(dir.path().to_path_buf());
+        let session = make_session(PathBuf::from("/tmp/test"));
+
+        let source_id = mgr.save(&session).await.unwrap();
+        let fork_id = mgr
+            .fork(&source_id, Some("experiment".to_string()))
+            .await
+            .unwrap();
+
+        assert_ne!(source_id, fork_id);
+
+        let forked = mgr.load(&fork_id).await.unwrap();
+        assert_eq!(forked.messages().len(), 2);
+        assert_eq!(forked.parent_session_id(), Some(source_id.as_str()));
+        assert_eq!(forked.branch_name(), Some("experiment"));
+    }
+
+    #[tokio::test]
+    async fn test_find_latest() {
+        let dir = TempDir::new().unwrap();
+        let mgr = SessionManager::new(dir.path().to_path_buf());
+
+        // Empty
+        assert!(mgr.find_latest().await.unwrap().is_none());
+
+        let s1 = make_session(PathBuf::from("/tmp/a"));
+        let _id1 = mgr.save(&s1).await.unwrap();
+
+        // Small delay to ensure different timestamps
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+
+        let s2 = make_session(PathBuf::from("/tmp/b"));
+        let id2 = mgr.save(&s2).await.unwrap();
+
+        let latest = mgr.find_latest().await.unwrap();
+        assert!(latest.is_some());
+        assert_eq!(latest.unwrap().0, id2);
+    }
+
+    #[tokio::test]
+    async fn test_list_nonexistent_dir() {
+        let mgr = SessionManager::new(PathBuf::from("/tmp/patina-test-nonexistent-dir"));
+        let ids = mgr.list().await.unwrap();
+        assert!(ids.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_invalid_session_id_rejected() {
+        let dir = TempDir::new().unwrap();
+        let mgr = SessionManager::new(dir.path().to_path_buf());
+
+        // Path traversal attempt
+        assert!(mgr.load("../../../etc/passwd").await.is_err());
+        assert!(mgr.delete("../escape").await.is_err());
+    }
+}

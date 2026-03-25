@@ -428,6 +428,7 @@ impl AppState {
                 compaction_metrics: Arc::new(CompactionMetrics::new()),
                 compaction_requested: false,
                 compaction_custom_instructions: None,
+                consecutive_compaction_failures: 0,
             },
             plugin_registry,
             agent_panel: AgentPanelState::new(subagent_spawner),
@@ -1994,8 +1995,19 @@ impl AppState {
         let current_tokens = self.estimate_conversation_tokens();
         let threshold_tokens = (context_limit as f64 * f64::from(threshold)) as usize;
 
-        // Check for a manual compaction request (bypasses threshold)
+        // Check for a manual compaction request (bypasses threshold and circuit breaker)
         let forced = self.compression.take_compaction_request().is_some();
+
+        // Manual compaction resets the circuit breaker
+        if forced {
+            self.compression.reset_circuit_breaker();
+        }
+
+        // Circuit breaker: skip auto-compaction after too many consecutive failures
+        if !forced && self.compression.is_compaction_circuit_open() {
+            tracing::warn!("Compaction circuit breaker open — skipping auto-compaction");
+            return Ok(false);
+        }
 
         // Check if we're under threshold and no forced compaction
         if !forced && current_tokens < threshold_tokens {
@@ -2064,11 +2076,17 @@ impl AppState {
                 // Update compaction UI
                 self.complete_compaction(after_tokens);
 
+                // Reset circuit breaker on success
+                self.compression.record_compaction_success();
+
                 Ok(true)
             }
             Err(e) => {
                 tracing::error!(error = %e, "Compaction failed");
                 self.fail_compaction();
+
+                // Record failure for circuit breaker
+                self.compression.record_compaction_failure();
 
                 // Return error but don't fail the operation
                 Err(e)

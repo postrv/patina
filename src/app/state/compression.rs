@@ -49,6 +49,10 @@ pub struct CompressionState {
 
     /// Optional custom instructions for the next compaction (set by `/compact`).
     pub(crate) compaction_custom_instructions: Option<String>,
+
+    /// Consecutive compaction failure count for circuit breaker.
+    /// After 3 failures, auto-compaction is skipped until reset.
+    pub(crate) consecutive_compaction_failures: u8,
 }
 
 impl CompressionState {
@@ -270,6 +274,42 @@ impl CompressionState {
             None
         }
     }
+
+    /// Maximum consecutive compaction failures before the circuit breaker trips.
+    const CIRCUIT_BREAKER_THRESHOLD: u8 = 3;
+
+    /// Returns whether the compaction circuit breaker has tripped.
+    ///
+    /// After 3 consecutive compaction failures, auto-compaction is disabled
+    /// to prevent infinite retry loops. Manual `/compact` resets the breaker.
+    #[must_use]
+    pub fn is_compaction_circuit_open(&self) -> bool {
+        self.consecutive_compaction_failures >= Self::CIRCUIT_BREAKER_THRESHOLD
+    }
+
+    /// Records a compaction failure, incrementing the failure counter.
+    pub fn record_compaction_failure(&mut self) {
+        self.consecutive_compaction_failures =
+            self.consecutive_compaction_failures.saturating_add(1);
+        if self.is_compaction_circuit_open() {
+            tracing::warn!(
+                "Compaction circuit breaker tripped after {} consecutive failures",
+                self.consecutive_compaction_failures
+            );
+        }
+    }
+
+    /// Records a compaction success, resetting the failure counter.
+    pub fn record_compaction_success(&mut self) {
+        self.consecutive_compaction_failures = 0;
+    }
+
+    /// Resets the circuit breaker, re-enabling auto-compaction.
+    ///
+    /// Called when the user manually triggers `/compact` to override.
+    pub fn reset_circuit_breaker(&mut self) {
+        self.consecutive_compaction_failures = 0;
+    }
 }
 
 #[cfg(test)]
@@ -293,6 +333,7 @@ mod tests {
             token_budget: TokenBudget::new(100_000),
             compaction_requested: false,
             compaction_custom_instructions: None,
+            consecutive_compaction_failures: 0,
         }
     }
 
@@ -463,5 +504,63 @@ mod tests {
     fn test_take_compaction_request_returns_none_when_not_requested() {
         let mut state = make_state();
         assert_eq!(state.take_compaction_request(), None);
+    }
+
+    #[test]
+    fn test_circuit_breaker_initially_closed() {
+        let state = make_state();
+        assert!(!state.is_compaction_circuit_open());
+    }
+
+    #[test]
+    fn test_circuit_breaker_trips_after_three_failures() {
+        let mut state = make_state();
+        assert!(!state.is_compaction_circuit_open());
+
+        state.record_compaction_failure();
+        assert!(!state.is_compaction_circuit_open());
+
+        state.record_compaction_failure();
+        assert!(!state.is_compaction_circuit_open());
+
+        state.record_compaction_failure();
+        assert!(state.is_compaction_circuit_open());
+    }
+
+    #[test]
+    fn test_circuit_breaker_success_resets_counter() {
+        let mut state = make_state();
+        state.record_compaction_failure();
+        state.record_compaction_failure();
+        assert!(!state.is_compaction_circuit_open());
+
+        state.record_compaction_success();
+        // Two more failures should not trip it since counter was reset
+        state.record_compaction_failure();
+        state.record_compaction_failure();
+        assert!(!state.is_compaction_circuit_open());
+    }
+
+    #[test]
+    fn test_circuit_breaker_manual_reset() {
+        let mut state = make_state();
+        state.record_compaction_failure();
+        state.record_compaction_failure();
+        state.record_compaction_failure();
+        assert!(state.is_compaction_circuit_open());
+
+        state.reset_circuit_breaker();
+        assert!(!state.is_compaction_circuit_open());
+    }
+
+    #[test]
+    fn test_circuit_breaker_saturating_add() {
+        let mut state = make_state();
+        // Should not overflow even with many failures
+        for _ in 0..300 {
+            state.record_compaction_failure();
+        }
+        assert!(state.is_compaction_circuit_open());
+        assert_eq!(state.consecutive_compaction_failures, 255);
     }
 }
