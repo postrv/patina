@@ -27,81 +27,8 @@ use ratatui::{
 
 use crate::tui::theme::PatinaTheme;
 
-/// State for the tool block widget.
-#[derive(Debug, Clone)]
-pub struct ToolBlockState {
-    /// Name of the tool being executed (e.g., "bash", "read_file").
-    tool_name: String,
-
-    /// Input provided to the tool (e.g., command, file path).
-    tool_input: String,
-
-    /// Result of tool execution, if complete.
-    result: Option<String>,
-
-    /// Whether the result represents an error.
-    is_error: bool,
-}
-
-impl ToolBlockState {
-    /// Creates a new tool block state.
-    ///
-    /// # Arguments
-    ///
-    /// * `tool_name` - Name of the tool (e.g., "bash", "read_file")
-    /// * `tool_input` - Input provided to the tool
-    #[must_use]
-    pub fn new(tool_name: impl Into<String>, tool_input: impl Into<String>) -> Self {
-        Self {
-            tool_name: tool_name.into(),
-            tool_input: tool_input.into(),
-            result: None,
-            is_error: false,
-        }
-    }
-
-    /// Returns the tool name.
-    #[must_use]
-    pub fn tool_name(&self) -> &str {
-        &self.tool_name
-    }
-
-    /// Returns the tool input.
-    #[must_use]
-    pub fn tool_input(&self) -> &str {
-        &self.tool_input
-    }
-
-    /// Returns the result, if any.
-    #[must_use]
-    pub fn result(&self) -> Option<&str> {
-        self.result.as_deref()
-    }
-
-    /// Returns whether this is an error result.
-    #[must_use]
-    pub fn is_error(&self) -> bool {
-        self.is_error
-    }
-
-    /// Returns whether the tool execution is complete.
-    #[must_use]
-    pub fn is_complete(&self) -> bool {
-        self.result.is_some()
-    }
-
-    /// Sets the result of tool execution.
-    pub fn set_result(&mut self, result: impl Into<String>) {
-        self.result = Some(result.into());
-        self.is_error = false;
-    }
-
-    /// Sets an error result.
-    pub fn set_error(&mut self, error: impl Into<String>) {
-        self.result = Some(error.into());
-        self.is_error = true;
-    }
-}
+// Re-export state type from the shared module
+pub use crate::types::ui_state::ToolBlockState;
 
 /// Widget for rendering a tool execution block.
 pub struct ToolBlockWidget<'a> {
@@ -118,9 +45,9 @@ impl<'a> ToolBlockWidget<'a> {
 
     /// Renders the header line with tool icon and name.
     fn render_header(&self) -> Line<'static> {
-        let icon = if self.state.is_error { "✗" } else { "⚙" };
+        let icon = if self.state.is_error() { "✗" } else { "⚙" };
 
-        let header_style = if self.state.is_error {
+        let header_style = if self.state.is_error() {
             PatinaTheme::error().add_modifier(Modifier::BOLD)
         } else {
             PatinaTheme::tool_header()
@@ -128,7 +55,7 @@ impl<'a> ToolBlockWidget<'a> {
 
         Line::from(vec![
             Span::styled(format!(" {} ", icon), header_style),
-            Span::styled(self.state.tool_name.clone(), header_style),
+            Span::styled(self.state.tool_name().to_string(), header_style),
         ])
     }
 
@@ -137,7 +64,7 @@ impl<'a> ToolBlockWidget<'a> {
         Line::from(vec![
             Span::styled("  › ", PatinaTheme::prompt()),
             Span::styled(
-                self.state.tool_input.clone(),
+                self.state.tool_input().to_string(),
                 Style::default().fg(PatinaTheme::TOOL_CONTENT),
             ),
         ])
@@ -147,11 +74,11 @@ impl<'a> ToolBlockWidget<'a> {
     fn render_result(&self) -> Vec<Line<'static>> {
         let mut lines = Vec::new();
 
-        if let Some(result) = &self.state.result {
+        if let Some(result) = self.state.result() {
             // Separator
             lines.push(Line::from(""));
 
-            let result_style = if self.state.is_error {
+            let result_style = if self.state.is_error() {
                 PatinaTheme::error()
             } else {
                 Style::default().fg(PatinaTheme::TOOL_CONTENT)

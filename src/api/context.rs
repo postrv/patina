@@ -139,7 +139,7 @@ pub async fn compact_or_truncate_context(
     preserve_recent: usize,
 ) -> Vec<ApiMessageV2> {
     // Try compaction first
-    let compactor = ContextCompactor::new_mock();
+    let compactor = ContextCompactor::new_noop();
     let config = CompactionConfig {
         target_tokens: max_tokens,
         preserve_recent,

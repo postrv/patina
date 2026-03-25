@@ -44,7 +44,7 @@ fn user_with_tool_result(tool_id: &str, result: &str) -> ApiMessageV2 {
 /// This is critical for maintaining conversation coherence.
 #[tokio::test]
 async fn test_compact_preserves_system_message() {
-    let compactor = ContextCompactor::new_mock();
+    let compactor = ContextCompactor::new_noop();
     let messages = vec![
         user("You are a helpful assistant for project X..."),
         assistant("Understood. How can I help?"),
@@ -78,7 +78,7 @@ async fn test_compact_preserves_system_message() {
 /// not just dropped like truncation does.
 #[tokio::test]
 async fn test_compact_summarizes_old_messages() {
-    let compactor = ContextCompactor::new_mock();
+    let compactor = ContextCompactor::new_noop();
 
     // Create a long conversation with substantial content that exceeds token budget
     let long_response = "Here is a detailed explanation of how to implement this feature. First, you need to understand the core concepts involved. Then you'll want to set up the proper data structures and algorithms. After that, you can proceed with the actual implementation. Make sure to add proper error handling and logging throughout.";
@@ -141,7 +141,7 @@ async fn test_compact_summarizes_old_messages() {
 /// This ensures the model has immediate context for the current task.
 #[tokio::test]
 async fn test_compact_preserves_recent_messages() {
-    let compactor = ContextCompactor::new_mock();
+    let compactor = ContextCompactor::new_noop();
 
     let messages = vec![
         user("System prompt"),
@@ -182,7 +182,7 @@ async fn test_compact_preserves_recent_messages() {
 /// Compacted output must respect the configured token budget.
 #[tokio::test]
 async fn test_compact_respects_token_budget() {
-    let compactor = ContextCompactor::new_mock();
+    let compactor = ContextCompactor::new_noop();
 
     // Create a very long conversation
     let mut messages = vec![user("System prompt for a large project")];
@@ -222,7 +222,7 @@ async fn test_compact_respects_token_budget() {
 /// The compacted conversation must maintain alternating user/assistant roles.
 #[tokio::test]
 async fn test_compact_maintains_conversation_coherence() {
-    let compactor = ContextCompactor::new_mock();
+    let compactor = ContextCompactor::new_noop();
 
     let messages = vec![
         user("System prompt"),
@@ -267,7 +267,7 @@ async fn test_compact_maintains_conversation_coherence() {
 /// Separating them would break the conversation structure.
 #[tokio::test]
 async fn test_compact_handles_tool_use_pairs() {
-    let compactor = ContextCompactor::new_mock();
+    let compactor = ContextCompactor::new_noop();
 
     let messages = vec![
         user("System prompt"),
@@ -323,7 +323,7 @@ async fn test_compact_handles_tool_use_pairs() {
 /// The summary should be structured as a timeline with key decisions/outcomes.
 #[tokio::test]
 async fn test_compact_generates_timeline_summary() {
-    let compactor = ContextCompactor::new_mock();
+    let compactor = ContextCompactor::new_noop();
 
     // Use longer messages to ensure we exceed the token budget
     let detailed_response = "I have completed this task successfully. The implementation includes proper error handling, comprehensive logging, thorough documentation, and unit tests covering edge cases.";
@@ -381,7 +381,7 @@ async fn test_compact_generates_timeline_summary() {
 /// rather than creating nested summaries.
 #[tokio::test]
 async fn test_compact_merges_adjacent_summaries() {
-    let compactor = ContextCompactor::new_mock();
+    let compactor = ContextCompactor::new_noop();
 
     // Simulate a conversation that was already compacted once
     let messages = vec![
@@ -428,7 +428,7 @@ async fn test_compact_merges_adjacent_summaries() {
 /// compaction should return it unchanged.
 #[tokio::test]
 async fn test_compact_idempotent_when_under_budget() {
-    let compactor = ContextCompactor::new_mock();
+    let compactor = ContextCompactor::new_noop();
 
     let messages = vec![
         user("System prompt"),
@@ -474,7 +474,7 @@ async fn test_compact_idempotent_when_under_budget() {
 /// Compaction should report how many tokens were saved.
 #[tokio::test]
 async fn test_compact_reports_token_savings() {
-    let compactor = ContextCompactor::new_mock();
+    let compactor = ContextCompactor::new_noop();
 
     // Create a conversation with significant content that definitely exceeds budget
     let long_padding = "x".repeat(200); // Add 200 chars = 50 tokens to each message

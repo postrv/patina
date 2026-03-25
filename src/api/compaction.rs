@@ -103,15 +103,15 @@ Previous conversation to summarize:
 /// Trait for generating conversation summaries.
 ///
 /// This trait abstracts the summarization logic, allowing different
-/// implementations for testing (mock) and production (Claude API).
+/// implementations for no-op/default and production (Claude API).
 ///
 /// # Example
 ///
 /// ```rust,ignore
-/// use patina::api::compaction::{Summarizer, MockSummarizer, CompactionConfig};
+/// use patina::api::compaction::{Summarizer, NoOpSummarizer, CompactionConfig};
 /// use patina::types::ApiMessageV2;
 ///
-/// let summarizer = MockSummarizer;
+/// let summarizer = NoOpSummarizer;
 /// let messages = vec![ApiMessageV2::user("Hello")];
 /// let config = CompactionConfig::default();
 /// let summary = summarizer.summarize(&messages, &config).await;
@@ -134,23 +134,25 @@ pub trait Summarizer: Send + Sync {
     ) -> impl std::future::Future<Output = String> + Send;
 }
 
-/// Mock summarizer for testing.
+/// No-op summarizer that returns empty summaries.
 ///
 /// Generates placeholder summaries without making API calls.
 /// Extracts key content from messages to create a timeline.
+/// Used as the default summarizer in production until a real
+/// LLM-backed summarizer is wired in.
 #[derive(Debug, Clone, Copy, Default)]
-pub struct MockSummarizer;
+pub struct NoOpSummarizer;
 
-impl Summarizer for MockSummarizer {
+impl Summarizer for NoOpSummarizer {
     async fn summarize(&self, messages: &[ApiMessageV2], config: &CompactionConfig) -> String {
-        generate_mock_summary(messages, config)
+        generate_noop_summary(messages, config)
     }
 }
 
 /// Claude API-based summarizer for production use.
 ///
 /// Uses the Anthropic API to generate intelligent summaries of conversations.
-/// Falls back to mock summarization if the API call fails (graceful degradation).
+/// Falls back to no-op summarization if the API call fails (graceful degradation).
 ///
 /// # Example
 ///
@@ -259,25 +261,25 @@ impl ClaudeSummarizer {
 impl Summarizer for ClaudeSummarizer {
     /// Generates a summary using the Claude API.
     ///
-    /// Falls back to mock summarization if the API call fails (graceful degradation).
+    /// Falls back to no-op summarization if the API call fails (graceful degradation).
     async fn summarize(&self, messages: &[ApiMessageV2], config: &CompactionConfig) -> String {
         match self.summarize_async(messages, config).await {
             Ok(summary) => summary,
             Err(e) => {
                 warn!(
                     error = %e,
-                    "Failed to generate Claude summary, falling back to mock summarization"
+                    "Failed to generate Claude summary, falling back to no-op summarization"
                 );
-                generate_mock_summary(messages, config)
+                generate_noop_summary(messages, config)
             }
         }
     }
 }
 
-/// Generates a mock summary for testing.
+/// Generates a no-op placeholder summary without API calls.
 ///
 /// Extracts key content from messages to create a summary based on the configured style.
-fn generate_mock_summary(messages: &[ApiMessageV2], config: &CompactionConfig) -> String {
+fn generate_noop_summary(messages: &[ApiMessageV2], config: &CompactionConfig) -> String {
     let mut summary_parts = Vec::new();
 
     // Check if any input is already a summary (to merge)
@@ -528,13 +530,13 @@ pub struct CompactionResult {
 /// # Example
 ///
 /// ```rust,ignore
-/// use patina::api::compaction::{ContextCompactor, MockSummarizer, CompactionConfig};
+/// use patina::api::compaction::{ContextCompactor, NoOpSummarizer, CompactionConfig};
 ///
-/// // Create a mock compactor for testing
-/// let compactor = ContextCompactor::new_mock();
+/// // Create a no-op compactor (default, no API calls)
+/// let compactor = ContextCompactor::new_noop();
 ///
 /// // Or with a custom summarizer
-/// let custom_compactor = ContextCompactor::with_summarizer(MockSummarizer);
+/// let custom_compactor = ContextCompactor::with_summarizer(NoOpSummarizer);
 /// ```
 #[derive(Debug)]
 pub struct ContextCompactor<S: Summarizer> {
@@ -542,15 +544,15 @@ pub struct ContextCompactor<S: Summarizer> {
     summarizer: S,
 }
 
-impl ContextCompactor<MockSummarizer> {
-    /// Creates a mock compactor for testing.
+impl ContextCompactor<NoOpSummarizer> {
+    /// Creates a no-op compactor with placeholder summaries.
     ///
-    /// The mock compactor generates placeholder summaries without
+    /// The no-op compactor generates placeholder summaries without
     /// making actual API calls.
     #[must_use]
-    pub fn new_mock() -> Self {
+    pub fn new_noop() -> Self {
         Self {
-            summarizer: MockSummarizer,
+            summarizer: NoOpSummarizer,
         }
     }
 }
@@ -697,9 +699,9 @@ impl<S: Summarizer> ContextCompactor<S> {
     }
 }
 
-impl Default for ContextCompactor<MockSummarizer> {
+impl Default for ContextCompactor<NoOpSummarizer> {
     fn default() -> Self {
-        Self::new_mock()
+        Self::new_noop()
     }
 }
 
@@ -753,8 +755,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_mock_summarizer_implements_trait() {
-        let summarizer = MockSummarizer;
+    async fn test_noop_summarizer_implements_trait() {
+        let summarizer = NoOpSummarizer;
         let messages = vec![
             ApiMessageV2::user("Hello"),
             ApiMessageV2::assistant("Hi there!"),
@@ -773,9 +775,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_context_compactor_new_mock() {
-        // Verify mock compactor can be created and used
-        let compactor = ContextCompactor::new_mock();
+    async fn test_context_compactor_new_noop() {
+        // Verify no-op compactor can be created and used
+        let compactor = ContextCompactor::new_noop();
         let messages = vec![ApiMessageV2::user("Test")];
         let config = CompactionConfig::default();
         // Should not panic
@@ -846,7 +848,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_compact_empty_messages() {
-        let compactor = ContextCompactor::new_mock();
+        let compactor = ContextCompactor::new_noop();
         let messages: Vec<ApiMessageV2> = vec![];
         let config = CompactionConfig::default();
         let result = compactor.compact(&messages, &config).await.unwrap();
@@ -856,7 +858,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_compact_short_conversation() {
-        let compactor = ContextCompactor::new_mock();
+        let compactor = ContextCompactor::new_noop();
         let messages = vec![
             ApiMessageV2::user("System"),
             ApiMessageV2::assistant("Ready"),
@@ -978,12 +980,12 @@ mod tests {
     #[test]
     fn test_claude_summarizer_graceful_degradation_pattern() {
         // Verify the Summarizer trait is implemented
-        // When API fails, it should fall back to mock summary
+        // When API fails, it should fall back to no-op summary
         // This is tested at the trait level, not the actual API call
         fn accepts_summarizer<S: Summarizer>(_s: S) {}
 
-        let mock = MockSummarizer;
-        accepts_summarizer(mock);
+        let noop = NoOpSummarizer;
+        accepts_summarizer(noop);
 
         // ClaudeSummarizer would also satisfy this if we had a client
         // accepts_summarizer(ClaudeSummarizer::new(client));

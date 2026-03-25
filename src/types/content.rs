@@ -32,6 +32,7 @@
 //! }
 //! ```
 
+use crate::tools::ToolResult;
 use crate::types::image::ImageSource;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -269,6 +270,38 @@ impl ToolResultBlock {
             tool_use_id: tool_use_id.into(),
             content: error.into(),
             is_error: true,
+        }
+    }
+
+    /// Creates a `ToolResultBlock` from a [`ToolResult`] enum value.
+    ///
+    /// Maps each variant to the appropriate success/error result:
+    /// - `Success` -> success block with the output content
+    /// - `Error` -> error block with the error message
+    /// - `Cancelled` -> error block with cancellation message
+    /// - `NeedsPermission` -> error block with permission requirement
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use patina::types::content::ToolResultBlock;
+    /// use patina::tools::ToolResult;
+    ///
+    /// let result = ToolResult::Success("file contents".to_string());
+    /// let block = ToolResultBlock::from_result("toolu_01abc", &result);
+    /// assert_eq!(block.content, "file contents");
+    /// assert!(!block.is_error);
+    /// ```
+    #[must_use]
+    pub fn from_result(tool_use_id: impl Into<String>, result: &ToolResult) -> Self {
+        let id = tool_use_id.into();
+        match result {
+            ToolResult::Success(output) => Self::success(id, output),
+            ToolResult::Error(msg) => Self::error(id, msg),
+            ToolResult::Cancelled => Self::error(id, "Tool execution cancelled"),
+            ToolResult::NeedsPermission(perm) => {
+                Self::error(id, format!("Permission required: {perm:?}"))
+            }
         }
     }
 }
@@ -753,5 +786,68 @@ mod tests {
         let tool_use = ContentBlock::tool_use("id", "bash", json!({}));
         assert!(!tool_use.is_thinking());
         assert!(tool_use.as_thinking().is_none());
+    }
+
+    // =========================================================================
+    // ToolResultBlock::from_result tests
+    // =========================================================================
+
+    #[test]
+    fn test_from_result_success() {
+        use crate::tools::ToolResult;
+
+        let result = ToolResult::Success("output data".to_string());
+        let block = ToolResultBlock::from_result("toolu_success", &result);
+
+        assert_eq!(block.tool_use_id, "toolu_success");
+        assert_eq!(block.content, "output data");
+        assert!(!block.is_error);
+    }
+
+    #[test]
+    fn test_from_result_error() {
+        use crate::tools::ToolResult;
+
+        let result = ToolResult::Error("something went wrong".to_string());
+        let block = ToolResultBlock::from_result("toolu_error", &result);
+
+        assert_eq!(block.tool_use_id, "toolu_error");
+        assert_eq!(block.content, "something went wrong");
+        assert!(block.is_error);
+    }
+
+    #[test]
+    fn test_from_result_cancelled() {
+        use crate::tools::ToolResult;
+
+        let result = ToolResult::Cancelled;
+        let block = ToolResultBlock::from_result("toolu_cancel", &result);
+
+        assert_eq!(block.tool_use_id, "toolu_cancel");
+        assert!(
+            block.content.contains("cancelled"),
+            "Expected cancellation message, got: {}",
+            block.content
+        );
+        assert!(block.is_error);
+    }
+
+    #[test]
+    fn test_from_result_needs_permission() {
+        use crate::permissions::PermissionRequest;
+        use crate::tools::ToolResult;
+
+        let perm =
+            PermissionRequest::new("bash", Some("rm -rf /tmp/test"), "Delete temporary files");
+        let result = ToolResult::NeedsPermission(perm);
+        let block = ToolResultBlock::from_result("toolu_perm", &result);
+
+        assert_eq!(block.tool_use_id, "toolu_perm");
+        assert!(
+            block.content.contains("Permission required"),
+            "Expected permission message, got: {}",
+            block.content
+        );
+        assert!(block.is_error);
     }
 }

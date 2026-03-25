@@ -2,7 +2,7 @@ use crate::api::TokenBudget;
 use crate::context::compression::{CompactionMetrics, CompressionOrchestrator};
 use crate::mcp::connection::McpConnection;
 use crate::narsil::context::ContextSuggestion;
-use crate::tui::widgets::CompactionProgressState;
+use crate::types::ui_state::CompactionProgressState;
 use std::sync::Arc;
 
 /// Compression, context injection, and compaction state extracted from AppState.
@@ -240,7 +240,7 @@ impl CompressionState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tui::widgets::CompactionStatus;
+    use crate::types::ui_state::CompactionStatus;
 
     /// Helper to build a default `CompressionState` for testing.
     fn make_state() -> CompressionState {

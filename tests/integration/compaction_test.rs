@@ -44,7 +44,7 @@ async fn test_compaction_end_to_end() {
     let original_tokens = estimate_messages_tokens(&messages);
 
     // Compact with aggressive settings
-    let compactor = ContextCompactor::new_mock();
+    let compactor = ContextCompactor::new_noop();
     let config = CompactionConfig {
         target_tokens: 500,
         preserve_recent: 2,
@@ -156,7 +156,7 @@ async fn test_compaction_with_tool_use() {
             ApiMessageV2::assistant("Created newfile.txt with the content 'hello'."),
         ];
 
-    let compactor = ContextCompactor::new_mock();
+    let compactor = ContextCompactor::new_noop();
     let config = CompactionConfig {
         target_tokens: 500,
         preserve_recent: 4,
@@ -201,7 +201,7 @@ async fn test_compaction_preserves_tool_pairs_in_recent() {
         ApiMessageV2::assistant("All tests passed successfully!"),
     ];
 
-    let compactor = ContextCompactor::new_mock();
+    let compactor = ContextCompactor::new_noop();
     let config = CompactionConfig {
         target_tokens: 300,
         preserve_recent: 4, // Should preserve the tool use pair
@@ -260,7 +260,7 @@ async fn test_compaction_summary_quality_timeline() {
         ApiMessageV2::assistant("Preparing deployment."),
     ];
 
-    let compactor = ContextCompactor::new_mock();
+    let compactor = ContextCompactor::new_noop();
     let config = CompactionConfig {
         target_tokens: 200,
         preserve_recent: 2,
@@ -342,7 +342,7 @@ async fn test_summary_styles() {
         SummaryStyle::BulletPoints,
         SummaryStyle::Narrative,
     ] {
-        let compactor = ContextCompactor::new_mock();
+        let compactor = ContextCompactor::new_noop();
         let config = CompactionConfig {
             target_tokens: 100,
             preserve_recent: 0,

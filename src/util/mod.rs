@@ -1,5 +1,7 @@
 //! Utility functions and helpers
 
+pub mod url_validation;
+
 use directories::ProjectDirs;
 use std::path::PathBuf;
 

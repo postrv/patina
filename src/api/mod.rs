@@ -23,7 +23,7 @@ pub use context::{
 
 // Re-export compaction types for convenience
 pub use compaction::{
-    CompactionConfig, CompactionResult, ContextCompactor, MockSummarizer, Summarizer, SummaryStyle,
+    CompactionConfig, CompactionResult, ContextCompactor, NoOpSummarizer, Summarizer, SummaryStyle,
 };
 
 use anyhow::Result;

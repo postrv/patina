@@ -22,6 +22,7 @@ pub mod conversation;
 pub mod image;
 pub mod message;
 pub mod stream;
+pub mod ui_state;
 
 // Re-export common types for convenience
 pub use config::Config;

@@ -27,164 +27,11 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Widget},
 };
-use std::fmt;
 
 use crate::tui::theme::PatinaTheme;
 
-/// Status of the compaction operation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum CompactionStatus {
-    /// No compaction in progress.
-    #[default]
-    Idle,
-    /// Compaction is currently running.
-    Compacting,
-    /// Compaction completed successfully.
-    Complete,
-    /// Compaction failed.
-    Failed,
-}
-
-impl fmt::Display for CompactionStatus {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Idle => write!(f, "Idle"),
-            Self::Compacting => write!(f, "Compacting..."),
-            Self::Complete => write!(f, "Complete"),
-            Self::Failed => write!(f, "Failed"),
-        }
-    }
-}
-
-/// State for the compaction progress widget.
-///
-/// Tracks the progress of a context compaction operation.
-#[derive(Debug, Clone)]
-pub struct CompactionProgressState {
-    /// Target token count after compaction.
-    target_tokens: usize,
-    /// Token count before compaction.
-    before_tokens: usize,
-    /// Token count after compaction (set when complete).
-    after_tokens: Option<usize>,
-    /// Current progress (0.0 to 1.0).
-    progress: f64,
-    /// Current status of the compaction.
-    status: CompactionStatus,
-    /// Whether this is an auto-triggered compaction (vs manual).
-    is_auto: bool,
-}
-
-impl CompactionProgressState {
-    /// Creates a new compaction progress state for manual compaction.
-    ///
-    /// # Arguments
-    ///
-    /// * `target_tokens` - Target token count after compaction
-    /// * `before_tokens` - Token count before compaction
-    #[must_use]
-    pub fn new(target_tokens: usize, before_tokens: usize) -> Self {
-        Self {
-            target_tokens,
-            before_tokens,
-            after_tokens: None,
-            progress: 0.0,
-            status: CompactionStatus::Idle,
-            is_auto: false,
-        }
-    }
-
-    /// Creates a new compaction progress state for auto-triggered compaction.
-    ///
-    /// This is used when compaction is automatically triggered due to
-    /// context limit approaching, rather than manually requested.
-    ///
-    /// # Arguments
-    ///
-    /// * `target_tokens` - Target token count after compaction
-    /// * `before_tokens` - Token count before compaction
-    #[must_use]
-    pub fn new_auto(target_tokens: usize, before_tokens: usize) -> Self {
-        Self {
-            target_tokens,
-            before_tokens,
-            after_tokens: None,
-            progress: 0.0,
-            status: CompactionStatus::Idle,
-            is_auto: true,
-        }
-    }
-
-    /// Returns the target token count.
-    #[must_use]
-    pub fn target_tokens(&self) -> usize {
-        self.target_tokens
-    }
-
-    /// Returns the token count before compaction.
-    #[must_use]
-    pub fn before_tokens(&self) -> usize {
-        self.before_tokens
-    }
-
-    /// Returns the token count after compaction, if available.
-    #[must_use]
-    pub fn after_tokens(&self) -> Option<usize> {
-        self.after_tokens
-    }
-
-    /// Sets the token count after compaction.
-    pub fn set_after_tokens(&mut self, tokens: usize) {
-        self.after_tokens = Some(tokens);
-    }
-
-    /// Returns the number of tokens saved by compaction.
-    ///
-    /// Returns `None` if compaction has not completed.
-    #[must_use]
-    pub fn saved_tokens(&self) -> Option<usize> {
-        self.after_tokens
-            .map(|after| self.before_tokens.saturating_sub(after))
-    }
-
-    /// Returns the current progress (0.0 to 1.0).
-    #[must_use]
-    pub fn progress(&self) -> f64 {
-        self.progress
-    }
-
-    /// Sets the current progress.
-    ///
-    /// The value is clamped to the range [0.0, 1.0].
-    pub fn set_progress(&mut self, progress: f64) {
-        self.progress = progress.clamp(0.0, 1.0);
-    }
-
-    /// Returns the current status.
-    #[must_use]
-    pub fn status(&self) -> CompactionStatus {
-        self.status
-    }
-
-    /// Sets the current status.
-    pub fn set_status(&mut self, status: CompactionStatus) {
-        self.status = status;
-    }
-
-    /// Returns whether this is an auto-triggered compaction.
-    ///
-    /// Auto compaction is triggered when the context approaches the limit,
-    /// as opposed to manual compaction requested by the user.
-    #[must_use]
-    pub fn is_auto(&self) -> bool {
-        self.is_auto
-    }
-
-    /// Sets whether this is an auto-triggered compaction.
-    pub fn set_auto(&mut self, is_auto: bool) {
-        self.is_auto = is_auto;
-    }
-}
+// Re-export state types from the shared module
+pub use crate::types::ui_state::{CompactionProgressState, CompactionStatus};
 
 /// Widget for displaying compaction progress.
 pub struct CompactionProgressWidget<'a> {
@@ -234,7 +81,7 @@ impl<'a> CompactionProgressWidget<'a> {
 
     /// Renders the status line with icon and text.
     pub fn render_status_line(&self) -> Line<'static> {
-        let (icon, status_text, style) = match self.state.status {
+        let (icon, status_text, style) = match self.state.status() {
             CompactionStatus::Idle => (
                 "○".to_string(),
                 "Idle",
@@ -246,7 +93,7 @@ impl<'a> CompactionProgressWidget<'a> {
                     .throbber
                     .map_or_else(|| "◐".to_string(), |c| c.to_string());
                 // Show "Auto-compacting..." for auto-triggered compaction
-                let text = if self.state.is_auto {
+                let text = if self.state.is_auto() {
                     "Auto-compacting context..."
                 } else {
                     "Compacting..."
@@ -273,7 +120,7 @@ impl<'a> CompactionProgressWidget<'a> {
 
     /// Renders the progress bar.
     fn render_progress_bar(&self, width: u16) -> Line<'static> {
-        let percent = (self.state.progress * 100.0).round() as u8;
+        let percent = (self.state.progress() * 100.0).round() as u8;
         let percent_str = format!("{:>3}%", percent);
 
         // Calculate bar width (leave room for brackets and percentage)
@@ -285,10 +132,10 @@ impl<'a> CompactionProgressWidget<'a> {
             ));
         }
 
-        let filled = (bar_width as f64 * self.state.progress).round() as usize;
+        let filled = (bar_width as f64 * self.state.progress()).round() as usize;
         let empty = bar_width.saturating_sub(filled);
 
-        let bar_style = match self.state.status {
+        let bar_style = match self.state.status() {
             CompactionStatus::Complete => Style::default().fg(PatinaTheme::SUCCESS),
             CompactionStatus::Failed => Style::default().fg(PatinaTheme::ERROR),
             _ => Style::default().fg(PatinaTheme::VERDIGRIS),
@@ -307,8 +154,8 @@ impl<'a> CompactionProgressWidget<'a> {
 
     /// Renders the token counts line.
     fn render_token_counts(&self) -> Line<'static> {
-        let before = Self::format_tokens(self.state.before_tokens);
-        let target = Self::format_tokens(self.state.target_tokens);
+        let before = Self::format_tokens(self.state.before_tokens());
+        let target = Self::format_tokens(self.state.target_tokens());
 
         let label_style = Style::default().fg(PatinaTheme::MUTED);
         let value_style = Style::default().fg(PatinaTheme::VERDIGRIS_BRIGHT);
@@ -323,14 +170,14 @@ impl<'a> CompactionProgressWidget<'a> {
 
     /// Renders the after/savings line (when complete).
     fn render_savings_line(&self) -> Option<Line<'static>> {
-        let after = self.state.after_tokens?;
+        let after = self.state.after_tokens()?;
         let saved = self.state.saved_tokens()?;
 
         let after_str = Self::format_tokens(after);
         let saved_str = Self::format_tokens(saved);
 
-        let savings_percent = if self.state.before_tokens > 0 {
-            (saved as f64 / self.state.before_tokens as f64 * 100.0).round() as usize
+        let savings_percent = if self.state.before_tokens() > 0 {
+            (saved as f64 / self.state.before_tokens() as f64 * 100.0).round() as usize
         } else {
             0
         };
@@ -375,7 +222,7 @@ impl Widget for CompactionProgressWidget<'_> {
         }
 
         // Determine layout based on available height
-        let has_savings = self.state.after_tokens.is_some();
+        let has_savings = self.state.after_tokens().is_some();
         let row_count = if has_savings { 4 } else { 3 };
 
         let constraints: Vec<Constraint> = (0..row_count)

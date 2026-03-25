@@ -44,12 +44,12 @@ use crate::permissions::{PermissionManager, PermissionRequest, PermissionRespons
 use crate::plugins::PluginRegistry;
 use crate::session::Session;
 use crate::tools::HookedToolExecutor;
-use crate::tui::scroll::ScrollState;
-use crate::tui::selection::{FocusArea, SelectionState};
-use crate::tui::widgets::{CompactionProgressState, ToolBlockState};
 use crate::types::config::EffortLevel;
 use crate::types::config::ParallelMode;
 use crate::types::content::StopReason;
+use crate::types::ui_state::{
+    CompactionProgressState, FocusArea, ScrollState, SelectionState, ToolBlockState,
+};
 use crate::types::{ApiMessageV2, Message, Role, Timeline};
 use anyhow::Result;
 use serde_json::Value;
@@ -1927,7 +1927,7 @@ impl AppState {
     /// }
     /// ```
     pub async fn maybe_compact(&mut self, threshold: f32, context_limit: usize) -> Result<bool> {
-        use crate::api::compaction::{CompactionConfig, ContextCompactor, MockSummarizer};
+        use crate::api::compaction::{CompactionConfig, ContextCompactor, NoOpSummarizer};
         use std::time::Instant;
 
         // Estimate current usage
@@ -1954,9 +1954,9 @@ impl AppState {
         let target_tokens = context_limit / 2; // Target 50% of context
         self.start_compaction(target_tokens, current_tokens, true);
 
-        // Uses MockSummarizer until the LlmProvider trait (Sprint 2) enables
+        // Uses NoOpSummarizer until the LlmProvider trait (Sprint 2) enables
         // wiring a real summarizer without coupling to AnthropicClient.
-        let compactor = ContextCompactor::<MockSummarizer>::new_mock();
+        let compactor = ContextCompactor::<NoOpSummarizer>::new_noop();
 
         let config = CompactionConfig {
             target_tokens,
@@ -4015,7 +4015,7 @@ mod tests {
             focus_area: FocusArea::Content,
         };
 
-        use crate::tui::selection::ContentPosition;
+        use crate::types::ui_state::ContentPosition;
         ui.selection.start(ContentPosition::new(0, 0));
         ui.selection.update(ContentPosition::new(1, 5));
         ui.selection.end();
@@ -4065,7 +4065,7 @@ mod tests {
 
     #[test]
     fn test_ui_selection_extract_text_single_line() {
-        use crate::tui::selection::ContentPosition;
+        use crate::types::ui_state::ContentPosition;
         let mut ui = UISelectionState {
             selection: SelectionState::new(),
             copy_pending: false,
@@ -4081,7 +4081,7 @@ mod tests {
 
     #[test]
     fn test_ui_selection_extract_text_multi_line() {
-        use crate::tui::selection::ContentPosition;
+        use crate::types::ui_state::ContentPosition;
         let mut ui = UISelectionState {
             selection: SelectionState::new(),
             copy_pending: false,
@@ -4104,7 +4104,7 @@ mod tests {
 
     #[test]
     fn test_ui_selection_extract_text_empty_cache() {
-        use crate::tui::selection::ContentPosition;
+        use crate::types::ui_state::ContentPosition;
         let mut ui = UISelectionState {
             selection: SelectionState::new(),
             copy_pending: false,

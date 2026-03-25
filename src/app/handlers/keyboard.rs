@@ -18,7 +18,7 @@ use tracing::{debug, info, warn};
 use crate::app::context::AppContext;
 use crate::app::dispatch::{EventHandler, Handled};
 use crate::app::events::AppEvent;
-use crate::tui::selection::{ContentPosition, FocusArea};
+use crate::types::ui_state::{ContentPosition, FocusArea};
 use crate::types::{Message, Role};
 
 /// Handles keyboard, mouse, and resize events.

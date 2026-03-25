@@ -1,4 +1,4 @@
-use crate::tui::selection::{FocusArea, SelectionState};
+use crate::types::ui_state::{FocusArea, SelectionState};
 use anyhow::Result;
 
 /// UI selection and copy state extracted from AppState.
@@ -173,7 +173,7 @@ impl UISelectionState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tui::selection::ContentPosition;
+    use crate::types::ui_state::ContentPosition;
 
     /// Helper to build a `UISelectionState` with the given cache lines and a
     /// selection already set (start → end, finished).

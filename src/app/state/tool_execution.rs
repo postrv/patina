@@ -1,7 +1,7 @@
 use crate::app::tool_loop::ToolLoop;
 use crate::permissions::{PermissionManager, PermissionRequest};
 use crate::tools::HookedToolExecutor;
-use crate::tui::widgets::ToolBlockState;
+use crate::types::ui_state::ToolBlockState;
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
 
