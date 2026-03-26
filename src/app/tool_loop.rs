@@ -954,42 +954,6 @@ pub fn format_tool_results_for_display(user_msg: &crate::types::ApiMessageV2) ->
     }
 }
 
-/// Completes tool execution and prepares the conversation for continuation.
-///
-/// This is the shared logic between `run_print_mode()` and
-/// [`AppContext::finish_tool_execution_and_continue`](super::context::AppContext::finish_tool_execution_and_continue).
-/// It:
-/// 1. Finishes tool execution and gets continuation data
-/// 2. Builds assistant and user messages from tool results
-/// 3. Adds both to the API message history
-/// 4. Truncates large tool results
-/// 5. Adds a display summary to the timeline
-/// 6. Transitions the tool loop to streaming state
-///
-/// # Errors
-///
-/// Returns an error if `finish_tool_execution()` or `start_streaming()` fails.
-pub fn complete_tool_cycle(state: &mut super::state::AppState) -> anyhow::Result<()> {
-    use crate::types::{Message, Role};
-
-    let continuation = state.finish_tool_execution()?;
-    let (assistant_msg, mut user_msg) = continuation.build_messages();
-
-    state.api_messages_mut().push(assistant_msg);
-
-    truncate_tool_results(&mut user_msg);
-
-    let tool_result_summary = format_tool_results_for_display(&user_msg);
-    state.add_message(Message {
-        role: Role::User,
-        content: tool_result_summary,
-    });
-    state.api_messages_mut().push(user_msg);
-
-    state.tool_loop_mut().start_streaming()?;
-    Ok(())
-}
-
 /// Converts a `ToolUseBlock` to a `tools::ToolCall`.
 ///
 /// This bridges the API types to the executor types.
@@ -2644,7 +2608,7 @@ mod tests {
         let mut state = state_with_executed_tools().await;
         let api_count_before = state.api_messages().len();
 
-        super::complete_tool_cycle(&mut state).unwrap();
+        state.complete_tool_cycle().unwrap();
 
         // Should add 2 messages: assistant (tool_use) + user (tool_result)
         assert_eq!(
@@ -2659,7 +2623,7 @@ mod tests {
         let mut state = state_with_executed_tools().await;
         let timeline_len_before = state.timeline().len();
 
-        super::complete_tool_cycle(&mut state).unwrap();
+        state.complete_tool_cycle().unwrap();
 
         assert!(
             state.timeline().len() > timeline_len_before,
@@ -2671,7 +2635,7 @@ mod tests {
     async fn test_complete_tool_cycle_transitions_to_streaming() {
         let mut state = state_with_executed_tools().await;
 
-        super::complete_tool_cycle(&mut state).unwrap();
+        state.complete_tool_cycle().unwrap();
 
         assert_eq!(
             *state.tool_loop_mut().state(),

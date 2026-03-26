@@ -15,7 +15,7 @@ use crate::api::{LlmProvider, StreamEvent, ToolChoice};
 use crate::types::{ApiMessageV2, Message, Role};
 
 use super::state::AppState;
-use super::tool_loop::{self, ToolLoopState};
+use super::tool_loop::ToolLoopState;
 use super::{
     initialize_compression_orchestrator, initialize_mcp_servers, Config, STREAMING_CHANNEL_BUFFER,
 };
@@ -130,7 +130,7 @@ async fn run_tool_continuation_cycle(
         }
 
         // Complete tool execution: build messages, add to history, truncate
-        tool_loop::complete_tool_cycle(state)?;
+        state.complete_tool_cycle()?;
 
         let (tx, mut rx) = mpsc::channel(STREAMING_CHANNEL_BUFFER);
         let api_messages = state.prepare_api_messages_for_send(client.model()).await;

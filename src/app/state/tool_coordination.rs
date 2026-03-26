@@ -363,6 +363,42 @@ impl AppState {
             .map_err(|e| anyhow::anyhow!("{}", e))
     }
 
+    /// Completes tool execution and prepares the conversation for continuation.
+    ///
+    /// This is the shared logic between `run_print_mode()` and
+    /// [`AppContext::finish_tool_execution_and_continue`](super::super::context::AppContext::finish_tool_execution_and_continue).
+    /// It:
+    /// 1. Finishes tool execution and gets continuation data
+    /// 2. Builds assistant and user messages from tool results
+    /// 3. Adds both to the API message history
+    /// 4. Truncates large tool results
+    /// 5. Adds a display summary to the timeline
+    /// 6. Transitions the tool loop to streaming state
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `finish_tool_execution()` or `start_streaming()` fails.
+    pub fn complete_tool_cycle(&mut self) -> Result<()> {
+        use crate::app::tool_loop::{format_tool_results_for_display, truncate_tool_results};
+
+        let continuation = self.finish_tool_execution()?;
+        let (assistant_msg, mut user_msg) = continuation.build_messages();
+
+        self.api_messages_mut().push(assistant_msg);
+
+        truncate_tool_results(&mut user_msg);
+
+        let tool_result_summary = format_tool_results_for_display(&user_msg);
+        self.add_message(Message {
+            role: Role::User,
+            content: tool_result_summary,
+        });
+        self.api_messages_mut().push(user_msg);
+
+        self.tool_loop_mut().start_streaming()?;
+        Ok(())
+    }
+
     /// Approves all pending tools for execution.
     pub fn approve_all_tools(&mut self) -> Result<()> {
         self.tool_state
