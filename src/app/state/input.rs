@@ -199,7 +199,7 @@ impl Default for InputState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::completion::{CompletionEntry, CompletionSource, CompletionState};
+    use crate::types::ui_state::{CompletionEntry, CompletionSource, CompletionState};
 
     /// Helper: builds a `CompletionState` with two sample entries.
     fn sample_completion() -> CompletionState {

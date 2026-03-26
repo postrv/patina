@@ -12,10 +12,15 @@
 //! - [`ContinuousLoopStatus`] - continuous loop status for TUI display
 //! - [`GateResult`] - quality gate results for TUI display
 //! - [`AgentPanelStatus`] / [`AgentPanelEntry`] - agent panel display
+//! - [`PlanState`] / [`PlanStep`] - plan review state
+//! - [`QuestionState`] - interactive question prompt state
+//! - [`CompletionState`] / [`CompletionEntry`] / [`CompletionSource`] - completion engine
 //!
 //! Rendering widgets that consume these types remain in `tui/`.
 
 use std::fmt;
+
+use super::ToolResultBlock;
 
 // =============================================================================
 // Scroll State
@@ -731,6 +736,528 @@ pub struct AgentPanelEntry {
     pub status: AgentPanelStatus,
     /// Most recent content snippet from the agent.
     pub last_content: String,
+}
+
+// =============================================================================
+// Plan State
+// =============================================================================
+
+/// A single step in a proposed plan.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlanStep {
+    /// Human-readable description of this step.
+    pub description: String,
+    /// Tool calls this step intends to make (informational).
+    pub tool_calls: Vec<String>,
+}
+
+/// State for a pending plan awaiting user review.
+///
+/// Created when the model emits a `plan` tool_use. The plan is held
+/// in this state until the user approves or rejects it via the
+/// [`PlanHandler`](crate::app::handlers::plan::PlanHandler).
+#[derive(Debug, Clone)]
+pub struct PlanState {
+    /// The tool_use ID to include in the tool result response.
+    pub tool_use_id: String,
+    /// Plan title summarizing the proposed work.
+    pub title: String,
+    /// Ordered list of steps in the plan.
+    pub steps: Vec<PlanStep>,
+    /// Index of the currently highlighted step in the review UI.
+    pub selected_index: usize,
+}
+
+impl PlanState {
+    /// Creates a new plan state from a tool_use.
+    ///
+    /// # Arguments
+    ///
+    /// * `tool_use_id` - The tool_use ID for the response
+    /// * `title` - Plan title
+    /// * `steps` - Ordered plan steps
+    #[must_use]
+    pub fn new(tool_use_id: String, title: String, steps: Vec<PlanStep>) -> Self {
+        Self {
+            tool_use_id,
+            title,
+            steps,
+            selected_index: 0,
+        }
+    }
+
+    /// Moves the selection to the next step (wraps around).
+    pub fn select_next(&mut self) {
+        if !self.steps.is_empty() {
+            self.selected_index = (self.selected_index + 1) % self.steps.len();
+        }
+    }
+
+    /// Moves the selection to the previous step (wraps around).
+    pub fn select_prev(&mut self) {
+        if !self.steps.is_empty() {
+            self.selected_index = if self.selected_index == 0 {
+                self.steps.len() - 1
+            } else {
+                self.selected_index - 1
+            };
+        }
+    }
+
+    /// Returns the number of steps in the plan.
+    #[must_use]
+    pub fn step_count(&self) -> usize {
+        self.steps.len()
+    }
+
+    /// Approves the plan, returning a success tool result block.
+    #[must_use]
+    pub fn approve(&self) -> ToolResultBlock {
+        ToolResultBlock {
+            tool_use_id: self.tool_use_id.clone(),
+            content: "Plan approved by user. Proceed with execution.".to_string(),
+            is_error: false,
+        }
+    }
+
+    /// Rejects the plan, returning an error tool result block.
+    #[must_use]
+    pub fn reject(&self) -> ToolResultBlock {
+        ToolResultBlock {
+            tool_use_id: self.tool_use_id.clone(),
+            content: "Plan rejected by user.".to_string(),
+            is_error: true,
+        }
+    }
+
+    /// Parses a plan from tool_use JSON input.
+    ///
+    /// Expected schema:
+    /// ```json
+    /// {
+    ///   "title": "...",
+    ///   "steps": [{ "description": "...", "tool_calls": ["..."] }]
+    /// }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns `None` if the input doesn't match the expected schema.
+    #[must_use]
+    pub fn from_tool_input(tool_use_id: String, input: &serde_json::Value) -> Option<Self> {
+        let title = input.get("title")?.as_str()?.to_string();
+        let steps_arr = input.get("steps")?.as_array()?;
+
+        let steps: Vec<PlanStep> = steps_arr
+            .iter()
+            .filter_map(|step| {
+                let description = step.get("description")?.as_str()?.to_string();
+                let tool_calls = step
+                    .get("tool_calls")
+                    .and_then(|tc| tc.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_str().map(String::from))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                Some(PlanStep {
+                    description,
+                    tool_calls,
+                })
+            })
+            .collect();
+
+        if steps.is_empty() {
+            return None;
+        }
+
+        Some(Self::new(tool_use_id, title, steps))
+    }
+}
+
+// =============================================================================
+// Question State
+// =============================================================================
+
+/// State for a pending user question awaiting response.
+///
+/// Created when the model emits an `ask_user` tool_use. The question is held
+/// in this state until the user responds via the
+/// [`QuestionHandler`](crate::app::handlers::question::QuestionHandler).
+#[derive(Debug, Clone)]
+pub struct QuestionState {
+    /// The tool_use ID to include in the tool result response.
+    pub tool_use_id: String,
+    /// The question text to display.
+    pub question: String,
+    /// Optional list of choices for the user.
+    pub options: Vec<String>,
+    /// Whether free-text input is allowed.
+    pub allow_free_text: bool,
+    /// Index of the currently selected option (0 if no options).
+    pub selected_option: usize,
+    /// Free-text input buffer.
+    pub free_text_input: String,
+    /// Whether the cursor is in the free-text input field (vs option list).
+    pub in_free_text: bool,
+}
+
+impl QuestionState {
+    /// Creates a new question state from tool input parameters.
+    ///
+    /// # Arguments
+    ///
+    /// * `tool_use_id` - The tool_use ID for the response
+    /// * `question` - The question text
+    /// * `options` - Optional list of choices
+    /// * `allow_free_text` - Whether free-text is allowed
+    #[must_use]
+    pub fn new(
+        tool_use_id: String,
+        question: String,
+        options: Vec<String>,
+        allow_free_text: bool,
+    ) -> Self {
+        let in_free_text = options.is_empty();
+        Self {
+            tool_use_id,
+            question,
+            options,
+            allow_free_text,
+            selected_option: 0,
+            free_text_input: String::new(),
+            in_free_text,
+        }
+    }
+
+    /// Moves the selection to the next option (wraps around).
+    pub fn select_next(&mut self) {
+        if !self.options.is_empty() {
+            self.selected_option = (self.selected_option + 1) % self.options.len();
+        }
+    }
+
+    /// Moves the selection to the previous option (wraps around).
+    pub fn select_prev(&mut self) {
+        if !self.options.is_empty() {
+            self.selected_option = if self.selected_option == 0 {
+                self.options.len() - 1
+            } else {
+                self.selected_option - 1
+            };
+        }
+    }
+
+    /// Toggles between option selection and free-text input.
+    pub fn toggle_input_mode(&mut self) {
+        if self.allow_free_text && !self.options.is_empty() {
+            self.in_free_text = !self.in_free_text;
+        }
+    }
+
+    /// Appends a character to the free-text input.
+    pub fn push_char(&mut self, c: char) {
+        if self.in_free_text {
+            self.free_text_input.push(c);
+        }
+    }
+
+    /// Removes the last character from the free-text input.
+    pub fn pop_char(&mut self) {
+        if self.in_free_text {
+            self.free_text_input.pop();
+        }
+    }
+
+    /// Returns the user's response as a string.
+    ///
+    /// If in free-text mode and text is non-empty, returns the text.
+    /// Otherwise, returns the selected option (if any).
+    #[must_use]
+    pub fn response_text(&self) -> String {
+        if self.in_free_text && !self.free_text_input.is_empty() {
+            self.free_text_input.clone()
+        } else if !self.options.is_empty() {
+            self.options[self.selected_option].clone()
+        } else {
+            self.free_text_input.clone()
+        }
+    }
+
+    /// Submits the response, returning a success tool result block.
+    #[must_use]
+    pub fn submit(&self) -> ToolResultBlock {
+        ToolResultBlock {
+            tool_use_id: self.tool_use_id.clone(),
+            content: self.response_text(),
+            is_error: false,
+        }
+    }
+
+    /// Cancels the question, returning an error tool result block.
+    #[must_use]
+    pub fn cancel(&self) -> ToolResultBlock {
+        ToolResultBlock {
+            tool_use_id: self.tool_use_id.clone(),
+            content: "User cancelled the question.".to_string(),
+            is_error: true,
+        }
+    }
+
+    /// Parses a question from tool_use JSON input.
+    ///
+    /// Expected schema:
+    /// ```json
+    /// {
+    ///   "question": "...",
+    ///   "options": ["a", "b"],
+    ///   "allow_free_text": true
+    /// }
+    /// ```
+    ///
+    /// # Returns
+    ///
+    /// `None` if the input doesn't have a `question` field.
+    #[must_use]
+    pub fn from_tool_input(tool_use_id: String, input: &serde_json::Value) -> Option<Self> {
+        let question = input.get("question")?.as_str()?.to_string();
+
+        let options = input
+            .get("options")
+            .and_then(|o| o.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let allow_free_text = input
+            .get("allow_free_text")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+
+        Some(Self::new(tool_use_id, question, options, allow_free_text))
+    }
+}
+
+// =============================================================================
+// Completion State
+// =============================================================================
+
+/// Source of a completion candidate.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CompletionSource {
+    /// Built-in slash command.
+    Builtin,
+    /// Command provided by a plugin.
+    Plugin(String),
+    /// MCP tool (future).
+    McpTool(String),
+    /// User-defined command (future).
+    User,
+}
+
+impl CompletionSource {
+    /// Returns a short display indicator for the source.
+    ///
+    /// Used in the completion menu to show where a command comes from.
+    #[must_use]
+    pub fn indicator(&self) -> &str {
+        match self {
+            Self::Builtin => "",
+            Self::Plugin(_) => "[P]",
+            Self::McpTool(_) => "[M]",
+            Self::User => "[U]",
+        }
+    }
+}
+
+/// A single completion candidate.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompletionEntry {
+    /// The command name (without leading `/`).
+    pub name: String,
+    /// A short description shown alongside the name.
+    pub description: String,
+    /// Where this candidate comes from.
+    pub source: CompletionSource,
+}
+
+impl CompletionEntry {
+    /// Creates a new completion entry.
+    #[must_use]
+    pub fn new(
+        name: impl Into<String>,
+        description: impl Into<String>,
+        source: CompletionSource,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            description: description.into(),
+            source,
+        }
+    }
+}
+
+/// Scores a candidate against a filter string.
+///
+/// Returns a score from 0 to 100:
+/// - 100: exact name match
+/// - 80: name starts with filter (prefix match)
+/// - 60: filter found as substring in name (fuzzy name)
+/// - 40: filter found as substring in description (fuzzy description)
+/// - 0: no match
+///
+/// All comparisons are case-insensitive. An empty filter matches everything
+/// with score 100.
+#[must_use]
+pub fn score_candidate(entry: &CompletionEntry, filter: &str) -> u8 {
+    if filter.is_empty() {
+        return 100;
+    }
+
+    let filter_lower = filter.to_lowercase();
+    let name_lower = entry.name.to_lowercase();
+    let desc_lower = entry.description.to_lowercase();
+
+    if name_lower == filter_lower {
+        100
+    } else if name_lower.starts_with(&filter_lower) {
+        80
+    } else if name_lower.contains(&filter_lower) {
+        60
+    } else if desc_lower.contains(&filter_lower) {
+        40
+    } else {
+        0
+    }
+}
+
+/// A scored candidate for internal sorting.
+#[derive(Debug, Clone)]
+struct ScoredEntry {
+    entry: CompletionEntry,
+    score: u8,
+}
+
+/// Manages the completion popup lifecycle, filtering, and selection.
+///
+/// Created when the user types `/` at position 0, destroyed when they dismiss
+/// or accept a candidate.
+#[derive(Debug, Clone)]
+pub struct CompletionState {
+    /// All candidates from all providers.
+    candidates: Vec<CompletionEntry>,
+    /// Currently visible (filtered + sorted) entries.
+    filtered: Vec<CompletionEntry>,
+    /// Index into `filtered` for the highlighted entry.
+    selected: usize,
+    /// Current filter text (everything after `/`).
+    filter: String,
+}
+
+impl CompletionState {
+    /// Creates a new completion state showing all candidates.
+    #[must_use]
+    pub fn new(candidates: Vec<CompletionEntry>) -> Self {
+        let filtered = candidates.clone();
+        Self {
+            candidates,
+            filtered,
+            selected: 0,
+            filter: String::new(),
+        }
+    }
+
+    /// Updates the filter and recomputes the filtered list.
+    ///
+    /// Resets selection to 0.
+    pub fn set_filter(&mut self, filter: &str) {
+        self.filter = filter.to_string();
+        self.refilter();
+        self.selected = 0;
+    }
+
+    /// Returns the current filter string.
+    #[must_use]
+    pub fn filter(&self) -> &str {
+        &self.filter
+    }
+
+    /// Returns the filtered and sorted entries.
+    #[must_use]
+    pub fn filtered(&self) -> &[CompletionEntry] {
+        &self.filtered
+    }
+
+    /// Returns the index of the currently selected entry.
+    #[must_use]
+    pub fn selected_index(&self) -> usize {
+        self.selected
+    }
+
+    /// Returns the currently selected entry, if any.
+    #[must_use]
+    pub fn selected_entry(&self) -> Option<&CompletionEntry> {
+        self.filtered.get(self.selected)
+    }
+
+    /// Moves selection down, wrapping to the top.
+    pub fn select_next(&mut self) {
+        if !self.filtered.is_empty() {
+            self.selected = (self.selected + 1) % self.filtered.len();
+        }
+    }
+
+    /// Moves selection up, wrapping to the bottom.
+    pub fn select_previous(&mut self) {
+        if !self.filtered.is_empty() {
+            if self.selected == 0 {
+                self.selected = self.filtered.len() - 1;
+            } else {
+                self.selected -= 1;
+            }
+        }
+    }
+
+    /// Accepts the currently selected entry.
+    ///
+    /// Returns the command name (without `/`) if there is a selection,
+    /// or `None` if the filtered list is empty.
+    #[must_use]
+    pub fn accept(&self) -> Option<String> {
+        self.selected_entry().map(|e| e.name.clone())
+    }
+
+    /// Recomputes the filtered list from candidates using current filter.
+    fn refilter(&mut self) {
+        let mut scored: Vec<ScoredEntry> = self
+            .candidates
+            .iter()
+            .filter_map(|entry| {
+                let score = score_candidate(entry, &self.filter);
+                if score > 0 {
+                    Some(ScoredEntry {
+                        entry: entry.clone(),
+                        score,
+                    })
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        // Sort by score descending, then by name ascending for stable ordering.
+        scored.sort_by(|a, b| {
+            b.score
+                .cmp(&a.score)
+                .then_with(|| a.entry.name.cmp(&b.entry.name))
+        });
+
+        self.filtered = scored.into_iter().map(|s| s.entry).collect();
+    }
 }
 
 #[cfg(test)]

@@ -96,10 +96,10 @@ async fn send_tool_result(ctx: &mut AppContext<'_>, result: crate::types::ToolRe
 mod tests {
     use super::*;
     use crate::api::{AnthropicClient, LlmProvider};
-    use crate::app::state::plan::{PlanState, PlanStep};
     use crate::app::state::AppState;
     use crate::session::SessionManager;
     use crate::types::config::ParallelMode;
+    use crate::types::ui_state::{PlanState, PlanStep};
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use secrecy::SecretString;
     use std::path::PathBuf;

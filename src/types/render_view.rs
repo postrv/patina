@@ -10,12 +10,11 @@
 //! after rendering.
 
 use crate::api::tokens::TokenBudget;
-use crate::app::completion::CompletionState;
-use crate::app::state::plan::PlanState;
-use crate::app::state::question::QuestionState;
-use crate::app::state::{ContinuousLoopStatus, GateResult};
 use crate::permissions::PermissionRequest;
-use crate::types::ui_state::{CompactionProgressState, FocusArea, ScrollState, SelectionState};
+use crate::types::ui_state::{
+    CompactionProgressState, CompletionState, ContinuousLoopStatus, FocusArea, GateResult,
+    PlanState, QuestionState, ScrollState, SelectionState,
+};
 use crate::types::Timeline;
 
 /// A read-only view of application state for TUI rendering.
@@ -112,8 +111,7 @@ pub struct RenderView<'a> {
 mod tests {
     use super::*;
     use crate::api::tokens::TokenBudget;
-    use crate::app::state::ContinuousLoopStatus;
-    use crate::types::ui_state::{FocusArea, ScrollState, SelectionState};
+    use crate::types::ui_state::{ContinuousLoopStatus, FocusArea, ScrollState, SelectionState};
     use crate::types::Timeline;
 
     /// Creates a minimal `RenderView` for testing.

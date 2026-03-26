@@ -11,7 +11,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph, Widget, Wrap},
 };
 
-use crate::app::state::plan::PlanState;
+use crate::types::ui_state::PlanState;
 
 /// Widget for displaying a plan review modal.
 ///
@@ -138,7 +138,7 @@ impl Widget for PlanReviewWidget<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::state::plan::{PlanState, PlanStep};
+    use crate::types::ui_state::{PlanState, PlanStep};
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
 

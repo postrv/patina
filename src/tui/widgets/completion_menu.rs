@@ -31,7 +31,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Widget},
 };
 
-use crate::app::completion::CompletionState;
+use crate::types::ui_state::CompletionState;
 
 /// Maximum number of entries visible in the popup at once.
 const MAX_VISIBLE_ENTRIES: usize = 8;
@@ -161,7 +161,7 @@ impl Widget for CompletionMenuWidget<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::completion::{CompletionEntry, CompletionSource, CompletionState};
+    use crate::types::ui_state::{CompletionEntry, CompletionSource, CompletionState};
 
     fn sample_entries() -> Vec<CompletionEntry> {
         vec![

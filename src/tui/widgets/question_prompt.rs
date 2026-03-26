@@ -12,7 +12,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph, Widget, Wrap},
 };
 
-use crate::app::state::question::QuestionState;
+use crate::types::ui_state::QuestionState;
 
 /// Widget for displaying a user question prompt modal.
 ///
@@ -158,7 +158,7 @@ impl Widget for QuestionPromptWidget<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::state::question::QuestionState;
+    use crate::types::ui_state::QuestionState;
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
 

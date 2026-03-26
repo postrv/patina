@@ -119,8 +119,9 @@ impl EventHandler for ContinuousHandler {
 mod tests {
     use super::*;
     use crate::api::{AnthropicClient, LlmProvider};
-    use crate::app::state::{AppState, ContinuousLoopStatus};
+    use crate::app::state::AppState;
     use crate::continuous::ContinuousEvent;
+    use crate::types::ui_state::ContinuousLoopStatus;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use secrecy::SecretString;
     use std::path::PathBuf;
