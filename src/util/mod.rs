@@ -118,6 +118,29 @@ pub fn format_bytes(bytes: u64) -> String {
     }
 }
 
+/// Acquires a `Mutex` lock, recovering from poisoning.
+///
+/// If the mutex was poisoned by a panicking thread, this logs an error
+/// and recovers the inner value. This avoids cascading panics while
+/// making lock-poisoning recovery consistent across the codebase.
+///
+/// # Examples
+///
+/// ```
+/// use std::sync::Mutex;
+/// use patina::util::safe_lock;
+///
+/// let mutex = Mutex::new(42);
+/// let guard = safe_lock(&mutex);
+/// assert_eq!(*guard, 42);
+/// ```
+pub fn safe_lock<T>(lock: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    lock.lock().unwrap_or_else(|e| {
+        tracing::error!("Mutex lock was poisoned, recovering");
+        e.into_inner()
+    })
+}
+
 pub fn sanitize_filename(name: &str) -> String {
     name.chars()
         .map(|c| match c {

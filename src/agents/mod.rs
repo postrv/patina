@@ -17,6 +17,8 @@
 //!     system_prompt: "You explore code.".to_string(),
 //!     allowed_tools: vec!["read".to_string(), "glob".to_string()],
 //!     max_turns: 10,
+//!     color: Some("cyan".to_string()),
+//!     effort: None,
 //! };
 //!
 //! let id = orchestrator.spawn(config);
@@ -107,6 +109,10 @@ pub struct SubagentConfig {
     pub allowed_tools: Vec<String>,
     /// Maximum number of API turns before the agent must complete.
     pub max_turns: usize,
+    /// Visual indicator color for TUI display (e.g., "red", "green", "cyan").
+    pub color: Option<String>,
+    /// Reasoning effort level override (e.g., "low", "medium", "high").
+    pub effort: Option<String>,
 }
 
 /// Result returned when a subagent completes execution.
@@ -439,6 +445,8 @@ mod tests {
             system_prompt: "You are a test.".to_string(),
             allowed_tools: vec!["read_file".to_string()],
             max_turns: 5,
+            color: None,
+            effort: None,
         };
         let id = orch.spawn(config);
         assert_eq!(orch.get_status(id), Some("pending"));

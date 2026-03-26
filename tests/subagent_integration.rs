@@ -14,6 +14,8 @@ fn test_config() -> SubagentConfig {
         system_prompt: "You are a test agent.".to_string(),
         allowed_tools: vec!["read".to_string(), "grep".to_string()],
         max_turns: 5,
+        color: None,
+        effort: None,
     }
 }
 
@@ -51,6 +53,8 @@ fn test_subagent_spawn_stores_config() {
         system_prompt: "You explore code.".to_string(),
         allowed_tools: vec!["glob".to_string(), "read".to_string()],
         max_turns: 10,
+        color: None,
+        effort: None,
     };
 
     let id = orchestrator.spawn(config);
@@ -100,6 +104,8 @@ async fn test_subagent_run_returns_result() {
         system_prompt: "Test prompt".to_string(),
         allowed_tools: vec![],
         max_turns: 3,
+        color: None,
+        effort: None,
     };
 
     let id = orchestrator.spawn(config);
@@ -192,6 +198,8 @@ fn test_subagent_config_clone() {
         system_prompt: "Clone me".to_string(),
         allowed_tools: vec!["tool1".to_string(), "tool2".to_string()],
         max_turns: 7,
+        color: None,
+        effort: None,
     };
 
     let cloned = config.clone();
@@ -239,6 +247,8 @@ fn test_subagent_context_isolation_separate_configs() {
         system_prompt: "You are agent 1.".to_string(),
         allowed_tools: vec!["read".to_string()],
         max_turns: 5,
+        color: None,
+        effort: None,
     };
 
     let config2 = SubagentConfig {
@@ -247,6 +257,8 @@ fn test_subagent_context_isolation_separate_configs() {
         system_prompt: "You are agent 2.".to_string(),
         allowed_tools: vec!["write".to_string()],
         max_turns: 10,
+        color: None,
+        effort: None,
     };
 
     let id1 = orchestrator.spawn(config1);
@@ -301,6 +313,8 @@ async fn test_subagent_context_isolation_independent_execution() {
         system_prompt: "Test 1".to_string(),
         allowed_tools: vec![],
         max_turns: 3,
+        color: None,
+        effort: None,
     };
 
     let config2 = SubagentConfig {
@@ -309,6 +323,8 @@ async fn test_subagent_context_isolation_independent_execution() {
         system_prompt: "Test 2".to_string(),
         allowed_tools: vec![],
         max_turns: 3,
+        color: None,
+        effort: None,
     };
 
     let id1 = orchestrator.spawn(config1);
@@ -336,6 +352,8 @@ fn test_subagent_tool_restrictions_allowed_list() {
         system_prompt: "You have limited tools.".to_string(),
         allowed_tools: vec!["read".to_string(), "grep".to_string()],
         max_turns: 5,
+        color: None,
+        effort: None,
     };
 
     let id = orchestrator.spawn(config);
@@ -368,6 +386,8 @@ fn test_subagent_tool_restrictions_empty_list() {
         system_prompt: "You have no tools.".to_string(),
         allowed_tools: vec![],
         max_turns: 3,
+        color: None,
+        effort: None,
     };
 
     let id = orchestrator.spawn(config);
@@ -404,6 +424,8 @@ fn test_subagent_tool_restrictions_case_sensitive() {
         system_prompt: "Test".to_string(),
         allowed_tools: vec!["Read".to_string()],
         max_turns: 3,
+        color: None,
+        effort: None,
     };
 
     let id = orchestrator.spawn(config);
@@ -428,6 +450,8 @@ fn test_subagent_get_allowed_tools() {
         system_prompt: "Test".to_string(),
         allowed_tools: vec!["read".to_string(), "write".to_string(), "glob".to_string()],
         max_turns: 5,
+        color: None,
+        effort: None,
     };
 
     let id = orchestrator.spawn(config);
@@ -466,6 +490,8 @@ async fn test_parallel_subagent_execution() {
             system_prompt: "Test".to_string(),
             allowed_tools: vec![],
             max_turns: 3,
+            color: None,
+            effort: None,
         })
         .collect();
 
@@ -498,6 +524,8 @@ async fn test_parallel_subagent_independent_results() {
         system_prompt: "Test".to_string(),
         allowed_tools: vec!["read".to_string()],
         max_turns: 5,
+        color: None,
+        effort: None,
     };
 
     let config2 = SubagentConfig {
@@ -506,6 +534,8 @@ async fn test_parallel_subagent_independent_results() {
         system_prompt: "Test".to_string(),
         allowed_tools: vec!["write".to_string()],
         max_turns: 10,
+        color: None,
+        effort: None,
     };
 
     let id1 = orchestrator.spawn(config1);
@@ -533,6 +563,8 @@ fn test_subagent_max_turns_config() {
         system_prompt: "Test".to_string(),
         allowed_tools: vec![],
         max_turns: 15,
+        color: None,
+        effort: None,
     };
 
     let id = orchestrator.spawn(config);
@@ -555,6 +587,8 @@ fn test_subagent_max_turns_different_values() {
             system_prompt: "Test".to_string(),
             allowed_tools: vec![],
             max_turns: 3,
+            color: None,
+            effort: None,
         },
         SubagentConfig {
             name: "medium-agent".to_string(),
@@ -562,6 +596,8 @@ fn test_subagent_max_turns_different_values() {
             system_prompt: "Test".to_string(),
             allowed_tools: vec![],
             max_turns: 10,
+            color: None,
+            effort: None,
         },
         SubagentConfig {
             name: "long-agent".to_string(),
@@ -569,6 +605,8 @@ fn test_subagent_max_turns_different_values() {
             system_prompt: "Test".to_string(),
             allowed_tools: vec![],
             max_turns: 50,
+            color: None,
+            effort: None,
         },
     ];
 
@@ -650,6 +688,8 @@ fn test_subagent_list_all_agents() {
                 system_prompt: "Test".to_string(),
                 allowed_tools: vec![],
                 max_turns: 3,
+                color: None,
+                effort: None,
             })
         })
         .collect();
