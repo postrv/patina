@@ -42,7 +42,7 @@ use crate::api::provider::RequestOptions;
 use crate::api::tokens::{model_context_limit, ModelCapabilities};
 use crate::api::tools::default_tools;
 use crate::api::{LlmProvider, StreamEvent, SystemBlock, ThinkingConfig, TokenBudget, ToolChoice};
-use crate::app::tool_loop::{ContinuationData, ToolLoop, ToolLoopState};
+use crate::app::tool_loop::ToolLoop;
 use crate::app::STREAMING_CHANNEL_BUFFER;
 use crate::context::compression::{CompactionMetrics, CompressionOrchestrator};
 use crate::enterprise::audit::{AuditConfig, AuditLogger};
@@ -595,6 +595,17 @@ impl AppState {
     /// Returns a mutable reference to the model configuration state.
     pub fn model_config_mut(&mut self) -> &mut ModelConfigState {
         &mut self.model_config
+    }
+
+    /// Returns a reference to the tool execution state.
+    #[must_use]
+    pub fn tool_state(&self) -> &ToolExecutionState {
+        &self.tool_state
+    }
+
+    /// Returns a mutable reference to the tool execution state.
+    pub fn tool_state_mut(&mut self) -> &mut ToolExecutionState {
+        &mut self.tool_state
     }
 
     /// Updates the agent panel with a progress event.
@@ -1499,7 +1510,7 @@ mod tests {
         assert!(state.has_background_work());
 
         // Clear tool channel
-        state.clear_tool_result_rx();
+        state.tool_state_mut().clear_tool_result_rx();
         assert!(!state.has_background_work());
     }
 

@@ -345,3 +345,113 @@ impl ToolExecutionState {
                 .all(|call| call.executed || call.result.is_some())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    /// Creates a fresh `ToolExecutionState` for testing.
+    fn new_tool_state() -> ToolExecutionState {
+        let hooks = crate::hooks::HookManager::new("test-session".to_string());
+        let executor = HookedToolExecutor::new(PathBuf::from("/tmp"), hooks);
+        let permission_manager = Arc::new(Mutex::new(PermissionManager::new()));
+        ToolExecutionState {
+            tool_loop: ToolLoop::new(),
+            tool_executor: Arc::new(executor),
+            permission_manager,
+            pending_permission: None,
+            tool_blocks: Vec::new(),
+            tool_result_rx: None,
+            executing_tool_ids: std::collections::HashSet::new(),
+        }
+    }
+
+    #[test]
+    fn new_state_has_idle_tool_loop() {
+        let state = new_tool_state();
+        assert_eq!(state.tool_loop_state(), &ToolLoopState::Idle);
+        assert!(!state.tool_loop_is_active());
+        assert!(!state.has_pending_permission());
+        assert!(!state.has_executing_tools());
+        assert!(!state.has_tool_result_rx());
+        assert!(state.tool_blocks().is_empty());
+        assert!(!state.has_tool_blocks());
+        assert!(state.all_tools_complete());
+    }
+
+    #[test]
+    fn tool_block_start_and_complete() {
+        let mut state = new_tool_state();
+
+        let idx = state.start_tool_block("bash", "echo hello");
+        assert_eq!(idx, 0);
+        assert!(state.has_tool_blocks());
+        assert_eq!(state.tool_blocks().len(), 1);
+        assert_eq!(state.tool_blocks()[0].tool_name(), "bash");
+
+        state.complete_tool_block(idx, "hello", false);
+        assert!(state.tool_blocks()[0].is_complete());
+
+        state.clear_tool_blocks();
+        assert!(state.tool_blocks().is_empty());
+        assert!(!state.has_tool_blocks());
+    }
+
+    #[test]
+    fn tool_loop_accessors_reflect_state() {
+        let mut state = new_tool_state();
+
+        // Start streaming transitions away from Idle
+        state.tool_loop_mut().start_streaming().unwrap();
+        assert!(state.tool_loop_is_active());
+        assert_eq!(state.tool_loop_state(), &ToolLoopState::Streaming);
+
+        // Reset goes back to Idle
+        state.reset_tool_loop();
+        assert_eq!(state.tool_loop_state(), &ToolLoopState::Idle);
+        assert!(!state.tool_loop_is_active());
+    }
+
+    #[test]
+    fn pending_permission_management() {
+        let mut state = new_tool_state();
+
+        assert!(!state.has_pending_permission());
+        assert!(state.pending_permission().is_none());
+
+        let request =
+            PermissionRequest::new("bash", Some(r#"{"command":"rm -rf /"}"#), "test permission");
+        state.set_pending_permission(request);
+        assert!(state.has_pending_permission());
+        assert_eq!(state.pending_permission().unwrap().tool_name, "bash");
+
+        // Needs user action when there's a pending permission
+        assert!(state.tool_loop_needs_user_action());
+
+        state.clear_pending_permission();
+        assert!(!state.has_pending_permission());
+    }
+
+    #[test]
+    fn executing_tool_tracking() {
+        let mut state = new_tool_state();
+
+        assert!(!state.has_executing_tools());
+        assert!(state.all_tools_complete());
+
+        state.mark_tool_executing("tool_1");
+        assert!(state.has_executing_tools());
+        assert!(!state.all_tools_complete());
+
+        // record_tool_result removes from executing set
+        let result = crate::types::ToolResultBlock {
+            tool_use_id: "tool_1".to_string(),
+            content: "done".to_string(),
+            is_error: false,
+        };
+        state.record_tool_result("tool_1", result);
+        assert!(!state.has_executing_tools());
+        assert!(state.all_tools_complete());
+    }
+}

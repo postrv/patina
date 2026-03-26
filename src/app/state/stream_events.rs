@@ -23,7 +23,7 @@ impl AppState {
                 self.handle_tool_use_input_delta(index, &partial_json);
             }
             StreamEvent::ToolUseComplete { index } => {
-                self.handle_tool_use_complete(index)?;
+                self.tool_state.handle_tool_use_complete(index)?;
             }
             StreamEvent::ContentBlockComplete { .. } => {
                 // Content block completion is tracked internally
@@ -117,7 +117,7 @@ impl AppState {
                 self.api_messages.push(ApiMessageV2::assistant(text));
             }
         }
-        self.handle_message_complete(stop_reason)?;
+        self.tool_state.handle_message_complete(stop_reason)?;
         self.display.loading = false;
         self.streaming_rx = None;
         self.dirty.messages = true;

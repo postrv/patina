@@ -227,15 +227,15 @@ fn test_executing_tools_tracking() {
     let mut state = new_state();
 
     // Initially no tools executing
-    assert!(!state.has_executing_tools());
+    assert!(!state.tool_state().has_executing_tools());
 
     // Mark a tool as executing
-    state.mark_tool_executing("tool_1");
-    assert!(state.has_executing_tools());
+    state.tool_state_mut().mark_tool_executing("tool_1");
+    assert!(state.tool_state().has_executing_tools());
 
     // Mark another tool
-    state.mark_tool_executing("tool_2");
-    assert!(state.has_executing_tools());
+    state.tool_state_mut().mark_tool_executing("tool_2");
+    assert!(state.tool_state().has_executing_tools());
 
     // Complete one tool (simulated through record_tool_result)
     let result = patina::types::ToolResultBlock {
@@ -246,7 +246,7 @@ fn test_executing_tools_tracking() {
     state.record_tool_result("tool_1", result);
 
     // Still have one executing
-    assert!(state.has_executing_tools());
+    assert!(state.tool_state().has_executing_tools());
 
     // Complete the other
     let result2 = patina::types::ToolResultBlock {
@@ -257,5 +257,5 @@ fn test_executing_tools_tracking() {
     state.record_tool_result("tool_2", result2);
 
     // Now none executing
-    assert!(!state.has_executing_tools());
+    assert!(!state.tool_state().has_executing_tools());
 }

@@ -60,7 +60,7 @@ impl EventHandler for PermissionHandler {
         Box::pin(async move {
             match event {
                 AppEvent::Key(key) => {
-                    if !ctx.state.has_pending_permission() {
+                    if !ctx.state.tool_state().has_pending_permission() {
                         return Ok(Handled::IGNORED);
                     }
 
@@ -96,7 +96,7 @@ fn convert_key_to_response(
     ctx: &mut AppContext<'_>,
     key: crossterm::event::KeyEvent,
 ) -> Option<PermissionResponse> {
-    let request = ctx.state.pending_permission()?.clone();
+    let request = ctx.state.tool_state().pending_permission()?.clone();
     let mut prompt_state = PermissionPromptState::new(request);
 
     let key_char = match key.code {
@@ -142,7 +142,7 @@ async fn apply_permission_response(
         // deny_all_tools() fails if the tool loop is already Idle, which
         // can happen when a PermissionResponse event arrives without a
         // matching tool execution. Log and continue rather than crashing.
-        if let Err(e) = ctx.state.deny_all_tools() {
+        if let Err(e) = ctx.state.tool_state_mut().deny_all_tools() {
             debug!(?e, "deny_all_tools failed (tool loop may already be idle)");
         }
     }
@@ -216,7 +216,7 @@ mod tests {
         let (session_mgr, _dir) = test_session_manager();
 
         // No permission set — should pass through.
-        assert!(!state.has_pending_permission());
+        assert!(!state.tool_state().has_pending_permission());
 
         let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
         let event = AppEvent::Key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
@@ -347,7 +347,7 @@ mod tests {
         let (session_mgr, _dir) = test_session_manager();
 
         state.set_pending_permission(test_permission_request());
-        assert!(state.has_pending_permission());
+        assert!(state.tool_state().has_pending_permission());
 
         let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
         let event = AppEvent::Key(KeyEvent::new(KeyCode::Char('z'), KeyModifiers::NONE));
@@ -400,7 +400,7 @@ mod tests {
         let _result = handler.handle(&event, &mut ctx).await.unwrap();
 
         assert!(
-            !ctx.state.has_pending_permission(),
+            !ctx.state.tool_state().has_pending_permission(),
             "Pressing 'y' must clear the pending permission"
         );
     }
@@ -420,7 +420,7 @@ mod tests {
         let _result = handler.handle(&event, &mut ctx).await.unwrap();
 
         assert!(
-            !ctx.state.has_pending_permission(),
+            !ctx.state.tool_state().has_pending_permission(),
             "Pressing 'a' must clear the pending permission"
         );
     }
@@ -440,7 +440,7 @@ mod tests {
         let _result = handler.handle(&event, &mut ctx).await.unwrap();
 
         assert!(
-            !ctx.state.has_pending_permission(),
+            !ctx.state.tool_state().has_pending_permission(),
             "Pressing 'n' must clear the pending permission"
         );
     }
@@ -460,7 +460,7 @@ mod tests {
         let _result = handler.handle(&event, &mut ctx).await.unwrap();
 
         assert!(
-            !ctx.state.has_pending_permission(),
+            !ctx.state.tool_state().has_pending_permission(),
             "Pressing Esc must clear the pending permission (deny)"
         );
     }
@@ -480,7 +480,7 @@ mod tests {
         let _result = handler.handle(&event, &mut ctx).await.unwrap();
 
         assert!(
-            !ctx.state.has_pending_permission(),
+            !ctx.state.tool_state().has_pending_permission(),
             "Pressing Enter must confirm selection and clear the pending permission"
         );
     }
@@ -507,7 +507,7 @@ mod tests {
             "Navigation keys must still be consumed during permission prompt"
         );
         assert!(
-            ctx.state.has_pending_permission(),
+            ctx.state.tool_state().has_pending_permission(),
             "Navigation keys must NOT clear the pending permission"
         );
     }
@@ -534,7 +534,7 @@ mod tests {
             "Unrecognized keys must be consumed during permission prompt"
         );
         assert!(
-            ctx.state.has_pending_permission(),
+            ctx.state.tool_state().has_pending_permission(),
             "Unrecognized keys must NOT clear the pending permission"
         );
     }
@@ -600,7 +600,7 @@ mod tests {
         let _result = handler.handle(&event, &mut ctx).await.unwrap();
 
         assert!(
-            !ctx.state.has_pending_permission(),
+            !ctx.state.tool_state().has_pending_permission(),
             "PermissionResponse event must clear the pending permission"
         );
     }
@@ -615,7 +615,7 @@ mod tests {
 
         // No pending permission — response event should still be consumed
         // (it's a dedicated event type with no other handler).
-        assert!(!state.has_pending_permission());
+        assert!(!state.tool_state().has_pending_permission());
 
         let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
         let event = AppEvent::PermissionResponse(PermissionResponse::Deny);

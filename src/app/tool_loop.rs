@@ -2590,7 +2590,7 @@ mod tests {
         );
 
         // Drive tool loop through: streaming → tool_use → approve → execute
-        let tl = state.tool_loop_mut();
+        let tl = state.tool_state_mut().tool_loop_mut();
         tl.start_streaming().unwrap();
         tl.start_tool_use(0, "toolu_1".to_string(), "bash".to_string());
         tl.append_tool_input(0, r#"{"command":"echo hello"}"#);
@@ -2638,7 +2638,7 @@ mod tests {
         state.complete_tool_cycle().unwrap();
 
         assert_eq!(
-            *state.tool_loop_mut().state(),
+            *state.tool_state_mut().tool_loop_mut().state(),
             ToolLoopState::Streaming,
             "complete_tool_cycle should transition to Streaming"
         );

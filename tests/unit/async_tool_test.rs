@@ -49,14 +49,14 @@ fn test_tool_result_channel_setup() {
     state.set_tool_result_rx(rx);
 
     // Verify channel is set
-    assert!(state.has_tool_result_rx());
+    assert!(state.tool_state().has_tool_result_rx());
 
     // Send a result through the channel
     let result = mock_tool_result("tool_bash", "/home/user", false);
     tx.try_send(("tool_bash".to_string(), result)).unwrap();
 
     // Should be able to receive (non-blocking check)
-    assert!(state.try_recv_tool_result().is_some());
+    assert!(state.tool_state_mut().try_recv_tool_result().is_some());
 }
 
 /// Tests that tool execution returns immediately when spawned in background.
@@ -65,7 +65,9 @@ async fn test_tool_execution_returns_immediately() {
     let mut state = new_state();
 
     // Add a pending tool
-    state.add_pending_tool(mock_tool_use("bash", r#"{"command": "sleep 5"}"#));
+    state
+        .tool_state_mut()
+        .add_pending_tool(mock_tool_use("bash", r#"{"command": "sleep 5"}"#));
 
     // Start tool execution in background
     let start = std::time::Instant::now();
@@ -102,20 +104,20 @@ async fn test_tool_results_streamed() {
         .unwrap();
 
     // Results should be receivable
-    let received1 = state.try_recv_tool_result();
+    let received1 = state.tool_state_mut().try_recv_tool_result();
     assert!(received1.is_some());
     let (id1, r1) = received1.unwrap();
     assert_eq!(id1, "tool_1");
     assert_eq!(r1.content, "result 1");
 
-    let received2 = state.try_recv_tool_result();
+    let received2 = state.tool_state_mut().try_recv_tool_result();
     assert!(received2.is_some());
     let (id2, r2) = received2.unwrap();
     assert_eq!(id2, "tool_2");
     assert_eq!(r2.content, "result 2");
 
     // No more results
-    assert!(state.try_recv_tool_result().is_none());
+    assert!(state.tool_state_mut().try_recv_tool_result().is_none());
 }
 
 /// Tests that UI remains responsive during tool execution.
@@ -148,7 +150,7 @@ async fn test_ui_responsive_during_tools() {
         ticks += 1;
 
         // Check for tool results without blocking
-        if let Some((id, result)) = state.try_recv_tool_result() {
+        if let Some((id, result)) = state.tool_state_mut().try_recv_tool_result() {
             state.record_tool_result(&id, result);
         }
 
@@ -172,22 +174,24 @@ fn test_tool_execution_state_tracking() {
     let mut state = new_state();
 
     // Initially no tools executing
-    assert!(!state.has_executing_tools());
+    assert!(!state.tool_state().has_executing_tools());
 
     // Add pending tool
-    state.add_pending_tool(mock_tool_use("bash", r#"{"command": "pwd"}"#));
+    state
+        .tool_state_mut()
+        .add_pending_tool(mock_tool_use("bash", r#"{"command": "pwd"}"#));
 
     // Mark tool as executing
-    state.mark_tool_executing("tool_bash");
-    assert!(state.has_executing_tools());
+    state.tool_state_mut().mark_tool_executing("tool_bash");
+    assert!(state.tool_state().has_executing_tools());
 
     // Record result
     let result = mock_tool_result("tool_bash", "/home/user", false);
     state.record_tool_result("tool_bash", result);
 
     // Tool should now be complete
-    assert!(!state.has_executing_tools());
-    assert!(state.all_tools_complete());
+    assert!(!state.tool_state().has_executing_tools());
+    assert!(state.tool_state().all_tools_complete());
 }
 
 /// Tests that tool progress is visible in timeline during execution.
@@ -258,7 +262,7 @@ async fn test_multiple_tools_independent_results() {
 
     let collect_timeout = timeout(Duration::from_millis(200), async {
         while results.len() < 2 {
-            if let Some(result) = state.try_recv_tool_result() {
+            if let Some(result) = state.tool_state_mut().try_recv_tool_result() {
                 results.push(result);
             }
             tokio::time::sleep(Duration::from_millis(10)).await;

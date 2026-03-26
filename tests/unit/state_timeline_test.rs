@@ -110,8 +110,8 @@ fn test_tool_block_added_to_timeline() {
     state.add_tool_block_with_result("bash", "ls -la", "file1.txt\nfile2.txt", false);
 
     // Verify legacy tool_blocks updated
-    assert_eq!(state.tool_blocks().len(), 1);
-    assert_eq!(state.tool_blocks()[0].tool_name(), "bash");
+    assert_eq!(state.tool_state().tool_blocks().len(), 1);
+    assert_eq!(state.tool_state().tool_blocks()[0].tool_name(), "bash");
 
     // Verify timeline updated
     assert_eq!(state.timeline().len(), 2); // assistant + tool

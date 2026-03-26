@@ -110,7 +110,7 @@ impl<'a> AppContext<'a> {
     /// Delegates to [`AppState::has_pending_permission`].
     #[must_use]
     pub fn has_pending_permission(&self) -> bool {
-        self.state.has_pending_permission()
+        self.state.tool_state().has_pending_permission()
     }
 
     /// Returns `true` if there are tools currently being executed in background tasks.
@@ -118,7 +118,7 @@ impl<'a> AppContext<'a> {
     /// Delegates to [`AppState::has_executing_tools`].
     #[must_use]
     pub fn has_executing_tools(&self) -> bool {
-        self.state.has_executing_tools()
+        self.state.tool_state().has_executing_tools()
     }
 
     /// Starts tool execution in the background (non-blocking).
@@ -132,13 +132,16 @@ impl<'a> AppContext<'a> {
     ///
     /// Returns an error if tool approval fails.
     pub fn start_tool_execution(&mut self) -> Result<()> {
-        if !matches!(self.state.tool_loop_state(), ToolLoopState::PendingApproval) {
+        if !matches!(
+            self.state.tool_state().tool_loop_state(),
+            ToolLoopState::PendingApproval
+        ) {
             debug!("Tool loop not in PendingApproval state, skipping");
             return Ok(());
         }
 
         debug!("Tool loop in PendingApproval state, auto-approving tools");
-        self.state.approve_all_tools()?;
+        self.state.tool_state_mut().approve_all_tools()?;
 
         debug!("Spawning tool execution in background");
         let _handle = self.state.spawn_tool_execution();
@@ -287,7 +290,7 @@ impl<'a> AppContext<'a> {
 
                 // Branch 3: Throbber / animation tick.
                 _ = tick_interval.tick(),
-                    if self.state.is_loading() || self.state.has_executing_tools() =>
+                    if self.state.is_loading() || self.state.tool_state().has_executing_tools() =>
                 {
                     return AppEvent::Tick;
                 }
@@ -659,7 +662,7 @@ mod tests {
         let session_mgr = test_session_manager();
 
         // Mark a tool as executing so has_executing_tools() returns true.
-        state.mark_tool_executing("toolu_test");
+        state.tool_state_mut().mark_tool_executing("toolu_test");
 
         let mut stream = futures::stream::pending::<Result<Event, io::Error>>();
         let mut interval = tokio::time::interval(Duration::from_millis(100));
@@ -726,7 +729,7 @@ mod tests {
 
         // Drive tool loop to PendingApproval state
         {
-            let tl = state.tool_loop_mut();
+            let tl = state.tool_state_mut().tool_loop_mut();
             tl.start_streaming().unwrap();
             tl.start_tool_use(0, "toolu_1".to_string(), "bash".to_string());
             tl.append_tool_input(0, r#"{"command":"echo hi"}"#);
@@ -736,7 +739,7 @@ mod tests {
         }
 
         assert!(matches!(
-            state.tool_loop_state(),
+            state.tool_state().tool_loop_state(),
             crate::app::tool_loop::ToolLoopState::PendingApproval
         ));
 

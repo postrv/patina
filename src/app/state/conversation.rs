@@ -388,3 +388,65 @@ impl AppState {
         self.dirty.messages = true;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn new_state() -> AppState {
+        AppState::new(
+            std::path::PathBuf::from("/test"),
+            false,
+            crate::types::config::ParallelMode::Enabled,
+        )
+    }
+
+    #[test]
+    fn messages_returns_timeline_entries() {
+        let mut state = new_state();
+        // Initially empty
+        assert!(state.messages().is_empty());
+
+        // After adding a message, it appears in messages()
+        state.add_message(Message {
+            role: Role::User,
+            content: "hello".to_string(),
+        });
+        let msgs = state.messages();
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0].role, Role::User);
+        assert_eq!(msgs[0].content, "hello");
+    }
+
+    #[test]
+    fn add_message_updates_timeline_and_dirty_flag() {
+        let mut state = new_state();
+        state.dirty.clear();
+
+        state.add_message(Message {
+            role: Role::Assistant,
+            content: "I can help.".to_string(),
+        });
+
+        // Dirty flag should be set
+        assert!(state.dirty.messages);
+
+        // Timeline should contain the assistant message
+        let entries: Vec<_> = state.timeline().iter().collect();
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].is_assistant());
+    }
+
+    #[test]
+    fn api_messages_start_empty_and_grow_on_add() {
+        let mut state = new_state();
+        assert!(state.api_messages().is_empty());
+        assert_eq!(state.api_messages_len(), 0);
+
+        let msg = ApiMessageV2::user("test prompt");
+        state.add_api_message(msg);
+
+        assert_eq!(state.api_messages_len(), 1);
+        assert_eq!(state.api_messages()[0].to_legacy().content, "test prompt");
+    }
+}

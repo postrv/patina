@@ -89,11 +89,13 @@ impl EventHandler for StreamHandler {
 
                     // When all tools have completed and the tool loop is in
                     // Executing state, set up continuation streaming.
-                    let is_executing =
-                        matches!(ctx.state.tool_loop_state(), ToolLoopState::Executing);
-                    if is_executing && ctx.state.all_tools_complete() {
+                    let is_executing = matches!(
+                        ctx.state.tool_state().tool_loop_state(),
+                        ToolLoopState::Executing
+                    );
+                    if is_executing && ctx.state.tool_state().all_tools_complete() {
                         debug!("All tools complete, setting up continuation");
-                        ctx.state.clear_tool_result_rx();
+                        ctx.state.tool_state_mut().clear_tool_result_rx();
                         ctx.finish_tool_execution_and_continue().await?;
                     }
 
@@ -292,7 +294,7 @@ mod tests {
         let (session_mgr, _dir) = test_session_manager();
 
         // Set up a tool as executing so record_tool_result has something to remove.
-        state.mark_tool_executing("toolu_test");
+        state.tool_state_mut().mark_tool_executing("toolu_test");
 
         let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
@@ -514,8 +516,8 @@ mod tests {
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
 
-        state.mark_tool_executing("toolu_abc");
-        assert!(state.has_executing_tools());
+        state.tool_state_mut().mark_tool_executing("toolu_abc");
+        assert!(state.tool_state().has_executing_tools());
 
         let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
@@ -530,7 +532,7 @@ mod tests {
         let _result = handler.handle(&event, &mut ctx).await.unwrap();
 
         assert!(
-            !ctx.state.has_executing_tools(),
+            !ctx.state.tool_state().has_executing_tools(),
             "ToolResult must remove the tool from the executing set"
         );
     }

@@ -52,7 +52,7 @@ pub(crate) async fn process_print_stream(
                 return Ok(PrintStreamResult::Error(e));
             }
             StreamEvent::ToolUseStart { id, name, index } => {
-                if let Err(e) = state.tool_loop_mut().start_streaming() {
+                if let Err(e) = state.tool_state_mut().tool_loop_mut().start_streaming() {
                     tracing::warn!("Failed to start streaming in print mode tool use: {}", e);
                 }
                 state.handle_tool_use_start(id, name, index);
@@ -64,7 +64,7 @@ pub(crate) async fn process_print_stream(
                 state.handle_tool_use_input_delta(index, &partial_json);
             }
             StreamEvent::ToolUseComplete { index } => {
-                state.handle_tool_use_complete(index)?;
+                state.tool_state_mut().handle_tool_use_complete(index)?;
             }
             _ => {}
         }
@@ -113,9 +113,12 @@ async fn run_tool_continuation_cycle(
     state: &mut AppState,
     client: &Arc<dyn LlmProvider>,
 ) -> Result<()> {
-    while matches!(state.tool_loop_state(), ToolLoopState::PendingApproval) {
+    while matches!(
+        state.tool_state().tool_loop_state(),
+        ToolLoopState::PendingApproval
+    ) {
         // Auto-approve all tools in non-interactive mode
-        state.approve_all_tools()?;
+        state.tool_state_mut().approve_all_tools()?;
 
         // Execute the tools
         let needs_permission = state.execute_pending_tools().await?;
@@ -215,7 +218,12 @@ pub(crate) async fn run_print_mode(config: &Config, prompt: &str) -> Result<()> 
     };
 
     // If there are no tool uses, add the assistant message to both display and API
-    if !response.is_empty() && !matches!(state.tool_loop_state(), ToolLoopState::PendingApproval) {
+    if !response.is_empty()
+        && !matches!(
+            state.tool_state().tool_loop_state(),
+            ToolLoopState::PendingApproval
+        )
+    {
         state.add_message(Message {
             role: Role::Assistant,
             content: response.clone(),

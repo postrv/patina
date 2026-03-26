@@ -12,35 +12,6 @@ impl AppState {
     // Tool Execution Integration (thin wrappers around ToolExecutionState)
     // ========================================================================
 
-    /// Returns a reference to the tool loop state.
-    #[must_use]
-    pub fn tool_loop(&self) -> &ToolLoop {
-        self.tool_state.tool_loop()
-    }
-
-    /// Returns a mutable reference to the tool loop.
-    pub fn tool_loop_mut(&mut self) -> &mut ToolLoop {
-        self.tool_state.tool_loop_mut()
-    }
-
-    /// Returns the current tool loop state.
-    #[must_use]
-    pub fn tool_loop_state(&self) -> &ToolLoopState {
-        self.tool_state.tool_loop_state()
-    }
-
-    /// Returns the pending permission request, if any.
-    #[must_use]
-    pub fn pending_permission(&self) -> Option<&PermissionRequest> {
-        self.tool_state.pending_permission()
-    }
-
-    /// Returns true if there's a pending permission prompt.
-    #[must_use]
-    pub fn has_pending_permission(&self) -> bool {
-        self.tool_state.has_pending_permission()
-    }
-
     /// Sets a pending permission request.
     ///
     /// The UI should display this as a modal prompt.
@@ -256,27 +227,6 @@ impl AppState {
         self.dirty.messages = true;
     }
 
-    /// Handles tool_use completion.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the tool loop rejects the completion.
-    pub fn handle_tool_use_complete(&mut self, index: usize) -> Result<()> {
-        self.tool_state.handle_tool_use_complete(index)
-    }
-
-    /// Handles message completion with a stop reason.
-    ///
-    /// If the stop reason is `ToolUse`, transitions the tool loop to
-    /// `PendingApproval` state.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the state transition is invalid.
-    pub fn handle_message_complete(&mut self, stop_reason: StopReason) -> Result<()> {
-        self.tool_state.handle_message_complete(stop_reason)
-    }
-
     /// Executes all pending tools that have been approved.
     ///
     /// Creates tool blocks for UI display, executes the tools, and
@@ -354,18 +304,6 @@ impl AppState {
         Ok(result)
     }
 
-    /// Finishes tool execution and returns continuation data.
-    ///
-    /// The continuation data contains the messages needed to continue
-    /// the conversation with Claude.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the tool loop is not in the expected state.
-    pub fn finish_tool_execution(&mut self) -> Result<ContinuationData> {
-        self.tool_state.finish_tool_execution()
-    }
-
     /// Completes tool execution and prepares the conversation for continuation.
     ///
     /// This is the shared logic between `run_print_mode()` and
@@ -384,7 +322,7 @@ impl AppState {
     pub fn complete_tool_cycle(&mut self) -> Result<()> {
         use crate::app::tool_loop::{format_tool_results_for_display, truncate_tool_results};
 
-        let continuation = self.finish_tool_execution()?;
+        let continuation = self.tool_state.finish_tool_execution()?;
         let (assistant_msg, mut user_msg) = continuation.build_messages();
 
         self.api_messages_mut().push(assistant_msg);
@@ -398,44 +336,14 @@ impl AppState {
         });
         self.api_messages_mut().push(user_msg);
 
-        self.tool_loop_mut().start_streaming()?;
+        self.tool_state.tool_loop_mut().start_streaming()?;
         Ok(())
-    }
-
-    /// Approves all pending tools for execution.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the tool loop is not in `PendingApproval` state.
-    pub fn approve_all_tools(&mut self) -> Result<()> {
-        self.tool_state.approve_all_tools()
-    }
-
-    /// Denies all pending tools.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the tool loop is not in `PendingApproval` state.
-    pub fn deny_all_tools(&mut self) -> Result<()> {
-        self.tool_state.deny_all_tools()
     }
 
     /// Resets the tool loop to idle state.
     pub fn reset_tool_loop(&mut self) {
         self.tool_state.reset_tool_loop();
         self.dirty.full = true;
-    }
-
-    /// Returns true if the tool loop is waiting for user action.
-    #[must_use]
-    pub fn tool_loop_needs_user_action(&self) -> bool {
-        self.tool_state.tool_loop_needs_user_action()
-    }
-
-    /// Returns true if the tool loop is actively processing.
-    #[must_use]
-    pub fn tool_loop_is_active(&self) -> bool {
-        self.tool_state.tool_loop_is_active()
     }
 
     // ========================================================================
@@ -468,24 +376,12 @@ impl AppState {
         self.dirty.messages = true;
     }
 
-    /// Returns a slice of all tool blocks for rendering.
-    #[must_use]
-    pub fn tool_blocks(&self) -> &[ToolBlockState] {
-        self.tool_state.tool_blocks()
-    }
-
     /// Clears all tool blocks.
     ///
     /// Call this when starting a new conversation turn.
     pub fn clear_tool_blocks(&mut self) {
         self.tool_state.clear_tool_blocks();
         self.dirty.messages = true;
-    }
-
-    /// Returns true if there are any tool blocks to display.
-    #[must_use]
-    pub fn has_tool_blocks(&self) -> bool {
-        self.tool_state.has_tool_blocks()
     }
 
     // ========================================================================
@@ -605,49 +501,6 @@ impl AppState {
         rx: mpsc::Receiver<(String, crate::types::ToolResultBlock)>,
     ) {
         self.tool_state.set_tool_result_rx(rx);
-    }
-
-    /// Returns true if a tool result channel is currently set.
-    #[must_use]
-    pub fn has_tool_result_rx(&self) -> bool {
-        self.tool_state.has_tool_result_rx()
-    }
-
-    /// Attempts to receive a tool result without blocking.
-    ///
-    /// Returns `Some((tool_id, result))` if a result is available,
-    /// `None` if no result is ready or channel is not set.
-    pub fn try_recv_tool_result(&mut self) -> Option<(String, crate::types::ToolResultBlock)> {
-        self.tool_state.try_recv_tool_result()
-    }
-
-    /// Receives a tool result asynchronously.
-    ///
-    /// Returns `None` immediately if no channel is set, otherwise waits for
-    /// the next result. This is designed for use in `tokio::select!`.
-    ///
-    /// # Returns
-    ///
-    /// - `Some((tool_id, result))` - A tool completed execution
-    /// - `None` - Channel closed or no channel set
-    pub async fn recv_tool_result(&mut self) -> Option<(String, crate::types::ToolResultBlock)> {
-        self.tool_state.recv_tool_result().await
-    }
-
-    /// Clears the tool result channel.
-    ///
-    /// Called after all tools have completed and results have been processed.
-    pub fn clear_tool_result_rx(&mut self) {
-        self.tool_state.clear_tool_result_rx();
-    }
-
-    /// Adds a pending tool to the tool loop.
-    ///
-    /// # Arguments
-    ///
-    /// * `tool_use` - The tool use block to add
-    pub fn add_pending_tool(&mut self, tool_use: crate::types::ToolUseBlock) {
-        self.tool_state.add_pending_tool(tool_use);
     }
 
     /// Intercepts special tools that need synchronous or UI-driven handling.
@@ -874,21 +727,6 @@ impl AppState {
         Some(handle)
     }
 
-    /// Returns true if there are any tools currently executing.
-    #[must_use]
-    pub fn has_executing_tools(&self) -> bool {
-        self.tool_state.has_executing_tools()
-    }
-
-    /// Marks a tool as currently executing.
-    ///
-    /// # Arguments
-    ///
-    /// * `tool_id` - The ID of the tool to mark as executing
-    pub fn mark_tool_executing(&mut self, tool_id: &str) {
-        self.tool_state.mark_tool_executing(tool_id);
-    }
-
     /// Records a tool result and removes the tool from executing set.
     ///
     /// Updates the tool loop, removes the tool from the executing set,
@@ -908,12 +746,6 @@ impl AppState {
         self.update_timeline_tool_by_id(tool_id, output, is_error);
 
         self.dirty.messages = true;
-    }
-
-    /// Returns true if all pending tools have completed execution.
-    #[must_use]
-    pub fn all_tools_complete(&self) -> bool {
-        self.tool_state.all_tools_complete()
     }
 
     /// Adds a tool to the timeline in executing state (no output yet).

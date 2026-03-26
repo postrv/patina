@@ -532,7 +532,11 @@ fn test_tool_use_response_not_added_to_display_by_append_chunk() {
     state.mark_rendered();
 
     // Start streaming
-    state.tool_loop_mut().start_streaming().unwrap();
+    state
+        .tool_state_mut()
+        .tool_loop_mut()
+        .start_streaming()
+        .unwrap();
     state.set_streaming(true);
 
     // Simulate streaming text via ContentDelta
@@ -543,7 +547,7 @@ fn test_tool_use_response_not_added_to_display_by_append_chunk() {
     // Simulate tool_use events
     state.handle_tool_use_start("toolu_123".to_string(), "bash".to_string(), 0);
     state.handle_tool_use_input_delta(0, r#"{"command":"ls"}"#);
-    state.handle_tool_use_complete(0).unwrap();
+    state.tool_state_mut().handle_tool_use_complete(0).unwrap();
 
     // Record timeline length before MessageComplete
     let timeline_len_before = state.timeline().len();
@@ -563,7 +567,10 @@ fn test_tool_use_response_not_added_to_display_by_append_chunk() {
     );
 
     // The text should be stored in tool_loop for later use
-    assert_eq!(state.tool_loop().text_content(), "I'll help you.");
+    assert_eq!(
+        state.tool_state().tool_loop().text_content(),
+        "I'll help you."
+    );
 }
 
 /// Tests that normal (non-tool_use) responses are finalized in timeline.
@@ -577,7 +584,11 @@ fn test_normal_response_added_to_display_by_append_chunk() {
     state.mark_rendered();
 
     // Start streaming
-    state.tool_loop_mut().start_streaming().unwrap();
+    state
+        .tool_state_mut()
+        .tool_loop_mut()
+        .start_streaming()
+        .unwrap();
     state.set_streaming(true);
     state
         .append_chunk(StreamEvent::ContentDelta("Here's my response.".to_string()))
@@ -607,7 +618,11 @@ fn test_tool_loop_preserves_text_content() {
     let mut state = new_state();
 
     // Start streaming
-    state.tool_loop_mut().start_streaming().unwrap();
+    state
+        .tool_state_mut()
+        .tool_loop_mut()
+        .start_streaming()
+        .unwrap();
     state.set_streaming(true);
 
     // Stream some text
@@ -619,7 +634,10 @@ fn test_tool_loop_preserves_text_content() {
         .unwrap();
 
     // Tool loop should have the full text
-    assert_eq!(state.tool_loop().text_content(), "Let me help you.");
+    assert_eq!(
+        state.tool_state().tool_loop().text_content(),
+        "Let me help you."
+    );
 }
 
 // ============================================================================
@@ -821,7 +839,10 @@ fn test_restore_from_session_restores_session_id() {
 #[test]
 fn test_appstate_has_tool_loop() {
     let state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
-    assert!(matches!(state.tool_loop_state(), ToolLoopState::Idle));
+    assert!(matches!(
+        state.tool_state().tool_loop_state(),
+        ToolLoopState::Idle
+    ));
 }
 
 #[test]
@@ -829,24 +850,31 @@ fn test_appstate_receives_tool_use() {
     let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
 
     // Start streaming
-    state.tool_loop_mut().start_streaming().unwrap();
+    state
+        .tool_state_mut()
+        .tool_loop_mut()
+        .start_streaming()
+        .unwrap();
 
     // Simulate receiving tool use events
     state.handle_tool_use_start("toolu_123".to_string(), "bash".to_string(), 0);
     state.handle_tool_use_input_delta(0, r#"{"command":"ls"}"#);
-    state.handle_tool_use_complete(0).unwrap();
+    state.tool_state_mut().handle_tool_use_complete(0).unwrap();
 
     // Complete the message with tool_use stop reason
-    state.handle_message_complete(StopReason::ToolUse).unwrap();
+    state
+        .tool_state_mut()
+        .handle_message_complete(StopReason::ToolUse)
+        .unwrap();
 
     // Should be in PendingApproval state
     assert!(matches!(
-        state.tool_loop_state(),
+        state.tool_state().tool_loop_state(),
         ToolLoopState::PendingApproval
     ));
 
     // Should need user action
-    assert!(state.tool_loop_needs_user_action());
+    assert!(state.tool_state().tool_loop_needs_user_action());
 }
 
 #[test]
@@ -854,36 +882,46 @@ fn test_appstate_approve_and_deny_tools() {
     let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
 
     // Set up tool use
-    state.tool_loop_mut().start_streaming().unwrap();
+    state
+        .tool_state_mut()
+        .tool_loop_mut()
+        .start_streaming()
+        .unwrap();
     state.handle_tool_use_start("toolu_1".to_string(), "bash".to_string(), 0);
     state.handle_tool_use_input_delta(0, "{}");
-    state.handle_tool_use_complete(0).unwrap();
-    state.handle_message_complete(StopReason::ToolUse).unwrap();
+    state.tool_state_mut().handle_tool_use_complete(0).unwrap();
+    state
+        .tool_state_mut()
+        .handle_message_complete(StopReason::ToolUse)
+        .unwrap();
 
     // Deny all
-    state.deny_all_tools().unwrap();
-    assert!(matches!(state.tool_loop_state(), ToolLoopState::Idle));
+    state.tool_state_mut().deny_all_tools().unwrap();
+    assert!(matches!(
+        state.tool_state().tool_loop_state(),
+        ToolLoopState::Idle
+    ));
 }
 
 #[test]
 fn test_appstate_pending_permission() {
     let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
 
-    assert!(!state.has_pending_permission());
-    assert!(state.pending_permission().is_none());
+    assert!(!state.tool_state().has_pending_permission());
+    assert!(state.tool_state().pending_permission().is_none());
 
     // Set a pending permission
     let request = PermissionRequest::new("bash", Some("rm -rf temp"), "Execute command");
     state.set_pending_permission(request);
 
-    assert!(state.has_pending_permission());
-    assert!(state.pending_permission().is_some());
-    let pending = state.pending_permission().unwrap();
+    assert!(state.tool_state().has_pending_permission());
+    assert!(state.tool_state().pending_permission().is_some());
+    let pending = state.tool_state().pending_permission().unwrap();
     assert_eq!(pending.tool_name, "bash");
 
     // Clear it
     state.clear_pending_permission();
-    assert!(!state.has_pending_permission());
+    assert!(!state.tool_state().has_pending_permission());
 }
 
 #[tokio::test]
@@ -900,7 +938,7 @@ async fn test_appstate_handles_permission_response() {
         .await;
 
     // Permission should be cleared
-    assert!(!state.has_pending_permission());
+    assert!(!state.tool_state().has_pending_permission());
 }
 
 #[test]
@@ -908,7 +946,11 @@ fn test_appstate_reset_tool_loop() {
     let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
 
     // Set up some state
-    state.tool_loop_mut().start_streaming().unwrap();
+    state
+        .tool_state_mut()
+        .tool_loop_mut()
+        .start_streaming()
+        .unwrap();
     state.handle_tool_use_start("toolu_1".to_string(), "bash".to_string(), 0);
     let request = PermissionRequest::new("bash", None, "test");
     state.set_pending_permission(request);
@@ -916,8 +958,11 @@ fn test_appstate_reset_tool_loop() {
     // Reset
     state.reset_tool_loop();
 
-    assert!(matches!(state.tool_loop_state(), ToolLoopState::Idle));
-    assert!(!state.has_pending_permission());
+    assert!(matches!(
+        state.tool_state().tool_loop_state(),
+        ToolLoopState::Idle
+    ));
+    assert!(!state.tool_state().has_pending_permission());
 }
 
 #[test]
@@ -925,13 +970,17 @@ fn test_appstate_tool_loop_state_helpers() {
     let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
 
     // Initially idle - needs user action
-    assert!(state.tool_loop_needs_user_action());
-    assert!(!state.tool_loop_is_active());
+    assert!(state.tool_state().tool_loop_needs_user_action());
+    assert!(!state.tool_state().tool_loop_is_active());
 
     // Start streaming - active
-    state.tool_loop_mut().start_streaming().unwrap();
-    assert!(!state.tool_loop_needs_user_action());
-    assert!(state.tool_loop_is_active());
+    state
+        .tool_state_mut()
+        .tool_loop_mut()
+        .start_streaming()
+        .unwrap();
+    assert!(!state.tool_state().tool_loop_needs_user_action());
+    assert!(state.tool_state().tool_loop_is_active());
 }
 
 // ========================================================================
@@ -1059,8 +1108,8 @@ fn test_scroll_state_accessor() {
 #[test]
 fn test_tool_blocks_initially_empty() {
     let state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
-    assert!(state.tool_blocks().is_empty());
-    assert!(!state.has_tool_blocks());
+    assert!(state.tool_state().tool_blocks().is_empty());
+    assert!(!state.tool_state().has_tool_blocks());
 }
 
 #[test]
@@ -1070,10 +1119,10 @@ fn test_start_tool_block() {
     let index = state.start_tool_block("bash", "git status");
 
     assert_eq!(index, 0);
-    assert!(state.has_tool_blocks());
-    assert_eq!(state.tool_blocks().len(), 1);
+    assert!(state.tool_state().has_tool_blocks());
+    assert_eq!(state.tool_state().tool_blocks().len(), 1);
 
-    let block = &state.tool_blocks()[0];
+    let block = &state.tool_state().tool_blocks()[0];
     assert_eq!(block.tool_name(), "bash");
     assert_eq!(block.tool_input(), "git status");
     assert!(!block.is_complete());
@@ -1086,7 +1135,7 @@ fn test_complete_tool_block_success() {
 
     state.complete_tool_block(index, "hello", false);
 
-    let block = &state.tool_blocks()[0];
+    let block = &state.tool_state().tool_blocks()[0];
     assert!(block.is_complete());
     assert_eq!(block.result(), Some("hello"));
     assert!(!block.is_error());
@@ -1099,7 +1148,7 @@ fn test_complete_tool_block_error() {
 
     state.complete_tool_block(index, "Command not found", true);
 
-    let block = &state.tool_blocks()[0];
+    let block = &state.tool_state().tool_blocks()[0];
     assert!(block.is_complete());
     assert_eq!(block.result(), Some("Command not found"));
     assert!(block.is_error());
@@ -1114,13 +1163,13 @@ fn test_multiple_tool_blocks() {
 
     assert_eq!(idx1, 0);
     assert_eq!(idx2, 1);
-    assert_eq!(state.tool_blocks().len(), 2);
+    assert_eq!(state.tool_state().tool_blocks().len(), 2);
 
     state.complete_tool_block(idx1, "file1.txt\nfile2.txt", false);
     state.complete_tool_block(idx2, "file contents", false);
 
-    assert!(state.tool_blocks()[0].is_complete());
-    assert!(state.tool_blocks()[1].is_complete());
+    assert!(state.tool_state().tool_blocks()[0].is_complete());
+    assert!(state.tool_state().tool_blocks()[1].is_complete());
 }
 
 #[test]
@@ -1129,12 +1178,12 @@ fn test_clear_tool_blocks() {
 
     state.start_tool_block("bash", "ls");
     state.start_tool_block("read", "/tmp/test");
-    assert_eq!(state.tool_blocks().len(), 2);
+    assert_eq!(state.tool_state().tool_blocks().len(), 2);
 
     state.clear_tool_blocks();
 
-    assert!(state.tool_blocks().is_empty());
-    assert!(!state.has_tool_blocks());
+    assert!(state.tool_state().tool_blocks().is_empty());
+    assert!(!state.tool_state().has_tool_blocks());
 }
 
 #[test]
@@ -1144,7 +1193,7 @@ fn test_complete_invalid_index_is_safe() {
     // Completing a non-existent index should not panic
     state.complete_tool_block(999, "result", false);
 
-    assert!(state.tool_blocks().is_empty());
+    assert!(state.tool_state().tool_blocks().is_empty());
 }
 
 // ========================================================================
@@ -1796,10 +1845,10 @@ async fn test_recv_tool_result_returns_none_when_no_channel() {
     let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
 
     // Initially tool_result_rx is None
-    assert!(!state.has_tool_result_rx());
+    assert!(!state.tool_state().has_tool_result_rx());
 
     // recv_tool_result should return None immediately, not block
-    let result = state.recv_tool_result().await;
+    let result = state.tool_state_mut().recv_tool_result().await;
     assert!(result.is_none());
 }
 
@@ -1810,7 +1859,7 @@ async fn test_recv_tool_result_receives_results_when_channel_set() {
     // Set up a tool result channel
     let (tx, rx) = mpsc::channel(100);
     state.set_tool_result_rx(rx);
-    assert!(state.has_tool_result_rx());
+    assert!(state.tool_state().has_tool_result_rx());
 
     // Send a result
     let result_block = ToolResultBlock {
@@ -1823,7 +1872,7 @@ async fn test_recv_tool_result_receives_results_when_channel_set() {
         .unwrap();
 
     // Should receive the result
-    let result = state.recv_tool_result().await;
+    let result = state.tool_state_mut().recv_tool_result().await;
     assert!(result.is_some());
     let (id, block) = result.unwrap();
     assert_eq!(id, "toolu_123");
@@ -1837,7 +1886,7 @@ async fn test_recv_background_event_returns_none_when_no_channels() {
 
     // Initially both channels are None
     assert!(!state.has_streaming());
-    assert!(!state.has_tool_result_rx());
+    assert!(!state.tool_state().has_tool_result_rx());
     assert!(!state.has_background_work());
 
     // recv_background_event should return None immediately, not block
@@ -1903,11 +1952,11 @@ fn test_clear_tool_result_rx() {
     // Set up channel
     let (_tx, rx) = mpsc::channel(100);
     state.set_tool_result_rx(rx);
-    assert!(state.has_tool_result_rx());
+    assert!(state.tool_state().has_tool_result_rx());
 
     // Clear it
-    state.clear_tool_result_rx();
-    assert!(!state.has_tool_result_rx());
+    state.tool_state_mut().clear_tool_result_rx();
+    assert!(!state.tool_state().has_tool_result_rx());
 }
 
 #[test]
@@ -1931,20 +1980,27 @@ async fn test_spawn_tool_execution_sets_channel() {
     let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
 
     // No channel initially
-    assert!(!state.has_tool_result_rx());
+    assert!(!state.tool_state().has_tool_result_rx());
 
     // Set up tool use and spawn
-    state.tool_loop_mut().start_streaming().unwrap();
+    state
+        .tool_state_mut()
+        .tool_loop_mut()
+        .start_streaming()
+        .unwrap();
     state.handle_tool_use_start("toolu_789".to_string(), "bash".to_string(), 0);
     state.handle_tool_use_input_delta(0, r#"{"command":"echo hi"}"#);
-    state.handle_tool_use_complete(0).unwrap();
-    state.handle_message_complete(StopReason::ToolUse).unwrap();
-    state.approve_all_tools().unwrap();
+    state.tool_state_mut().handle_tool_use_complete(0).unwrap();
+    state
+        .tool_state_mut()
+        .handle_message_complete(StopReason::ToolUse)
+        .unwrap();
+    state.tool_state_mut().approve_all_tools().unwrap();
 
     // Spawn should set up channel (requires tokio runtime)
     let _handle = state.spawn_tool_execution();
-    assert!(state.has_tool_result_rx());
-    assert!(state.has_executing_tools());
+    assert!(state.tool_state().has_tool_result_rx());
+    assert!(state.tool_state().has_executing_tools());
 }
 
 #[test]
@@ -1952,8 +2008,8 @@ fn test_record_tool_result_updates_state() {
     let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
 
     // Mark a tool as executing
-    state.mark_tool_executing("toolu_abc");
-    assert!(state.has_executing_tools());
+    state.tool_state_mut().mark_tool_executing("toolu_abc");
+    assert!(state.tool_state().has_executing_tools());
 
     // Record result
     let result = ToolResultBlock {
@@ -1964,7 +2020,7 @@ fn test_record_tool_result_updates_state() {
     state.record_tool_result("toolu_abc", result);
 
     // Should no longer have executing tools
-    assert!(!state.has_executing_tools());
+    assert!(!state.tool_state().has_executing_tools());
 }
 
 #[test]
@@ -1972,11 +2028,11 @@ fn test_all_tools_complete() {
     let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
 
     // No executing tools initially
-    assert!(state.all_tools_complete());
+    assert!(state.tool_state().all_tools_complete());
 
     // Mark a tool as executing
-    state.mark_tool_executing("toolu_xyz");
-    assert!(!state.all_tools_complete());
+    state.tool_state_mut().mark_tool_executing("toolu_xyz");
+    assert!(!state.tool_state().all_tools_complete());
 
     // Record result
     let result = ToolResultBlock {
@@ -1985,7 +2041,7 @@ fn test_all_tools_complete() {
         is_error: false,
     };
     state.record_tool_result("toolu_xyz", result);
-    assert!(state.all_tools_complete());
+    assert!(state.tool_state().all_tools_complete());
 }
 
 // =========================================================================
@@ -2296,11 +2352,11 @@ fn test_tool_execution_state_construction() {
     let state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
 
     // Access tool_state sub-struct fields through AppState delegation
-    assert_eq!(state.tool_loop_state(), &ToolLoopState::Idle);
-    assert!(!state.has_pending_permission());
-    assert!(!state.has_tool_blocks());
-    assert!(!state.has_tool_result_rx());
-    assert!(!state.has_executing_tools());
+    assert_eq!(state.tool_state().tool_loop_state(), &ToolLoopState::Idle);
+    assert!(!state.tool_state().has_pending_permission());
+    assert!(!state.tool_state().has_tool_blocks());
+    assert!(!state.tool_state().has_tool_result_rx());
+    assert!(!state.tool_state().has_executing_tools());
 }
 
 /// Documents the initial state of all 7 tool-related fields in AppState.
@@ -2311,9 +2367,9 @@ fn test_tool_state_field_access_baseline() {
     let state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
 
     // 1. tool_loop: starts Idle (Idle counts as "needs user action")
-    assert_eq!(state.tool_loop_state(), &ToolLoopState::Idle);
-    assert!(!state.tool_loop_is_active());
-    assert!(state.tool_loop_needs_user_action());
+    assert_eq!(state.tool_state().tool_loop_state(), &ToolLoopState::Idle);
+    assert!(!state.tool_state().tool_loop_is_active());
+    assert!(state.tool_state().tool_loop_needs_user_action());
 
     // 2. tool_executor: exists (Arc<HookedToolExecutor>)
     // Accessed via tool_loop.execute_pending() — not directly exposed.
@@ -2324,19 +2380,19 @@ fn test_tool_state_field_access_baseline() {
     // Verified indirectly via pending_permission workflow.
 
     // 4. pending_permission: starts None
-    assert!(!state.has_pending_permission());
-    assert!(state.pending_permission().is_none());
+    assert!(!state.tool_state().has_pending_permission());
+    assert!(state.tool_state().pending_permission().is_none());
 
     // 5. tool_blocks: starts empty
-    assert!(!state.has_tool_blocks());
-    assert!(state.tool_blocks().is_empty());
+    assert!(!state.tool_state().has_tool_blocks());
+    assert!(state.tool_state().tool_blocks().is_empty());
 
     // 6. tool_result_rx: starts None (no background channel)
-    assert!(!state.has_tool_result_rx());
+    assert!(!state.tool_state().has_tool_result_rx());
 
     // 7. executing_tool_ids: starts empty
-    assert!(!state.has_executing_tools());
-    assert!(state.all_tools_complete());
+    assert!(!state.tool_state().has_executing_tools());
+    assert!(state.tool_state().all_tools_complete());
 }
 
 /// Documents tool_loop mutation patterns through the public API.
@@ -2346,8 +2402,8 @@ fn test_tool_state_tool_loop_mutations() {
 
     // Reset resets to Idle
     state.reset_tool_loop();
-    assert_eq!(state.tool_loop_state(), &ToolLoopState::Idle);
-    assert!(!state.tool_loop_is_active());
+    assert_eq!(state.tool_state().tool_loop_state(), &ToolLoopState::Idle);
+    assert!(!state.tool_state().tool_loop_is_active());
 }
 
 /// Documents pending_permission lifecycle through the public API.
@@ -2356,7 +2412,7 @@ fn test_tool_state_pending_permission_lifecycle() {
     let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
 
     // Initially no permission
-    assert!(!state.has_pending_permission());
+    assert!(!state.tool_state().has_pending_permission());
 
     // Set a permission request
     let request = PermissionRequest {
@@ -2365,12 +2421,15 @@ fn test_tool_state_pending_permission_lifecycle() {
         description: "Run shell command".to_string(),
     };
     state.set_pending_permission(request);
-    assert!(state.has_pending_permission());
-    assert_eq!(state.pending_permission().unwrap().tool_name, "bash");
+    assert!(state.tool_state().has_pending_permission());
+    assert_eq!(
+        state.tool_state().pending_permission().unwrap().tool_name,
+        "bash"
+    );
 
     // Clear permission
     state.clear_pending_permission();
-    assert!(!state.has_pending_permission());
+    assert!(!state.tool_state().has_pending_permission());
 }
 
 /// Documents tool_blocks lifecycle through the public API.
@@ -2381,13 +2440,13 @@ fn test_tool_state_tool_blocks_lifecycle() {
     // Start a tool block
     let idx = state.start_tool_block("bash", r#"{"command": "ls"}"#);
     assert_eq!(idx, 0);
-    assert!(state.has_tool_blocks());
-    assert_eq!(state.tool_blocks().len(), 1);
+    assert!(state.tool_state().has_tool_blocks());
+    assert_eq!(state.tool_state().tool_blocks().len(), 1);
 
     // Complete the block with a result
     state.complete_tool_block(idx, "file1.txt\nfile2.txt", false);
     assert_eq!(
-        state.tool_blocks()[0].result(),
+        state.tool_state().tool_blocks()[0].result(),
         Some("file1.txt\nfile2.txt")
     );
 
@@ -2395,12 +2454,12 @@ fn test_tool_state_tool_blocks_lifecycle() {
     let idx2 = state.start_tool_block("read_file", r#"{"path": "/missing"}"#);
     assert_eq!(idx2, 1);
     state.complete_tool_block(idx2, "File not found", true);
-    assert!(state.tool_blocks()[1].is_error());
+    assert!(state.tool_state().tool_blocks()[1].is_error());
 
     // Clear all blocks
     state.clear_tool_blocks();
-    assert!(!state.has_tool_blocks());
-    assert!(state.tool_blocks().is_empty());
+    assert!(!state.tool_state().has_tool_blocks());
+    assert!(state.tool_state().tool_blocks().is_empty());
 }
 
 /// Documents executing_tool_ids tracking through the public API.
@@ -2409,16 +2468,16 @@ fn test_tool_state_executing_tool_ids_tracking() {
     let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
 
     // Initially empty
-    assert!(!state.has_executing_tools());
+    assert!(!state.tool_state().has_executing_tools());
 
     // Mark a tool as executing
-    state.mark_tool_executing("tool_001");
-    assert!(state.has_executing_tools());
-    assert!(!state.all_tools_complete());
+    state.tool_state_mut().mark_tool_executing("tool_001");
+    assert!(state.tool_state().has_executing_tools());
+    assert!(!state.tool_state().all_tools_complete());
 
     // Mark another
-    state.mark_tool_executing("tool_002");
-    assert!(state.has_executing_tools());
+    state.tool_state_mut().mark_tool_executing("tool_002");
+    assert!(state.tool_state().has_executing_tools());
 
     // Record result for first tool — remove from executing set
     let result = ToolResultBlock {
@@ -2428,7 +2487,7 @@ fn test_tool_state_executing_tool_ids_tracking() {
     };
     state.record_tool_result("tool_001", result);
     // Still has tool_002 executing
-    assert!(state.has_executing_tools());
+    assert!(state.tool_state().has_executing_tools());
 
     // Record result for second tool
     let result2 = ToolResultBlock {
@@ -2437,7 +2496,7 @@ fn test_tool_state_executing_tool_ids_tracking() {
         is_error: false,
     };
     state.record_tool_result("tool_002", result2);
-    assert!(!state.has_executing_tools());
+    assert!(!state.tool_state().has_executing_tools());
 }
 
 /// Documents tool_result_rx channel lifecycle through the public API.
@@ -2446,13 +2505,13 @@ fn test_tool_state_result_channel_lifecycle() {
     let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
 
     // Initially no channel
-    assert!(!state.has_tool_result_rx());
-    assert!(state.try_recv_tool_result().is_none());
+    assert!(!state.tool_state().has_tool_result_rx());
+    assert!(state.tool_state_mut().try_recv_tool_result().is_none());
 
     // Set a channel
     let (tx, rx) = mpsc::channel(100);
     state.set_tool_result_rx(rx);
-    assert!(state.has_tool_result_rx());
+    assert!(state.tool_state().has_tool_result_rx());
 
     // Send a result through the channel
     let result = ToolResultBlock {
@@ -2463,15 +2522,15 @@ fn test_tool_state_result_channel_lifecycle() {
     tx.try_send(("t1".to_string(), result)).unwrap();
 
     // Receive it
-    let received = state.try_recv_tool_result();
+    let received = state.tool_state_mut().try_recv_tool_result();
     assert!(received.is_some());
     let (id, block) = received.unwrap();
     assert_eq!(id, "t1");
     assert_eq!(block.content, "ok");
 
     // Clear channel
-    state.clear_tool_result_rx();
-    assert!(!state.has_tool_result_rx());
+    state.tool_state_mut().clear_tool_result_rx();
+    assert!(!state.tool_state().has_tool_result_rx());
 }
 
 // ========================================================================
@@ -2485,25 +2544,25 @@ fn test_tool_state_delegation_methods() {
     let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
 
     // tool_loop() returns immutable reference
-    assert_eq!(state.tool_loop().state(), &ToolLoopState::Idle);
+    assert_eq!(state.tool_state().tool_loop().state(), &ToolLoopState::Idle);
 
     // tool_loop_mut() returns mutable reference
-    state.tool_loop_mut().reset();
-    assert_eq!(state.tool_loop_state(), &ToolLoopState::Idle);
+    state.tool_state_mut().tool_loop_mut().reset();
+    assert_eq!(state.tool_state().tool_loop_state(), &ToolLoopState::Idle);
 
     // has_executing_tools() delegates correctly (is_tool_executing equivalent)
-    assert!(!state.has_executing_tools());
-    state.mark_tool_executing("t1");
-    assert!(state.has_executing_tools());
+    assert!(!state.tool_state().has_executing_tools());
+    state.tool_state_mut().mark_tool_executing("t1");
+    assert!(state.tool_state().has_executing_tools());
 
     // pending_permission() delegates correctly
-    assert!(state.pending_permission().is_none());
+    assert!(state.tool_state().pending_permission().is_none());
     state.set_pending_permission(PermissionRequest {
         tool_name: "read".to_string(),
         tool_input: None,
         description: "Read file".to_string(),
     });
-    assert!(state.pending_permission().is_some());
+    assert!(state.tool_state().pending_permission().is_some());
 }
 
 // ========================================================================
