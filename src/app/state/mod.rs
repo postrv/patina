@@ -1362,9 +1362,14 @@ impl AppState {
     ///
     /// * `feedback` - Layout metrics from the most recent render pass
     pub fn apply_render_feedback(&mut self, feedback: &RenderFeedback) {
-        self.ui_selection.update_rendered_lines_from_strings(&feedback.wrapped_lines);
-        self.display.scroll.set_viewport_height(feedback.viewport_height);
-        self.display.scroll.set_content_height(feedback.content_height);
+        self.ui_selection
+            .update_rendered_lines_from_strings(&feedback.wrapped_lines);
+        self.display
+            .scroll
+            .set_viewport_height(feedback.viewport_height);
+        self.display
+            .scroll
+            .set_content_height(feedback.content_height);
     }
 }
 
