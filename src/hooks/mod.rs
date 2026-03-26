@@ -21,8 +21,10 @@ pub enum HookEvent {
     SessionEnd,
     Notification,
     Stop,
+    StopFailure,
     SubagentStop,
     PreCompact,
+    PostCompact,
 }
 
 impl HookEvent {
@@ -37,8 +39,10 @@ impl HookEvent {
             HookEvent::SessionEnd => "SessionEnd",
             HookEvent::Notification => "Notification",
             HookEvent::Stop => "Stop",
+            HookEvent::StopFailure => "StopFailure",
             HookEvent::SubagentStop => "SubagentStop",
             HookEvent::PreCompact => "PreCompact",
+            HookEvent::PostCompact => "PostCompact",
         }
     }
 }
@@ -278,7 +282,7 @@ impl Default for HookExecutor {
 
 /// High-level hook manager for application lifecycle integration.
 ///
-/// Provides convenience methods for firing all 11 hook events with appropriate
+/// Provides convenience methods for firing all 13 hook events with appropriate
 /// context construction. This is the primary interface for integrating hooks
 /// into the application.
 ///
@@ -395,11 +399,17 @@ impl HookManager {
         if let Some(hooks) = config.stop {
             self.executor.register(HookEvent::Stop, hooks);
         }
+        if let Some(hooks) = config.stop_failure {
+            self.executor.register(HookEvent::StopFailure, hooks);
+        }
         if let Some(hooks) = config.subagent_stop {
             self.executor.register(HookEvent::SubagentStop, hooks);
         }
         if let Some(hooks) = config.pre_compact {
             self.executor.register(HookEvent::PreCompact, hooks);
+        }
+        if let Some(hooks) = config.post_compact {
+            self.executor.register(HookEvent::PostCompact, hooks);
         }
     }
 
@@ -677,6 +687,43 @@ impl HookManager {
         };
         self.executor.execute(HookEvent::PreCompact, &context).await
     }
+
+    /// Fires the PostCompact event after successful compaction.
+    ///
+    /// Called after context compaction completes with summary content.
+    pub async fn fire_post_compact(&self) -> Result<HookResult> {
+        let context = HookContext {
+            hook_event_name: HookEvent::PostCompact.as_str().to_string(),
+            session_id: self.session_id.clone(),
+            tool_name: None,
+            tool_input: None,
+            tool_response: None,
+            prompt: None,
+            stop_reason: None,
+        };
+        self.executor
+            .execute(HookEvent::PostCompact, &context)
+            .await
+    }
+
+    /// Fires the StopFailure event when an API error ends a turn.
+    ///
+    /// Called when the streaming response encounters a fatal error
+    /// that prevents normal completion.
+    pub async fn fire_stop_failure(&self, error: &str) -> Result<HookResult> {
+        let context = HookContext {
+            hook_event_name: HookEvent::StopFailure.as_str().to_string(),
+            session_id: self.session_id.clone(),
+            tool_name: None,
+            tool_input: None,
+            tool_response: None,
+            prompt: None,
+            stop_reason: Some(error.to_string()),
+        };
+        self.executor
+            .execute(HookEvent::StopFailure, &context)
+            .await
+    }
 }
 
 /// Configuration structure for hooks loaded from TOML.
@@ -700,10 +747,14 @@ struct HooksConfig {
     notification: Option<Vec<HookDefinition>>,
     #[serde(rename = "Stop")]
     stop: Option<Vec<HookDefinition>>,
+    #[serde(rename = "StopFailure")]
+    stop_failure: Option<Vec<HookDefinition>>,
     #[serde(rename = "SubagentStop")]
     subagent_stop: Option<Vec<HookDefinition>>,
     #[serde(rename = "PreCompact")]
     pre_compact: Option<Vec<HookDefinition>>,
+    #[serde(rename = "PostCompact")]
+    post_compact: Option<Vec<HookDefinition>>,
 }
 
 #[cfg(test)]
@@ -847,8 +898,10 @@ mod tests {
             (HookEvent::SessionEnd, "SessionEnd"),
             (HookEvent::Notification, "Notification"),
             (HookEvent::Stop, "Stop"),
+            (HookEvent::StopFailure, "StopFailure"),
             (HookEvent::SubagentStop, "SubagentStop"),
             (HookEvent::PreCompact, "PreCompact"),
+            (HookEvent::PostCompact, "PostCompact"),
         ];
         for (event, name) in &expected {
             assert_eq!(
@@ -857,8 +910,8 @@ mod tests {
                 "HookEvent::{name} produced wrong string"
             );
         }
-        // Ensure we tested all 11 variants
-        assert_eq!(expected.len(), 11);
+        // Ensure we tested all 13 variants
+        assert_eq!(expected.len(), 13);
     }
 
     #[test]
