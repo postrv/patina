@@ -1,4 +1,4 @@
-use super::background::{ContinuousLoopStatus, GateResult};
+use crate::types::ui_state::{ContinuousLoopStatus, GateResult};
 
 /// Continuous coding loop state extracted from AppState.
 ///

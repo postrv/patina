@@ -10,7 +10,7 @@
 //!
 //! ```rust,ignore
 //! use patina::tui::widgets::continuous_progress::ContinuousProgressWidget;
-//! use patina::app::state::{ContinuousLoopStatus, GateResult};
+//! use patina::types::{ContinuousLoopStatus, GateResult};
 //!
 //! let widget = ContinuousProgressWidget::new(
 //!     &ContinuousLoopStatus::Running { iteration: 3 },
@@ -28,8 +28,8 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Widget},
 };
 
-use crate::app::state::{ContinuousLoopStatus, GateResult};
 use crate::tui::theme::PatinaTheme;
+use crate::types::{ContinuousLoopStatus, GateResult};
 
 /// Widget for displaying continuous coding session progress.
 pub struct ContinuousProgressWidget<'a> {

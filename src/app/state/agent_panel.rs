@@ -1,5 +1,5 @@
-use super::background::{AgentPanelEntry, AgentPanelStatus};
 use crate::agents::{AgentProgress, ConflictReport, SubagentSpawner};
+use crate::types::ui_state::{AgentPanelEntry, AgentPanelStatus};
 
 /// Agent panel state extracted from AppState.
 ///

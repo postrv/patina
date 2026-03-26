@@ -38,3 +38,6 @@ pub use stream::{
 
 // Unified timeline types
 pub use conversation::{ConversationEntry, Timeline, TimelineError};
+
+// Shared UI state types (used by both app::state and tui)
+pub use ui_state::{AgentPanelEntry, AgentPanelStatus, ContinuousLoopStatus, GateResult};

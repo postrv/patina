@@ -16,12 +16,12 @@ use ratatui::{
 };
 
 use crate::app::state::AppState;
-use crate::app::state::ContinuousLoopStatus;
 use crate::permissions::PermissionRequest;
 use crate::tui::theme::PatinaTheme;
 use crate::tui::widgets::compaction_progress::{CompactionProgressState, CompactionProgressWidget};
 use crate::tui::widgets::continuous_progress::ContinuousProgressWidget;
 use crate::tui::widgets::permission_prompt::{PermissionPromptState, PermissionPromptWidget};
+use crate::types::ContinuousLoopStatus;
 use crate::types::{ConversationEntry, Timeline};
 
 /// Feedback from the render pass that must be applied to AppState.
