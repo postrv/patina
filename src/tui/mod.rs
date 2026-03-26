@@ -15,12 +15,12 @@ use ratatui::{
     Frame,
 };
 
-use crate::app::state::AppState;
 use crate::permissions::PermissionRequest;
 use crate::tui::theme::PatinaTheme;
 use crate::tui::widgets::compaction_progress::{CompactionProgressState, CompactionProgressWidget};
 use crate::tui::widgets::continuous_progress::ContinuousProgressWidget;
 use crate::tui::widgets::permission_prompt::{PermissionPromptState, PermissionPromptWidget};
+use crate::types::render_view::RenderView;
 use crate::types::ContinuousLoopStatus;
 use crate::types::{ConversationEntry, Timeline};
 
@@ -395,7 +395,21 @@ fn render_tool_execution(
     lines.push(Line::from("")); // Spacer between tool blocks
 }
 
-pub fn render(frame: &mut Frame, state: &mut AppState) {
+/// Renders a complete frame from a [`RenderView`], returning layout feedback.
+///
+/// The caller is responsible for applying the returned [`RenderFeedback`] to
+/// mutable application state (e.g., via `AppState::apply_render_feedback`).
+///
+/// # Arguments
+///
+/// * `frame` - The ratatui frame to render into
+/// * `view` - Read-only view of all data needed for rendering
+///
+/// # Returns
+///
+/// Layout metrics that must be written back to application state.
+#[must_use]
+pub fn render(frame: &mut Frame, view: &RenderView) -> RenderFeedback {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -405,40 +419,35 @@ pub fn render(frame: &mut Frame, state: &mut AppState) {
         ])
         .split(frame.area());
 
-    let feedback = render_messages(frame, chunks[0], state);
+    let feedback = render_messages(frame, chunks[0], view);
 
-    // Apply render feedback to state (scroll + selection systems need these)
-    state.update_rendered_lines_from_feedback(&feedback.wrapped_lines);
-    state.set_viewport_height(feedback.viewport_height);
-    state.update_content_height(feedback.content_height);
-
-    render_status_bar(frame, chunks[1], state);
-    render_input(frame, chunks[2], state);
+    render_status_bar(frame, chunks[1], view, &feedback);
+    render_input(frame, chunks[2], view);
 
     // Render completion popup above the input area if active
-    if let Some(completion) = state.completion() {
+    if let Some(completion) = view.completion {
         if !completion.filtered().is_empty() {
             render_completion_popup(frame, chunks[2], completion);
         }
     }
 
     // Render continuous loop status in status bar area if active
-    if *state.continuous_status() != ContinuousLoopStatus::Inactive {
-        render_continuous_overlay(frame, state);
+    if *view.continuous_status != ContinuousLoopStatus::Inactive {
+        render_continuous_overlay(frame, view);
     }
 
     // Render compaction progress overlay if compaction is active
-    if let Some(compaction_state) = state.compaction_state() {
-        render_compaction_overlay(frame, compaction_state, state.throbber_char());
+    if let Some(compaction_state) = view.compaction_state {
+        render_compaction_overlay(frame, compaction_state, view.throbber_char);
     }
 
     // Render permission modal overlay if there's a pending permission request
-    if let Some(request) = state.pending_permission() {
+    if let Some(request) = view.pending_permission {
         render_permission_modal(frame, request);
     }
 
     // Render plan review overlay if there's a pending plan
-    if let Some(plan) = state.pending_plan() {
+    if let Some(plan) = view.pending_plan {
         let area = frame.area();
         let modal_area = widgets::PlanReviewWidget::modal_area(area, plan.step_count());
         let widget = widgets::PlanReviewWidget::new(plan);
@@ -446,7 +455,7 @@ pub fn render(frame: &mut Frame, state: &mut AppState) {
     }
 
     // Render question prompt overlay if there's a pending question
-    if let Some(question) = state.pending_question() {
+    if let Some(question) = view.pending_question {
         let area = frame.area();
         let modal_area = widgets::QuestionPromptWidget::modal_area(
             area,
@@ -456,6 +465,8 @@ pub fn render(frame: &mut Frame, state: &mut AppState) {
         let widget = widgets::QuestionPromptWidget::new(question);
         frame.render_widget(widget, modal_area);
     }
+
+    feedback
 }
 
 /// Renders the compaction progress overlay.
@@ -498,13 +509,13 @@ pub fn render_compaction_overlay(
 /// # Arguments
 ///
 /// * `frame` - The ratatui frame to render into
-/// * `state` - Application state containing continuous loop data
-pub fn render_continuous_overlay(frame: &mut Frame, state: &AppState) {
+/// * `view` - Read-only render view containing continuous loop data
+pub fn render_continuous_overlay(frame: &mut Frame, view: &RenderView) {
     let area = frame.area();
 
     // Calculate panel area - top-right corner, 40 chars wide
-    let gate_count = state.continuous_gate_results().len()
-        + usize::from(state.continuous_checking_gate().is_some());
+    let gate_count =
+        view.continuous_gate_results.len() + usize::from(view.continuous_checking_gate.is_some());
     // 2 borders + status + iteration + gate results (min 4 total height)
     let panel_height = (4 + gate_count).max(4).min(area.height as usize) as u16;
     let panel_width = 45u16.min(area.width.saturating_sub(2));
@@ -514,12 +525,12 @@ pub fn render_continuous_overlay(frame: &mut Frame, state: &AppState) {
     let panel_area = Rect::new(panel_x, panel_y, panel_width, panel_height);
 
     let widget = ContinuousProgressWidget::new(
-        state.continuous_status(),
-        state.continuous_iterations_completed(),
-        state.continuous_gate_results(),
+        view.continuous_status,
+        view.continuous_iterations_completed,
+        view.continuous_gate_results,
     )
-    .with_checking_gate(state.continuous_checking_gate())
-    .with_last_duration(state.continuous_last_duration_ms());
+    .with_checking_gate(view.continuous_checking_gate)
+    .with_last_duration(view.continuous_last_duration_ms);
 
     frame.render_widget(widget, panel_area);
 }
@@ -689,11 +700,11 @@ fn render_permission_modal_dangerous(frame: &mut Frame, area: Rect, state: &Perm
     frame.render_widget(Paragraph::new(hints), chunks[8]);
 }
 
-fn render_messages(frame: &mut Frame, area: Rect, state: &AppState) -> RenderFeedback {
+fn render_messages(frame: &mut Frame, area: Rect, view: &RenderView) -> RenderFeedback {
     // Render using unified timeline
-    let throbber = state.throbber_char();
-    let timeline_entry_count = state.timeline().len();
-    let lines = render_timeline_with_throbber(state.timeline(), throbber);
+    let throbber = view.throbber_char;
+    let timeline_entry_count = view.timeline.len();
+    let lines = render_timeline_with_throbber(view.timeline, throbber);
 
     tracing::debug!(
         timeline_entries = timeline_entry_count,
@@ -726,7 +737,7 @@ fn render_messages(frame: &mut Frame, area: Rect, state: &AppState) -> RenderFee
     // content height decreased (e.g., wrapping calculation changed). We clamp
     // to ensure valid scroll position.
     let max_scroll = wrapped_height.saturating_sub(viewport_height);
-    let clamped_offset = state.scroll_offset().min(max_scroll);
+    let clamped_offset = view.scroll_offset.min(max_scroll);
     let scroll_from_top = max_scroll.saturating_sub(clamped_offset);
 
     tracing::debug!(
@@ -735,10 +746,10 @@ fn render_messages(frame: &mut Frame, area: Rect, state: &AppState) -> RenderFee
         viewport_height,
         content_width,
         max_scroll,
-        raw_offset = state.scroll_offset(),
+        raw_offset = view.scroll_offset,
         clamped_offset,
         scroll_from_top,
-        mode = ?state.scroll_state().mode(),
+        mode = ?view.scroll_state.mode(),
         "scroll calculation"
     );
 
@@ -761,15 +772,15 @@ fn render_messages(frame: &mut Frame, area: Rect, state: &AppState) -> RenderFee
     }
 }
 
-fn render_status_bar(frame: &mut Frame, area: Rect, state: &AppState) {
-    let spans = status_bar::build_status_bar_spans(state);
+fn render_status_bar(frame: &mut Frame, area: Rect, view: &RenderView, feedback: &RenderFeedback) {
+    let spans = status_bar::build_status_bar_spans(view, feedback);
     let line = Line::from(spans);
     let status_bar = Paragraph::new(line).style(PatinaTheme::status_bar());
     frame.render_widget(status_bar, area);
 }
 
-fn render_input(frame: &mut Frame, area: Rect, state: &AppState) {
-    let input = Paragraph::new(state.input())
+fn render_input(frame: &mut Frame, area: Rect, view: &RenderView) {
+    let input = Paragraph::new(view.input)
         .block(
             Block::default()
                 .borders(Borders::ALL)
@@ -780,12 +791,13 @@ fn render_input(frame: &mut Frame, area: Rect, state: &AppState) {
 
     frame.render_widget(input, area);
 
-    frame.set_cursor_position((area.x + state.input().len() as u16 + 1, area.y + 1));
+    frame.set_cursor_position((area.x + view.input.len() as u16 + 1, area.y + 1));
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::state::AppState;
     use ratatui::{backend::TestBackend, Terminal};
 
     /// Creates a test terminal with the given dimensions.
@@ -881,6 +893,16 @@ mod tests {
     // Status bar context token display tests (7.1.2.3)
     // =========================================================================
 
+    /// Creates a dummy `RenderFeedback` for tests that only exercise the
+    /// status bar (which needs the feedback for scroll indicators).
+    fn dummy_feedback() -> RenderFeedback {
+        RenderFeedback {
+            wrapped_lines: Vec::new(),
+            viewport_height: 0,
+            content_height: 0,
+        }
+    }
+
     #[test]
     fn test_status_bar_shows_context_tokens() {
         use crate::types::config::ParallelMode;
@@ -895,10 +917,12 @@ mod tests {
         // Simulate context injection of ~5,000 tokens
         state.set_context_tokens_injected(5_000);
 
+        let feedback = dummy_feedback();
         terminal
             .draw(|frame| {
                 let area = Rect::new(0, 0, 120, 1);
-                render_status_bar(frame, area, &state);
+                let view = state.as_render_view();
+                render_status_bar(frame, area, &view, &feedback);
             })
             .expect("Failed to draw status bar");
 
@@ -927,10 +951,12 @@ mod tests {
             ParallelMode::Enabled,
         );
 
+        let feedback = dummy_feedback();
         terminal
             .draw(|frame| {
                 let area = Rect::new(0, 0, 120, 1);
-                render_status_bar(frame, area, &state);
+                let view = state.as_render_view();
+                render_status_bar(frame, area, &view, &feedback);
             })
             .expect("Failed to draw status bar");
 

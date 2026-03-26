@@ -420,7 +420,14 @@ async fn event_loop(
 
     loop {
         if state.needs_render() {
-            terminal.draw(|frame| tui::render(frame, state))?;
+            let mut feedback = None;
+            terminal.draw(|frame| {
+                let view = state.as_render_view();
+                feedback = Some(tui::render(frame, &view));
+            })?;
+            if let Some(fb) = feedback {
+                state.apply_render_feedback(&fb);
+            }
             state.mark_rendered();
         }
 

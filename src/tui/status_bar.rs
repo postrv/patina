@@ -8,10 +8,11 @@ use ratatui::{
     text::Span,
 };
 
-use crate::app::state::AppState;
 use crate::tui::scroll::AutoScrollMode;
 use crate::tui::selection::FocusArea;
 use crate::tui::theme::PatinaTheme;
+use crate::tui::RenderFeedback;
+use crate::types::render_view::RenderView;
 
 /// Produces git branch spans (icon + branch name).
 ///
@@ -245,34 +246,32 @@ pub fn update_spans(version: Option<&str>) -> Vec<Span<'static>> {
     ]
 }
 
-/// Collects all status bar spans from `AppState` by delegating to pure sub-functions.
+/// Collects all status bar spans from a [`RenderView`] by delegating to pure sub-functions.
 ///
-/// This is the single integration point between `AppState` and the status bar
-/// rendering. The wrapper in `tui/mod.rs` applies the `PatinaTheme::status_bar()`
-/// style and renders the resulting line.
+/// The `feedback` parameter provides freshly-computed viewport and content
+/// heights from the current render pass, ensuring the scroll indicator in the
+/// status bar reflects the actual layout rather than stale values from the
+/// previous frame.
 ///
 /// # Errors
 ///
 /// This function does not return errors.
 #[must_use]
-pub fn build_status_bar_spans(state: &AppState) -> Vec<Span<'static>> {
+pub fn build_status_bar_spans(view: &RenderView, feedback: &RenderFeedback) -> Vec<Span<'static>> {
     let mut spans = Vec::new();
 
-    spans.extend(branch_spans(state.worktree_branch()));
-    spans.extend(modified_spans(state.worktree_modified()));
-    spans.extend(upstream_spans(
-        state.worktree_ahead(),
-        state.worktree_behind(),
-    ));
-    spans.extend(focus_spans(state.focus_area()));
+    spans.extend(branch_spans(view.worktree_branch));
+    spans.extend(modified_spans(view.worktree_modified));
+    spans.extend(upstream_spans(view.worktree_ahead, view.worktree_behind));
+    spans.extend(focus_spans(view.focus_area));
 
-    let selection = state
-        .selection()
+    let selection = view
+        .selection
         .range()
         .map(|(start, end)| (start.line, end.line));
     spans.extend(selection_spans(selection));
 
-    let budget = state.token_budget();
+    let budget = view.token_budget;
     spans.extend(budget_spans(
         budget.used(),
         budget.limit(),
@@ -280,15 +279,16 @@ pub fn build_status_bar_spans(state: &AppState) -> Vec<Span<'static>> {
         budget.is_warning(),
     ));
 
-    spans.extend(context_spans(state.context_tokens_injected()));
-    spans.extend(update_spans(state.update_available()));
+    spans.extend(context_spans(view.context_tokens_injected));
+    spans.extend(update_spans(view.update_available));
 
-    let scroll = state.scroll_state();
+    // Use feedback-provided viewport/content heights so the scroll indicator
+    // reflects the layout computed in *this* frame, not the previous one.
     spans.extend(scroll_spans(
-        scroll.mode(),
-        scroll.offset(),
-        scroll.viewport_height(),
-        scroll.content_height(),
+        view.scroll_state.mode(),
+        view.scroll_state.offset(),
+        feedback.viewport_height,
+        feedback.content_height,
     ));
 
     spans

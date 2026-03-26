@@ -46,7 +46,7 @@ fn create_state_with_messages(message_count: usize) -> AppState {
 /// Benchmark: Full redraw with 100 messages
 /// Target: <1ms
 fn bench_full_redraw_100_messages(c: &mut Criterion) {
-    let mut state = create_state_with_messages(100);
+    let state = create_state_with_messages(100);
     let backend = TestBackend::new(120, 40);
     let mut terminal = Terminal::new(backend).expect("Failed to create terminal");
 
@@ -54,7 +54,8 @@ fn bench_full_redraw_100_messages(c: &mut Criterion) {
         b.iter(|| {
             terminal
                 .draw(|frame| {
-                    render(frame, black_box(&mut state));
+                    let view = state.as_render_view();
+                    let _ = render(frame, black_box(&view));
                 })
                 .expect("Failed to draw");
         });
@@ -108,7 +109,8 @@ fn bench_streaming_cycle(c: &mut Criterion) {
                 state.append_streaming_text(black_box("token "));
                 terminal
                     .draw(|frame| {
-                        render(frame, &mut state);
+                        let view = state.as_render_view();
+                        let _ = render(frame, &view);
                     })
                     .expect("Failed to draw");
             },
@@ -225,7 +227,8 @@ fn bench_large_message_rendering(c: &mut Criterion) {
         b.iter(|| {
             terminal
                 .draw(|frame| {
-                    render(frame, black_box(&mut state));
+                    let view = state.as_render_view();
+                    let _ = render(frame, black_box(&view));
                 })
                 .expect("Failed to draw");
         });

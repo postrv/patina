@@ -16,9 +16,17 @@ fn render_to_string(state: &mut AppState, width: u16, height: u16) -> String {
     let backend = TestBackend::new(width, height);
     let mut terminal = Terminal::new(backend).expect("Failed to create terminal");
 
+    let mut feedback = None;
     terminal
-        .draw(|frame| render(frame, state))
+        .draw(|frame| {
+            let view = state.as_render_view();
+            feedback = Some(render(frame, &view));
+        })
         .expect("Failed to draw");
+
+    if let Some(fb) = feedback {
+        state.apply_render_feedback(&fb);
+    }
 
     // Convert buffer to string for snapshot
     let buffer = terminal.backend().buffer();

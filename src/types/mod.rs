@@ -21,6 +21,7 @@ pub mod content;
 pub mod conversation;
 pub mod image;
 pub mod message;
+pub mod render_view;
 pub mod stream;
 pub mod ui_state;
 
@@ -41,3 +42,6 @@ pub use conversation::{ConversationEntry, Timeline, TimelineError};
 
 // Shared UI state types (used by both app::state and tui)
 pub use ui_state::{AgentPanelEntry, AgentPanelStatus, ContinuousLoopStatus, GateResult};
+
+// Render view model for TUI decoupling
+pub use render_view::RenderView;

@@ -56,9 +56,11 @@ use crate::permissions::{PermissionManager, PermissionRequest, PermissionRespons
 use crate::plugins::PluginRegistry;
 use crate::session::Session;
 use crate::tools::HookedToolExecutor;
+use crate::tui::RenderFeedback;
 use crate::types::config::EffortLevel;
 use crate::types::config::ParallelMode;
 use crate::types::content::{StopReason, ToolResultBlock, ToolUseBlock};
+use crate::types::render_view::RenderView;
 use crate::types::ui_state::{
     CompactionProgressState, FocusArea, ScrollState, SelectionState, ToolBlockState,
 };
@@ -1566,6 +1568,68 @@ impl AppState {
     #[must_use]
     pub fn compaction_metrics_summary(&self) -> CompactionMetricsSummary {
         self.compression.compaction_metrics.summary()
+    }
+
+    // ========================================================================
+    // Render view (TUI decoupling)
+    // ========================================================================
+
+    /// Creates a read-only view of all state the TUI needs to render a frame.
+    ///
+    /// This is the bridge between `AppState` and the TUI layer. The returned
+    /// [`RenderView`] borrows data from `self`, so the TUI never needs to
+    /// import `AppState` directly.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// let view = state.as_render_view();
+    /// let feedback = tui::render(frame, &view);
+    /// state.apply_render_feedback(&feedback);
+    /// ```
+    #[must_use]
+    pub fn as_render_view(&self) -> RenderView<'_> {
+        RenderView {
+            timeline: self.timeline(),
+            throbber_char: self.throbber_char(),
+            scroll_offset: self.scroll_offset(),
+            scroll_state: self.scroll_state(),
+            selection: self.selection(),
+            focus_area: self.focus_area(),
+            input: self.input(),
+            completion: self.completion(),
+            worktree_branch: self.worktree_branch(),
+            worktree_modified: self.worktree_modified(),
+            worktree_ahead: self.worktree_ahead(),
+            worktree_behind: self.worktree_behind(),
+            token_budget: self.token_budget(),
+            context_tokens_injected: self.compression.context_tokens_injected(),
+            update_available: self.update_available(),
+            continuous_status: self.continuous_status(),
+            continuous_iterations_completed: self.continuous_iterations_completed(),
+            continuous_gate_results: self.continuous_gate_results(),
+            continuous_checking_gate: self.continuous_checking_gate(),
+            continuous_last_duration_ms: self.continuous_last_duration_ms(),
+            compaction_state: self.compaction_state(),
+            pending_permission: self.pending_permission(),
+            pending_plan: self.pending_plan(),
+            pending_question: self.pending_question(),
+        }
+    }
+
+    /// Applies layout metrics computed during rendering back to mutable state.
+    ///
+    /// The TUI's `render()` function returns a [`RenderFeedback`] containing
+    /// wrapped-line caches and viewport dimensions. This method writes those
+    /// values into the scroll and selection subsystems.
+    ///
+    /// # Arguments
+    ///
+    /// * `feedback` - Layout metrics from the most recent render pass
+    pub fn apply_render_feedback(&mut self, feedback: &RenderFeedback) {
+        self.update_rendered_lines_from_feedback(&feedback.wrapped_lines);
+        self.set_viewport_height(feedback.viewport_height);
+        self.update_content_height(feedback.content_height);
     }
 }
 
