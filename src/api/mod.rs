@@ -4,6 +4,7 @@ pub mod compaction;
 pub mod context;
 pub mod multi_model;
 pub mod provider;
+pub mod provider_factory;
 pub mod providers;
 pub mod retry;
 pub mod tokens;
@@ -43,6 +44,9 @@ pub use crate::types::StreamEvent;
 
 // Re-export request option types
 pub use provider::RequestOptions;
+
+// Re-export provider factory
+pub use provider_factory::create_provider;
 
 /// Configuration for extended thinking.
 ///

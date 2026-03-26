@@ -176,7 +176,8 @@ async fn run_tool_continuation_cycle(
 ///
 /// This matches Claude Code's `-p` / `--print` flag behavior.
 pub(crate) async fn run_print_mode(config: &Config, prompt: &str) -> Result<()> {
-    let client: Arc<dyn LlmProvider> = Arc::from(crate::api::provider::create_provider(config)?);
+    let client: Arc<dyn LlmProvider> =
+        Arc::from(crate::api::provider_factory::create_provider(config)?);
     let mut state = AppState::with_performance_config(
         config.working_dir.clone(),
         config.skip_permissions,
