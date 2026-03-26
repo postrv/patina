@@ -12,6 +12,8 @@ pub struct AgentPanelState {
     entries: Vec<AgentPanelEntry>,
     /// Pending conflict reports from cross-agent conflict detection.
     pending_conflicts: Vec<ConflictReport>,
+    /// Whether any mutation has occurred since last `mark_clean()`.
+    dirty: bool,
 }
 
 impl AgentPanelState {
@@ -22,7 +24,19 @@ impl AgentPanelState {
             spawner,
             entries: Vec::new(),
             pending_conflicts: Vec::new(),
+            dirty: false,
         }
+    }
+
+    /// Returns whether any mutation has occurred since last `mark_clean()`.
+    #[must_use]
+    pub fn is_dirty(&self) -> bool {
+        self.dirty
+    }
+
+    /// Clears the dirty flag after rendering.
+    pub fn mark_clean(&mut self) {
+        self.dirty = false;
     }
 
     /// Returns whether subagent orchestration is enabled.
@@ -48,6 +62,7 @@ impl AgentPanelState {
     /// If an entry for the given `agent_id` exists, it is updated in place.
     /// Otherwise, a new entry is created. Returns `true` if state changed.
     pub fn update_progress(&mut self, agent_id: &str, agent_name: &str, progress: &AgentProgress) {
+        self.dirty = true;
         let status = match progress {
             AgentProgress::IterationStarted { iteration, max } => AgentPanelStatus::Running {
                 iteration: *iteration,
@@ -102,6 +117,7 @@ impl AgentPanelState {
 
     /// Records a conflict report.
     pub fn add_conflict(&mut self, report: ConflictReport) {
+        self.dirty = true;
         self.pending_conflicts.push(report);
     }
 

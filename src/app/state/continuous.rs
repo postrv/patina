@@ -19,9 +19,23 @@ pub struct ContinuousLoopState {
 
     /// Accumulated quality gate results for the current iteration.
     pub(crate) gate_results: Vec<GateResult>,
+
+    /// Whether any mutation has occurred since last `mark_clean()`.
+    pub(crate) dirty: bool,
 }
 
 impl ContinuousLoopState {
+    /// Returns whether any mutation has occurred since last `mark_clean()`.
+    #[must_use]
+    pub fn is_dirty(&self) -> bool {
+        self.dirty
+    }
+
+    /// Clears the dirty flag after rendering.
+    pub fn mark_clean(&mut self) {
+        self.dirty = false;
+    }
+
     /// Returns the current status of the continuous coding loop.
     #[must_use]
     pub fn status(&self) -> &ContinuousLoopStatus {
@@ -54,6 +68,7 @@ impl ContinuousLoopState {
 
     /// Updates state for a new continuous iteration starting.
     pub fn update_iteration(&mut self, iteration: u32) {
+        self.dirty = true;
         self.status = ContinuousLoopStatus::Running { iteration };
         self.checking_gate = None;
         self.gate_results.clear();
@@ -61,17 +76,20 @@ impl ContinuousLoopState {
 
     /// Records the completion of a continuous iteration.
     pub fn complete_iteration(&mut self, duration_ms: u64) {
+        self.dirty = true;
         self.iterations_completed += 1;
         self.last_duration_ms = Some(duration_ms);
     }
 
     /// Records that a quality gate check is starting.
     pub fn set_gate_checking(&mut self, gate: &str) {
+        self.dirty = true;
         self.checking_gate = Some(gate.to_string());
     }
 
     /// Records the result of a quality gate check.
     pub fn record_gate_result(&mut self, gate: &str, passed: bool, message: Option<&str>) {
+        self.dirty = true;
         self.checking_gate = None;
         self.gate_results.push(GateResult {
             gate: gate.to_string(),
@@ -82,6 +100,7 @@ impl ContinuousLoopState {
 
     /// Records that stagnation was detected.
     pub fn set_stagnation(&mut self, iterations_without_progress: u32, threshold: u32) {
+        self.dirty = true;
         self.status = ContinuousLoopStatus::Stagnated {
             iterations_without_progress,
             threshold,
@@ -90,6 +109,7 @@ impl ContinuousLoopState {
 
     /// Records that human intervention is required.
     pub fn set_human_checkpoint(&mut self, reason: &str) {
+        self.dirty = true;
         self.status = ContinuousLoopStatus::HumanRequired {
             reason: reason.to_string(),
         };
@@ -97,6 +117,7 @@ impl ContinuousLoopState {
 
     /// Resets all continuous loop state to inactive.
     pub fn reset(&mut self) {
+        self.dirty = true;
         self.status = ContinuousLoopStatus::Inactive;
         self.iterations_completed = 0;
         self.last_duration_ms = None;
@@ -116,6 +137,7 @@ mod tests {
             last_duration_ms: None,
             checking_gate: None,
             gate_results: Vec::new(),
+            dirty: false,
         }
     }
 

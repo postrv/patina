@@ -442,6 +442,7 @@ impl AppState {
                 last_duration_ms: None,
                 checking_gate: None,
                 gate_results: Vec::new(),
+                dirty: false,
             },
             mcp_manager: None,
             cost_tracker: CostTracker::new(CostConfig::default()),
@@ -865,10 +866,18 @@ impl AppState {
 
     pub fn needs_render(&self) -> bool {
         self.dirty.any()
+            || self.agent_panel.is_dirty()
+            || self.continuous.is_dirty()
+            || self.display.is_dirty()
+            || self.input_state.is_dirty()
     }
 
     pub fn mark_rendered(&mut self) {
         self.dirty.clear();
+        self.agent_panel.mark_clean();
+        self.continuous.mark_clean();
+        self.display.mark_clean();
+        self.input_state.mark_clean();
     }
 
     pub fn mark_full_redraw(&mut self) {
@@ -1567,6 +1576,7 @@ mod tests {
             last_duration_ms: None,
             checking_gate: None,
             gate_results: Vec::new(),
+            dirty: false,
         };
         assert_eq!(*cls.status(), ContinuousLoopStatus::Inactive);
         assert_eq!(cls.iterations_completed(), 0);
@@ -1587,6 +1597,7 @@ mod tests {
                 passed: true,
                 message: None,
             }],
+            dirty: false,
         };
         cls.update_iteration(1);
         assert_eq!(
@@ -1605,6 +1616,7 @@ mod tests {
             last_duration_ms: None,
             checking_gate: None,
             gate_results: Vec::new(),
+            dirty: false,
         };
         cls.complete_iteration(5000);
         assert_eq!(cls.iterations_completed(), 1);
@@ -1619,6 +1631,7 @@ mod tests {
             last_duration_ms: None,
             checking_gate: None,
             gate_results: Vec::new(),
+            dirty: false,
         };
         cls.set_gate_checking("clippy");
         assert_eq!(cls.checking_gate(), Some("clippy"));
@@ -1637,6 +1650,7 @@ mod tests {
             last_duration_ms: Some(3000),
             checking_gate: None,
             gate_results: Vec::new(),
+            dirty: false,
         };
         cls.set_stagnation(3, 5);
         assert_eq!(
@@ -1661,6 +1675,7 @@ mod tests {
             last_duration_ms: None,
             checking_gate: None,
             gate_results: Vec::new(),
+            dirty: false,
         };
         cls.set_human_checkpoint("needs review");
         assert_eq!(

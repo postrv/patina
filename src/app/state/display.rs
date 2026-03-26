@@ -26,6 +26,9 @@ pub struct DisplayState {
 
     /// Custom prompt bar color set by `/color`.
     pub(crate) prompt_color: Option<String>,
+
+    /// Whether any mutation has occurred since last `mark_clean()`.
+    dirty: bool,
 }
 
 impl DisplayState {
@@ -39,7 +42,19 @@ impl DisplayState {
             terminal_height: 24,
             update_available: None,
             prompt_color: None,
+            dirty: false,
         }
+    }
+
+    /// Returns whether any mutation has occurred since last `mark_clean()`.
+    #[must_use]
+    pub fn is_dirty(&self) -> bool {
+        self.dirty
+    }
+
+    /// Clears the dirty flag after rendering.
+    pub fn mark_clean(&mut self) {
+        self.dirty = false;
     }
 
     /// Returns the current scroll offset.
@@ -72,6 +87,7 @@ impl DisplayState {
 
     /// Advances the throbber animation frame.
     pub fn tick_throbber(&mut self) {
+        self.dirty = true;
         self.throbber_frame = (self.throbber_frame + 1) % THROBBER_CHARS.len();
     }
 

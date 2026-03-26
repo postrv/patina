@@ -11,6 +11,8 @@ pub struct InputState {
     cursor_pos: usize,
     /// Active slash-command completion popup, if any.
     completion: Option<CompletionState>,
+    /// Whether any mutation has occurred since last `mark_clean()`.
+    dirty: bool,
 }
 
 impl InputState {
@@ -21,7 +23,19 @@ impl InputState {
             text: String::new(),
             cursor_pos: 0,
             completion: None,
+            dirty: false,
         }
+    }
+
+    /// Returns whether any mutation has occurred since last `mark_clean()`.
+    #[must_use]
+    pub fn is_dirty(&self) -> bool {
+        self.dirty
+    }
+
+    /// Clears the dirty flag after rendering.
+    pub fn mark_clean(&mut self) {
+        self.dirty = false;
     }
 
     /// Returns the current input text.
@@ -45,6 +59,7 @@ impl InputState {
     ///
     /// Clamps to the length of the text if `pos` exceeds it.
     pub fn set_cursor_position(&mut self, pos: usize) {
+        self.dirty = true;
         let max = self.text.chars().count();
         self.cursor_pos = pos.min(max);
     }
@@ -53,6 +68,7 @@ impl InputState {
     ///
     /// Returns `true` if the completion popup should be activated (/ typed as first char).
     pub fn insert_char(&mut self, c: char) -> bool {
+        self.dirty = true;
         let byte_pos = self
             .text
             .char_indices()
@@ -75,6 +91,7 @@ impl InputState {
 
     /// Deletes the character before the cursor (backspace behavior).
     pub fn delete_char(&mut self) {
+        self.dirty = true;
         if self.cursor_pos > 0 {
             let byte_pos = self
                 .text
@@ -98,6 +115,7 @@ impl InputState {
 
     /// Takes and returns the current input, clearing the buffer and resetting cursor.
     pub fn take(&mut self) -> String {
+        self.dirty = true;
         self.cursor_pos = 0;
         self.completion = None;
         std::mem::take(&mut self.text)
@@ -105,11 +123,13 @@ impl InputState {
 
     /// Moves the cursor left by one character.
     pub fn cursor_left(&mut self) {
+        self.dirty = true;
         self.cursor_pos = self.cursor_pos.saturating_sub(1);
     }
 
     /// Moves the cursor right by one character.
     pub fn cursor_right(&mut self) {
+        self.dirty = true;
         let char_count = self.text.chars().count();
         if self.cursor_pos < char_count {
             self.cursor_pos += 1;
@@ -118,11 +138,13 @@ impl InputState {
 
     /// Moves the cursor to the beginning of the input.
     pub fn cursor_home(&mut self) {
+        self.dirty = true;
         self.cursor_pos = 0;
     }
 
     /// Moves the cursor to the end of the input.
     pub fn cursor_end(&mut self) {
+        self.dirty = true;
         self.cursor_pos = self.text.chars().count();
     }
 
@@ -146,11 +168,13 @@ impl InputState {
 
     /// Sets the completion state.
     pub fn set_completion(&mut self, state: CompletionState) {
+        self.dirty = true;
         self.completion = Some(state);
     }
 
     /// Dismisses the completion popup.
     pub fn dismiss_completion(&mut self) {
+        self.dirty = true;
         self.completion = None;
     }
 
@@ -158,6 +182,7 @@ impl InputState {
     ///
     /// Returns the accepted command name, or `None` if nothing was selected.
     pub fn accept_completion(&mut self) -> Option<String> {
+        self.dirty = true;
         let name = self.completion.as_ref().and_then(|c| c.accept());
         if let Some(ref name) = name {
             self.text = format!("/{name} ");
@@ -187,6 +212,7 @@ impl InputState {
 
     /// Sets the input text and moves cursor to the end.
     pub fn set_text(&mut self, text: String) {
+        self.dirty = true;
         self.cursor_pos = text.chars().count();
         self.text = text;
     }
