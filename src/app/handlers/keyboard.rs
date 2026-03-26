@@ -18,6 +18,7 @@ use tracing::{debug, info, warn};
 use crate::app::context::AppContext;
 use crate::app::dispatch::{EventHandler, Handled};
 use crate::app::events::AppEvent;
+use crate::app::state::UISelectionState;
 use crate::types::ui_state::{ContentPosition, FocusArea};
 use crate::types::{Message, Role};
 
@@ -68,12 +69,12 @@ impl EventHandler for KeyboardHandler {
                     handle_key(ctx, key.code, key.modifiers).await
                 }
                 AppEvent::Mouse(mouse) => {
-                    let terminal_height = ctx.state.terminal_height();
+                    let terminal_height = ctx.state.display().terminal_height();
                     handle_mouse(ctx, mouse.kind, mouse.row, mouse.column, terminal_height);
                     Ok(Handled::CONSUMED)
                 }
                 AppEvent::Resize { width: _, height } => {
-                    ctx.state.set_terminal_height(*height);
+                    ctx.state.display_mut().set_terminal_height(*height);
                     ctx.state.mark_full_redraw();
                     Ok(Handled::CONSUMED)
                 }
@@ -112,7 +113,7 @@ async fn handle_key(
         }
 
         // Submit input
-        (KeyCode::Enter, KeyModifiers::NONE) if !ctx.state.input().is_empty() => {
+        (KeyCode::Enter, KeyModifiers::NONE) if !ctx.state.input_state().text().is_empty() => {
             handle_submit(ctx).await?;
             Ok(Handled::CONSUMED)
         }
@@ -151,7 +152,7 @@ async fn handle_key(
         // Scroll to bottom: End
         (KeyCode::End, _) => {
             debug!("scroll_to_bottom triggered");
-            let height = ctx.state.scroll_state().content_height();
+            let height = ctx.state.display().scroll_state().content_height();
             ctx.state.scroll_to_bottom(height);
             Ok(Handled::CONSUMED)
         }
@@ -196,8 +197,10 @@ async fn handle_key(
         }
 
         // Clear selection: Escape (only when selection is active)
-        (KeyCode::Esc, KeyModifiers::NONE) if ctx.state.selection().has_selection() => {
-            ctx.state.selection_mut().clear();
+        (KeyCode::Esc, KeyModifiers::NONE)
+            if ctx.state.ui_selection().selection().has_selection() =>
+        {
+            ctx.state.ui_selection_mut().selection_mut().clear();
             ctx.state.mark_full_redraw();
             Ok(Handled::CONSUMED)
         }
@@ -228,7 +231,7 @@ async fn handle_submit(ctx: &mut AppContext<'_>) -> Result<()> {
     } else {
         ctx.state.submit_message(&ctx.client, input).await?;
         // SessionHandler observer saves when it sees the dirty flag.
-        ctx.state.mark_session_dirty();
+        ctx.state.session_tracking_mut().mark_dirty();
     }
 
     Ok(())
@@ -241,7 +244,7 @@ fn handle_slash_command(ctx: &mut AppContext<'_>, input: &str) {
     let plugin_info = SlashCommandHandler::build_plugin_info(ctx.state.plugins());
     let mcp_info = build_mcp_server_info(ctx.state);
     let cost_summary = ctx.state.cost_summary();
-    let session_id = ctx.state.session_id().map(String::from);
+    let session_id = ctx.state.session_tracking().id().map(String::from);
     let mut handler = SlashCommandHandler::new(ctx.state.working_dir.clone())
         .with_plugins(plugin_info)
         .with_mcp_info(mcp_info)
@@ -322,7 +325,9 @@ fn handle_command_action(
             match crate::api::AnthropicClient::with_model(&model_name) {
                 Ok(new_client) => {
                     ctx.client = std::sync::Arc::new(new_client);
-                    ctx.state.set_current_model(model_name.clone());
+                    ctx.state
+                        .model_config_mut()
+                        .set_current_model(model_name.clone());
                     format!("Switched to model: {model_name}")
                 }
                 Err(e) => format!("Failed to switch model: {e}"),
@@ -362,11 +367,15 @@ fn handle_command_action(
             }
         }
         CommandAction::RenameSession(name) => {
-            ctx.state.set_session_name(Some(name.clone()));
+            ctx.state
+                .session_tracking_mut()
+                .set_name(Some(name.clone()));
             format!("Session renamed to: {name}")
         }
         CommandAction::SetColor(color) => {
-            ctx.state.set_prompt_color(Some(color.clone()));
+            ctx.state
+                .display_mut()
+                .set_prompt_color(Some(color.clone()));
             format!("Prompt color set to: {color}")
         }
         CommandAction::SideQuestion(question) => {
@@ -413,7 +422,7 @@ fn build_mcp_server_info(
 
 /// Selects all content and sets focus to the content area.
 fn handle_select_all(ctx: &mut AppContext<'_>, modifiers: KeyModifiers) {
-    let line_count = ctx.state.rendered_line_count();
+    let line_count = ctx.state.ui_selection().rendered_line_count();
     let timeline_len = ctx.state.timeline().len();
     let modifier_name = if modifiers == KeyModifiers::SUPER {
         "Cmd+A"
@@ -426,7 +435,7 @@ fn handle_select_all(ctx: &mut AppContext<'_>, modifiers: KeyModifiers) {
         line_count,
         timeline_len,
         modifier = modifier_name,
-        focus_area = ?ctx.state.focus_area(),
+        focus_area = ?ctx.state.ui_selection().focus_area(),
         "select_all triggered via {}",
         modifier_name
     );
@@ -436,8 +445,13 @@ fn handle_select_all(ctx: &mut AppContext<'_>, modifiers: KeyModifiers) {
             timeline_len
         );
     } else {
-        ctx.state.set_focus_area(FocusArea::Content);
-        ctx.state.selection_mut().select_all(line_count);
+        ctx.state
+            .ui_selection_mut()
+            .set_focus_area(FocusArea::Content);
+        ctx.state
+            .ui_selection_mut()
+            .selection_mut()
+            .select_all(line_count);
         ctx.state.mark_full_redraw();
         let copy_hint = if modifiers == KeyModifiers::SUPER {
             "Cmd+C"
@@ -455,8 +469,8 @@ fn handle_select_all(ctx: &mut AppContext<'_>, modifiers: KeyModifiers) {
 
 /// Copies the current selection to the system clipboard.
 fn handle_copy(state: &crate::app::state::AppState) {
-    let selection = state.selection();
-    let cache_len = state.rendered_line_count();
+    let selection = state.ui_selection().selection();
+    let cache_len = state.ui_selection().rendered_line_count();
 
     if let Some((start, end)) = selection.range() {
         let selected_lines = end.line.saturating_sub(start.line) + 1;
@@ -470,7 +484,7 @@ fn handle_copy(state: &crate::app::state::AppState) {
             cache_len
         );
 
-        match state.copy_from_cache() {
+        match state.ui_selection().copy_from_cache() {
             Ok(true) => {
                 info!("Copied {} lines to clipboard", selected_lines);
             }
@@ -518,39 +532,37 @@ fn handle_mouse(
     column: u16,
     terminal_height: u16,
 ) {
-    use crate::app::state::AppState;
-
     match kind {
         MouseEventKind::Down(MouseButton::Left) => {
-            let clicked_area = AppState::focus_area_for_row(row, terminal_height);
-            ctx.state.set_focus_area(clicked_area);
+            let clicked_area = UISelectionState::focus_area_for_row(row, terminal_height);
+            ctx.state.ui_selection_mut().set_focus_area(clicked_area);
 
             if clicked_area == FocusArea::Content {
-                let first_visible = ctx.state.scroll_state().first_visible_line();
+                let first_visible = ctx.state.display().scroll_state().first_visible_line();
                 let content_row = row.saturating_sub(1) as usize;
                 let pos = ContentPosition::new(
                     first_visible + content_row,
                     column.saturating_sub(1) as usize,
                 );
-                ctx.state.selection_mut().start(pos);
+                ctx.state.ui_selection_mut().selection_mut().start(pos);
             }
             ctx.state.mark_full_redraw();
         }
         MouseEventKind::Drag(MouseButton::Left) => {
-            if ctx.state.focus_area() == FocusArea::Content {
-                let first_visible = ctx.state.scroll_state().first_visible_line();
+            if ctx.state.ui_selection().focus_area() == FocusArea::Content {
+                let first_visible = ctx.state.display().scroll_state().first_visible_line();
                 let content_row = row.saturating_sub(1) as usize;
                 let pos = ContentPosition::new(
                     first_visible + content_row,
                     column.saturating_sub(1) as usize,
                 );
-                ctx.state.selection_mut().update(pos);
+                ctx.state.ui_selection_mut().selection_mut().update(pos);
                 ctx.state.mark_full_redraw();
             }
         }
         MouseEventKind::Up(MouseButton::Left) => {
-            if ctx.state.focus_area() == FocusArea::Content {
-                ctx.state.selection_mut().end();
+            if ctx.state.ui_selection().focus_area() == FocusArea::Content {
+                ctx.state.ui_selection_mut().selection_mut().end();
                 ctx.state.mark_full_redraw();
             }
         }
@@ -804,7 +816,7 @@ mod tests {
 
         assert_eq!(result, Handled::CONSUMED);
         assert_eq!(
-            ctx.state.input(),
+            ctx.state.input_state().text(),
             "x",
             "Character key must insert into the input buffer"
         );
@@ -824,7 +836,7 @@ mod tests {
 
         assert_eq!(result, Handled::CONSUMED);
         assert_eq!(
-            ctx.state.input(),
+            ctx.state.input_state().text(),
             "X",
             "Shifted character key must insert into the input buffer"
         );
@@ -845,7 +857,7 @@ mod tests {
         // Pre-populate input
         state.insert_char('a');
         state.insert_char('b');
-        assert_eq!(state.input(), "ab");
+        assert_eq!(state.input_state().text(), "ab");
 
         let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
@@ -854,7 +866,7 @@ mod tests {
 
         assert_eq!(result, Handled::CONSUMED);
         assert_eq!(
-            ctx.state.input(),
+            ctx.state.input_state().text(),
             "a",
             "Backspace must delete the last character"
         );
@@ -1047,7 +1059,7 @@ mod tests {
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
 
-        assert!(state.input().is_empty());
+        assert!(state.input_state().text().is_empty());
 
         let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
@@ -1075,8 +1087,8 @@ mod tests {
         let (session_mgr, _dir) = test_session_manager();
 
         // Set up an active selection
-        state.selection_mut().select_all(10);
-        assert!(state.selection().has_selection());
+        state.ui_selection_mut().selection_mut().select_all(10);
+        assert!(state.ui_selection().selection().has_selection());
 
         let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
@@ -1085,7 +1097,7 @@ mod tests {
 
         assert_eq!(result, Handled::CONSUMED);
         assert!(
-            !ctx.state.selection().has_selection(),
+            !ctx.state.ui_selection().selection().has_selection(),
             "Escape must clear the active selection"
         );
     }
@@ -1098,7 +1110,7 @@ mod tests {
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
 
-        assert!(!state.selection().has_selection());
+        assert!(!state.ui_selection().selection().has_selection());
 
         let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 

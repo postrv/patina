@@ -12,7 +12,7 @@ use std::path::PathBuf;
 
 /// Helper to check if scroll is in auto-follow mode.
 fn is_auto_scrolling(state: &AppState) -> bool {
-    state.scroll_state().mode().should_auto_scroll()
+    state.display().scroll_state().mode().should_auto_scroll()
 }
 
 // ============================================================================

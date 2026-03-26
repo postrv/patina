@@ -244,16 +244,16 @@ fn test_tui_unicode_input() {
     }
 
     // Verify input state
-    assert_eq!(state.input(), "你好世界");
-    assert_eq!(state.cursor_position(), 4); // 4 unicode characters
+    assert_eq!(state.input_state().text(), "你好世界");
+    assert_eq!(state.input_state().cursor_position(), 4); // 4 unicode characters
 
     // Cursor navigation should work on characters, not bytes
     state.cursor_left();
-    assert_eq!(state.cursor_position(), 3);
+    assert_eq!(state.input_state().cursor_position(), 3);
 
     // Backspace deletes character BEFORE cursor (at position 2, which is "世")
     state.delete_char();
-    assert_eq!(state.input(), "你好界"); // "世" was deleted, "界" remains
+    assert_eq!(state.input_state().text(), "你好界"); // "世" was deleted, "界" remains
 
     // Render - should not panic
     let output = render_to_string(&mut state, 60, 10);
@@ -299,7 +299,7 @@ fn test_tui_scrolls_long_content() {
     );
 
     // Verify scroll offset is set
-    assert_eq!(state.scroll_offset(), 5);
+    assert_eq!(state.display().scroll_offset(), 5);
 }
 
 /// Tests that input cursor position tracking works correctly.
@@ -314,7 +314,7 @@ fn test_tui_input_cursor_visible() {
     }
 
     // Cursor should be at position 11 (after "Hello World")
-    assert_eq!(state.cursor_position(), 11);
+    assert_eq!(state.input_state().cursor_position(), 11);
 
     // Render
     let output = render_to_string(&mut state, 60, 10);
@@ -337,32 +337,32 @@ fn test_tui_cursor_movement() {
         state.insert_char(c);
     }
 
-    assert_eq!(state.cursor_position(), 5);
+    assert_eq!(state.input_state().cursor_position(), 5);
 
     // Move to beginning
     state.cursor_home();
-    assert_eq!(state.cursor_position(), 0);
+    assert_eq!(state.input_state().cursor_position(), 0);
 
     // Move to end
     state.cursor_end();
-    assert_eq!(state.cursor_position(), 5);
+    assert_eq!(state.input_state().cursor_position(), 5);
 
     // Move left
     state.cursor_left();
-    assert_eq!(state.cursor_position(), 4);
+    assert_eq!(state.input_state().cursor_position(), 4);
 
     // Move right
     state.cursor_right();
-    assert_eq!(state.cursor_position(), 5);
+    assert_eq!(state.input_state().cursor_position(), 5);
 
     // Move right at end should not go past
     state.cursor_right();
-    assert_eq!(state.cursor_position(), 5);
+    assert_eq!(state.input_state().cursor_position(), 5);
 
     // Move to beginning and try left - should stay at 0
     state.cursor_home();
     state.cursor_left();
-    assert_eq!(state.cursor_position(), 0);
+    assert_eq!(state.input_state().cursor_position(), 0);
 }
 
 // ============================================================================
@@ -378,28 +378,28 @@ fn test_tui_key_events() {
 
     // Test character insertion
     state.insert_char('A');
-    assert_eq!(state.input(), "A");
+    assert_eq!(state.input_state().text(), "A");
 
     state.insert_char('B');
-    assert_eq!(state.input(), "AB");
+    assert_eq!(state.input_state().text(), "AB");
 
     state.insert_char('C');
-    assert_eq!(state.input(), "ABC");
+    assert_eq!(state.input_state().text(), "ABC");
 
     // Test backspace
     state.delete_char();
-    assert_eq!(state.input(), "AB");
+    assert_eq!(state.input_state().text(), "AB");
 
     // Test cursor movement and insert in middle
     state.cursor_left();
     state.insert_char('X');
-    assert_eq!(state.input(), "AXB");
+    assert_eq!(state.input_state().text(), "AXB");
 
     // Test take_input (simulates Enter)
     let taken = state.take_input();
     assert_eq!(taken, "AXB");
-    assert_eq!(state.input(), "");
-    assert_eq!(state.cursor_position(), 0);
+    assert_eq!(state.input_state().text(), "");
+    assert_eq!(state.input_state().cursor_position(), 0);
 }
 
 /// Tests that resize events are handled correctly.
@@ -450,8 +450,11 @@ fn test_tui_paste_event() {
         state.insert_char(c);
     }
 
-    assert_eq!(state.input(), pasted_text);
-    assert_eq!(state.cursor_position(), pasted_text.chars().count());
+    assert_eq!(state.input_state().text(), pasted_text);
+    assert_eq!(
+        state.input_state().cursor_position(),
+        pasted_text.chars().count()
+    );
 
     // Render should work after paste
     let output = render_to_string(&mut state, 60, 10);
@@ -604,7 +607,7 @@ fn test_status_bar_shows_context_tokens() {
     let mut state = new_state();
 
     // Simulate 5000 tokens of context injected
-    state.set_context_tokens_injected(5000);
+    state.compression_mut().set_context_tokens_injected(5000);
 
     let output = render_to_string(&mut state, 80, 20);
 
@@ -623,7 +626,7 @@ fn test_status_bar_hides_context_tokens_when_zero() {
     let mut state = new_state();
 
     // No context injected (default)
-    assert_eq!(state.context_tokens_injected(), 0);
+    assert_eq!(state.compression().context_tokens_injected(), 0);
 
     let output = render_to_string(&mut state, 80, 20);
 

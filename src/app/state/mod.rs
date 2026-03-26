@@ -37,16 +37,13 @@ pub use ui_selection::UISelectionState;
 pub use worktree::WorktreeStatus;
 
 use crate::agents::{AgentProgress, ConflictReport, SubagentSpawner};
-use crate::api::multi_model::MultiModelClient;
 use crate::api::provider::RequestOptions;
 use crate::api::tokens::{model_context_limit, ModelCapabilities};
 use crate::api::tools::default_tools;
 use crate::api::{LlmProvider, StreamEvent, SystemBlock, ThinkingConfig, TokenBudget, ToolChoice};
 use crate::app::tool_loop::{ContinuationData, ToolLoop, ToolLoopState};
 use crate::app::STREAMING_CHANNEL_BUFFER;
-use crate::context::compression::{
-    CompactionMetrics, CompactionMetricsSummary, CompressionOrchestrator,
-};
+use crate::context::compression::{CompactionMetrics, CompressionOrchestrator};
 use crate::enterprise::audit::{AuditConfig, AuditLogger};
 use crate::enterprise::cost::{CostConfig, CostTracker, UsageRecord};
 use crate::hooks::HookManager;
@@ -57,13 +54,10 @@ use crate::plugins::PluginRegistry;
 use crate::session::Session;
 use crate::tools::HookedToolExecutor;
 use crate::tui::RenderFeedback;
-use crate::types::config::EffortLevel;
 use crate::types::config::ParallelMode;
 use crate::types::content::{StopReason, ToolResultBlock, ToolUseBlock};
 use crate::types::render_view::RenderView;
-use crate::types::ui_state::{
-    CompactionProgressState, FocusArea, ScrollState, SelectionState, ToolBlockState,
-};
+use crate::types::ui_state::{FocusArea, SelectionState, ToolBlockState};
 use crate::types::{ApiMessageV2, Message, Role, Timeline};
 use anyhow::Result;
 use serde_json::Value;
@@ -545,26 +539,61 @@ impl AppState {
         &self.agent_panel
     }
 
-    /// Returns whether subagent orchestration is enabled.
-    #[must_use]
-    pub fn subagents_enabled(&self) -> bool {
-        self.agent_panel.subagents_enabled()
+    /// Returns a mutable reference to the agent panel state.
+    pub fn agent_panel_mut(&mut self) -> &mut AgentPanelState {
+        &mut self.agent_panel
     }
 
-    /// Returns a reference to the subagent spawner if enabled.
+    /// Returns a reference to the display state.
     #[must_use]
-    pub fn subagent_spawner(&self) -> Option<&SubagentSpawner> {
-        self.agent_panel.spawner()
+    pub fn display(&self) -> &DisplayState {
+        &self.display
     }
 
-    // =========================================================================
-    // Agent panel methods (delegates to AgentPanelState)
-    // =========================================================================
+    /// Returns a mutable reference to the display state.
+    pub fn display_mut(&mut self) -> &mut DisplayState {
+        &mut self.display
+    }
 
-    /// Returns the current agent panel entries for TUI rendering.
+    /// Returns a mutable reference to the continuous loop state.
+    pub fn continuous_mut(&mut self) -> &mut ContinuousLoopState {
+        &mut self.continuous
+    }
+
+    /// Returns a mutable reference to the compression state.
+    pub fn compression_mut(&mut self) -> &mut CompressionState {
+        &mut self.compression
+    }
+
+    /// Returns a mutable reference to the worktree status.
+    pub fn worktree_mut(&mut self) -> &mut WorktreeStatus {
+        &mut self.worktree
+    }
+
+    /// Returns a mutable reference to the session tracking state.
+    pub fn session_tracking_mut(&mut self) -> &mut SessionTracking {
+        &mut self.session
+    }
+
+    /// Returns a mutable reference to the input state.
+    pub fn input_state_mut(&mut self) -> &mut InputState {
+        &mut self.input_state
+    }
+
+    /// Returns a mutable reference to the UI selection state.
+    pub fn ui_selection_mut(&mut self) -> &mut UISelectionState {
+        &mut self.ui_selection
+    }
+
+    /// Returns a reference to the model configuration state.
     #[must_use]
-    pub fn agent_panel_entries(&self) -> &[AgentPanelEntry] {
-        self.agent_panel.entries()
+    pub fn model_config(&self) -> &ModelConfigState {
+        &self.model_config
+    }
+
+    /// Returns a mutable reference to the model configuration state.
+    pub fn model_config_mut(&mut self) -> &mut ModelConfigState {
+        &mut self.model_config
     }
 
     /// Updates the agent panel with a progress event.
@@ -590,12 +619,6 @@ impl AppState {
         self.agent_panel.take_conflicts()
     }
 
-    /// Returns `true` if there are pending conflict reports.
-    #[must_use]
-    pub fn has_pending_conflicts(&self) -> bool {
-        self.agent_panel.has_pending_conflicts()
-    }
-
     // =========================================================================
     // Continuous loop panel methods (delegates to ContinuousLoopState)
     // =========================================================================
@@ -604,36 +627,6 @@ impl AppState {
     #[must_use]
     pub fn continuous(&self) -> &ContinuousLoopState {
         &self.continuous
-    }
-
-    /// Returns the current status of the continuous coding loop.
-    #[must_use]
-    pub fn continuous_status(&self) -> &ContinuousLoopStatus {
-        self.continuous.status()
-    }
-
-    /// Returns the number of completed iterations in the current session.
-    #[must_use]
-    pub fn continuous_iterations_completed(&self) -> u32 {
-        self.continuous.iterations_completed()
-    }
-
-    /// Returns the duration of the last completed iteration in milliseconds.
-    #[must_use]
-    pub fn continuous_last_duration_ms(&self) -> Option<u64> {
-        self.continuous.last_duration_ms()
-    }
-
-    /// Returns the name of the quality gate currently being checked.
-    #[must_use]
-    pub fn continuous_checking_gate(&self) -> Option<&str> {
-        self.continuous.checking_gate()
-    }
-
-    /// Returns accumulated quality gate results for the current iteration.
-    #[must_use]
-    pub fn continuous_gate_results(&self) -> &[GateResult] {
-        self.continuous.gate_results()
     }
 
     /// Updates state for a new continuous iteration starting.
@@ -698,45 +691,6 @@ impl AppState {
         &self.compression
     }
 
-    /// Returns whether auto-context injection is enabled.
-    #[must_use]
-    pub fn auto_context_enabled(&self) -> bool {
-        self.compression.auto_context_enabled()
-    }
-
-    /// Sets whether auto-context injection is enabled.
-    pub fn set_auto_context_enabled(&mut self, enabled: bool) {
-        self.compression.set_auto_context_enabled(enabled);
-    }
-
-    /// Returns whether there are pending context suggestions.
-    #[must_use]
-    pub fn has_pending_context(&self) -> bool {
-        self.compression.has_pending_context()
-    }
-
-    /// Returns a reference to the pending context suggestions.
-    #[must_use]
-    pub fn pending_context(&self) -> &[ContextSuggestion] {
-        self.compression.pending_context()
-    }
-
-    /// Sets the pending context suggestions.
-    pub fn set_pending_context(&mut self, suggestions: Vec<ContextSuggestion>) {
-        self.compression.set_pending_context(suggestions);
-    }
-
-    /// Takes and returns the pending context suggestions, clearing them.
-    #[must_use]
-    pub fn take_pending_context(&mut self) -> Vec<ContextSuggestion> {
-        self.compression.take_pending_context()
-    }
-
-    /// Clears the pending context suggestions.
-    pub fn clear_pending_context(&mut self) {
-        self.compression.clear_pending_context();
-    }
-
     // =========================================================================
     // Input state methods (delegates to InputState)
     // =========================================================================
@@ -745,17 +699,6 @@ impl AppState {
     #[must_use]
     pub fn input_state(&self) -> &InputState {
         &self.input_state
-    }
-
-    /// Returns the current input text.
-    #[must_use]
-    pub fn input(&self) -> &str {
-        self.input_state.text()
-    }
-
-    /// Returns a mutable reference to the input text.
-    pub fn input_mut(&mut self) -> &mut String {
-        self.input_state.text_mut()
     }
 
     /// Inserts a character at the current cursor position.
@@ -777,12 +720,6 @@ impl AppState {
     pub fn take_input(&mut self) -> String {
         self.dirty.input = true;
         self.input_state.take()
-    }
-
-    /// Returns the current cursor position (character index, not byte index).
-    #[must_use]
-    pub fn cursor_position(&self) -> usize {
-        self.input_state.cursor_position()
     }
 
     /// Moves the cursor left by one character.
@@ -807,14 +744,6 @@ impl AppState {
     pub fn cursor_end(&mut self) {
         self.input_state.cursor_end();
         self.dirty.input = true;
-    }
-
-    /// Returns the current scroll offset for rendering.
-    ///
-    /// This provides backward compatibility with TUI rendering.
-    #[must_use]
-    pub fn scroll_offset(&self) -> usize {
-        self.display.scroll.offset()
     }
 
     /// Scrolls up by the specified number of lines.
@@ -887,89 +816,10 @@ impl AppState {
         self.display.scroll.set_viewport_height(height);
     }
 
-    /// Returns the scroll state for read access.
-    #[must_use]
-    pub fn scroll_state(&self) -> &ScrollState {
-        &self.display.scroll
-    }
-
     /// Returns a reference to the UI selection state.
     #[must_use]
     pub fn ui_selection(&self) -> &UISelectionState {
         &self.ui_selection
-    }
-
-    /// Returns the selection state for read access.
-    #[must_use]
-    pub fn selection(&self) -> &SelectionState {
-        self.ui_selection.selection()
-    }
-
-    /// Returns the selection state for modification.
-    pub fn selection_mut(&mut self) -> &mut SelectionState {
-        self.ui_selection.selection_mut()
-    }
-
-    /// Returns the current focus area.
-    #[must_use]
-    pub fn focus_area(&self) -> FocusArea {
-        self.ui_selection.focus_area()
-    }
-
-    /// Sets the focus area, clearing selection if focus changes.
-    pub fn set_focus_area(&mut self, area: FocusArea) {
-        self.ui_selection.set_focus_area(area);
-    }
-
-    /// Determines which focus area a screen row belongs to.
-    #[must_use]
-    pub fn focus_area_for_row(row: u16, terminal_height: u16) -> FocusArea {
-        UISelectionState::focus_area_for_row(row, terminal_height)
-    }
-
-    /// Copies the current selection to the system clipboard.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if all clipboard methods fail.
-    pub fn copy_selection_to_clipboard(&self, lines: &[ratatui::text::Line<'_>]) -> Result<bool> {
-        self.ui_selection.copy_selection_to_clipboard(lines)
-    }
-
-    /// Requests a copy operation to be performed during the next render.
-    pub fn request_copy(&mut self) {
-        self.ui_selection.request_copy();
-    }
-
-    /// Checks and clears the copy pending flag.
-    pub fn take_copy_pending(&mut self) -> bool {
-        self.ui_selection.take_copy_pending()
-    }
-
-    /// Returns the total number of rendered lines.
-    #[must_use]
-    pub fn rendered_line_count(&self) -> usize {
-        self.ui_selection.rendered_line_count()
-    }
-
-    /// Updates the cached rendered lines for copy operations.
-    pub fn update_rendered_lines_cache(&mut self, lines: &[ratatui::text::Line<'_>], width: usize) {
-        self.ui_selection.update_rendered_lines_cache(lines, width);
-    }
-
-    /// Updates the cached rendered lines from pre-wrapped strings (via `RenderFeedback`).
-    pub fn update_rendered_lines_from_feedback(&mut self, wrapped: &[String]) {
-        self.ui_selection
-            .update_rendered_lines_from_strings(wrapped);
-    }
-
-    /// Copies the current selection to clipboard using cached lines.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if clipboard access fails.
-    pub fn copy_from_cache(&self) -> Result<bool> {
-        self.ui_selection.copy_from_cache()
     }
 
     pub fn is_loading(&self) -> bool {
@@ -1010,54 +860,6 @@ impl AppState {
 
     pub fn mark_full_redraw(&mut self) {
         self.dirty.full = true;
-    }
-
-    /// Returns the cached terminal height in rows.
-    ///
-    /// Defaults to 24 if no resize event has been received.
-    #[must_use]
-    pub fn terminal_height(&self) -> u16 {
-        self.display.terminal_height
-    }
-
-    /// Updates the cached terminal height.
-    ///
-    /// Called from the event loop on startup and on resize events.
-    pub fn set_terminal_height(&mut self, height: u16) {
-        self.display.terminal_height = height;
-    }
-
-    /// Returns the latest available update version, if any.
-    #[must_use]
-    pub fn update_available(&self) -> Option<&str> {
-        self.display.update_available.as_deref()
-    }
-
-    /// Sets the available update version from background update check.
-    pub fn set_update_available(&mut self, version: String) {
-        self.display.set_update_available(version);
-    }
-
-    /// Returns the custom prompt bar color, if set.
-    #[must_use]
-    pub fn prompt_color(&self) -> Option<&str> {
-        self.display.prompt_color()
-    }
-
-    /// Sets or clears the custom prompt bar color.
-    pub fn set_prompt_color(&mut self, color: Option<String>) {
-        self.display.set_prompt_color(color);
-    }
-
-    /// Returns the custom session name, if set.
-    #[must_use]
-    pub fn session_name(&self) -> Option<&str> {
-        self.session.name()
-    }
-
-    /// Sets or clears the custom session name.
-    pub fn set_session_name(&mut self, name: Option<String>) {
-        self.session.set_name(name);
     }
 
     /// Returns the display messages from the timeline for clipboard copy.
@@ -1424,22 +1226,10 @@ impl AppState {
         self.dirty.full = true;
     }
 
-    /// Returns the current worktree branch name, if set.
-    #[must_use]
-    pub fn worktree_branch(&self) -> Option<&str> {
-        self.worktree.branch()
-    }
-
     /// Sets the number of modified files in the worktree.
     pub fn set_worktree_modified(&mut self, count: usize) {
         self.worktree.set_modified(count);
         self.dirty.full = true;
-    }
-
-    /// Returns the number of modified files in the worktree.
-    #[must_use]
-    pub fn worktree_modified(&self) -> usize {
-        self.worktree.modified()
     }
 
     /// Sets the number of commits ahead of upstream.
@@ -1448,38 +1238,15 @@ impl AppState {
         self.dirty.full = true;
     }
 
-    /// Returns the number of commits ahead of upstream.
-    #[must_use]
-    pub fn worktree_ahead(&self) -> usize {
-        self.worktree.ahead()
-    }
-
     /// Sets the number of commits behind upstream.
     pub fn set_worktree_behind(&mut self, count: usize) {
         self.worktree.set_behind(count);
         self.dirty.full = true;
     }
 
-    /// Returns the number of commits behind upstream.
-    #[must_use]
-    pub fn worktree_behind(&self) -> usize {
-        self.worktree.behind()
-    }
-
     // ========================================================================
     // Token Budget Tracking
     // ========================================================================
-
-    /// Returns a reference to the token budget for display.
-    #[must_use]
-    pub fn token_budget(&self) -> &TokenBudget {
-        self.compression.token_budget()
-    }
-
-    /// Returns a mutable reference to the token budget.
-    pub fn token_budget_mut(&mut self) -> &mut TokenBudget {
-        self.compression.token_budget_mut()
-    }
 
     /// Adds token usage to the budget.
     pub fn add_token_usage(&mut self, tokens: usize) {
@@ -1496,17 +1263,6 @@ impl AppState {
     // ========================================================================
     // Compaction Progress (delegates to CompressionState)
     // ========================================================================
-
-    /// Returns the compaction progress state.
-    #[must_use]
-    pub fn compaction_state(&self) -> Option<&CompactionProgressState> {
-        self.compression.compaction_state()
-    }
-
-    /// Returns a mutable reference to the compaction progress state.
-    pub fn compaction_state_mut(&mut self) -> Option<&mut CompactionProgressState> {
-        self.compression.compaction_state_mut()
-    }
 
     /// Starts a compaction operation.
     pub fn start_compaction(&mut self, target_tokens: usize, before_tokens: usize, is_auto: bool) {
@@ -1549,27 +1305,6 @@ impl AppState {
         self.dirty.full = true;
     }
 
-    /// Returns whether a manual compaction has been requested.
-    #[must_use]
-    pub fn is_compaction_requested(&self) -> bool {
-        self.compression.is_compaction_requested()
-    }
-
-    /// Returns a reference to the compaction metrics.
-    #[must_use]
-    pub fn compaction_metrics(&self) -> &CompactionMetrics {
-        self.compression.compaction_metrics()
-    }
-
-    /// Returns a summary of compaction metrics.
-    ///
-    /// Provides a snapshot of compaction statistics including counts,
-    /// totals, and averages.
-    #[must_use]
-    pub fn compaction_metrics_summary(&self) -> CompactionMetricsSummary {
-        self.compression.compaction_metrics.summary()
-    }
-
     // ========================================================================
     // Render view (TUI decoupling)
     // ========================================================================
@@ -1591,29 +1326,29 @@ impl AppState {
     pub fn as_render_view(&self) -> RenderView<'_> {
         RenderView {
             timeline: self.timeline(),
-            throbber_char: self.throbber_char(),
-            scroll_offset: self.scroll_offset(),
-            scroll_state: self.scroll_state(),
-            selection: self.selection(),
-            focus_area: self.focus_area(),
-            input: self.input(),
-            completion: self.completion(),
-            worktree_branch: self.worktree_branch(),
-            worktree_modified: self.worktree_modified(),
-            worktree_ahead: self.worktree_ahead(),
-            worktree_behind: self.worktree_behind(),
-            token_budget: self.token_budget(),
+            throbber_char: self.display.throbber_char(),
+            scroll_offset: self.display.scroll_offset(),
+            scroll_state: self.display.scroll_state(),
+            selection: self.ui_selection.selection(),
+            focus_area: self.ui_selection.focus_area(),
+            input: self.input_state.text(),
+            completion: self.input_state.completion(),
+            worktree_branch: self.worktree.branch(),
+            worktree_modified: self.worktree.modified(),
+            worktree_ahead: self.worktree.ahead(),
+            worktree_behind: self.worktree.behind(),
+            token_budget: self.compression.token_budget(),
             context_tokens_injected: self.compression.context_tokens_injected(),
-            update_available: self.update_available(),
-            continuous_status: self.continuous_status(),
-            continuous_iterations_completed: self.continuous_iterations_completed(),
-            continuous_gate_results: self.continuous_gate_results(),
-            continuous_checking_gate: self.continuous_checking_gate(),
-            continuous_last_duration_ms: self.continuous_last_duration_ms(),
-            compaction_state: self.compaction_state(),
-            pending_permission: self.pending_permission(),
-            pending_plan: self.pending_plan(),
-            pending_question: self.pending_question(),
+            update_available: self.display.update_available(),
+            continuous_status: self.continuous.status(),
+            continuous_iterations_completed: self.continuous.iterations_completed(),
+            continuous_gate_results: self.continuous.gate_results(),
+            continuous_checking_gate: self.continuous.checking_gate(),
+            continuous_last_duration_ms: self.continuous.last_duration_ms(),
+            compaction_state: self.compression.compaction_state(),
+            pending_permission: self.tool_state.pending_permission.as_ref(),
+            pending_plan: self.pending_plan.as_ref(),
+            pending_question: self.pending_question.as_ref(),
         }
     }
 
@@ -1627,15 +1362,16 @@ impl AppState {
     ///
     /// * `feedback` - Layout metrics from the most recent render pass
     pub fn apply_render_feedback(&mut self, feedback: &RenderFeedback) {
-        self.update_rendered_lines_from_feedback(&feedback.wrapped_lines);
-        self.set_viewport_height(feedback.viewport_height);
-        self.update_content_height(feedback.content_height);
+        self.ui_selection.update_rendered_lines_from_strings(&feedback.wrapped_lines);
+        self.display.scroll.set_viewport_height(feedback.viewport_height);
+        self.display.scroll.set_content_height(feedback.content_height);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::config::EffortLevel;
 
     fn test_message(role: Role, content: &str) -> Message {
         Message {
@@ -1649,7 +1385,7 @@ mod tests {
         let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
         // Set some initial state
         state.display.scroll.restore_offset(100);
-        *state.input_mut() = "existing".to_string();
+        *state.input_state_mut().text_mut() = "existing".to_string();
         state.input_state.set_cursor_position(8);
 
         // Create a session without UI state
@@ -1659,16 +1395,16 @@ mod tests {
         state.restore_from_session(&session);
 
         // UI state should remain unchanged since session has no UI state
-        assert_eq!(state.scroll_offset(), 100);
-        assert_eq!(state.input(), "existing");
-        assert_eq!(state.cursor_position(), 8);
+        assert_eq!(state.display().scroll_offset(), 100);
+        assert_eq!(state.input_state().text(), "existing");
+        assert_eq!(state.input_state().cursor_position(), 8);
     }
 
     #[test]
     fn test_to_session_preserves_ui_state() {
         let mut state = AppState::new(PathBuf::from("/project"), false, ParallelMode::Enabled);
         state.display.scroll.restore_offset(42);
-        *state.input_mut() = "draft text".to_string();
+        *state.input_state_mut().text_mut() = "draft text".to_string();
         state.input_state.set_cursor_position(5);
 
         let session = state.to_session();
@@ -1685,7 +1421,7 @@ mod tests {
         let mut state = AppState::new(PathBuf::from("/project"), false, ParallelMode::Enabled);
         state.add_message(test_message(Role::User, "Test message"));
         state.display.scroll.restore_offset(100);
-        *state.input_mut() = "unsent input".to_string();
+        *state.input_state_mut().text_mut() = "unsent input".to_string();
         state.input_state.set_cursor_position(6);
 
         // Convert to session
@@ -1702,9 +1438,9 @@ mod tests {
         assert!(
             matches!(entries[0], crate::types::ConversationEntry::UserMessage(s) if s == "Test message")
         );
-        assert_eq!(new_state.scroll_offset(), 100);
-        assert_eq!(new_state.input(), "unsent input");
-        assert_eq!(new_state.cursor_position(), 6);
+        assert_eq!(new_state.display().scroll_offset(), 100);
+        assert_eq!(new_state.input_state().text(), "unsent input");
+        assert_eq!(new_state.input_state().cursor_position(), 6);
     }
 
     #[test]
@@ -1851,12 +1587,12 @@ mod tests {
 
         // Set cached context directly for testing
         state.compression.cached_ccg_context = Some("test context".to_string());
-        assert!(state.has_cached_ccg_context());
+        assert!(state.compression().has_cached_ccg_context());
 
         // Take should return and clear
-        let taken = state.take_cached_ccg_context();
+        let taken = state.compression_mut().take_cached_ccg_context();
         assert_eq!(taken, Some("test context".to_string()));
-        assert!(!state.has_cached_ccg_context());
+        assert!(!state.compression().has_cached_ccg_context());
     }
 
     #[test]
@@ -1867,17 +1603,20 @@ mod tests {
         state.compression.cached_ccg_context = Some("test context".to_string());
 
         // Auto-context disabled - should return None
-        assert!(state.context_for_injection().is_none());
+        assert!(state.compression().context_for_injection().is_none());
 
         // Enable auto-context
-        state.set_auto_context_enabled(true);
-        assert_eq!(state.context_for_injection(), Some("test context"));
+        state.compression_mut().set_auto_context_enabled(true);
+        assert_eq!(
+            state.compression().context_for_injection(),
+            Some("test context")
+        );
     }
 
     #[tokio::test]
     async fn test_context_not_reinjected_when_hash_unchanged() {
         let mut state = AppState::new(PathBuf::from("."), false, ParallelMode::Enabled);
-        state.set_auto_context_enabled(true);
+        state.compression_mut().set_auto_context_enabled(true);
 
         // Create a minimal orchestrator so the early-return check passes
         let caps = crate::narsil::NarsilCapabilities::from_tools(&["find_symbols".to_string()]);
@@ -1885,16 +1624,18 @@ mod tests {
             caps,
             "test-repo",
         ));
-        state.set_compression_orchestrator(orchestrator);
+        state
+            .compression_mut()
+            .set_compression_orchestrator(orchestrator);
 
         // Pre-populate cached context and set the hash to the current git HEAD
         // Since tests run in the git repo, get_git_head_hash(".") returns a real hash
         let current_hash =
             get_git_head_hash(std::path::Path::new(".")).unwrap_or_else(|| "unknown".to_string());
-        state.set_last_ccg_hash(current_hash);
+        state.compression_mut().set_last_ccg_hash(current_hash);
         state.compression.cached_ccg_context =
             Some("## Cached Context\nAlready fetched".to_string());
-        state.set_context_tokens_injected(3000);
+        state.compression_mut().set_context_tokens_injected(3000);
 
         // refresh_build_context should detect hash is unchanged and return
         // the cached context without making any MCP calls
@@ -1910,9 +1651,9 @@ mod tests {
             "Should return the existing cached content"
         );
         // Tokens should remain unchanged (not reset)
-        assert_eq!(state.context_tokens_injected(), 3000);
+        assert_eq!(state.compression().context_tokens_injected(), 3000);
         // Cache should still be present
-        assert!(state.has_cached_ccg_context());
+        assert!(state.compression().has_cached_ccg_context());
     }
 
     #[tokio::test]
@@ -1923,25 +1664,27 @@ mod tests {
         let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
 
         // Verify initial state
-        assert!(state.last_ccg_hash().is_none());
-        assert_eq!(state.context_tokens_injected(), 0);
-        assert!(!state.has_cached_ccg_context());
+        assert!(state.compression().last_ccg_hash().is_none());
+        assert_eq!(state.compression().context_tokens_injected(), 0);
+        assert!(!state.compression().has_cached_ccg_context());
 
         // After setting context (simulating a successful fetch), the metrics
         // fields are populated for the status bar and logging
-        state.set_last_ccg_hash("abc123".to_string());
-        state.set_context_tokens_injected(5000);
+        state
+            .compression_mut()
+            .set_last_ccg_hash("abc123".to_string());
+        state.compression_mut().set_context_tokens_injected(5000);
         state.compression.cached_ccg_context = Some("## Context".to_string());
 
-        assert_eq!(state.last_ccg_hash(), Some("abc123"));
-        assert_eq!(state.context_tokens_injected(), 5000);
-        assert!(state.has_cached_ccg_context());
+        assert_eq!(state.compression().last_ccg_hash(), Some("abc123"));
+        assert_eq!(state.compression().context_tokens_injected(), 5000);
+        assert!(state.compression().has_cached_ccg_context());
     }
 
     #[tokio::test]
     async fn test_submit_message_with_cached_context_prepends() {
         let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
-        state.set_auto_context_enabled(true);
+        state.compression_mut().set_auto_context_enabled(true);
 
         // Pre-populate cached context
         state.compression.cached_ccg_context =
@@ -1959,7 +1702,7 @@ mod tests {
             .await;
 
         // Cached context should be consumed
-        assert!(!state.has_cached_ccg_context());
+        assert!(!state.compression().has_cached_ccg_context());
 
         // The API message should contain the context wrapper
         assert!(!state.api_messages().is_empty());
@@ -2003,7 +1746,7 @@ mod tests {
 
         // Cached context should still be present
         assert!(
-            state.has_cached_ccg_context(),
+            state.compression().has_cached_ccg_context(),
             "build_api_messages should not consume cached context"
         );
     }
@@ -2011,7 +1754,7 @@ mod tests {
     #[test]
     fn test_prepare_api_messages_injects_context_when_enabled() {
         let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
-        state.set_auto_context_enabled(true);
+        state.compression_mut().set_auto_context_enabled(true);
         state.compression.cached_ccg_context =
             Some("## Project Structure\nRust CLI app".to_string());
 
@@ -2064,7 +1807,7 @@ mod tests {
     #[test]
     fn test_prepare_api_messages_does_not_consume_cached_context() {
         let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
-        state.set_auto_context_enabled(true);
+        state.compression_mut().set_auto_context_enabled(true);
         state.compression.cached_ccg_context = Some("## Context".to_string());
 
         state.api_messages_mut().push(ApiMessageV2::user("Hello"));
@@ -2074,7 +1817,7 @@ mod tests {
 
         // Cache should still be present for future calls
         assert!(
-            state.has_cached_ccg_context(),
+            state.compression().has_cached_ccg_context(),
             "build_api_messages should not consume the cached context"
         );
     }
@@ -2134,15 +1877,15 @@ mod tests {
     #[test]
     fn test_app_state_agent_panel_delegation() {
         let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
-        assert!(!state.subagents_enabled());
-        assert!(state.agent_panel_entries().is_empty());
+        assert!(!state.agent_panel().subagents_enabled());
+        assert!(state.agent_panel().entries().is_empty());
 
         let progress = AgentProgress::IterationStarted {
             iteration: 1,
             max: 3,
         };
         state.update_agent_progress("a1", "Agent", &progress);
-        assert_eq!(state.agent_panel_entries().len(), 1);
+        assert_eq!(state.agent_panel().entries().len(), 1);
         assert!(state.dirty.full);
     }
 
@@ -2266,19 +2009,19 @@ mod tests {
         state.update_continuous_iteration(1);
         assert!(state.dirty.full);
         assert_eq!(
-            *state.continuous_status(),
+            *state.continuous().status(),
             ContinuousLoopStatus::Running { iteration: 1 }
         );
 
         state.dirty.clear();
         state.complete_continuous_iteration(1, 2000);
         assert!(state.dirty.full);
-        assert_eq!(state.continuous_iterations_completed(), 1);
+        assert_eq!(state.continuous().iterations_completed(), 1);
 
         state.dirty.clear();
         state.reset_continuous();
         assert!(state.dirty.full);
-        assert_eq!(*state.continuous_status(), ContinuousLoopStatus::Inactive);
+        assert_eq!(*state.continuous().status(), ContinuousLoopStatus::Inactive);
     }
 
     #[test]
@@ -2420,7 +2163,7 @@ mod tests {
     #[test]
     fn test_build_request_options_high_effort() {
         let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
-        state.set_effort(EffortLevel::High);
+        state.model_config_mut().set_effort(EffortLevel::High);
         let opts = state.build_request_options("claude-sonnet-4-20250514");
         let thinking = opts
             .thinking
@@ -2432,8 +2175,8 @@ mod tests {
     #[test]
     fn test_build_request_options_explicit_budget_overrides_effort() {
         let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
-        state.set_effort(EffortLevel::Medium);
-        state.set_thinking_budget(Some(50_000));
+        state.model_config_mut().set_effort(EffortLevel::Medium);
+        state.model_config_mut().set_thinking_budget(Some(50_000));
         let opts = state.build_request_options("claude-sonnet-4-20250514");
         let thinking = opts
             .thinking
@@ -2444,7 +2187,7 @@ mod tests {
     #[test]
     fn test_build_request_options_unsupported_model() {
         let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
-        state.set_effort(EffortLevel::High);
+        state.model_config_mut().set_effort(EffortLevel::High);
         let opts = state.build_request_options("unknown-model");
         // Unknown model → no thinking support
         assert!(opts.thinking.is_none());
@@ -2453,7 +2196,9 @@ mod tests {
     #[test]
     fn test_build_request_options_system_prompt_with_cache() {
         let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
-        state.set_system_prompt(Some("You are a helpful assistant.".to_string()));
+        state
+            .model_config_mut()
+            .set_system_prompt(Some("You are a helpful assistant.".to_string()));
         let opts = state.build_request_options("claude-sonnet-4-20250514");
         let blocks = opts.system.expect("System prompt should produce blocks");
         assert_eq!(blocks.len(), 1);
@@ -2467,7 +2212,9 @@ mod tests {
     #[test]
     fn test_build_request_options_system_prompt_no_cache_for_old_model() {
         let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
-        state.set_system_prompt(Some("Instructions".to_string()));
+        state
+            .model_config_mut()
+            .set_system_prompt(Some("Instructions".to_string()));
         let opts = state.build_request_options("claude-3-haiku-20240307");
         let blocks = opts.system.expect("System prompt should produce blocks");
         assert!(
@@ -2482,14 +2229,14 @@ mod tests {
         state.dirty.clear();
 
         assert!(
-            !state.is_compaction_requested(),
+            !state.compression().is_compaction_requested(),
             "No compaction should be requested initially"
         );
 
         state.force_compact(Some("summarize briefly".to_string()));
 
         assert!(
-            state.is_compaction_requested(),
+            state.compression().is_compaction_requested(),
             "Compaction should be requested after force_compact"
         );
         assert!(
@@ -2503,12 +2250,12 @@ mod tests {
         let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
         state.force_compact(None);
 
-        assert!(state.is_compaction_requested());
+        assert!(state.compression().is_compaction_requested());
 
         // Verify the request can be consumed
         let request = state.compression.take_compaction_request();
         assert_eq!(request, Some(None));
-        assert!(!state.is_compaction_requested());
+        assert!(!state.compression().is_compaction_requested());
     }
 
     #[test]
@@ -2525,7 +2272,7 @@ mod tests {
             "sync_token_budget should set the dirty flag via add_token_usage"
         );
         assert!(
-            state.token_budget().used() > 0,
+            state.compression().token_budget().used() > 0,
             "Token budget should reflect the conversation tokens"
         );
     }
@@ -2556,7 +2303,7 @@ mod tests {
     fn test_memory_store_mut_returns_none_when_not_set() {
         let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
         assert!(
-            state.memory_store_mut().is_none(),
+            state.model_config_mut().memory_store_mut().is_none(),
             "Fresh state should have no memory store"
         );
     }

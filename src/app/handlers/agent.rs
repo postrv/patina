@@ -350,7 +350,7 @@ mod tests {
         let (session_mgr, _dir) = test_session_manager();
 
         assert!(
-            state.agent_panel_entries().is_empty(),
+            state.agent_panel().entries().is_empty(),
             "No agents before first event"
         );
 
@@ -366,11 +366,11 @@ mod tests {
         let _ = handler.handle(&event, &mut ctx).await.unwrap();
 
         assert_eq!(
-            ctx.state.agent_panel_entries().len(),
+            ctx.state.agent_panel().entries().len(),
             1,
             "Handler must create an agent panel entry"
         );
-        let entry = &ctx.state.agent_panel_entries()[0];
+        let entry = &ctx.state.agent_panel().entries()[0];
         assert_eq!(entry.agent_id, "agent-1");
         assert_eq!(entry.agent_name, "explorer");
         assert_eq!(
@@ -413,12 +413,12 @@ mod tests {
         let _ = handler.handle(&event2, &mut ctx).await.unwrap();
 
         assert_eq!(
-            ctx.state.agent_panel_entries().len(),
+            ctx.state.agent_panel().entries().len(),
             1,
             "Should update existing entry, not create a second"
         );
         assert_eq!(
-            ctx.state.agent_panel_entries()[0].status,
+            ctx.state.agent_panel().entries()[0].status,
             AgentPanelStatus::Running {
                 iteration: 2,
                 max_iterations: 10,
@@ -457,11 +457,11 @@ mod tests {
         let _ = handler.handle(&event2, &mut ctx).await.unwrap();
 
         assert_eq!(
-            ctx.state.agent_panel_entries()[0].status,
+            ctx.state.agent_panel().entries()[0].status,
             AgentPanelStatus::Completed { iterations_used: 3 }
         );
         assert_eq!(
-            ctx.state.agent_panel_entries()[0].last_content,
+            ctx.state.agent_panel().entries()[0].last_content,
             "Found relevant code."
         );
     }
@@ -497,7 +497,7 @@ mod tests {
         let _ = handler.handle(&event2, &mut ctx).await.unwrap();
 
         assert_eq!(
-            ctx.state.agent_panel_entries()[0].status,
+            ctx.state.agent_panel().entries()[0].status,
             AgentPanelStatus::Failed {
                 error: "Rate limit exceeded".to_string(),
             }
@@ -532,7 +532,7 @@ mod tests {
         let _ = handler.handle(&event2, &mut ctx).await.unwrap();
 
         assert_eq!(
-            ctx.state.agent_panel_entries()[0].last_content,
+            ctx.state.agent_panel().entries()[0].last_content,
             "Looking at src/main.rs..."
         );
     }
@@ -545,7 +545,7 @@ mod tests {
         let (session_mgr, _dir) = test_session_manager();
 
         assert!(
-            !state.has_pending_conflicts(),
+            !state.agent_panel().has_pending_conflicts(),
             "No conflicts before first event"
         );
 
@@ -556,7 +556,7 @@ mod tests {
         let _ = handler.handle(&event, &mut ctx).await.unwrap();
 
         assert!(
-            ctx.state.has_pending_conflicts(),
+            ctx.state.agent_panel().has_pending_conflicts(),
             "Handler must record the conflict report"
         );
     }
@@ -591,9 +591,9 @@ mod tests {
         });
         let _ = handler.handle(&event2, &mut ctx).await.unwrap();
 
-        assert_eq!(ctx.state.agent_panel_entries().len(), 2);
-        assert_eq!(ctx.state.agent_panel_entries()[0].agent_id, "agent-1");
-        assert_eq!(ctx.state.agent_panel_entries()[1].agent_id, "agent-2");
+        assert_eq!(ctx.state.agent_panel().entries().len(), 2);
+        assert_eq!(ctx.state.agent_panel().entries()[0].agent_id, "agent-1");
+        assert_eq!(ctx.state.agent_panel().entries()[1].agent_id, "agent-2");
     }
 
     #[tokio::test]

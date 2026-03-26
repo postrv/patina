@@ -3,11 +3,6 @@
 use super::*;
 
 impl AppState {
-    /// Sets the current model name for cost tracking.
-    pub fn set_current_model(&mut self, model: String) {
-        self.model_config.current_model = model;
-    }
-
     /// Returns a reference to the cost tracker.
     #[must_use]
     pub fn cost_tracker(&self) -> &CostTracker {
@@ -23,17 +18,6 @@ impl AppState {
     /// Returns a mutable reference to the audit logger.
     pub fn audit_logger_mut(&mut self) -> &mut AuditLogger {
         &mut self.audit_logger
-    }
-
-    /// Returns the multi-model client, if configured.
-    #[must_use]
-    pub fn multi_model(&self) -> Option<&MultiModelClient> {
-        self.model_config.multi_model.as_ref()
-    }
-
-    /// Sets the multi-model client for provider-aware model switching.
-    pub fn set_multi_model(&mut self, client: MultiModelClient) {
-        self.model_config.multi_model = Some(client);
     }
 
     /// Returns a formatted cost summary for display.
@@ -60,43 +44,6 @@ impl AppState {
                 .collect::<Vec<_>>()
                 .join("\n"),
         )
-    }
-
-    /// Sets the memory store.
-    pub fn set_memory_store(&mut self, store: crate::memory::store::MemoryStore) {
-        self.model_config.memory_store = Some(store);
-    }
-
-    /// Returns a reference to the memory store.
-    #[must_use]
-    pub fn memory_store(&self) -> Option<&crate::memory::store::MemoryStore> {
-        self.model_config.memory_store.as_ref()
-    }
-
-    /// Returns a mutable reference to the memory store.
-    pub fn memory_store_mut(&mut self) -> Option<&mut crate::memory::store::MemoryStore> {
-        self.model_config.memory_store.as_mut()
-    }
-
-    /// Sets the reasoning effort level.
-    pub fn set_effort(&mut self, effort: EffortLevel) {
-        self.model_config.effort = effort;
-    }
-
-    /// Sets the explicit thinking budget (overrides effort level).
-    pub fn set_thinking_budget(&mut self, budget: Option<u32>) {
-        self.model_config.thinking_budget = budget;
-    }
-
-    /// Sets the system prompt text for API requests.
-    pub fn set_system_prompt(&mut self, prompt: Option<String>) {
-        self.model_config.system_prompt = prompt;
-    }
-
-    /// Returns the current effort level.
-    #[must_use]
-    pub fn effort(&self) -> EffortLevel {
-        self.model_config.effort
     }
 
     /// Builds [`RequestOptions`] from the current state, gated by model capabilities.

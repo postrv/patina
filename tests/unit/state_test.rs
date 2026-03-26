@@ -37,12 +37,12 @@ fn new_state() -> AppState {
 #[test]
 fn test_input_insert_char() {
     let mut state = new_state();
-    assert!(state.input().is_empty());
+    assert!(state.input_state().text().is_empty());
 
     state.insert_char('H');
     state.insert_char('i');
 
-    assert_eq!(state.input(), "Hi");
+    assert_eq!(state.input_state().text(), "Hi");
 }
 
 /// Tests character deletion from the input buffer.
@@ -56,22 +56,22 @@ fn test_input_delete_char() {
     state.insert_char('o');
 
     state.delete_char();
-    assert_eq!(state.input(), "Hell");
+    assert_eq!(state.input_state().text(), "Hell");
 
     state.delete_char();
     state.delete_char();
-    assert_eq!(state.input(), "He");
+    assert_eq!(state.input_state().text(), "He");
 }
 
 /// Tests that delete_char on empty input doesn't panic.
 #[test]
 fn test_input_delete_char_empty() {
     let mut state = new_state();
-    assert!(state.input().is_empty());
+    assert!(state.input_state().text().is_empty());
 
     // Should not panic
     state.delete_char();
-    assert!(state.input().is_empty());
+    assert!(state.input_state().text().is_empty());
 }
 
 /// Tests that take_input returns the content and clears the buffer.
@@ -85,7 +85,7 @@ fn test_input_take() {
 
     let taken = state.take_input();
     assert_eq!(taken, "Test");
-    assert!(state.input().is_empty());
+    assert!(state.input_state().text().is_empty());
 }
 
 /// Tests that take_input on empty buffer returns empty string.
@@ -94,7 +94,7 @@ fn test_input_take_empty() {
     let mut state = new_state();
     let taken = state.take_input();
     assert!(taken.is_empty());
-    assert!(state.input().is_empty());
+    assert!(state.input_state().text().is_empty());
 }
 
 /// Tests unicode character handling in input.
@@ -105,10 +105,10 @@ fn test_input_unicode() {
     state.insert_char('好');
     state.insert_char('🦀');
 
-    assert_eq!(state.input(), "你好🦀");
+    assert_eq!(state.input_state().text(), "你好🦀");
 
     state.delete_char();
-    assert_eq!(state.input(), "你好");
+    assert_eq!(state.input_state().text(), "你好");
 }
 
 // ============================================================================
@@ -122,13 +122,13 @@ fn test_scroll_up() {
     // Set content larger than viewport to allow scrolling
     state.set_viewport_height(20);
     state.update_content_height(100);
-    assert_eq!(state.scroll_offset(), 0);
+    assert_eq!(state.display().scroll_offset(), 0);
 
     state.scroll_up(5);
-    assert_eq!(state.scroll_offset(), 5);
+    assert_eq!(state.display().scroll_offset(), 5);
 
     state.scroll_up(3);
-    assert_eq!(state.scroll_offset(), 8);
+    assert_eq!(state.display().scroll_offset(), 8);
 }
 
 /// Tests scroll down decreases scroll offset.
@@ -140,24 +140,24 @@ fn test_scroll_down() {
     state.update_content_height(100);
 
     state.scroll_up(10);
-    assert_eq!(state.scroll_offset(), 10);
+    assert_eq!(state.display().scroll_offset(), 10);
 
     state.scroll_down(3);
-    assert_eq!(state.scroll_offset(), 7);
+    assert_eq!(state.display().scroll_offset(), 7);
 
     state.scroll_down(2);
-    assert_eq!(state.scroll_offset(), 5);
+    assert_eq!(state.display().scroll_offset(), 5);
 }
 
 /// Tests scroll bounds saturation - scroll_down at 0 stays at 0.
 #[test]
 fn test_scroll_bounds_saturation_at_zero() {
     let mut state = new_state();
-    assert_eq!(state.scroll_offset(), 0);
+    assert_eq!(state.display().scroll_offset(), 0);
 
     // Should not go negative - saturating_sub should keep it at 0
     state.scroll_down(10);
-    assert_eq!(state.scroll_offset(), 0);
+    assert_eq!(state.display().scroll_offset(), 0);
 }
 
 /// Tests scroll up saturation - large values don't overflow.
@@ -166,11 +166,11 @@ fn test_scroll_up_large_values() {
     let mut state = new_state();
 
     state.scroll_up(usize::MAX / 2);
-    let first = state.scroll_offset();
+    let first = state.display().scroll_offset();
 
     // saturating_add should prevent overflow
     state.scroll_up(usize::MAX / 2);
-    assert!(state.scroll_offset() >= first);
+    assert!(state.display().scroll_offset() >= first);
 }
 
 // ============================================================================
@@ -283,7 +283,7 @@ fn test_dirty_flag_on_message_add() {
 #[test]
 fn test_cursor_initial_position() {
     let state = new_state();
-    assert_eq!(state.cursor_position(), 0);
+    assert_eq!(state.input_state().cursor_position(), 0);
 }
 
 /// Tests cursor position after inserting characters.
@@ -292,11 +292,11 @@ fn test_cursor_initial_position() {
 fn test_cursor_position_after_insert() {
     let mut state = new_state();
     state.insert_char('a');
-    assert_eq!(state.cursor_position(), 1);
+    assert_eq!(state.input_state().cursor_position(), 1);
 
     state.insert_char('b');
     state.insert_char('c');
-    assert_eq!(state.cursor_position(), 3);
+    assert_eq!(state.input_state().cursor_position(), 3);
 }
 
 /// Tests moving cursor left.
@@ -308,10 +308,10 @@ fn test_cursor_move_left() {
     state.insert_char('c');
 
     state.cursor_left();
-    assert_eq!(state.cursor_position(), 2);
+    assert_eq!(state.input_state().cursor_position(), 2);
 
     state.cursor_left();
-    assert_eq!(state.cursor_position(), 1);
+    assert_eq!(state.input_state().cursor_position(), 1);
 }
 
 /// Tests cursor left at beginning doesn't go negative.
@@ -320,11 +320,11 @@ fn test_cursor_move_left_at_start() {
     let mut state = new_state();
     state.insert_char('a');
     state.cursor_left();
-    assert_eq!(state.cursor_position(), 0);
+    assert_eq!(state.input_state().cursor_position(), 0);
 
     // Should not go negative
     state.cursor_left();
-    assert_eq!(state.cursor_position(), 0);
+    assert_eq!(state.input_state().cursor_position(), 0);
 }
 
 /// Tests moving cursor right.
@@ -339,13 +339,13 @@ fn test_cursor_move_right() {
     state.cursor_left();
     state.cursor_left();
     state.cursor_left();
-    assert_eq!(state.cursor_position(), 0);
+    assert_eq!(state.input_state().cursor_position(), 0);
 
     state.cursor_right();
-    assert_eq!(state.cursor_position(), 1);
+    assert_eq!(state.input_state().cursor_position(), 1);
 
     state.cursor_right();
-    assert_eq!(state.cursor_position(), 2);
+    assert_eq!(state.input_state().cursor_position(), 2);
 }
 
 /// Tests cursor right at end doesn't exceed length.
@@ -353,11 +353,11 @@ fn test_cursor_move_right() {
 fn test_cursor_move_right_at_end() {
     let mut state = new_state();
     state.insert_char('a');
-    assert_eq!(state.cursor_position(), 1);
+    assert_eq!(state.input_state().cursor_position(), 1);
 
     // Should not exceed string length
     state.cursor_right();
-    assert_eq!(state.cursor_position(), 1);
+    assert_eq!(state.input_state().cursor_position(), 1);
 }
 
 /// Tests inserting at cursor position (not at end).
@@ -371,8 +371,8 @@ fn test_insert_at_cursor() {
     state.cursor_left(); // cursor at 1
     state.insert_char('b'); // insert 'b' at position 1
 
-    assert_eq!(state.input(), "abc");
-    assert_eq!(state.cursor_position(), 2); // cursor moves after inserted char
+    assert_eq!(state.input_state().text(), "abc");
+    assert_eq!(state.input_state().cursor_position(), 2); // cursor moves after inserted char
 }
 
 /// Tests deleting at cursor position (backspace behavior).
@@ -387,8 +387,8 @@ fn test_delete_at_cursor() {
     state.cursor_left(); // cursor at 2
     state.delete_char(); // delete 'b' (char before cursor)
 
-    assert_eq!(state.input(), "ac");
-    assert_eq!(state.cursor_position(), 1);
+    assert_eq!(state.input_state().text(), "ac");
+    assert_eq!(state.input_state().cursor_position(), 1);
 }
 
 /// Tests cursor home (move to start).
@@ -400,7 +400,7 @@ fn test_cursor_home() {
     state.insert_char('c');
 
     state.cursor_home();
-    assert_eq!(state.cursor_position(), 0);
+    assert_eq!(state.input_state().cursor_position(), 0);
 }
 
 /// Tests cursor end (move to end).
@@ -413,7 +413,7 @@ fn test_cursor_end() {
     state.cursor_home();
 
     state.cursor_end();
-    assert_eq!(state.cursor_position(), 3);
+    assert_eq!(state.input_state().cursor_position(), 3);
 }
 
 // ============================================================================
@@ -708,8 +708,8 @@ fn test_message(role: Role, content: &str) -> Message {
 fn test_app_state_new() {
     let state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
     assert!(state.timeline().is_empty());
-    assert!(state.input().is_empty());
-    assert_eq!(state.scroll_offset(), 0);
+    assert!(state.input_state().text().is_empty());
+    assert_eq!(state.display().scroll_offset(), 0);
     assert_eq!(state.working_dir, PathBuf::from("/test"));
 }
 
@@ -741,9 +741,9 @@ fn test_restore_from_session_with_ui_state() {
 
     state.restore_from_session(&session);
 
-    assert_eq!(state.scroll_offset(), 50);
-    assert_eq!(state.input(), "draft input");
-    assert_eq!(state.cursor_position(), 5);
+    assert_eq!(state.display().scroll_offset(), 50);
+    assert_eq!(state.input_state().text(), "draft input");
+    assert_eq!(state.input_state().cursor_position(), 5);
 }
 
 #[test]
@@ -764,14 +764,14 @@ fn test_restore_marks_dirty() {
 #[test]
 fn test_app_state_session_id_none_initially() {
     let state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
-    assert!(state.session_id().is_none());
+    assert!(state.session_tracking().id().is_none());
 }
 
 #[test]
 fn test_app_state_set_session_id() {
     let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
-    state.set_session_id("abc123".to_string());
-    assert_eq!(state.session_id(), Some("abc123"));
+    state.session_tracking_mut().set_id("abc123".to_string());
+    assert_eq!(state.session_tracking().id(), Some("abc123"));
 }
 
 #[test]
@@ -799,7 +799,7 @@ fn test_to_session_with_messages() {
 #[test]
 fn test_restore_from_session_restores_session_id() {
     let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
-    assert!(state.session_id().is_none());
+    assert!(state.session_tracking().id().is_none());
 
     // Create session with an ID (simulating a saved session)
     let mut session = Session::new(PathBuf::from("/project"));
@@ -811,7 +811,7 @@ fn test_restore_from_session_restores_session_id() {
 
     state.restore_from_session(&session_with_id);
 
-    assert_eq!(state.session_id(), Some("test-session-id"));
+    assert_eq!(state.session_tracking().id(), Some("test-session-id"));
 }
 
 // ========================================================================
@@ -943,8 +943,11 @@ fn test_scroll_state_initial() {
     let state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
 
     // Should start in Follow mode at offset 0
-    assert_eq!(state.scroll_offset(), 0);
-    assert_eq!(state.scroll_state().mode(), AutoScrollMode::Follow);
+    assert_eq!(state.display().scroll_offset(), 0);
+    assert_eq!(
+        state.display().scroll_state().mode(),
+        AutoScrollMode::Follow
+    );
 }
 
 #[test]
@@ -954,14 +957,17 @@ fn test_streaming_content_auto_scrolls() {
 
     // Simulate content growth (streaming updates)
     state.update_content_height(30);
-    assert_eq!(state.scroll_offset(), 0); // At bottom
+    assert_eq!(state.display().scroll_offset(), 0); // At bottom
 
     // More content arrives
     state.update_content_height(50);
 
     // In Follow mode, should auto-scroll to stay at bottom
-    assert_eq!(state.scroll_offset(), 0);
-    assert_eq!(state.scroll_state().mode(), AutoScrollMode::Follow);
+    assert_eq!(state.display().scroll_offset(), 0);
+    assert_eq!(
+        state.display().scroll_state().mode(),
+        AutoScrollMode::Follow
+    );
 }
 
 #[test]
@@ -972,15 +978,21 @@ fn test_user_scroll_preserved_during_streaming() {
 
     // User scrolls up
     state.scroll_up(15);
-    assert_eq!(state.scroll_offset(), 15);
-    assert_eq!(state.scroll_state().mode(), AutoScrollMode::Manual);
+    assert_eq!(state.display().scroll_offset(), 15);
+    assert_eq!(
+        state.display().scroll_state().mode(),
+        AutoScrollMode::Manual
+    );
 
     // More content arrives (streaming)
     state.update_content_height(80);
 
     // User's scroll position should be preserved
-    assert_eq!(state.scroll_offset(), 15);
-    assert_eq!(state.scroll_state().mode(), AutoScrollMode::Manual);
+    assert_eq!(state.display().scroll_offset(), 15);
+    assert_eq!(
+        state.display().scroll_state().mode(),
+        AutoScrollMode::Manual
+    );
 }
 
 #[test]
@@ -991,14 +1003,20 @@ fn test_scroll_down_resumes_follow_mode() {
 
     // User scrolls up (switches to Manual)
     state.scroll_up(20);
-    assert_eq!(state.scroll_state().mode(), AutoScrollMode::Manual);
+    assert_eq!(
+        state.display().scroll_state().mode(),
+        AutoScrollMode::Manual
+    );
 
     // User scrolls all the way back down
     state.scroll_down(20);
 
     // Should resume Follow mode
-    assert_eq!(state.scroll_offset(), 0);
-    assert_eq!(state.scroll_state().mode(), AutoScrollMode::Follow);
+    assert_eq!(state.display().scroll_offset(), 0);
+    assert_eq!(
+        state.display().scroll_state().mode(),
+        AutoScrollMode::Follow
+    );
 }
 
 #[test]
@@ -1009,14 +1027,20 @@ fn test_scroll_to_bottom_method() {
 
     // User scrolls up
     state.scroll_up(30);
-    assert_eq!(state.scroll_state().mode(), AutoScrollMode::Manual);
+    assert_eq!(
+        state.display().scroll_state().mode(),
+        AutoScrollMode::Manual
+    );
 
     // Explicitly scroll to bottom
     state.scroll_to_bottom(80);
 
     // Should be in Follow mode at bottom
-    assert_eq!(state.scroll_offset(), 0);
-    assert_eq!(state.scroll_state().mode(), AutoScrollMode::Follow);
+    assert_eq!(state.display().scroll_offset(), 0);
+    assert_eq!(
+        state.display().scroll_state().mode(),
+        AutoScrollMode::Follow
+    );
 }
 
 #[test]
@@ -1024,7 +1048,7 @@ fn test_scroll_state_accessor() {
     let state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
 
     // Should be able to access scroll state
-    let scroll = state.scroll_state();
+    let scroll = state.display().scroll_state();
     assert_eq!(scroll.offset(), 0);
 }
 
@@ -1139,18 +1163,18 @@ fn test_api_messages_truncated_empty() {
 #[test]
 fn test_focus_area_default_is_input() {
     let state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
-    assert_eq!(state.focus_area(), FocusArea::Input);
+    assert_eq!(state.ui_selection().focus_area(), FocusArea::Input);
 }
 
 #[test]
 fn test_focus_area_can_be_set() {
     let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
 
-    state.set_focus_area(FocusArea::Content);
-    assert_eq!(state.focus_area(), FocusArea::Content);
+    state.ui_selection_mut().set_focus_area(FocusArea::Content);
+    assert_eq!(state.ui_selection().focus_area(), FocusArea::Content);
 
-    state.set_focus_area(FocusArea::Input);
-    assert_eq!(state.focus_area(), FocusArea::Input);
+    state.ui_selection_mut().set_focus_area(FocusArea::Input);
+    assert_eq!(state.ui_selection().focus_area(), FocusArea::Input);
 }
 
 #[test]
@@ -1158,14 +1182,20 @@ fn test_focus_change_clears_selection() {
     let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
 
     // Create a selection
-    state.selection_mut().start(ContentPosition::new(0, 0));
-    state.selection_mut().update(ContentPosition::new(5, 10));
-    state.selection_mut().end();
-    assert!(state.selection().has_selection());
+    state
+        .ui_selection_mut()
+        .selection_mut()
+        .start(ContentPosition::new(0, 0));
+    state
+        .ui_selection_mut()
+        .selection_mut()
+        .update(ContentPosition::new(5, 10));
+    state.ui_selection_mut().selection_mut().end();
+    assert!(state.ui_selection().selection().has_selection());
 
     // Change focus should clear selection
-    state.set_focus_area(FocusArea::Content);
-    assert!(!state.selection().has_selection());
+    state.ui_selection_mut().set_focus_area(FocusArea::Content);
+    assert!(!state.ui_selection().selection().has_selection());
 }
 
 #[test]
@@ -1173,42 +1203,72 @@ fn test_focus_same_area_preserves_selection() {
     let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
 
     // Set focus to content
-    state.set_focus_area(FocusArea::Content);
+    state.ui_selection_mut().set_focus_area(FocusArea::Content);
 
     // Create a selection
-    state.selection_mut().start(ContentPosition::new(0, 0));
-    state.selection_mut().update(ContentPosition::new(5, 10));
-    state.selection_mut().end();
-    assert!(state.selection().has_selection());
+    state
+        .ui_selection_mut()
+        .selection_mut()
+        .start(ContentPosition::new(0, 0));
+    state
+        .ui_selection_mut()
+        .selection_mut()
+        .update(ContentPosition::new(5, 10));
+    state.ui_selection_mut().selection_mut().end();
+    assert!(state.ui_selection().selection().has_selection());
 
     // Setting same focus should NOT clear selection
-    state.set_focus_area(FocusArea::Content);
-    assert!(state.selection().has_selection());
+    state.ui_selection_mut().set_focus_area(FocusArea::Content);
+    assert!(state.ui_selection().selection().has_selection());
 }
 
 #[test]
 fn test_focus_area_for_row_content() {
     // Terminal height 30: input is rows 27-29, content is 0-26
-    assert_eq!(AppState::focus_area_for_row(0, 30), FocusArea::Content);
-    assert_eq!(AppState::focus_area_for_row(10, 30), FocusArea::Content);
-    assert_eq!(AppState::focus_area_for_row(26, 30), FocusArea::Content);
+    assert_eq!(
+        UISelectionState::focus_area_for_row(0, 30),
+        FocusArea::Content
+    );
+    assert_eq!(
+        UISelectionState::focus_area_for_row(10, 30),
+        FocusArea::Content
+    );
+    assert_eq!(
+        UISelectionState::focus_area_for_row(26, 30),
+        FocusArea::Content
+    );
 }
 
 #[test]
 fn test_focus_area_for_row_input() {
     // Terminal height 30: input is rows 27-29
-    assert_eq!(AppState::focus_area_for_row(27, 30), FocusArea::Input);
-    assert_eq!(AppState::focus_area_for_row(28, 30), FocusArea::Input);
-    assert_eq!(AppState::focus_area_for_row(29, 30), FocusArea::Input);
+    assert_eq!(
+        UISelectionState::focus_area_for_row(27, 30),
+        FocusArea::Input
+    );
+    assert_eq!(
+        UISelectionState::focus_area_for_row(28, 30),
+        FocusArea::Input
+    );
+    assert_eq!(
+        UISelectionState::focus_area_for_row(29, 30),
+        FocusArea::Input
+    );
 }
 
 #[test]
 fn test_focus_area_for_row_small_terminal() {
     // Minimum terminal height 7: content rows 0-3, input rows 4-6
-    assert_eq!(AppState::focus_area_for_row(0, 7), FocusArea::Content);
-    assert_eq!(AppState::focus_area_for_row(3, 7), FocusArea::Content);
-    assert_eq!(AppState::focus_area_for_row(4, 7), FocusArea::Input);
-    assert_eq!(AppState::focus_area_for_row(6, 7), FocusArea::Input);
+    assert_eq!(
+        UISelectionState::focus_area_for_row(0, 7),
+        FocusArea::Content
+    );
+    assert_eq!(
+        UISelectionState::focus_area_for_row(3, 7),
+        FocusArea::Content
+    );
+    assert_eq!(UISelectionState::focus_area_for_row(4, 7), FocusArea::Input);
+    assert_eq!(UISelectionState::focus_area_for_row(6, 7), FocusArea::Input);
 }
 
 // Plugin loading tests
@@ -1254,8 +1314,8 @@ fn test_new_enables_plugins_by_default() {
 fn test_new_disables_subagents_by_default() {
     // AppState::new should disable subagents by default
     let state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
-    assert!(!state.subagents_enabled());
-    assert!(state.subagent_spawner().is_none());
+    assert!(!state.agent_panel().subagents_enabled());
+    assert!(state.agent_panel().spawner().is_none());
 }
 
 #[test]
@@ -1267,8 +1327,8 @@ fn test_with_options_subagents_disabled() {
         true,  // plugins_enabled
         false, // subagents_enabled
     );
-    assert!(!state.subagents_enabled());
-    assert!(state.subagent_spawner().is_none());
+    assert!(!state.agent_panel().subagents_enabled());
+    assert!(state.agent_panel().spawner().is_none());
 }
 
 #[test]
@@ -1280,8 +1340,8 @@ fn test_with_options_subagents_enabled() {
         true, // plugins_enabled
         true, // subagents_enabled
     );
-    assert!(state.subagents_enabled());
-    assert!(state.subagent_spawner().is_some());
+    assert!(state.agent_panel().subagents_enabled());
+    assert!(state.agent_panel().spawner().is_some());
 }
 
 #[test]
@@ -1295,7 +1355,10 @@ fn test_subagent_spawner_returns_valid_spawner_when_enabled() {
     );
 
     // Verify we can access the spawner
-    let spawner = state.subagent_spawner().expect("spawner should be Some");
+    let spawner = state
+        .agent_panel()
+        .spawner()
+        .expect("spawner should be Some");
     // Verify spawner has a valid model configured
     assert!(spawner.model().contains("claude"));
 }
@@ -1309,8 +1372,8 @@ fn test_with_plugins_disables_subagents() {
         ParallelMode::Enabled,
         true, // plugins_enabled
     );
-    assert!(!state.subagents_enabled());
-    assert!(state.subagent_spawner().is_none());
+    assert!(!state.agent_panel().subagents_enabled());
+    assert!(state.agent_panel().spawner().is_none());
 }
 
 // =========================================================================
@@ -1322,7 +1385,7 @@ fn test_auto_context_disabled_by_default() {
     // AppState should have auto_context disabled by default
     // (Config enables it, but AppState needs explicit opt-in)
     let state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
-    assert!(!state.auto_context_enabled());
+    assert!(!state.compression().auto_context_enabled());
 }
 
 #[test]
@@ -1330,15 +1393,15 @@ fn test_set_auto_context_enabled() {
     let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
 
     // Initially disabled
-    assert!(!state.auto_context_enabled());
+    assert!(!state.compression().auto_context_enabled());
 
     // Enable it
-    state.set_auto_context_enabled(true);
-    assert!(state.auto_context_enabled());
+    state.compression_mut().set_auto_context_enabled(true);
+    assert!(state.compression().auto_context_enabled());
 
     // Disable it
-    state.set_auto_context_enabled(false);
-    assert!(!state.auto_context_enabled());
+    state.compression_mut().set_auto_context_enabled(false);
+    assert!(!state.compression().auto_context_enabled());
 }
 
 #[test]
@@ -1364,11 +1427,13 @@ fn test_inject_context_suggestions() {
     ];
 
     // Inject the suggestions
-    state.set_pending_context(suggestions.clone());
+    state
+        .compression_mut()
+        .set_pending_context(suggestions.clone());
 
     // Verify we have pending context
-    assert!(state.has_pending_context());
-    assert_eq!(state.pending_context().len(), 2);
+    assert!(state.compression().has_pending_context());
+    assert_eq!(state.compression().pending_context().len(), 2);
 }
 
 #[test]
@@ -1384,14 +1449,14 @@ fn test_take_pending_context_clears() {
         content: "Content".to_string(),
     }];
 
-    state.set_pending_context(suggestions);
-    assert!(state.has_pending_context());
+    state.compression_mut().set_pending_context(suggestions);
+    assert!(state.compression().has_pending_context());
 
     // Take should return and clear
-    let taken = state.take_pending_context();
+    let taken = state.compression_mut().take_pending_context();
     assert_eq!(taken.len(), 1);
-    assert!(!state.has_pending_context());
-    assert!(state.pending_context().is_empty());
+    assert!(!state.compression().has_pending_context());
+    assert!(state.compression().pending_context().is_empty());
 }
 
 #[test]
@@ -1435,11 +1500,11 @@ fn test_clear_pending_context() {
         content: "Content".to_string(),
     }];
 
-    state.set_pending_context(suggestions);
-    assert!(state.has_pending_context());
+    state.compression_mut().set_pending_context(suggestions);
+    assert!(state.compression().has_pending_context());
 
-    state.clear_pending_context();
-    assert!(!state.has_pending_context());
+    state.compression_mut().clear_pending_context();
+    assert!(!state.compression().has_pending_context());
 }
 
 // =========================================================================
@@ -1449,14 +1514,14 @@ fn test_clear_pending_context() {
 #[test]
 fn test_compression_orchestrator_none_by_default() {
     let state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
-    assert!(state.compression_orchestrator().is_none());
-    assert!(!state.has_ccg_support());
+    assert!(state.compression().compression_orchestrator().is_none());
+    assert!(!state.compression().has_ccg_support());
 }
 
 #[test]
 fn test_has_ccg_support_false_when_no_orchestrator() {
     let state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
-    assert!(!state.has_ccg_support());
+    assert!(!state.compression().has_ccg_support());
 }
 
 // =========================================================================
@@ -1466,7 +1531,7 @@ fn test_has_ccg_support_false_when_no_orchestrator() {
 #[test]
 fn test_last_ccg_hash_none_by_default() {
     let state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
-    assert!(state.last_ccg_hash().is_none());
+    assert!(state.compression().last_ccg_hash().is_none());
 }
 
 #[test]
@@ -1477,7 +1542,7 @@ fn test_inject_ccg_context_returns_none_without_orchestrator() {
 
     // Without orchestrator, the method should return None early
     // We verify the precondition: no orchestrator means function returns None
-    assert!(state.compression_orchestrator().is_none());
+    assert!(state.compression().compression_orchestrator().is_none());
 }
 
 // =========================================================================
@@ -1487,7 +1552,7 @@ fn test_inject_ccg_context_returns_none_without_orchestrator() {
 #[test]
 fn test_cached_ccg_context_none_by_default() {
     let state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
-    assert!(!state.has_cached_ccg_context());
+    assert!(!state.compression().has_cached_ccg_context());
 }
 
 #[test]
@@ -1495,8 +1560,8 @@ fn test_context_for_injection_returns_none_without_cached_context() {
     let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
 
     // Enable auto-context but no cached context
-    state.set_auto_context_enabled(true);
-    assert!(state.context_for_injection().is_none());
+    state.compression_mut().set_auto_context_enabled(true);
+    assert!(state.compression().context_for_injection().is_none());
 }
 
 // =========================================================================
@@ -1506,54 +1571,54 @@ fn test_context_for_injection_returns_none_without_cached_context() {
 #[test]
 fn test_narsil_client_none_by_default() {
     let state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
-    assert!(!state.has_narsil_client());
+    assert!(!state.compression().has_narsil_client());
 }
 
 #[test]
 fn test_context_token_budget_default() {
     let state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
-    assert_eq!(state.context_token_budget(), 10_000);
+    assert_eq!(state.compression().context_token_budget(), 10_000);
 }
 
 #[test]
 fn test_set_context_token_budget() {
     let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
-    state.set_context_token_budget(5_000);
-    assert_eq!(state.context_token_budget(), 5_000);
+    state.compression_mut().set_context_token_budget(5_000);
+    assert_eq!(state.compression().context_token_budget(), 5_000);
 }
 
 #[test]
 fn test_context_tokens_injected_zero_by_default() {
     let state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
-    assert_eq!(state.context_tokens_injected(), 0);
+    assert_eq!(state.compression().context_tokens_injected(), 0);
 }
 
 #[tokio::test]
 async fn test_refresh_build_context_returns_early_when_disabled() {
     let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
     // auto_context is disabled by default
-    assert!(!state.auto_context_enabled());
+    assert!(!state.compression().auto_context_enabled());
 
     // Should return None immediately
     let result = state.refresh_build_context().await;
     assert!(result.is_none());
-    assert!(!state.has_cached_ccg_context());
-    assert_eq!(state.context_tokens_injected(), 0);
+    assert!(!state.compression().has_cached_ccg_context());
+    assert_eq!(state.compression().context_tokens_injected(), 0);
 }
 
 #[tokio::test]
 async fn test_refresh_build_context_returns_early_without_orchestrator() {
     let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
-    state.set_auto_context_enabled(true);
+    state.compression_mut().set_auto_context_enabled(true);
 
     // No orchestrator set
-    assert!(state.compression_orchestrator().is_none());
+    assert!(state.compression().compression_orchestrator().is_none());
 
     // Should return None immediately
     let result = state.refresh_build_context().await;
     assert!(result.is_none());
-    assert!(!state.has_cached_ccg_context());
-    assert_eq!(state.context_tokens_injected(), 0);
+    assert!(!state.compression().has_cached_ccg_context());
+    assert_eq!(state.compression().context_tokens_injected(), 0);
 }
 
 // =========================================================================
@@ -1649,7 +1714,7 @@ async fn test_inject_ccg_context_exists_and_callable() {
 
     // Without an orchestrator, inject_ccg_context returns Ok(None) immediately
     assert!(
-        state.compression_orchestrator().is_none(),
+        state.compression().compression_orchestrator().is_none(),
         "Default AppState should have no compression orchestrator"
     );
 
@@ -1658,14 +1723,14 @@ async fn test_inject_ccg_context_exists_and_callable() {
     // Note: We cannot call inject_ccg_context directly without a real McpConnection,
     // but we can verify the precondition that guarantees the early return.
     assert!(
-        state.compression_orchestrator().is_none(),
+        state.compression().compression_orchestrator().is_none(),
         "inject_ccg_context() would return Ok(None) without orchestrator"
     );
 
     // The orphaned method does NOT affect the working context injection path:
     // refresh_build_context() is the method actually used by submit_message().
     // With auto_context disabled, refresh_build_context returns None immediately.
-    assert!(!state.auto_context_enabled());
+    assert!(!state.compression().auto_context_enabled());
     let result = state.refresh_build_context().await;
     assert!(
         result.is_none(),
@@ -1683,7 +1748,7 @@ async fn test_inject_ccg_context_exists_and_callable() {
 #[test]
 fn test_prepare_api_messages_skips_context_when_no_cached() {
     let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
-    state.set_auto_context_enabled(true);
+    state.compression_mut().set_auto_context_enabled(true);
     // No cached context
 
     state.api_messages_mut().push(ApiMessageV2::user("Hello"));
@@ -1968,13 +2033,16 @@ fn test_sync_token_budget() {
         .push(ApiMessageV2::assistant("Hi there!"));
 
     // Initially budget is empty
-    assert_eq!(state.token_budget().used(), 0);
+    assert_eq!(state.compression().token_budget().used(), 0);
 
     // Sync budget
     state.sync_token_budget();
 
     // Budget should reflect message tokens
-    assert!(state.token_budget().used() > 0, "Budget should have usage");
+    assert!(
+        state.compression().token_budget().used() > 0,
+        "Budget should have usage"
+    );
 }
 
 #[tokio::test]
@@ -2071,7 +2139,7 @@ fn test_compaction_metrics_accessor() {
     let state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
 
     // New state should have zero metrics
-    let metrics = state.compaction_metrics();
+    let metrics = state.compression().compaction_metrics();
     assert_eq!(metrics.compaction_count(), 0);
     assert_eq!(metrics.total_tokens_saved(), 0);
     assert_eq!(metrics.total_time_ms(), 0);
@@ -2081,7 +2149,7 @@ fn test_compaction_metrics_accessor() {
 fn test_compaction_metrics_summary() {
     let state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
 
-    let summary = state.compaction_metrics_summary();
+    let summary = state.compression().compaction_metrics().summary();
     assert_eq!(summary.compaction_count, 0);
     assert_eq!(summary.total_tokens_saved, 0);
     assert_eq!(summary.average_tokens_saved, 0);
@@ -2108,7 +2176,7 @@ async fn test_compaction_metrics_record_on_compact() {
 
     // Metrics should be recorded (if compaction ran)
     // We can at least verify the accessor works
-    let summary = state.compaction_metrics_summary();
+    let summary = state.compression().compaction_metrics().summary();
     // Verify summary fields are accessible (values depend on compactor behavior)
     let _ = summary.compaction_count;
     let _ = summary.total_tokens_saved;
@@ -2123,14 +2191,14 @@ async fn test_compaction_metrics_record_on_compact() {
 fn test_continuous_defaults_to_inactive() {
     let state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Disabled);
     assert_eq!(
-        state.continuous_status(),
+        state.continuous().status(),
         &ContinuousLoopStatus::Inactive,
         "New state should have inactive continuous status"
     );
-    assert_eq!(state.continuous_iterations_completed(), 0);
-    assert_eq!(state.continuous_last_duration_ms(), None);
-    assert_eq!(state.continuous_checking_gate(), None);
-    assert!(state.continuous_gate_results().is_empty());
+    assert_eq!(state.continuous().iterations_completed(), 0);
+    assert_eq!(state.continuous().last_duration_ms(), None);
+    assert_eq!(state.continuous().checking_gate(), None);
+    assert!(state.continuous().gate_results().is_empty());
 }
 
 #[test]
@@ -2138,7 +2206,7 @@ fn test_update_continuous_iteration() {
     let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Disabled);
     state.update_continuous_iteration(3);
     assert_eq!(
-        state.continuous_status(),
+        state.continuous().status(),
         &ContinuousLoopStatus::Running { iteration: 3 }
     );
 }
@@ -2148,8 +2216,8 @@ fn test_complete_continuous_iteration() {
     let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Disabled);
     state.update_continuous_iteration(1);
     state.complete_continuous_iteration(1, 5000);
-    assert_eq!(state.continuous_iterations_completed(), 1);
-    assert_eq!(state.continuous_last_duration_ms(), Some(5000));
+    assert_eq!(state.continuous().iterations_completed(), 1);
+    assert_eq!(state.continuous().last_duration_ms(), Some(5000));
 }
 
 #[test]
@@ -2166,27 +2234,27 @@ fn test_reset_continuous_clears_all_state() {
     state.reset_continuous();
 
     assert_eq!(
-        state.continuous_status(),
+        state.continuous().status(),
         &ContinuousLoopStatus::Inactive,
         "Status should be Inactive after reset"
     );
     assert_eq!(
-        state.continuous_iterations_completed(),
+        state.continuous().iterations_completed(),
         0,
         "Iterations should be 0 after reset"
     );
     assert_eq!(
-        state.continuous_last_duration_ms(),
+        state.continuous().last_duration_ms(),
         None,
         "Duration should be None after reset"
     );
     assert_eq!(
-        state.continuous_checking_gate(),
+        state.continuous().checking_gate(),
         None,
         "Checking gate should be None after reset"
     );
     assert!(
-        state.continuous_gate_results().is_empty(),
+        state.continuous().gate_results().is_empty(),
         "Gate results should be empty after reset"
     );
 }
@@ -2196,12 +2264,12 @@ fn test_reset_continuous_from_stagnated() {
     let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Disabled);
     state.set_continuous_stagnation(5, 3);
     assert!(matches!(
-        state.continuous_status(),
+        state.continuous().status(),
         ContinuousLoopStatus::Stagnated { .. }
     ));
 
     state.reset_continuous();
-    assert_eq!(state.continuous_status(), &ContinuousLoopStatus::Inactive);
+    assert_eq!(state.continuous().status(), &ContinuousLoopStatus::Inactive);
 }
 
 #[test]
@@ -2209,12 +2277,12 @@ fn test_reset_continuous_from_human_required() {
     let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Disabled);
     state.set_continuous_human_checkpoint("build broken");
     assert!(matches!(
-        state.continuous_status(),
+        state.continuous().status(),
         ContinuousLoopStatus::HumanRequired { .. }
     ));
 
     state.reset_continuous();
-    assert_eq!(state.continuous_status(), &ContinuousLoopStatus::Inactive);
+    assert_eq!(state.continuous().status(), &ContinuousLoopStatus::Inactive);
 }
 
 // ========================================================================
@@ -2448,29 +2516,29 @@ fn test_compression_state_construction() {
     let state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
 
     // Orchestrator: not set by default
-    assert!(state.compression_orchestrator().is_none());
-    assert!(!state.has_ccg_support());
+    assert!(state.compression().compression_orchestrator().is_none());
+    assert!(!state.compression().has_ccg_support());
 
     // CCG cache: empty by default
-    assert!(state.last_ccg_hash().is_none());
-    assert!(!state.has_cached_ccg_context());
+    assert!(state.compression().last_ccg_hash().is_none());
+    assert!(!state.compression().has_cached_ccg_context());
 
     // Narsil client: not connected by default
-    assert!(!state.has_narsil_client());
+    assert!(!state.compression().has_narsil_client());
 
     // Token budgets
-    assert_eq!(state.context_token_budget(), 10_000);
-    assert_eq!(state.context_tokens_injected(), 0);
+    assert_eq!(state.compression().context_token_budget(), 10_000);
+    assert_eq!(state.compression().context_tokens_injected(), 0);
 
     // Auto-context: disabled by default
-    assert!(!state.auto_context_enabled());
-    assert!(!state.has_pending_context());
+    assert!(!state.compression().auto_context_enabled());
+    assert!(!state.compression().has_pending_context());
 
     // Compaction: inactive by default
-    assert!(state.compaction_state().is_none());
+    assert!(state.compression().compaction_state().is_none());
 
     // Token budget
-    assert_eq!(state.token_budget().used(), 0);
+    assert_eq!(state.compression().token_budget().used(), 0);
 }
 
 /// Verifies delegation methods for CompressionState provide clean access.
@@ -2479,15 +2547,15 @@ fn test_compression_state_delegation() {
     let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
 
     // orchestrator() delegates correctly
-    assert!(state.compression_orchestrator().is_none());
+    assert!(state.compression().compression_orchestrator().is_none());
 
     // compaction_state() delegates correctly
-    assert!(state.compaction_state().is_none());
+    assert!(state.compression().compaction_state().is_none());
 
     // token_budget() delegates correctly
-    assert_eq!(state.token_budget().used(), 0);
-    state.token_budget_mut().add_usage(500);
-    assert!(state.token_budget().used() > 0);
+    assert_eq!(state.compression().token_budget().used(), 0);
+    state.compression_mut().token_budget_mut().add_usage(500);
+    assert!(state.compression().token_budget().used() > 0);
 }
 
 // ========================================================================
@@ -2499,11 +2567,11 @@ fn test_compression_state_delegation() {
 fn test_continuous_loop_state_construction() {
     let state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
 
-    assert_eq!(state.continuous_status(), &ContinuousLoopStatus::Inactive);
-    assert_eq!(state.continuous_iterations_completed(), 0);
-    assert_eq!(state.continuous_last_duration_ms(), None);
-    assert_eq!(state.continuous_checking_gate(), None);
-    assert!(state.continuous_gate_results().is_empty());
+    assert_eq!(state.continuous().status(), &ContinuousLoopStatus::Inactive);
+    assert_eq!(state.continuous().iterations_completed(), 0);
+    assert_eq!(state.continuous().last_duration_ms(), None);
+    assert_eq!(state.continuous().checking_gate(), None);
+    assert!(state.continuous().gate_results().is_empty());
 }
 
 // ========================================================================
@@ -2516,13 +2584,13 @@ fn test_ui_selection_state_construction() {
     let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
 
     // Selection: starts with no active selection
-    assert!(!state.selection().has_selection());
+    assert!(!state.ui_selection().selection().has_selection());
 
     // Copy pending: false initially
-    assert!(!state.take_copy_pending());
+    assert!(!state.ui_selection_mut().take_copy_pending());
 
     // Focus area: default
-    assert_eq!(state.focus_area(), FocusArea::default());
+    assert_eq!(state.ui_selection().focus_area(), FocusArea::default());
 }
 
 // --- Completion integration tests (8.3.1) ---
@@ -2605,7 +2673,7 @@ fn test_accept_completion_replaces_input() {
     let name = state.accept_completion();
     assert!(name.is_some());
     let name = name.unwrap();
-    assert_eq!(state.input(), format!("/{name} "));
+    assert_eq!(state.input_state().text(), format!("/{name} "));
     assert!(!state.has_completion());
 }
 
@@ -2666,18 +2734,18 @@ fn test_worktree_status_clone_eq() {
 fn test_app_state_worktree_delegation() {
     let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
     state.set_worktree_branch("main".to_string());
-    assert_eq!(state.worktree_branch(), Some("main"));
+    assert_eq!(state.worktree().branch(), Some("main"));
     assert_eq!(state.worktree().branch(), Some("main"));
 
     state.set_worktree_modified(3);
-    assert_eq!(state.worktree_modified(), 3);
+    assert_eq!(state.worktree().modified(), 3);
     assert_eq!(state.worktree().modified(), 3);
 
     state.set_worktree_ahead(1);
-    assert_eq!(state.worktree_ahead(), 1);
+    assert_eq!(state.worktree().ahead(), 1);
 
     state.set_worktree_behind(2);
-    assert_eq!(state.worktree_behind(), 2);
+    assert_eq!(state.worktree().behind(), 2);
 }
 
 #[test]
@@ -2713,15 +2781,15 @@ fn test_session_tracking_dirty_cycle() {
 #[test]
 fn test_app_state_session_delegation() {
     let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
-    assert_eq!(state.session_id(), None);
+    assert_eq!(state.session_tracking().id(), None);
 
-    state.set_session_id("sess-1".to_string());
-    assert_eq!(state.session_id(), Some("sess-1"));
+    state.session_tracking_mut().set_id("sess-1".to_string());
+    assert_eq!(state.session_tracking().id(), Some("sess-1"));
     assert_eq!(state.session_tracking().id(), Some("sess-1"));
 
-    state.mark_session_dirty();
-    assert!(state.take_session_dirty());
-    assert!(!state.take_session_dirty());
+    state.session_tracking_mut().mark_dirty();
+    assert!(state.session_tracking_mut().take_dirty());
+    assert!(!state.session_tracking_mut().take_dirty());
 }
 
 // ========================================================================

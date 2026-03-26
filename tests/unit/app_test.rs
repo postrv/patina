@@ -54,7 +54,7 @@ fn test_initialize_compression_orchestrator_disabled_mode() {
 
     // Disabled mode should never set orchestrator
     initialize_compression_orchestrator(&mut state, &config);
-    assert!(state.compression_orchestrator().is_none());
+    assert!(state.compression().compression_orchestrator().is_none());
 }
 
 #[test]
@@ -75,7 +75,7 @@ fn test_initialize_compression_orchestrator_auto_mode_no_code_files() {
     initialize_compression_orchestrator(&mut state, &config);
     // Result depends on is_narsil_available() AND has_supported_code_files()
     // Since temp dir has no code files, orchestrator should be None
-    assert!(state.compression_orchestrator().is_none());
+    assert!(state.compression().compression_orchestrator().is_none());
 }
 
 // =========================================================================
@@ -125,7 +125,7 @@ async fn dispatcher_quit_event_triggers_session_save() {
 
     // SessionHandler must have saved the session on Quit.
     assert!(
-        ctx.state.session_id().is_some(),
+        ctx.state.session_tracking().id().is_some(),
         "SessionHandler must auto-save session on Quit event"
     );
 }
@@ -145,7 +145,7 @@ async fn dispatcher_char_input_inserts_into_state() {
 
     assert_eq!(result, Handled::CONSUMED);
     assert_eq!(
-        ctx.state.input(),
+        ctx.state.input_state().text(),
         "x",
         "Character input must flow through to KeyboardHandler and insert into input"
     );
@@ -214,7 +214,7 @@ async fn dispatcher_message_complete_marks_dirty_and_saves() {
 
     // SessionHandler should have observed the dirty flag and saved.
     assert!(
-        ctx.state.session_id().is_some(),
+        ctx.state.session_tracking().id().is_some(),
         "MessageComplete -> StreamHandler marks dirty -> SessionHandler saves"
     );
 }
@@ -243,7 +243,7 @@ async fn dispatcher_permission_key_consumed_before_keyboard() {
         "Key must be consumed by PermissionHandler when permission is pending"
     );
     assert_eq!(
-        ctx.state.input(),
+        ctx.state.input_state().text(),
         "",
         "Key must NOT reach KeyboardHandler when permission is pending"
     );
@@ -318,7 +318,7 @@ async fn dispatcher_ctrl_c_as_quit_saves_and_is_detectable() {
 
     assert!(is_quit, "AppEvent::Quit must report is_quit() == true");
     assert!(
-        ctx.state.session_id().is_some(),
+        ctx.state.session_tracking().id().is_some(),
         "Quit dispatch must trigger session save"
     );
 }
@@ -367,5 +367,9 @@ async fn dispatcher_multiple_events_sequence() {
         assert_eq!(result, Handled::CONSUMED, "Event {event} must be consumed");
     }
 
-    assert_eq!(state.input(), "hi", "Both characters must be inserted");
+    assert_eq!(
+        state.input_state().text(),
+        "hi",
+        "Both characters must be inserted"
+    );
 }

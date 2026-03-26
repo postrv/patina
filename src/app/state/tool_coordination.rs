@@ -593,7 +593,7 @@ impl AppState {
         self.display.loading = false;
         self.streaming_rx = None;
         self.dirty.messages = true;
-        self.mark_session_dirty();
+        self.session.mark_dirty();
     }
 
     // ========================================================================

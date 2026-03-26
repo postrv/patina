@@ -103,8 +103,12 @@ pub fn initialize_compression_orchestrator(state: &mut AppState, config: &Config
     }
 
     // Wire auto-context settings from config into state
-    state.set_auto_context_enabled(config.auto_context_enabled());
-    state.set_context_token_budget(config.compression.max_context_tokens);
+    state
+        .compression_mut()
+        .set_auto_context_enabled(config.auto_context_enabled());
+    state
+        .compression_mut()
+        .set_context_token_budget(config.compression.max_context_tokens);
 }
 
 /// Initializes MCP servers from config files.
@@ -217,13 +221,17 @@ pub async fn run(config: Config) -> Result<()> {
     };
 
     // Wire effort/thinking configuration from CLI into AppState
-    state.set_effort(config.effort);
-    state.set_thinking_budget(config.thinking_budget);
-    state.set_current_model(config.model.clone());
+    state.model_config_mut().set_effort(config.effort);
+    state
+        .model_config_mut()
+        .set_thinking_budget(config.thinking_budget);
+    state
+        .model_config_mut()
+        .set_current_model(config.model.clone());
 
     // Build and inject system prompt
     let prompt = system_prompt::build_system_prompt(&config.working_dir);
-    state.set_system_prompt(Some(prompt));
+    state.model_config_mut().set_system_prompt(Some(prompt));
 
     // Load persistent memory store
     if let Some(project_dirs) = directories::ProjectDirs::from("com", "patina", "patina") {
@@ -236,7 +244,7 @@ pub async fn run(config: Config) -> Result<()> {
             if count > 0 {
                 tracing::info!("Loaded {} memory entries", count);
             }
-            state.set_memory_store(store);
+            state.model_config_mut().set_memory_store(store);
         }
     }
 
@@ -415,7 +423,7 @@ async fn event_loop(
 
     // Cache initial terminal height in state for handler access.
     if let Ok(size) = terminal.size() {
-        state.set_terminal_height(size.height);
+        state.display_mut().set_terminal_height(size.height);
     }
 
     loop {

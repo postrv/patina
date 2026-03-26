@@ -62,7 +62,7 @@ pub(crate) async fn load_session_state(config: &Config) -> Result<AppState> {
 pub(crate) async fn auto_save_session(state: &mut AppState, session_manager: &SessionManager) {
     let session = state.to_session();
 
-    let result = if let Some(existing_id) = state.session_id() {
+    let result = if let Some(existing_id) = state.session_tracking().id() {
         // Update existing session
         session_manager
             .update(existing_id, &session)
@@ -75,9 +75,9 @@ pub(crate) async fn auto_save_session(state: &mut AppState, session_manager: &Se
 
     match result {
         Ok(id) => {
-            if state.session_id().is_none() {
+            if state.session_tracking().id().is_none() {
                 debug!(session_id = %id, "Created new session");
-                state.set_session_id(id);
+                state.session_tracking_mut().set_id(id);
             } else {
                 debug!(session_id = %id, "Updated session");
             }

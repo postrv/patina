@@ -162,7 +162,7 @@ impl<'a> AppContext<'a> {
 
         self.state.complete_tool_cycle()?;
 
-        self.state.mark_session_dirty();
+        self.state.session_tracking_mut().mark_dirty();
         debug!("Continuing conversation with tool results");
 
         let (tx, rx) = tokio::sync::mpsc::channel(super::STREAMING_CHANNEL_BUFFER);

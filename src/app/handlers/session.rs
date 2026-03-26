@@ -24,7 +24,7 @@ use crate::session::SessionManager;
 ///
 /// # Save triggers
 ///
-/// - **Dirty flag**: When [`AppState::take_session_dirty`] returns `true`,
+/// - **Dirty flag**: When `session_tracking_mut().take_dirty()` returns `true`,
 ///   the handler saves the session. Other handlers set this flag after
 ///   modifying conversation state.
 /// - **Quit event**: On [`AppEvent::Quit`], the handler always saves
@@ -56,7 +56,8 @@ impl EventHandler for SessionHandler {
         ctx: &'a mut AppContext<'_>,
     ) -> Pin<Box<dyn Future<Output = Result<Handled>> + Send + 'a>> {
         Box::pin(async move {
-            let should_save = ctx.state.take_session_dirty() || matches!(event, AppEvent::Quit);
+            let should_save =
+                ctx.state.session_tracking_mut().take_dirty() || matches!(event, AppEvent::Quit);
 
             if should_save {
                 auto_save(ctx.state, ctx.session_manager).await;
@@ -79,7 +80,7 @@ impl EventHandler for SessionHandler {
 async fn auto_save(state: &mut crate::app::state::AppState, session_manager: &SessionManager) {
     let session = state.to_session();
 
-    let result = if let Some(existing_id) = state.session_id() {
+    let result = if let Some(existing_id) = state.session_tracking().id() {
         session_manager
             .update(existing_id, &session)
             .await
@@ -90,9 +91,9 @@ async fn auto_save(state: &mut crate::app::state::AppState, session_manager: &Se
 
     match result {
         Ok(id) => {
-            if state.session_id().is_none() {
+            if state.session_tracking().id().is_none() {
                 debug!(session_id = %id, "Created new session");
-                state.set_session_id(id);
+                state.session_tracking_mut().set_id(id);
             } else {
                 debug!(session_id = %id, "Updated session");
             }
@@ -159,7 +160,7 @@ mod tests {
         let (session_mgr, _dir) = test_session_manager();
 
         // Mark the session as needing a save.
-        state.mark_session_dirty();
+        state.session_tracking_mut().mark_dirty();
 
         let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
         let event = AppEvent::Tick;
@@ -167,7 +168,7 @@ mod tests {
 
         // After handling, a new session should have been created.
         assert!(
-            ctx.state.session_id().is_some(),
+            ctx.state.session_tracking().id().is_some(),
             "SessionHandler must create a session when dirty flag is set"
         );
     }
@@ -179,7 +180,7 @@ mod tests {
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
 
-        state.mark_session_dirty();
+        state.session_tracking_mut().mark_dirty();
 
         let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
         let event = AppEvent::Tick;
@@ -187,7 +188,7 @@ mod tests {
 
         // The dirty flag should have been consumed.
         assert!(
-            !ctx.state.take_session_dirty(),
+            !ctx.state.session_tracking_mut().take_dirty(),
             "SessionHandler must clear the dirty flag after saving"
         );
     }
@@ -205,7 +206,7 @@ mod tests {
         let _result = handler.handle(&event, &mut ctx).await.unwrap();
 
         assert!(
-            ctx.state.session_id().is_none(),
+            ctx.state.session_tracking().id().is_none(),
             "SessionHandler must not save when session is not dirty"
         );
     }
@@ -227,7 +228,7 @@ mod tests {
         let _result = handler.handle(&event, &mut ctx).await.unwrap();
 
         assert!(
-            ctx.state.session_id().is_some(),
+            ctx.state.session_tracking().id().is_some(),
             "SessionHandler must save on Quit even when not dirty"
         );
     }
@@ -297,7 +298,7 @@ mod tests {
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
 
-        state.mark_session_dirty();
+        state.session_tracking_mut().mark_dirty();
 
         let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
         let event = AppEvent::Tick;
@@ -322,14 +323,18 @@ mod tests {
         let (session_mgr, _dir) = test_session_manager();
 
         // No session_id — save should create a new session.
-        assert!(state.session_id().is_none());
-        state.mark_session_dirty();
+        assert!(state.session_tracking().id().is_none());
+        state.session_tracking_mut().mark_dirty();
 
         let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
         let event = AppEvent::Tick;
         let _result = handler.handle(&event, &mut ctx).await.unwrap();
 
-        let id = ctx.state.session_id().expect("session_id should be set");
+        let id = ctx
+            .state
+            .session_tracking()
+            .id()
+            .expect("session_id should be set");
         assert!(!id.is_empty(), "session_id should be a non-empty string");
     }
 
@@ -341,24 +346,26 @@ mod tests {
         let (session_mgr, _dir) = test_session_manager();
 
         // First, create a session.
-        state.mark_session_dirty();
+        state.session_tracking_mut().mark_dirty();
         {
             let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
             let _result = handler.handle(&AppEvent::Tick, &mut ctx).await.unwrap();
         }
         let first_id = state
-            .session_id()
+            .session_tracking()
+            .id()
             .expect("should have session_id")
             .to_string();
 
         // Now mark dirty again — should update, not create.
-        state.mark_session_dirty();
+        state.session_tracking_mut().mark_dirty();
         {
             let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
             let _result = handler.handle(&AppEvent::Tick, &mut ctx).await.unwrap();
         }
         let second_id = state
-            .session_id()
+            .session_tracking()
+            .id()
             .expect("should still have session_id")
             .to_string();
 
@@ -381,7 +388,7 @@ mod tests {
         // Create a SessionManager pointing to an invalid path.
         let mgr = SessionManager::new(PathBuf::from("/nonexistent/impossible/path"));
 
-        state.mark_session_dirty();
+        state.session_tracking_mut().mark_dirty();
 
         let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &mgr);
         let event = AppEvent::Tick;
@@ -418,7 +425,7 @@ mod tests {
         let mut state = test_state();
         let (session_mgr, _dir) = test_session_manager();
 
-        state.mark_session_dirty();
+        state.session_tracking_mut().mark_dirty();
 
         let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
 
@@ -435,7 +442,7 @@ mod tests {
 
         // Session should have been created.
         assert!(
-            ctx.state.session_id().is_some(),
+            ctx.state.session_tracking().id().is_some(),
             "Session should be saved via dispatcher"
         );
     }
@@ -451,7 +458,10 @@ mod tests {
 
         auto_save(&mut state, &session_mgr).await;
 
-        let id = state.session_id().expect("session_id should be set");
+        let id = state
+            .session_tracking()
+            .id()
+            .expect("session_id should be set");
 
         // Verify the session file exists on disk.
         let session_path = dir.path().join(format!("{id}.json"));
@@ -468,14 +478,14 @@ mod tests {
 
         // Create initial session.
         auto_save(&mut state, &session_mgr).await;
-        let id = state.session_id().unwrap().to_string();
+        let id = state.session_tracking().id().unwrap().to_string();
 
         // Modify state and save again.
-        *state.input_mut() = "updated input".to_string();
+        *state.input_state_mut().text_mut() = "updated input".to_string();
         auto_save(&mut state, &session_mgr).await;
 
         // ID should remain the same.
-        assert_eq!(state.session_id().unwrap(), id);
+        assert_eq!(state.session_tracking().id().unwrap(), id);
     }
 
     #[tokio::test]
@@ -486,7 +496,7 @@ mod tests {
         // Should not panic or return error via state — just logs a warning.
         auto_save(&mut state, &mgr).await;
         assert!(
-            state.session_id().is_none(),
+            state.session_tracking().id().is_none(),
             "session_id should remain None on save failure"
         );
     }

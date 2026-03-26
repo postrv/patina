@@ -208,27 +208,6 @@ impl AppState {
         &self.session
     }
 
-    /// Returns the current session ID, if one has been assigned.
-    #[must_use]
-    pub fn session_id(&self) -> Option<&str> {
-        self.session.id()
-    }
-
-    /// Sets the session ID.
-    pub fn set_session_id(&mut self, id: String) {
-        self.session.set_id(id);
-    }
-
-    /// Marks the session as needing to be saved.
-    pub fn mark_session_dirty(&mut self) {
-        self.session.mark_dirty();
-    }
-
-    /// Returns `true` and clears the dirty flag if the session needs saving.
-    pub fn take_session_dirty(&mut self) -> bool {
-        self.session.take_dirty()
-    }
-
     /// Creates a `Session` from the current application state.
     ///
     /// The resulting session includes:

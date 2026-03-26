@@ -378,7 +378,7 @@ mod tests {
         let (session_mgr, _dir) = test_session_manager();
 
         assert_eq!(
-            state.continuous_status(),
+            state.continuous().status(),
             &ContinuousLoopStatus::Inactive,
             "Status should be Inactive before first event"
         );
@@ -388,7 +388,7 @@ mod tests {
         let _ = handler.handle(&event, &mut ctx).await.unwrap();
 
         assert_eq!(
-            ctx.state.continuous_status(),
+            ctx.state.continuous().status(),
             &ContinuousLoopStatus::Running { iteration: 3 },
             "Status should show Running with current iteration"
         );
@@ -413,8 +413,8 @@ mod tests {
         });
         let _ = handler.handle(&complete, &mut ctx).await.unwrap();
 
-        assert_eq!(ctx.state.continuous_iterations_completed(), 1);
-        assert_eq!(ctx.state.continuous_last_duration_ms(), Some(3500));
+        assert_eq!(ctx.state.continuous().iterations_completed(), 1);
+        assert_eq!(ctx.state.continuous().last_duration_ms(), Some(3500));
     }
 
     #[tokio::test]
@@ -431,7 +431,7 @@ mod tests {
         let _ = handler.handle(&event, &mut ctx).await.unwrap();
 
         assert_eq!(
-            ctx.state.continuous_checking_gate(),
+            ctx.state.continuous().checking_gate(),
             Some("tests"),
             "Should record which gate is currently being checked"
         );
@@ -452,7 +452,7 @@ mod tests {
         });
         let _ = handler.handle(&event, &mut ctx).await.unwrap();
 
-        let results = ctx.state.continuous_gate_results();
+        let results = ctx.state.continuous().gate_results();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].gate, "clippy");
         assert!(results[0].passed);
@@ -474,7 +474,7 @@ mod tests {
         });
         let _ = handler.handle(&event, &mut ctx).await.unwrap();
 
-        let results = ctx.state.continuous_gate_results();
+        let results = ctx.state.continuous().gate_results();
         assert_eq!(results.len(), 1);
         assert!(!results[0].passed);
     }
@@ -494,7 +494,7 @@ mod tests {
         let _ = handler.handle(&event, &mut ctx).await.unwrap();
 
         assert_eq!(
-            ctx.state.continuous_status(),
+            ctx.state.continuous().status(),
             &ContinuousLoopStatus::Stagnated {
                 iterations_without_progress: 5,
                 threshold: 3,
@@ -516,7 +516,7 @@ mod tests {
         let _ = handler.handle(&event, &mut ctx).await.unwrap();
 
         assert_eq!(
-            ctx.state.continuous_status(),
+            ctx.state.continuous().status(),
             &ContinuousLoopStatus::HumanRequired {
                 reason: "Cannot resolve test failures".to_string(),
             }
@@ -564,7 +564,7 @@ mod tests {
         });
         let _ = handler.handle(&event2, &mut ctx).await.unwrap();
 
-        assert_eq!(ctx.state.continuous_gate_results().len(), 2);
+        assert_eq!(ctx.state.continuous().gate_results().len(), 2);
     }
 
     // =========================================================================

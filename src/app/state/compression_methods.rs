@@ -6,18 +6,6 @@ impl AppState {
         self.compression.set_compression_orchestrator(orchestrator);
     }
 
-    /// Returns a reference to the compression orchestrator if available.
-    #[must_use]
-    pub fn compression_orchestrator(&self) -> Option<&Arc<CompressionOrchestrator>> {
-        self.compression.compression_orchestrator()
-    }
-
-    /// Returns true if the compression orchestrator supports CCG.
-    #[must_use]
-    pub fn has_ccg_support(&self) -> bool {
-        self.compression.has_ccg_support()
-    }
-
     /// Injects CCG context by fetching the default context (manifest + architecture).
     ///
     /// This method fetches context from narsil-mcp via the compression orchestrator.
@@ -91,67 +79,6 @@ impl AppState {
             self.compression.cached_ccg_context = Some(content_string.clone());
             Ok(Some(content_string))
         }
-    }
-
-    /// Returns the last CCG hash used for context injection.
-    #[must_use]
-    pub fn last_ccg_hash(&self) -> Option<&str> {
-        self.compression.last_ccg_hash()
-    }
-
-    /// Sets the last CCG hash.
-    pub fn set_last_ccg_hash(&mut self, hash: String) {
-        self.compression.set_last_ccg_hash(hash);
-    }
-
-    /// Returns whether there is cached CCG context.
-    #[must_use]
-    pub fn has_cached_ccg_context(&self) -> bool {
-        self.compression.has_cached_ccg_context()
-    }
-
-    /// Takes the cached CCG context.
-    pub fn take_cached_ccg_context(&mut self) -> Option<String> {
-        self.compression.take_cached_ccg_context()
-    }
-
-    /// Returns context for injection if auto-context is enabled.
-    #[must_use]
-    pub fn context_for_injection(&self) -> Option<&str> {
-        self.compression.context_for_injection()
-    }
-
-    /// Returns whether a narsil MCP client is available.
-    #[must_use]
-    pub fn has_narsil_client(&self) -> bool {
-        self.compression.has_narsil_client()
-    }
-
-    /// Sets the narsil MCP connection.
-    pub fn set_narsil_client(&mut self, client: McpConnection) {
-        self.compression.set_narsil_client(client);
-    }
-
-    /// Returns the maximum token budget for auto-injected context.
-    #[must_use]
-    pub fn context_token_budget(&self) -> usize {
-        self.compression.context_token_budget()
-    }
-
-    /// Sets the maximum token budget for auto-injected context.
-    pub fn set_context_token_budget(&mut self, budget: usize) {
-        self.compression.set_context_token_budget(budget);
-    }
-
-    /// Returns the number of tokens injected in the most recent context injection.
-    #[must_use]
-    pub fn context_tokens_injected(&self) -> usize {
-        self.compression.context_tokens_injected()
-    }
-
-    /// Sets the number of tokens injected.
-    pub fn set_context_tokens_injected(&mut self, tokens: usize) {
-        self.compression.set_context_tokens_injected(tokens);
     }
 
     /// Refreshes the cached CCG context by calling `build_context()`.

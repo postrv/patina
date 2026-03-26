@@ -130,7 +130,8 @@ fn bench_input_character_echo(c: &mut Criterion) {
             || {
                 // Setup: Create state with some existing input
                 let mut state = AppState::new(PathBuf::from("/tmp"), false, ParallelMode::Enabled);
-                *state.input_mut() = "Hello, this is some existing input text".to_string();
+                *state.input_state_mut().text_mut() =
+                    "Hello, this is some existing input text".to_string();
                 state
             },
             |mut state| {
@@ -152,7 +153,7 @@ fn bench_cursor_movement(c: &mut Criterion) {
         b.iter_batched(
             || {
                 let mut state = AppState::new(PathBuf::from("/tmp"), false, ParallelMode::Enabled);
-                *state.input_mut() =
+                *state.input_state_mut().text_mut() =
                     "Hello, this is some text for cursor movement testing".to_string();
                 // Move cursor to middle
                 for _ in 0..25 {

@@ -72,7 +72,7 @@ impl EventHandler for StreamHandler {
                     // Mark session dirty after message completion so
                     // SessionHandler persists the conversation.
                     if is_message_complete {
-                        ctx.state.mark_session_dirty();
+                        ctx.state.session_tracking_mut().mark_dirty();
                     }
 
                     // Trigger tool execution if the stop reason requires it.
@@ -476,7 +476,7 @@ mod tests {
         let _result = handler.handle(&event, &mut ctx).await.unwrap();
 
         assert!(
-            ctx.state.take_session_dirty(),
+            ctx.state.session_tracking_mut().take_dirty(),
             "MessageStop must mark the session as dirty for auto-save"
         );
     }
@@ -497,7 +497,7 @@ mod tests {
         let _result = handler.handle(&event, &mut ctx).await.unwrap();
 
         assert!(
-            ctx.state.take_session_dirty(),
+            ctx.state.session_tracking_mut().take_dirty(),
             "MessageComplete must mark the session as dirty for auto-save"
         );
     }

@@ -915,7 +915,7 @@ mod tests {
         );
 
         // Simulate context injection of ~5,000 tokens
-        state.set_context_tokens_injected(5_000);
+        state.compression_mut().set_context_tokens_injected(5_000);
 
         let feedback = dummy_feedback();
         terminal
