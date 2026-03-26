@@ -19,6 +19,7 @@ mod session_tracking;
 mod stream_events;
 mod tool_coordination;
 mod tool_execution;
+mod tool_interception;
 mod ui_selection;
 mod worktree;
 
