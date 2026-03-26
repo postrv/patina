@@ -5,9 +5,8 @@
 //! the TUI module no longer imports from `app::state`, breaking the circular
 //! dependency chain: `state -> app -> tui -> state`.
 //!
-//! The mutation path is handled separately: [`super::super::tui::RenderFeedback`]
-//! captures computed layout metrics, and the caller applies them to `AppState`
-//! after rendering.
+//! The mutation path is handled separately: [`RenderFeedback`] captures computed
+//! layout metrics, and the caller applies them to `AppState` after rendering.
 
 use crate::api::tokens::TokenBudget;
 use crate::permissions::PermissionRequest;
@@ -33,7 +32,6 @@ use crate::types::Timeline;
 /// 2. Living in `types/` which both `app` and `tui` can import freely.
 /// 3. Keeping the mutation path explicit via [`RenderFeedback`].
 ///
-/// [`RenderFeedback`]: crate::tui::RenderFeedback
 /// [`AppState::as_render_view`]: crate::app::state::AppState::as_render_view
 /// [`tui::render`]: crate::tui::render
 #[derive(Debug)]
@@ -105,6 +103,21 @@ pub struct RenderView<'a> {
     pub pending_plan: Option<&'a PlanState>,
     /// Pending question for user response.
     pub pending_question: Option<&'a QuestionState>,
+}
+
+/// Feedback from the render pass that must be applied to AppState.
+///
+/// `render_messages` computes layout metrics that the scroll and selection
+/// systems need. Instead of mutating `AppState` directly during rendering,
+/// this struct captures the computed values so they can be applied afterwards.
+#[derive(Debug, Clone)]
+pub struct RenderFeedback {
+    /// Wrapped lines from the timeline (for copy/paste line cache).
+    pub wrapped_lines: Vec<String>,
+    /// The viewport height in rows (excluding borders).
+    pub viewport_height: usize,
+    /// The total content height in wrapped rows.
+    pub content_height: usize,
 }
 
 #[cfg(test)]

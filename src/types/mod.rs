@@ -42,9 +42,9 @@ pub use conversation::{ConversationEntry, Timeline, TimelineError};
 
 // Shared UI state types (used by both app::state and tui)
 pub use ui_state::{
-    AgentPanelEntry, AgentPanelStatus, CompletionEntry, CompletionSource, CompletionState,
-    ContinuousLoopStatus, GateResult, PlanState, PlanStep, QuestionState,
+    score_candidate, AgentPanelEntry, AgentPanelStatus, CompletionEntry, CompletionSource,
+    CompletionState, ContinuousLoopStatus, GateResult, PlanState, PlanStep, QuestionState,
 };
 
 // Render view model for TUI decoupling
-pub use render_view::RenderView;
+pub use render_view::{RenderFeedback, RenderView};

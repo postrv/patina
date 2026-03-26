@@ -22,22 +22,10 @@ use crate::tui::widgets::continuous_progress::ContinuousProgressWidget;
 use crate::tui::widgets::permission_prompt::{PermissionPromptState, PermissionPromptWidget};
 use crate::types::render_view::RenderView;
 use crate::types::ContinuousLoopStatus;
-use crate::types::{ConversationEntry, Timeline};
+use crate::types::{CompletionState, ConversationEntry, Timeline};
 
-/// Feedback from the render pass that must be applied to AppState.
-///
-/// `render_messages` computes layout metrics that the scroll and selection
-/// systems need. Instead of mutating `AppState` directly during rendering,
-/// this struct captures the computed values so they can be applied afterwards.
-#[derive(Debug, Clone)]
-pub struct RenderFeedback {
-    /// Wrapped lines from the timeline (for copy/paste line cache).
-    pub wrapped_lines: Vec<String>,
-    /// The viewport height in rows (excluding borders).
-    pub viewport_height: usize,
-    /// The total content height in wrapped rows.
-    pub content_height: usize,
-}
+// Re-export RenderFeedback from its canonical location for backward compatibility.
+pub use crate::types::render_view::RenderFeedback;
 
 /// Calculates the total number of displayed lines after wrapping.
 ///
@@ -541,11 +529,7 @@ pub fn render_continuous_overlay(frame: &mut Frame, view: &RenderView) {
 ///
 /// Shows matching slash commands as the user types, with the selected entry
 /// highlighted. The popup is positioned directly above the input box.
-fn render_completion_popup(
-    frame: &mut Frame,
-    input_area: Rect,
-    completion: &crate::app::completion::CompletionState,
-) {
+fn render_completion_popup(frame: &mut Frame, input_area: Rect, completion: &CompletionState) {
     let area = widgets::CompletionMenuWidget::popup_area(input_area, completion.filtered().len());
     let widget = widgets::CompletionMenuWidget::new(completion);
     frame.render_widget(widget, area);

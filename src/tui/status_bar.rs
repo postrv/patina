@@ -11,7 +11,7 @@ use ratatui::{
 use crate::tui::scroll::AutoScrollMode;
 use crate::tui::selection::FocusArea;
 use crate::tui::theme::PatinaTheme;
-use crate::tui::RenderFeedback;
+use crate::types::render_view::RenderFeedback;
 use crate::types::render_view::RenderView;
 
 /// Produces git branch spans (icon + branch name).

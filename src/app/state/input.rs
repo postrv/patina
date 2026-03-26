@@ -1,3 +1,5 @@
+use crate::types::CompletionState;
+
 /// Input buffer state extracted from AppState.
 ///
 /// Groups the text buffer, cursor position, and completion popup state
@@ -8,7 +10,7 @@ pub struct InputState {
     /// Cursor position as character index (not byte index).
     cursor_pos: usize,
     /// Active slash-command completion popup, if any.
-    completion: Option<crate::app::completion::CompletionState>,
+    completion: Option<CompletionState>,
 }
 
 impl InputState {
@@ -126,13 +128,13 @@ impl InputState {
 
     /// Returns the active completion state, if any.
     #[must_use]
-    pub fn completion(&self) -> Option<&crate::app::completion::CompletionState> {
+    pub fn completion(&self) -> Option<&CompletionState> {
         self.completion.as_ref()
     }
 
     /// Returns a mutable reference to the active completion state.
     #[must_use]
-    pub fn completion_mut(&mut self) -> Option<&mut crate::app::completion::CompletionState> {
+    pub fn completion_mut(&mut self) -> Option<&mut CompletionState> {
         self.completion.as_mut()
     }
 
@@ -143,7 +145,7 @@ impl InputState {
     }
 
     /// Sets the completion state.
-    pub fn set_completion(&mut self, state: crate::app::completion::CompletionState) {
+    pub fn set_completion(&mut self, state: CompletionState) {
         self.completion = Some(state);
     }
 

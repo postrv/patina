@@ -54,9 +54,9 @@ use crate::permissions::{PermissionManager, PermissionRequest, PermissionRespons
 use crate::plugins::PluginRegistry;
 use crate::session::Session;
 use crate::tools::HookedToolExecutor;
-use crate::tui::RenderFeedback;
 use crate::types::config::ParallelMode;
 use crate::types::content::{StopReason, ToolResultBlock, ToolUseBlock};
+use crate::types::render_view::RenderFeedback;
 use crate::types::render_view::RenderView;
 use crate::types::ui_state::{FocusArea, SelectionState, ToolBlockState};
 use crate::types::{ApiMessageV2, Message, Role, Timeline};

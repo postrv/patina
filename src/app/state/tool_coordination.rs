@@ -172,13 +172,13 @@ impl AppState {
 
     /// Returns the active completion state, if any.
     #[must_use]
-    pub fn completion(&self) -> Option<&crate::app::completion::CompletionState> {
+    pub fn completion(&self) -> Option<&crate::types::CompletionState> {
         self.input_state.completion()
     }
 
     /// Returns a mutable reference to the active completion state.
     #[must_use]
-    pub fn completion_mut(&mut self) -> Option<&mut crate::app::completion::CompletionState> {
+    pub fn completion_mut(&mut self) -> Option<&mut crate::types::CompletionState> {
         self.input_state.completion_mut()
     }
 
@@ -253,6 +253,7 @@ impl AppState {
     pub fn handle_tool_use_input_delta(&mut self, index: usize, partial_json: &str) {
         self.tool_state
             .handle_tool_use_input_delta(index, partial_json);
+        self.dirty.messages = true;
     }
 
     /// Handles tool_use completion.
