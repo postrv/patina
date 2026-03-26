@@ -16,6 +16,7 @@ use tracing::debug;
 use crate::app::context::AppContext;
 use crate::app::dispatch::{EventHandler, Handled};
 use crate::app::events::AppEvent;
+use crate::types::ui_state::QuestionState;
 
 /// Handles user question prompts from the `ask_user` tool.
 ///
@@ -33,6 +34,41 @@ use crate::app::events::AppEvent;
 /// All key events are consumed while the question prompt is active.
 pub struct QuestionHandler;
 
+impl QuestionHandler {
+    /// Processes navigation, text input, and mode toggle keys for the question prompt.
+    ///
+    /// Returns `Some(Handled::CONSUMED)` for navigation/input keys.
+    /// Returns `None` for submit/cancel keys that need cross-cutting logic.
+    fn handle_input(
+        key: &crossterm::event::KeyEvent,
+        question: &mut QuestionState,
+    ) -> Option<Handled> {
+        match key.code {
+            KeyCode::Up | KeyCode::Char('k') if !question.in_free_text => {
+                question.select_prev();
+                Some(Handled::CONSUMED)
+            }
+            KeyCode::Down | KeyCode::Char('j') if !question.in_free_text => {
+                question.select_next();
+                Some(Handled::CONSUMED)
+            }
+            KeyCode::Tab => {
+                question.toggle_input_mode();
+                Some(Handled::CONSUMED)
+            }
+            KeyCode::Backspace => {
+                question.pop_char();
+                Some(Handled::CONSUMED)
+            }
+            KeyCode::Char(c) => {
+                question.push_char(c);
+                Some(Handled::CONSUMED)
+            }
+            _ => None, // not an input key (submit/cancel/other)
+        }
+    }
+}
+
 impl EventHandler for QuestionHandler {
     fn handle<'a>(
         &'a mut self,
@@ -40,68 +76,45 @@ impl EventHandler for QuestionHandler {
         ctx: &'a mut AppContext<'_>,
     ) -> Pin<Box<dyn Future<Output = Result<Handled>> + Send + 'a>> {
         Box::pin(async move {
-            match event {
-                AppEvent::Key(key) => {
-                    if !ctx.state.has_pending_question() {
-                        return Ok(Handled::IGNORED);
-                    }
+            let AppEvent::Key(key) = event else {
+                return Ok(Handled::IGNORED);
+            };
 
-                    match key.code {
-                        KeyCode::Enter => {
-                            if let Some(result) = ctx.state.submit_question() {
-                                debug!("Question answered, sending tool result");
-                                send_tool_result(ctx, result).await;
-                            }
-                        }
-                        KeyCode::Esc => {
-                            if let Some(result) = ctx.state.cancel_question() {
-                                debug!("Question cancelled, sending tool result");
-                                send_tool_result(ctx, result).await;
-                            }
-                        }
-                        KeyCode::Up | KeyCode::Char('k') if !is_in_free_text(ctx) => {
-                            if let Some(q) = ctx.state.pending_question_mut() {
-                                q.select_prev();
-                            }
-                        }
-                        KeyCode::Down | KeyCode::Char('j') if !is_in_free_text(ctx) => {
-                            if let Some(q) = ctx.state.pending_question_mut() {
-                                q.select_next();
-                            }
-                        }
-                        KeyCode::Tab => {
-                            if let Some(q) = ctx.state.pending_question_mut() {
-                                q.toggle_input_mode();
-                            }
-                        }
-                        KeyCode::Backspace => {
-                            if let Some(q) = ctx.state.pending_question_mut() {
-                                q.pop_char();
-                            }
-                        }
-                        KeyCode::Char(c) => {
-                            if let Some(q) = ctx.state.pending_question_mut() {
-                                q.push_char(c);
-                            }
-                        }
-                        _ => {} // consume but ignore
-                    }
-
-                    Ok(Handled::CONSUMED)
-                }
-                _ => Ok(Handled::IGNORED),
+            if !ctx.state.has_pending_question() {
+                return Ok(Handled::IGNORED);
             }
+
+            // Try input/navigation first (narrow path — only touches QuestionState)
+            if let Some(question) = ctx.state.pending_question_mut() {
+                if let Some(handled) = Self::handle_input(key, question) {
+                    return Ok(handled);
+                }
+            }
+
+            // Submit/cancel (broad path — crosses sub-states)
+            match key.code {
+                KeyCode::Enter => {
+                    if let Some(result) = ctx.state.submit_question() {
+                        debug!("Question answered, sending tool result");
+                        send_tool_result(ctx, result).await;
+                    }
+                }
+                KeyCode::Esc => {
+                    if let Some(result) = ctx.state.cancel_question() {
+                        debug!("Question cancelled, sending tool result");
+                        send_tool_result(ctx, result).await;
+                    }
+                }
+                _ => {} // consume but ignore
+            }
+
+            Ok(Handled::CONSUMED)
         })
     }
 
     fn name(&self) -> &str {
         "question"
     }
-}
-
-/// Returns true if the pending question is in free-text input mode.
-fn is_in_free_text(ctx: &AppContext<'_>) -> bool {
-    ctx.state.pending_question().is_some_and(|q| q.in_free_text)
 }
 
 /// Records an interactive tool result as if it completed normally.
@@ -117,7 +130,6 @@ mod tests {
     use crate::app::state::AppState;
     use crate::session::SessionManager;
     use crate::types::config::ParallelMode;
-    use crate::types::ui_state::QuestionState;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use secrecy::SecretString;
     use std::path::PathBuf;
@@ -343,6 +355,129 @@ mod tests {
         let _ = handler.handle(&event, &mut ctx).await.unwrap();
 
         assert!(ctx.state.pending_question().unwrap().in_free_text);
+    }
+
+    // =========================================================================
+    // Narrow tests — QuestionHandler::handle_input
+    // =========================================================================
+
+    #[test]
+    fn handle_input_down_selects_next_option() {
+        let mut q = test_question_with_options();
+        assert_eq!(q.selected_option, 0);
+        assert!(!q.in_free_text);
+
+        let key = KeyEvent::new(KeyCode::Down, KeyModifiers::NONE);
+        let result = QuestionHandler::handle_input(&key, &mut q);
+
+        assert_eq!(result, Some(Handled::CONSUMED));
+        assert_eq!(q.selected_option, 1);
+    }
+
+    #[test]
+    fn handle_input_up_selects_prev_option() {
+        let mut q = test_question_with_options();
+        q.selected_option = 2;
+
+        let key = KeyEvent::new(KeyCode::Up, KeyModifiers::NONE);
+        let result = QuestionHandler::handle_input(&key, &mut q);
+
+        assert_eq!(result, Some(Handled::CONSUMED));
+        assert_eq!(q.selected_option, 1);
+    }
+
+    #[test]
+    fn handle_input_char_pushes_in_free_text() {
+        let mut q = test_question_free_text();
+        assert!(q.in_free_text);
+
+        let key = KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE);
+        let result = QuestionHandler::handle_input(&key, &mut q);
+
+        assert_eq!(result, Some(Handled::CONSUMED));
+        assert_eq!(q.free_text_input, "x");
+    }
+
+    #[test]
+    fn handle_input_char_always_handled_even_when_not_free_text() {
+        // Char(c) is always dispatched to push_char; push_char guards on in_free_text
+        let mut q = test_question_with_options();
+        assert!(!q.in_free_text);
+
+        let key = KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE);
+        let result = QuestionHandler::handle_input(&key, &mut q);
+
+        assert_eq!(result, Some(Handled::CONSUMED));
+        // push_char is a no-op when not in free text
+        assert_eq!(q.free_text_input, "");
+    }
+
+    #[test]
+    fn handle_input_tab_toggles_mode() {
+        let mut q = test_question_with_options();
+        assert!(!q.in_free_text);
+
+        let key = KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE);
+        let result = QuestionHandler::handle_input(&key, &mut q);
+
+        assert_eq!(result, Some(Handled::CONSUMED));
+        assert!(q.in_free_text);
+    }
+
+    #[test]
+    fn handle_input_backspace_removes_char() {
+        let mut q = test_question_free_text();
+        q.free_text_input = "ab".into();
+
+        let key = KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE);
+        let result = QuestionHandler::handle_input(&key, &mut q);
+
+        assert_eq!(result, Some(Handled::CONSUMED));
+        assert_eq!(q.free_text_input, "a");
+    }
+
+    #[test]
+    fn handle_input_enter_returns_none() {
+        let mut q = test_question_with_options();
+
+        let key = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+        let result = QuestionHandler::handle_input(&key, &mut q);
+
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn handle_input_esc_returns_none() {
+        let mut q = test_question_with_options();
+
+        let key = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+        let result = QuestionHandler::handle_input(&key, &mut q);
+
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn handle_input_k_navigates_when_not_free_text() {
+        let mut q = test_question_with_options();
+        q.selected_option = 1;
+
+        let key = KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE);
+        let result = QuestionHandler::handle_input(&key, &mut q);
+
+        assert_eq!(result, Some(Handled::CONSUMED));
+        assert_eq!(q.selected_option, 0);
+    }
+
+    #[test]
+    fn handle_input_k_pushes_char_when_in_free_text() {
+        let mut q = test_question_with_options();
+        q.in_free_text = true;
+
+        let key = KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE);
+        let result = QuestionHandler::handle_input(&key, &mut q);
+
+        assert_eq!(result, Some(Handled::CONSUMED));
+        assert_eq!(q.free_text_input, "k");
     }
 
     // =========================================================================

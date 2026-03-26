@@ -18,7 +18,7 @@ use tracing::debug;
 use crate::app::context::AppContext;
 use crate::app::dispatch::{EventHandler, Handled};
 use crate::app::events::AppEvent;
-use crate::permissions::PermissionResponse;
+use crate::permissions::{PermissionRequest, PermissionResponse};
 use crate::tui::widgets::handle_permission_key;
 use crate::tui::widgets::permission_prompt::PermissionPromptState;
 
@@ -51,6 +51,32 @@ use crate::tui::widgets::permission_prompt::PermissionPromptState;
 /// ```
 pub struct PermissionHandler;
 
+impl PermissionHandler {
+    /// Maps a key event to a permission response using the prompt state machine.
+    ///
+    /// Returns `None` for navigation keys or unrecognized keys.
+    /// Returns `Some(response)` for keys that resolve the prompt.
+    fn map_key_to_response(
+        key: crossterm::event::KeyEvent,
+        request: &PermissionRequest,
+    ) -> Option<PermissionResponse> {
+        let mut prompt_state = PermissionPromptState::new(request.clone());
+
+        let key_char = match key.code {
+            KeyCode::Char(c) => c,
+            KeyCode::Enter => '\r',
+            KeyCode::Esc => '\x1b',
+            KeyCode::Tab => '\t',
+            KeyCode::Backspace => '\x08',
+            KeyCode::Left => 'h',
+            KeyCode::Right => 'l',
+            _ => return None,
+        };
+
+        handle_permission_key(&mut prompt_state, key_char)
+    }
+}
+
 impl EventHandler for PermissionHandler {
     fn handle<'a>(
         &'a mut self,
@@ -64,10 +90,14 @@ impl EventHandler for PermissionHandler {
                         return Ok(Handled::IGNORED);
                     }
 
-                    // Convert the key event to a permission response.
-                    let response = convert_key_to_response(ctx, *key);
+                    // Map the key to a response (narrow path — pure function)
+                    let request = match ctx.state.tool_state().pending_permission() {
+                        Some(req) => req.clone(),
+                        None => return Ok(Handled::IGNORED),
+                    };
 
-                    if let Some(response) = response {
+                    if let Some(response) = Self::map_key_to_response(*key, &request) {
+                        ctx.state.clear_pending_permission();
                         apply_permission_response(ctx, response).await?;
                     }
 
@@ -88,35 +118,6 @@ impl EventHandler for PermissionHandler {
     fn name(&self) -> &str {
         "permission"
     }
-}
-
-/// Converts a crossterm key event into a permission response, if the key
-/// maps to a decision (y/n/a/Enter/Esc). Navigation keys return `None`.
-fn convert_key_to_response(
-    ctx: &mut AppContext<'_>,
-    key: crossterm::event::KeyEvent,
-) -> Option<PermissionResponse> {
-    let request = ctx.state.tool_state().pending_permission()?.clone();
-    let mut prompt_state = PermissionPromptState::new(request);
-
-    let key_char = match key.code {
-        KeyCode::Char(c) => c,
-        KeyCode::Enter => '\r',
-        KeyCode::Esc => '\x1b',
-        KeyCode::Tab => '\t',
-        KeyCode::Backspace => '\x08',
-        KeyCode::Left => 'h',
-        KeyCode::Right => 'l',
-        _ => return None,
-    };
-
-    let response = handle_permission_key(&mut prompt_state, key_char);
-
-    if response.is_some() {
-        ctx.state.clear_pending_permission();
-    }
-
-    response
 }
 
 /// Applies a permission response: updates state and triggers tool execution
@@ -155,7 +156,6 @@ mod tests {
     use super::*;
     use crate::api::{AnthropicClient, LlmProvider};
     use crate::app::state::AppState;
-    use crate::permissions::{PermissionRequest, PermissionResponse};
     use crate::session::SessionManager;
     use crate::types::config::ParallelMode;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -626,6 +626,75 @@ mod tests {
             Handled::CONSUMED,
             "PermissionResponse must be consumed even without a pending permission"
         );
+    }
+
+    // =========================================================================
+    // Narrow tests — PermissionHandler::map_key_to_response
+    // =========================================================================
+
+    #[test]
+    fn map_key_y_returns_allow_once() {
+        let request = test_permission_request();
+        let key = KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE);
+        let response = PermissionHandler::map_key_to_response(key, &request);
+        assert_eq!(response, Some(PermissionResponse::AllowOnce));
+    }
+
+    #[test]
+    fn map_key_a_returns_allow_always() {
+        let request = test_permission_request();
+        let key = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE);
+        let response = PermissionHandler::map_key_to_response(key, &request);
+        assert_eq!(response, Some(PermissionResponse::AllowAlways));
+    }
+
+    #[test]
+    fn map_key_n_returns_deny() {
+        let request = test_permission_request();
+        let key = KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE);
+        let response = PermissionHandler::map_key_to_response(key, &request);
+        assert_eq!(response, Some(PermissionResponse::Deny));
+    }
+
+    #[test]
+    fn map_key_esc_returns_deny() {
+        let request = test_permission_request();
+        let key = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+        let response = PermissionHandler::map_key_to_response(key, &request);
+        assert_eq!(response, Some(PermissionResponse::Deny));
+    }
+
+    #[test]
+    fn map_key_enter_returns_default_allow_once() {
+        let request = test_permission_request();
+        let key = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+        let response = PermissionHandler::map_key_to_response(key, &request);
+        // Default selection is AllowOnce
+        assert_eq!(response, Some(PermissionResponse::AllowOnce));
+    }
+
+    #[test]
+    fn map_key_left_returns_none_navigation() {
+        let request = test_permission_request();
+        let key = KeyEvent::new(KeyCode::Left, KeyModifiers::NONE);
+        let response = PermissionHandler::map_key_to_response(key, &request);
+        assert_eq!(response, None);
+    }
+
+    #[test]
+    fn map_key_right_returns_none_navigation() {
+        let request = test_permission_request();
+        let key = KeyEvent::new(KeyCode::Right, KeyModifiers::NONE);
+        let response = PermissionHandler::map_key_to_response(key, &request);
+        assert_eq!(response, None);
+    }
+
+    #[test]
+    fn map_key_f1_returns_none_unrecognized() {
+        let request = test_permission_request();
+        let key = KeyEvent::new(KeyCode::F(1), KeyModifiers::NONE);
+        let response = PermissionHandler::map_key_to_response(key, &request);
+        assert_eq!(response, None);
     }
 
     // =========================================================================

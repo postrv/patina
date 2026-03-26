@@ -17,6 +17,7 @@ use tracing::debug;
 use crate::app::context::AppContext;
 use crate::app::dispatch::{EventHandler, Handled};
 use crate::app::events::AppEvent;
+use crate::types::ui_state::PlanState;
 
 /// Handles plan review prompts.
 ///
@@ -32,6 +33,29 @@ use crate::app::events::AppEvent;
 /// preventing them from reaching the `KeyboardHandler`.
 pub struct PlanHandler;
 
+impl PlanHandler {
+    /// Processes a navigation key event for the plan review modal.
+    ///
+    /// Handles Up/Down/j/k for step navigation. Returns `None` for non-navigation
+    /// keys (approve/reject/other) which need cross-cutting logic.
+    fn handle_navigation(
+        key: &crossterm::event::KeyEvent,
+        plan: &mut PlanState,
+    ) -> Option<Handled> {
+        match key.code {
+            KeyCode::Up | KeyCode::Char('k') => {
+                plan.select_prev();
+                Some(Handled::CONSUMED)
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                plan.select_next();
+                Some(Handled::CONSUMED)
+            }
+            _ => None, // not a navigation key
+        }
+    }
+}
+
 impl EventHandler for PlanHandler {
     fn handle<'a>(
         &'a mut self,
@@ -39,42 +63,39 @@ impl EventHandler for PlanHandler {
         ctx: &'a mut AppContext<'_>,
     ) -> Pin<Box<dyn Future<Output = Result<Handled>> + Send + 'a>> {
         Box::pin(async move {
-            match event {
-                AppEvent::Key(key) => {
-                    if !ctx.state.has_pending_plan() {
-                        return Ok(Handled::IGNORED);
-                    }
+            let AppEvent::Key(key) = event else {
+                return Ok(Handled::IGNORED);
+            };
 
-                    match key.code {
-                        KeyCode::Enter => {
-                            if let Some(result) = ctx.state.approve_plan() {
-                                debug!("Plan approved, sending tool result");
-                                send_tool_result(ctx, result).await;
-                            }
-                        }
-                        KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('N') => {
-                            if let Some(result) = ctx.state.reject_plan() {
-                                debug!("Plan rejected, sending tool result");
-                                send_tool_result(ctx, result).await;
-                            }
-                        }
-                        KeyCode::Up | KeyCode::Char('k') => {
-                            if let Some(plan) = ctx.state.pending_plan_mut() {
-                                plan.select_prev();
-                            }
-                        }
-                        KeyCode::Down | KeyCode::Char('j') => {
-                            if let Some(plan) = ctx.state.pending_plan_mut() {
-                                plan.select_next();
-                            }
-                        }
-                        _ => {} // consume but ignore
-                    }
-
-                    Ok(Handled::CONSUMED)
-                }
-                _ => Ok(Handled::IGNORED),
+            if !ctx.state.has_pending_plan() {
+                return Ok(Handled::IGNORED);
             }
+
+            // Try navigation first (narrow path — only touches PlanState)
+            if let Some(plan) = ctx.state.pending_plan_mut() {
+                if let Some(handled) = Self::handle_navigation(key, plan) {
+                    return Ok(handled);
+                }
+            }
+
+            // Approval/rejection (broad path — crosses sub-states)
+            match key.code {
+                KeyCode::Enter => {
+                    if let Some(result) = ctx.state.approve_plan() {
+                        debug!("Plan approved, sending tool result");
+                        send_tool_result(ctx, result).await;
+                    }
+                }
+                KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('N') => {
+                    if let Some(result) = ctx.state.reject_plan() {
+                        debug!("Plan rejected, sending tool result");
+                        send_tool_result(ctx, result).await;
+                    }
+                }
+                _ => {} // consume but ignore
+            }
+
+            Ok(Handled::CONSUMED)
         })
     }
 
@@ -99,7 +120,7 @@ mod tests {
     use crate::app::state::AppState;
     use crate::session::SessionManager;
     use crate::types::config::ParallelMode;
-    use crate::types::ui_state::{PlanState, PlanStep};
+    use crate::types::ui_state::PlanStep;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use secrecy::SecretString;
     use std::path::PathBuf;
@@ -290,6 +311,70 @@ mod tests {
         let _ = handler.handle(&event, &mut ctx).await.unwrap();
 
         assert!(!ctx.state.has_pending_plan());
+    }
+
+    // =========================================================================
+    // Narrow tests — PlanHandler::handle_navigation
+    // =========================================================================
+
+    #[test]
+    fn handle_navigation_down_selects_next() {
+        let mut plan = test_plan();
+        assert_eq!(plan.selected_index, 0);
+
+        let key = KeyEvent::new(KeyCode::Down, KeyModifiers::NONE);
+        let result = PlanHandler::handle_navigation(&key, &mut plan);
+
+        assert_eq!(result, Some(Handled::CONSUMED));
+        assert_eq!(plan.selected_index, 1);
+    }
+
+    #[test]
+    fn handle_navigation_up_selects_prev() {
+        let mut plan = test_plan();
+        plan.selected_index = 1;
+
+        let key = KeyEvent::new(KeyCode::Up, KeyModifiers::NONE);
+        let result = PlanHandler::handle_navigation(&key, &mut plan);
+
+        assert_eq!(result, Some(Handled::CONSUMED));
+        assert_eq!(plan.selected_index, 0);
+    }
+
+    #[test]
+    fn handle_navigation_j_selects_next() {
+        let mut plan = test_plan();
+        assert_eq!(plan.selected_index, 0);
+
+        let key = KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE);
+        let result = PlanHandler::handle_navigation(&key, &mut plan);
+
+        assert_eq!(result, Some(Handled::CONSUMED));
+        assert_eq!(plan.selected_index, 1);
+    }
+
+    #[test]
+    fn handle_navigation_k_selects_prev() {
+        let mut plan = test_plan();
+        plan.selected_index = 1;
+
+        let key = KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE);
+        let result = PlanHandler::handle_navigation(&key, &mut plan);
+
+        assert_eq!(result, Some(Handled::CONSUMED));
+        assert_eq!(plan.selected_index, 0);
+    }
+
+    #[test]
+    fn handle_navigation_non_nav_key_returns_none() {
+        let mut plan = test_plan();
+
+        let key = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+        let result = PlanHandler::handle_navigation(&key, &mut plan);
+
+        assert_eq!(result, None);
+        // Plan state unchanged
+        assert_eq!(plan.selected_index, 0);
     }
 
     // =========================================================================
