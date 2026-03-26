@@ -17,6 +17,7 @@ use tracing::debug;
 use crate::app::context::AppContext;
 use crate::app::dispatch::{EventHandler, Handled};
 use crate::app::events::AppEvent;
+use crate::app::state::ContinuousLoopState;
 use crate::continuous::ContinuousEvent;
 
 /// Handles continuous coding loop events for the TUI progress display.
@@ -38,6 +39,49 @@ use crate::continuous::ContinuousEvent;
 /// ```
 pub struct ContinuousHandler;
 
+impl ContinuousHandler {
+    /// Processes a continuous event, updating the continuous loop state.
+    ///
+    /// This is the core logic extracted for independent testability.
+    /// Takes only `ContinuousLoopState`, not the full `AppState`.
+    fn handle_continuous_event(
+        event: &ContinuousEvent,
+        continuous: &mut ContinuousLoopState,
+    ) -> Result<Handled> {
+        match event {
+            ContinuousEvent::IterationStart { iteration } => {
+                continuous.update_iteration(*iteration);
+            }
+            ContinuousEvent::IterationComplete {
+                iteration: _,
+                duration_ms,
+            } => {
+                continuous.complete_iteration(*duration_ms);
+            }
+            ContinuousEvent::QualityGateCheck { gate } => {
+                continuous.set_gate_checking(gate);
+            }
+            ContinuousEvent::QualityGateResult {
+                gate,
+                passed,
+                message,
+            } => {
+                continuous.record_gate_result(gate, *passed, message.as_deref());
+            }
+            ContinuousEvent::StagnationDetected {
+                iterations_without_progress,
+                threshold,
+            } => {
+                continuous.set_stagnation(*iterations_without_progress, *threshold);
+            }
+            ContinuousEvent::HumanCheckpointRequired { reason } => {
+                continuous.set_human_checkpoint(reason);
+            }
+        }
+        Ok(Handled::CONSUMED)
+    }
+}
+
 impl EventHandler for ContinuousHandler {
     fn handle<'a>(
         &'a mut self,
@@ -45,68 +89,14 @@ impl EventHandler for ContinuousHandler {
         ctx: &'a mut AppContext<'_>,
     ) -> Pin<Box<dyn Future<Output = Result<Handled>> + Send + 'a>> {
         Box::pin(async move {
-            match event {
-                AppEvent::Continuous(continuous_event) => {
-                    match continuous_event {
-                        ContinuousEvent::IterationStart { iteration } => {
-                            debug!(iteration = %iteration, "Continuous iteration started");
-                            ctx.state.update_continuous_iteration(*iteration);
-                        }
-                        ContinuousEvent::IterationComplete {
-                            iteration,
-                            duration_ms,
-                        } => {
-                            debug!(
-                                iteration = %iteration,
-                                duration_ms = %duration_ms,
-                                "Continuous iteration completed"
-                            );
-                            ctx.state
-                                .complete_continuous_iteration(*iteration, *duration_ms);
-                        }
-                        ContinuousEvent::QualityGateCheck { gate } => {
-                            debug!(gate = %gate, "Quality gate check starting");
-                            ctx.state.set_continuous_gate_checking(gate);
-                        }
-                        ContinuousEvent::QualityGateResult {
-                            gate,
-                            passed,
-                            message,
-                        } => {
-                            debug!(
-                                gate = %gate,
-                                passed = %passed,
-                                "Quality gate result"
-                            );
-                            ctx.state.record_continuous_gate_result(
-                                gate,
-                                *passed,
-                                message.as_deref(),
-                            );
-                        }
-                        ContinuousEvent::StagnationDetected {
-                            iterations_without_progress,
-                            threshold,
-                        } => {
-                            debug!(
-                                iterations = %iterations_without_progress,
-                                threshold = %threshold,
-                                "Stagnation detected"
-                            );
-                            ctx.state.set_continuous_stagnation(
-                                *iterations_without_progress,
-                                *threshold,
-                            );
-                        }
-                        ContinuousEvent::HumanCheckpointRequired { reason } => {
-                            debug!(reason = %reason, "Human checkpoint required");
-                            ctx.state.set_continuous_human_checkpoint(reason);
-                        }
-                    }
-                    Ok(Handled::CONSUMED)
-                }
-                _ => Ok(Handled::IGNORED),
-            }
+            let AppEvent::Continuous(continuous_event) = event else {
+                return Ok(Handled::IGNORED);
+            };
+            debug!(
+                "Continuous event received: {}",
+                continuous_event.event_type()
+            );
+            Self::handle_continuous_event(continuous_event, ctx.state.continuous_mut())
         })
     }
 
@@ -602,5 +592,90 @@ mod tests {
         let key = AppEvent::Key(KeyEvent::new(KeyCode::Char('z'), KeyModifiers::NONE));
         let result = dispatcher.dispatch(&key, &mut ctx).await.unwrap();
         assert_eq!(result, Handled::IGNORED);
+    }
+
+    // =========================================================================
+    // Narrow tests: handle_continuous_event with ContinuousLoopState only
+    // =========================================================================
+
+    fn make_continuous_state() -> ContinuousLoopState {
+        ContinuousLoopState {
+            status: ContinuousLoopStatus::Inactive,
+            iterations_completed: 0,
+            last_duration_ms: None,
+            checking_gate: None,
+            gate_results: Vec::new(),
+            dirty: false,
+        }
+    }
+
+    #[test]
+    fn handle_continuous_event_iteration_start_updates_status() {
+        let mut state = make_continuous_state();
+        let event = ContinuousEvent::IterationStart { iteration: 3 };
+        let result = ContinuousHandler::handle_continuous_event(&event, &mut state).unwrap();
+
+        assert_eq!(result, Handled::CONSUMED);
+        assert_eq!(
+            state.status(),
+            &ContinuousLoopStatus::Running { iteration: 3 }
+        );
+        assert!(state.is_dirty());
+    }
+
+    #[test]
+    fn handle_continuous_event_iteration_complete_records_duration() {
+        let mut state = make_continuous_state();
+        let event = ContinuousEvent::IterationComplete {
+            iteration: 1,
+            duration_ms: 4500,
+        };
+        let result = ContinuousHandler::handle_continuous_event(&event, &mut state).unwrap();
+
+        assert_eq!(result, Handled::CONSUMED);
+        assert_eq!(state.iterations_completed(), 1);
+        assert_eq!(state.last_duration_ms(), Some(4500));
+    }
+
+    #[test]
+    fn handle_continuous_event_gate_result_accumulates() {
+        let mut state = make_continuous_state();
+
+        let event1 = ContinuousEvent::QualityGateResult {
+            gate: "clippy".to_string(),
+            passed: true,
+            message: Some("0 warnings".to_string()),
+        };
+        let _ = ContinuousHandler::handle_continuous_event(&event1, &mut state).unwrap();
+
+        let event2 = ContinuousEvent::QualityGateResult {
+            gate: "tests".to_string(),
+            passed: false,
+            message: Some("2 failures".to_string()),
+        };
+        let _ = ContinuousHandler::handle_continuous_event(&event2, &mut state).unwrap();
+
+        assert_eq!(state.gate_results().len(), 2);
+        assert!(state.gate_results()[0].passed);
+        assert!(!state.gate_results()[1].passed);
+    }
+
+    #[test]
+    fn handle_continuous_event_stagnation_updates_status() {
+        let mut state = make_continuous_state();
+        let event = ContinuousEvent::StagnationDetected {
+            iterations_without_progress: 5,
+            threshold: 3,
+        };
+        let result = ContinuousHandler::handle_continuous_event(&event, &mut state).unwrap();
+
+        assert_eq!(result, Handled::CONSUMED);
+        assert_eq!(
+            state.status(),
+            &ContinuousLoopStatus::Stagnated {
+                iterations_without_progress: 5,
+                threshold: 3,
+            }
+        );
     }
 }

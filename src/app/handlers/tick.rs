@@ -12,6 +12,7 @@ use anyhow::Result;
 use crate::app::context::AppContext;
 use crate::app::dispatch::{EventHandler, Handled};
 use crate::app::events::AppEvent;
+use crate::app::state::DisplayState;
 
 /// Handles periodic tick events for animation and background polling.
 ///
@@ -30,6 +31,15 @@ use crate::app::events::AppEvent;
 /// ```
 pub struct TickHandler;
 
+impl TickHandler {
+    /// Advances the throbber animation.
+    ///
+    /// The display state tracks its own dirty flag.
+    fn handle_tick(display: &mut DisplayState) {
+        display.tick_throbber();
+    }
+}
+
 impl EventHandler for TickHandler {
     fn handle<'a>(
         &'a mut self,
@@ -38,7 +48,7 @@ impl EventHandler for TickHandler {
     ) -> Pin<Box<dyn Future<Output = Result<Handled>> + Send + 'a>> {
         Box::pin(async move {
             if matches!(event, AppEvent::Tick) {
-                ctx.state.tick_throbber();
+                Self::handle_tick(ctx.state.display_mut());
                 process_mcp_events(ctx);
                 Ok(Handled::CONSUMED)
             } else {
@@ -341,5 +351,30 @@ mod tests {
         let key = AppEvent::Key(KeyEvent::new(KeyCode::Char('z'), KeyModifiers::NONE));
         let result = dispatcher.dispatch(&key, &mut ctx).await.unwrap();
         assert_eq!(result, Handled::IGNORED);
+    }
+
+    // =========================================================================
+    // Narrow tests: handle_tick with DisplayState only (no AppState)
+    // =========================================================================
+
+    #[test]
+    fn handle_tick_advances_throbber_on_display_state() {
+        let mut display = DisplayState::new();
+        assert_eq!(display.throbber_char(), '\u{280B}'); // ⠋
+
+        TickHandler::handle_tick(&mut display);
+
+        assert_eq!(display.throbber_char(), '\u{2819}'); // ⠙
+    }
+
+    #[test]
+    fn handle_tick_sets_dirty_flag_on_display_state() {
+        let mut display = DisplayState::new();
+        display.mark_clean();
+        assert!(!display.is_dirty());
+
+        TickHandler::handle_tick(&mut display);
+
+        assert!(display.is_dirty());
     }
 }

@@ -18,6 +18,7 @@ use crate::agents::AgentEvent;
 use crate::app::context::AppContext;
 use crate::app::dispatch::{EventHandler, Handled};
 use crate::app::events::AppEvent;
+use crate::app::state::AgentPanelState;
 
 /// Handles background agent events for the TUI agent panel.
 ///
@@ -38,6 +39,29 @@ use crate::app::events::AppEvent;
 /// ```
 pub struct AgentHandler;
 
+impl AgentHandler {
+    /// Processes an agent event, updating the agent panel state.
+    ///
+    /// This is the core logic extracted for independent testability.
+    /// Takes only `AgentPanelState`, not the full `AppState`.
+    fn handle_agent_event(event: &AgentEvent, panel: &mut AgentPanelState) -> Result<Handled> {
+        match event {
+            AgentEvent::Progress {
+                agent_id,
+                agent_name,
+                progress,
+            } => {
+                panel.update_progress(agent_id, agent_name, progress);
+                Ok(Handled::CONSUMED)
+            }
+            AgentEvent::ConflictDetected { report } => {
+                panel.add_conflict(report.clone());
+                Ok(Handled::CONSUMED)
+            }
+        }
+    }
+}
+
 impl EventHandler for AgentHandler {
     fn handle<'a>(
         &'a mut self,
@@ -45,35 +69,11 @@ impl EventHandler for AgentHandler {
         ctx: &'a mut AppContext<'_>,
     ) -> Pin<Box<dyn Future<Output = Result<Handled>> + Send + 'a>> {
         Box::pin(async move {
-            match event {
-                AppEvent::Agent(agent_event) => {
-                    match agent_event {
-                        AgentEvent::Progress {
-                            agent_id,
-                            agent_name,
-                            progress,
-                        } => {
-                            debug!(
-                                agent_id = %agent_id,
-                                agent_name = %agent_name,
-                                progress = %progress,
-                                "Agent progress event"
-                            );
-                            ctx.state
-                                .update_agent_progress(agent_id, agent_name, progress);
-                        }
-                        AgentEvent::ConflictDetected { report } => {
-                            debug!(
-                                has_conflicts = report.has_conflicts(),
-                                "Agent conflict detected"
-                            );
-                            ctx.state.add_conflict_report(report.clone());
-                        }
-                    }
-                    Ok(Handled::CONSUMED)
-                }
-                _ => Ok(Handled::IGNORED),
-            }
+            let AppEvent::Agent(agent_event) = event else {
+                return Ok(Handled::IGNORED);
+            };
+            debug!("Agent event received");
+            Self::handle_agent_event(agent_event, ctx.state.agent_panel_mut())
         })
     }
 
@@ -664,5 +664,69 @@ mod tests {
         let key = AppEvent::Key(KeyEvent::new(KeyCode::Char('z'), KeyModifiers::NONE));
         let result = dispatcher.dispatch(&key, &mut ctx).await.unwrap();
         assert_eq!(result, Handled::IGNORED);
+    }
+
+    // =========================================================================
+    // Narrow tests: handle_agent_event with AgentPanelState only (no AppState)
+    // =========================================================================
+
+    #[test]
+    fn handle_agent_event_progress_creates_entry() {
+        let mut panel = AgentPanelState::new(None);
+        assert!(panel.entries().is_empty());
+
+        let event = AgentEvent::Progress {
+            agent_id: "agent-1".to_string(),
+            agent_name: "explorer".to_string(),
+            progress: AgentProgress::IterationStarted {
+                iteration: 1,
+                max: 10,
+            },
+        };
+        let result = AgentHandler::handle_agent_event(&event, &mut panel).unwrap();
+
+        assert_eq!(result, Handled::CONSUMED);
+        assert_eq!(panel.entries().len(), 1);
+        assert_eq!(panel.entries()[0].agent_id, "agent-1");
+        assert_eq!(
+            panel.entries()[0].status,
+            AgentPanelStatus::Running {
+                iteration: 1,
+                max_iterations: 10,
+            }
+        );
+    }
+
+    #[test]
+    fn handle_agent_event_conflict_adds_report() {
+        let mut panel = AgentPanelState::new(None);
+        assert!(!panel.has_pending_conflicts());
+
+        let event = AgentEvent::ConflictDetected {
+            report: ConflictReport::empty(),
+        };
+        let result = AgentHandler::handle_agent_event(&event, &mut panel).unwrap();
+
+        assert_eq!(result, Handled::CONSUMED);
+        assert!(panel.has_pending_conflicts());
+    }
+
+    #[test]
+    fn handle_agent_event_sets_dirty_flag() {
+        let mut panel = AgentPanelState::new(None);
+        panel.mark_clean();
+        assert!(!panel.is_dirty());
+
+        let event = AgentEvent::Progress {
+            agent_id: "agent-1".to_string(),
+            agent_name: "explorer".to_string(),
+            progress: AgentProgress::IterationStarted {
+                iteration: 1,
+                max: 5,
+            },
+        };
+        let _ = AgentHandler::handle_agent_event(&event, &mut panel).unwrap();
+
+        assert!(panel.is_dirty());
     }
 }

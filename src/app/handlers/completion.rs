@@ -20,11 +20,12 @@ use std::future::Future;
 use std::pin::Pin;
 
 use anyhow::Result;
-use crossterm::event::KeyCode;
+use crossterm::event::{KeyCode, KeyEvent};
 
 use crate::app::context::AppContext;
 use crate::app::dispatch::{EventHandler, Handled};
 use crate::app::events::AppEvent;
+use crate::app::state::InputState;
 
 /// Handles completion popup key events for slash command auto-completion.
 ///
@@ -45,6 +46,41 @@ use crate::app::events::AppEvent;
 /// ```
 pub struct CompletionHandler;
 
+impl CompletionHandler {
+    /// Processes a key event against the completion popup state.
+    ///
+    /// This is the core logic extracted for independent testability.
+    /// Takes only `InputState`, not the full `AppState`.
+    fn handle_key(key: &KeyEvent, input: &mut InputState) -> Result<Handled> {
+        if !input.has_completion() {
+            return Ok(Handled::IGNORED);
+        }
+        match key.code {
+            KeyCode::Down => {
+                if let Some(completion) = input.completion_mut() {
+                    completion.select_next();
+                }
+                Ok(Handled::CONSUMED)
+            }
+            KeyCode::Up => {
+                if let Some(completion) = input.completion_mut() {
+                    completion.select_previous();
+                }
+                Ok(Handled::CONSUMED)
+            }
+            KeyCode::Tab | KeyCode::Enter => {
+                input.accept_completion();
+                Ok(Handled::CONSUMED)
+            }
+            KeyCode::Esc => {
+                input.dismiss_completion();
+                Ok(Handled::CONSUMED)
+            }
+            _ => Ok(Handled::IGNORED),
+        }
+    }
+}
+
 impl EventHandler for CompletionHandler {
     fn handle<'a>(
         &'a mut self,
@@ -55,35 +91,7 @@ impl EventHandler for CompletionHandler {
             let AppEvent::Key(key) = event else {
                 return Ok(Handled::IGNORED);
             };
-
-            if !ctx.state.has_completion() {
-                return Ok(Handled::IGNORED);
-            }
-
-            match key.code {
-                KeyCode::Down => {
-                    if let Some(completion) = ctx.state.completion_mut() {
-                        completion.select_next();
-                    }
-                    Ok(Handled::CONSUMED)
-                }
-                KeyCode::Up => {
-                    if let Some(completion) = ctx.state.completion_mut() {
-                        completion.select_previous();
-                    }
-                    Ok(Handled::CONSUMED)
-                }
-                KeyCode::Tab | KeyCode::Enter => {
-                    ctx.state.accept_completion();
-                    Ok(Handled::CONSUMED)
-                }
-                KeyCode::Esc => {
-                    ctx.state.dismiss_completion();
-                    Ok(Handled::CONSUMED)
-                }
-                // All other keys pass through to KeyboardHandler
-                _ => Ok(Handled::IGNORED),
-            }
+            Self::handle_key(key, ctx.state.input_state_mut())
         })
     }
 
@@ -102,6 +110,7 @@ mod tests {
     use crate::app::state::AppState;
     use crate::session::SessionManager;
     use crate::types::config::ParallelMode;
+    use crate::types::ui_state::{CompletionEntry, CompletionSource, CompletionState};
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use secrecy::SecretString;
     use std::path::PathBuf;
@@ -317,6 +326,78 @@ mod tests {
 
         let event = AppEvent::Tick;
         let result = handler.handle(&event, &mut ctx).await.unwrap();
+        assert!(result.is_ignored());
+    }
+
+    // =========================================================================
+    // Narrow tests: handle_key with InputState only (no AppState)
+    // =========================================================================
+
+    /// Helper: builds a sample `CompletionState` with two entries.
+    fn sample_completion() -> CompletionState {
+        CompletionState::new(vec![
+            CompletionEntry::new("help", "Show help", CompletionSource::Builtin),
+            CompletionEntry::new("mcp", "MCP status", CompletionSource::Builtin),
+        ])
+    }
+
+    #[test]
+    fn handle_key_ignores_when_no_completion() {
+        let mut input = InputState::new();
+        let key = KeyEvent::new(KeyCode::Down, KeyModifiers::NONE);
+        let result = CompletionHandler::handle_key(&key, &mut input).unwrap();
+        assert!(result.is_ignored());
+    }
+
+    #[test]
+    fn handle_key_down_selects_next() {
+        let mut input = InputState::new();
+        input.set_completion(sample_completion());
+        let initial = input.completion().unwrap().selected_index();
+
+        let key = KeyEvent::new(KeyCode::Down, KeyModifiers::NONE);
+        let result = CompletionHandler::handle_key(&key, &mut input).unwrap();
+
+        assert!(result.is_consumed());
+        assert_eq!(input.completion().unwrap().selected_index(), initial + 1);
+    }
+
+    #[test]
+    fn handle_key_esc_dismisses_completion() {
+        let mut input = InputState::new();
+        input.set_completion(sample_completion());
+        assert!(input.has_completion());
+
+        let key = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+        let result = CompletionHandler::handle_key(&key, &mut input).unwrap();
+
+        assert!(result.is_consumed());
+        assert!(!input.has_completion());
+    }
+
+    #[test]
+    fn handle_key_tab_accepts_completion() {
+        let mut input = InputState::new();
+        input.set_text("/".to_string());
+        input.set_completion(sample_completion());
+        assert!(input.has_completion());
+
+        let key = KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE);
+        let result = CompletionHandler::handle_key(&key, &mut input).unwrap();
+
+        assert!(result.is_consumed());
+        assert!(!input.has_completion());
+        assert!(input.text().starts_with('/'));
+    }
+
+    #[test]
+    fn handle_key_char_passes_through_with_completion() {
+        let mut input = InputState::new();
+        input.set_completion(sample_completion());
+
+        let key = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE);
+        let result = CompletionHandler::handle_key(&key, &mut input).unwrap();
+
         assert!(result.is_ignored());
     }
 }
