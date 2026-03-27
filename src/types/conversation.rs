@@ -116,6 +116,62 @@ impl ConversationEntry {
         matches!(self, Self::ImageDisplay { .. })
     }
 
+    /// Returns an approximate line count for viewport culling.
+    ///
+    /// The count matches the number of `Line` items that the TUI render
+    /// functions (`render_user_message`, `render_assistant_message`, etc.)
+    /// would produce for this entry.  It does **not** account for
+    /// terminal-width wrapping; it is used only by [`VirtualizedViewport`]
+    /// to decide which entries overlap the visible area.
+    ///
+    /// [`VirtualizedViewport`]: crate::tui::scroll::VirtualizedViewport
+    #[must_use]
+    pub fn estimated_line_count(&self) -> usize {
+        /// Maximum output lines shown for a tool execution before truncation.
+        const TOOL_OUTPUT_MAX_LINES: usize = 5;
+
+        match self {
+            Self::UserMessage(text) => {
+                // 1 header ("You:") + content lines + 1 spacer
+                1 + text.lines().count().max(1) + 1
+            }
+            Self::AssistantMessage(text) => {
+                if text.is_empty() {
+                    // Empty assistant messages are skipped in rendering
+                    0
+                } else {
+                    // 1 header ("Patina:") + content lines + 1 spacer
+                    1 + text.lines().count() + 1
+                }
+            }
+            Self::Streaming { text, .. } => {
+                // 1 header (with throbber) + content lines (no spacer)
+                1 + text.lines().count()
+            }
+            Self::ToolExecution { output, .. } => {
+                // 1 header + 1 input line
+                let base = 2;
+                let result_lines = match output {
+                    None => 1, // "Running..."
+                    Some(out) => {
+                        let total = out.lines().count().max(1);
+                        let shown = total.min(TOOL_OUTPUT_MAX_LINES);
+                        if total > TOOL_OUTPUT_MAX_LINES {
+                            shown + 1 // truncation indicator
+                        } else {
+                            shown
+                        }
+                    }
+                };
+                base + result_lines + 1 // +1 spacer
+            }
+            Self::ImageDisplay { .. } => {
+                // 1 header + 1 alt text + 1 spacer
+                3
+            }
+        }
+    }
+
     /// Returns the text content if this entry has displayable text.
     ///
     /// Returns `Some(&str)` for user messages, assistant messages, and streaming entries.
@@ -614,5 +670,109 @@ mod tests {
             follows_message_idx: None,
         };
         assert!(tool.as_image_display().is_none());
+    }
+
+    // =========================================================================
+    // estimated_line_count tests (B1.1)
+    // =========================================================================
+
+    #[test]
+    fn test_estimated_line_count_user_message_single_line() {
+        let entry = ConversationEntry::UserMessage("Hello".to_string());
+        // 1 header ("You:") + 1 content line + 1 spacer = 3
+        assert_eq!(entry.estimated_line_count(), 3);
+    }
+
+    #[test]
+    fn test_estimated_line_count_user_message_multi_line() {
+        let entry = ConversationEntry::UserMessage("Hello\nWorld\nFoo".to_string());
+        // 1 header + 3 content lines + 1 spacer = 5
+        assert_eq!(entry.estimated_line_count(), 5);
+    }
+
+    #[test]
+    fn test_estimated_line_count_assistant_message_single_line() {
+        let entry = ConversationEntry::AssistantMessage("Hi there!".to_string());
+        // 1 header ("Patina:") + 1 content line + 1 spacer = 3
+        assert_eq!(entry.estimated_line_count(), 3);
+    }
+
+    #[test]
+    fn test_estimated_line_count_assistant_message_empty() {
+        let entry = ConversationEntry::AssistantMessage(String::new());
+        // Empty assistant messages are skipped in rendering = 0
+        assert_eq!(entry.estimated_line_count(), 0);
+    }
+
+    #[test]
+    fn test_estimated_line_count_streaming_entry() {
+        let entry = ConversationEntry::Streaming {
+            text: "Hello\nWorld".to_string(),
+            complete: false,
+        };
+        // 1 header (with throbber) + 2 content lines = 3
+        assert_eq!(entry.estimated_line_count(), 3);
+    }
+
+    #[test]
+    fn test_estimated_line_count_streaming_empty() {
+        let entry = ConversationEntry::Streaming {
+            text: String::new(),
+            complete: false,
+        };
+        // 1 header only (no content lines, no spacer)
+        assert_eq!(entry.estimated_line_count(), 1);
+    }
+
+    #[test]
+    fn test_estimated_line_count_tool_execution_pending() {
+        let entry = ConversationEntry::ToolExecution {
+            name: "bash".to_string(),
+            input: "ls -la".to_string(),
+            output: None,
+            is_error: false,
+            follows_message_idx: None,
+        };
+        // 1 header + 1 input + 1 "Running..." + 1 spacer = 4
+        assert_eq!(entry.estimated_line_count(), 4);
+    }
+
+    #[test]
+    fn test_estimated_line_count_tool_execution_short_output() {
+        let entry = ConversationEntry::ToolExecution {
+            name: "bash".to_string(),
+            input: "echo hello".to_string(),
+            output: Some("hello".to_string()),
+            is_error: false,
+            follows_message_idx: None,
+        };
+        // 1 header + 1 input + 1 output line + 1 spacer = 4
+        assert_eq!(entry.estimated_line_count(), 4);
+    }
+
+    #[test]
+    fn test_estimated_line_count_tool_execution_long_output() {
+        let long_output = "line1\nline2\nline3\nline4\nline5\nline6\nline7";
+        let entry = ConversationEntry::ToolExecution {
+            name: "bash".to_string(),
+            input: "cmd".to_string(),
+            output: Some(long_output.to_string()),
+            is_error: false,
+            follows_message_idx: None,
+        };
+        // 1 header + 1 input + 5 output lines (capped) + 1 truncation + 1 spacer = 9
+        assert_eq!(entry.estimated_line_count(), 9);
+    }
+
+    #[test]
+    fn test_estimated_line_count_image_display() {
+        let entry = ConversationEntry::ImageDisplay {
+            width: 100,
+            height: 50,
+            pixels: vec![],
+            alt_text: Some("test image".to_string()),
+        };
+        // 1 header + 1 alt text + 1 spacer = 3
+        assert_eq!(entry.estimated_line_count(), 3);
     }
 }

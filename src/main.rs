@@ -1,5 +1,7 @@
 //! Patina - High-performance terminal client for Claude API
 
+use std::io::IsTerminal;
+
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 
@@ -241,6 +243,15 @@ async fn main() -> Result<()> {
         return oauth_login().await;
     }
 
+    // Detect piped stdin (non-terminal input)
+    let piped_input = if !std::io::stdin().is_terminal() {
+        std::io::read_to_string(std::io::stdin())
+            .ok()
+            .filter(|s| !s.is_empty())
+    } else {
+        None
+    };
+
     setup_logging(args.debug, !args.print || args.prompt.is_none());
 
     let narsil_mode = resolve_narsil_mode(args.with_narsil, args.no_narsil);
@@ -248,7 +259,8 @@ async fn main() -> Result<()> {
     let resume_mode = resolve_resume_mode(args.continue_session, args.resume.as_deref());
     let provider_config = build_provider_config(&args)?;
     let api_key = resolve_api_key(args.api_key)?;
-    let (initial_prompt, print_mode) = resolve_execution_mode(args.prompt, args.print)?;
+    let (initial_prompt, print_mode) =
+        resolve_execution_mode(args.prompt, args.print, piped_input)?;
 
     app::run(app::Config {
         api_key,
@@ -377,19 +389,38 @@ fn resolve_resume_mode(continue_session: bool, resume: Option<&str>) -> ResumeMo
     }
 }
 
-/// Determines the execution mode from prompt and print flags.
+/// Determines the execution mode from prompt, print flag, and piped stdin.
+///
+/// When piped input is present without an explicit prompt, print mode is
+/// auto-enabled. When both piped input and a prompt are provided, they are
+/// concatenated with the pipe content first.
 ///
 /// # Errors
 ///
-/// Returns an error if `--print` is used without a prompt.
-fn resolve_execution_mode(prompt: Option<String>, print: bool) -> Result<(Option<String>, bool)> {
-    match (prompt, print) {
-        (Some(p), true) => Ok((Some(p), true)),
-        (Some(p), false) => Ok((Some(p), false)),
-        (None, true) => {
+/// Returns an error if `--print` is used without a prompt and without
+/// piped input.
+fn resolve_execution_mode(
+    prompt: Option<String>,
+    print: bool,
+    piped_input: Option<String>,
+) -> Result<(Option<String>, bool)> {
+    match (prompt, print, piped_input) {
+        // Explicit prompt + piped input: combine (pipe first, then prompt)
+        (Some(p), mode, Some(piped)) => {
+            let combined = format!("{piped}\n\n{p}");
+            Ok((Some(combined), mode))
+        }
+        // Explicit prompt, no pipe
+        (Some(p), true, None) => Ok((Some(p), true)),
+        (Some(p), false, None) => Ok((Some(p), false)),
+        // No prompt, piped input: use as prompt, auto-enable print mode
+        (None, _, Some(piped)) => Ok((Some(piped), true)),
+        // No prompt, --print, no pipe: error
+        (None, true, None) => {
             anyhow::bail!("--print requires a prompt argument or piped input");
         }
-        (None, false) => Ok((None, false)),
+        // Interactive mode
+        (None, false, None) => Ok((None, false)),
     }
 }
 
@@ -688,5 +719,73 @@ mod tests {
             args.prompt,
             Some("Explain this architecture diagram".to_string())
         );
+    }
+
+    // B4 tests: resolve_execution_mode with piped input
+
+    /// Piped input with no prompt or flags should auto-enable print mode.
+    #[test]
+    fn test_resolve_piped_input_auto_print() {
+        let (prompt, print) =
+            resolve_execution_mode(None, false, Some("piped text".to_string())).unwrap();
+        assert_eq!(prompt.as_deref(), Some("piped text"));
+        assert!(print, "piped input should auto-enable print mode");
+    }
+
+    /// Piped input combined with an explicit prompt should concatenate them.
+    #[test]
+    fn test_resolve_piped_with_prompt() {
+        let (prompt, print) = resolve_execution_mode(
+            Some("fix the bug".to_string()),
+            false,
+            Some("diff output here".to_string()),
+        )
+        .unwrap();
+        let text = prompt.unwrap();
+        assert!(text.contains("diff output here"));
+        assert!(text.contains("fix the bug"));
+        assert!(!print);
+    }
+
+    /// Piped input with --print flag should use print mode.
+    #[test]
+    fn test_resolve_piped_with_print_flag() {
+        let (prompt, print) =
+            resolve_execution_mode(None, true, Some("piped text".to_string())).unwrap();
+        assert_eq!(prompt.as_deref(), Some("piped text"));
+        assert!(print);
+    }
+
+    /// No pipe, no prompt, --print should fail.
+    #[test]
+    fn test_resolve_no_input_print_fails() {
+        let result = resolve_execution_mode(None, true, None);
+        assert!(result.is_err());
+    }
+
+    /// No pipe, no prompt, no --print should be interactive mode.
+    #[test]
+    fn test_resolve_interactive_no_pipe() {
+        let (prompt, print) = resolve_execution_mode(None, false, None).unwrap();
+        assert!(prompt.is_none());
+        assert!(!print);
+    }
+
+    /// Explicit prompt with --print and no pipe should work as before.
+    #[test]
+    fn test_resolve_prompt_print_no_pipe() {
+        let (prompt, print) =
+            resolve_execution_mode(Some("hello".to_string()), true, None).unwrap();
+        assert_eq!(prompt.as_deref(), Some("hello"));
+        assert!(print);
+    }
+
+    /// Explicit prompt without --print and no pipe should work as before.
+    #[test]
+    fn test_resolve_prompt_no_print_no_pipe() {
+        let (prompt, print) =
+            resolve_execution_mode(Some("hello".to_string()), false, None).unwrap();
+        assert_eq!(prompt.as_deref(), Some("hello"));
+        assert!(!print);
     }
 }

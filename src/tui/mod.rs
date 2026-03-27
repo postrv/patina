@@ -180,6 +180,68 @@ pub fn render_timeline_with_throbber(timeline: &Timeline, throbber: char) -> Vec
     lines
 }
 
+/// Renders only the specified timeline entries to lines.
+///
+/// This is the viewport-culled variant of [`render_timeline_with_throbber`].
+/// Only entries whose indices appear in `visible_indices` are rendered,
+/// skipping off-screen content to avoid O(n) allocations for long timelines.
+///
+/// # Arguments
+///
+/// * `timeline` - The conversation timeline
+/// * `throbber` - Throbber animation character
+/// * `visible_indices` - Sorted slice of entry indices to render
+///
+/// # Returns
+///
+/// Styled lines for the visible entries only.
+#[must_use]
+pub fn render_visible_entries(
+    timeline: &Timeline,
+    throbber: char,
+    visible_indices: &[usize],
+) -> Vec<Line<'static>> {
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    let entries = timeline.entries();
+
+    for &idx in visible_indices {
+        if let Some(entry) = entries.get(idx) {
+            match entry {
+                ConversationEntry::UserMessage(text) => {
+                    render_user_message(&mut lines, text);
+                }
+                ConversationEntry::AssistantMessage(text) => {
+                    if !text.is_empty() {
+                        render_assistant_message(&mut lines, text);
+                    }
+                }
+                ConversationEntry::Streaming { text, .. } => {
+                    render_streaming_entry_with_throbber(&mut lines, text, throbber);
+                }
+                ConversationEntry::ToolExecution {
+                    name,
+                    input,
+                    output,
+                    is_error,
+                    ..
+                } => {
+                    render_tool_execution(&mut lines, name, input, output.as_deref(), *is_error);
+                }
+                ConversationEntry::ImageDisplay {
+                    width,
+                    height,
+                    alt_text,
+                    ..
+                } => {
+                    render_image_display(&mut lines, *width, *height, alt_text.as_deref());
+                }
+            }
+        }
+    }
+
+    lines
+}
+
 /// Renders a user message to lines.
 ///
 /// Note: User messages don't apply diff styling to avoid false positives
@@ -1450,5 +1512,89 @@ mod tests {
         assert!(content.contains("📷"), "Should have camera emoji");
         assert!(content.contains("1920×1080"), "Should have dimensions");
         assert!(content.contains("4K display"), "Should have alt text");
+    }
+
+    // =========================================================================
+    // Viewport-only rendering tests (B1)
+    // =========================================================================
+
+    #[test]
+    fn test_viewport_total_lines_matches_full_render() {
+        use crate::tui::scroll::VirtualizedViewport;
+
+        let mut timeline = Timeline::new();
+        timeline.push_user_message("Hello from user");
+        timeline.push_assistant_message("Hello from assistant");
+        timeline.push_tool_execution("bash", "ls", Some("file.txt".to_string()), false);
+        timeline.push_user_message("Another message\nWith multiple lines");
+
+        // Build viewport using estimated line counts
+        let mut viewport = VirtualizedViewport::new();
+        for (i, entry) in timeline.entries().iter().enumerate() {
+            viewport.add_content(i, entry.estimated_line_count());
+        }
+
+        // Render the full timeline for comparison
+        let full_lines = render_timeline_with_throbber(&timeline, ' ');
+
+        assert_eq!(
+            viewport.total_lines(),
+            full_lines.len(),
+            "Viewport total_lines ({}) must match full render line count ({})",
+            viewport.total_lines(),
+            full_lines.len()
+        );
+    }
+
+    #[test]
+    fn test_render_visible_entries_subset() {
+        let mut timeline = Timeline::new();
+        // Create enough entries to exceed a small viewport
+        for i in 0..20 {
+            timeline.push_user_message(format!("User message {i}"));
+            timeline.push_assistant_message(format!("Assistant message {i}"));
+        }
+
+        let full_lines = render_timeline_with_throbber(&timeline, ' ');
+        let visible = render_visible_entries(&timeline, ' ', &[0, 1]);
+
+        // Visible subset should be smaller than full render
+        assert!(
+            visible.len() < full_lines.len(),
+            "Visible lines ({}) should be fewer than full lines ({})",
+            visible.len(),
+            full_lines.len()
+        );
+        // But should still produce output for the 2 visible entries
+        assert!(
+            visible.len() >= 4,
+            "Should produce at least 4 lines for 2 entries (header + content + spacer each)"
+        );
+    }
+
+    #[test]
+    fn test_render_visible_entries_matches_full_render_content() {
+        let mut timeline = Timeline::new();
+        timeline.push_user_message("Hello");
+        timeline.push_assistant_message("World");
+
+        let full_lines = render_timeline_with_throbber(&timeline, ' ');
+        let all_visible = render_visible_entries(&timeline, ' ', &[0, 1]);
+
+        // When rendering all entries, output should match full render
+        assert_eq!(
+            full_lines.len(),
+            all_visible.len(),
+            "Rendering all entries via render_visible_entries should match full render"
+        );
+    }
+
+    #[test]
+    fn test_render_visible_entries_empty_indices() {
+        let mut timeline = Timeline::new();
+        timeline.push_user_message("Hello");
+
+        let visible = render_visible_entries(&timeline, ' ', &[]);
+        assert!(visible.is_empty(), "No visible indices should produce no lines");
     }
 }
