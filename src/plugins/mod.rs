@@ -68,6 +68,8 @@ pub struct HooksConfig {
     #[serde(default)]
     pub post_tool_use: Vec<HookDef>,
     #[serde(default)]
+    pub post_tool_use_failure: Vec<HookDef>,
+    #[serde(default)]
     pub session_start: Vec<HookDef>,
     #[serde(default)]
     pub session_end: Vec<HookDef>,
@@ -78,9 +80,13 @@ pub struct HooksConfig {
     #[serde(default)]
     pub stop: Vec<HookDef>,
     #[serde(default)]
+    pub stop_failure: Vec<HookDef>,
+    #[serde(default)]
     pub subagent_stop: Vec<HookDef>,
     #[serde(default)]
     pub pre_compact: Vec<HookDef>,
+    #[serde(default)]
+    pub post_compact: Vec<HookDef>,
     #[serde(default)]
     pub permission_request: Vec<HookDef>,
 }
@@ -394,11 +400,74 @@ impl PluginRegistry {
     pub fn command_count(&self) -> usize {
         self.commands.len()
     }
+
+    /// Returns an iterator over all loaded plugins.
+    pub fn iter_plugins(&self) -> impl Iterator<Item = &Plugin> {
+        self.plugins.values()
+    }
 }
 
 impl Default for PluginRegistry {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Bridges plugin hook definitions into the core [`HookManager`].
+///
+/// Converts each [`HookDef`] from a plugin's [`HooksConfig`] into a
+/// [`HookDefinition`] and registers it with the appropriate [`HookEvent`].
+///
+/// This should be called during initialization before the hook manager
+/// is moved into an `Arc`.
+///
+/// # Arguments
+///
+/// * `hooks_config` - The plugin's hook configuration
+/// * `hook_manager` - The hook manager to register hooks with
+pub fn bridge_plugin_hooks(
+    hooks_config: &HooksConfig,
+    hook_manager: &mut crate::hooks::HookManager,
+) {
+    use crate::hooks::{HookCommand, HookDefinition, HookEvent};
+
+    let event_pairs: &[(&[HookDef], HookEvent)] = &[
+        (&hooks_config.pre_tool_use, HookEvent::PreToolUse),
+        (&hooks_config.post_tool_use, HookEvent::PostToolUse),
+        (
+            &hooks_config.post_tool_use_failure,
+            HookEvent::PostToolUseFailure,
+        ),
+        (&hooks_config.session_start, HookEvent::SessionStart),
+        (&hooks_config.session_end, HookEvent::SessionEnd),
+        (
+            &hooks_config.user_prompt_submit,
+            HookEvent::UserPromptSubmit,
+        ),
+        (&hooks_config.notification, HookEvent::Notification),
+        (&hooks_config.stop, HookEvent::Stop),
+        (&hooks_config.stop_failure, HookEvent::StopFailure),
+        (&hooks_config.subagent_stop, HookEvent::SubagentStop),
+        (&hooks_config.pre_compact, HookEvent::PreCompact),
+        (&hooks_config.post_compact, HookEvent::PostCompact),
+        (
+            &hooks_config.permission_request,
+            HookEvent::PermissionRequest,
+        ),
+    ];
+
+    for (defs, event) in event_pairs {
+        for def in *defs {
+            let definition = HookDefinition {
+                matcher: def.matcher.clone(),
+                hooks: vec![HookCommand {
+                    hook_type: "command".to_string(),
+                    command: def.command.clone(),
+                    timeout_ms: Some(30_000),
+                }],
+            };
+            hook_manager.register_hook(*event, definition);
+        }
     }
 }
 

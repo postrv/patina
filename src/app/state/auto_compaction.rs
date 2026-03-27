@@ -106,6 +106,12 @@ impl AppState {
         let target_tokens = context_limit / 2; // Target 50% of context
         self.start_compaction(target_tokens, current_tokens, !forced);
 
+        // Fire PreCompact hook (non-blocking)
+        let executor = Arc::clone(&self.tool_state.tool_executor);
+        tokio::spawn(async move {
+            let _ = executor.hooks().fire_pre_compact().await;
+        });
+
         // Uses NoOpSummarizer until the LlmProvider trait (Sprint 2) enables
         // wiring a real summarizer without coupling to AnthropicClient.
         let compactor = ContextCompactor::<NoOpSummarizer>::new_noop();
@@ -150,6 +156,12 @@ impl AppState {
 
                 // Update compaction UI
                 self.complete_compaction(after_tokens);
+
+                // Fire PostCompact hook (non-blocking)
+                let executor = Arc::clone(&self.tool_state.tool_executor);
+                tokio::spawn(async move {
+                    let _ = executor.hooks().fire_post_compact().await;
+                });
 
                 // Reset circuit breaker on success
                 self.compression.record_compaction_success();

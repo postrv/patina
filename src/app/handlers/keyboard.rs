@@ -229,6 +229,14 @@ async fn handle_submit(ctx: &mut AppContext<'_>) -> Result<()> {
     if input.trim().starts_with('/') {
         handle_slash_command(ctx, &input);
     } else {
+        // Fire UserPromptSubmit hook before sending to API
+        let _ = ctx
+            .state
+            .tool_state()
+            .tool_executor
+            .hooks()
+            .fire_user_prompt_submit(&input)
+            .await;
         ctx.state.submit_message(&ctx.client, input).await?;
         // SessionHandler observer saves when it sees the dirty flag.
         ctx.state.session_tracking_mut().mark_dirty();

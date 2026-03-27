@@ -339,12 +339,28 @@ pub async fn run(config: Config) -> Result<()> {
         });
     }
 
+    // Fire SessionStart hook
+    let _ = state
+        .tool_state()
+        .tool_executor
+        .hooks()
+        .fire_session_start()
+        .await;
+
     // If there's an initial prompt, submit it immediately
     if let Some(ref prompt) = config.initial_prompt {
         state.submit_message(&client, prompt.clone()).await?;
     }
 
     let result = event_loop(&mut terminal, &mut client, &mut state, &session_manager).await;
+
+    // Fire SessionEnd hook
+    let _ = state
+        .tool_state()
+        .tool_executor
+        .hooks()
+        .fire_session_end(None)
+        .await;
 
     // Shut down MCP servers before terminal cleanup
     if let Some(manager) = state.mcp_manager_mut() {

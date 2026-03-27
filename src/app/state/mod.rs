@@ -355,7 +355,19 @@ impl AppState {
     ) -> Self {
         // Generate a unique session ID for hooks
         let hook_session_id = uuid::Uuid::new_v4().to_string();
-        let hook_manager = HookManager::new(hook_session_id);
+        let mut hook_manager = HookManager::new(hook_session_id);
+
+        // Load hook configuration from project-local and user-global locations
+        let hooks_toml = working_dir.join(".claude/hooks.toml");
+        if let Err(e) = hook_manager.load_config_graceful(&hooks_toml) {
+            tracing::warn!("Failed to load project hook config: {}", e);
+        }
+        if let Some(base_dirs) = directories::BaseDirs::new() {
+            let user_hooks = base_dirs.config_dir().join("patina/hooks.toml");
+            if let Err(e) = hook_manager.load_config_graceful(&user_hooks) {
+                tracing::warn!("Failed to load user hook config: {}", e);
+            }
+        }
 
         // Create permission manager with skip_permissions setting
         let mut pm = PermissionManager::new();
@@ -365,19 +377,24 @@ impl AppState {
         // Convert PerformanceConfig to ParallelConfig
         let parallel_config = performance.to_parallel_config();
 
-        // Create tool executor with hook, permission, and parallel configuration
-        let tool_executor = Arc::new(
-            HookedToolExecutor::new(working_dir.clone(), hook_manager)
-                .with_permissions(Arc::clone(&permission_manager))
-                .with_parallel_config(parallel_config),
-        );
-
         // Load plugins if enabled
         let plugin_registry = if plugins_enabled {
             Self::load_plugins()
         } else {
             PluginRegistry::new()
         };
+
+        // Bridge plugin hooks into the hook manager before it's wrapped in Arc
+        for plugin in plugin_registry.iter_plugins() {
+            crate::plugins::bridge_plugin_hooks(&plugin.hooks, &mut hook_manager);
+        }
+
+        // Create tool executor with hook, permission, and parallel configuration
+        let tool_executor = Arc::new(
+            HookedToolExecutor::new(working_dir.clone(), hook_manager)
+                .with_permissions(Arc::clone(&permission_manager))
+                .with_parallel_config(parallel_config),
+        );
 
         // Load skills from standard directories
         let skill_engine = Self::load_skills(&working_dir);

@@ -91,6 +91,26 @@ impl HookedToolExecutor {
         }
     }
 
+    /// Returns a reference to the hook manager.
+    ///
+    /// Use this to fire lifecycle hooks from application code.
+    /// Since `HookedToolExecutor` is typically stored behind an `Arc`,
+    /// this provides read-only access sufficient for `fire_*` methods
+    /// which take `&self`.
+    #[must_use]
+    pub fn hooks(&self) -> &HookManager {
+        &self.hooks
+    }
+
+    /// Returns a mutable reference to the hook manager.
+    ///
+    /// Use this to register hooks or load configuration before the
+    /// executor is wrapped in an `Arc`. Once inside an `Arc`, only
+    /// shared (`&self`) access is available via [`hooks()`](Self::hooks).
+    pub fn hooks_mut(&mut self) -> &mut HookManager {
+        &mut self.hooks
+    }
+
     /// Returns the current shell state.
     ///
     /// This provides access to the tracked working directory and environment
@@ -101,6 +121,12 @@ impl HookedToolExecutor {
     /// Panics if the lock is poisoned.
     pub fn shell_state(&self) -> std::sync::RwLockReadGuard<'_, ShellState> {
         self.inner.shell_state()
+    }
+
+    /// Returns a reference to the current execution policy.
+    #[must_use]
+    pub fn policy(&self) -> &ToolExecutionPolicy {
+        self.inner.policy()
     }
 
     /// Creates a new hooked tool executor with a custom policy.
@@ -338,6 +364,13 @@ impl HookedToolExecutor {
                         input = ?input_str,
                         "Tool execution requires permission prompt"
                     );
+
+                    // Fire PermissionRequest hook
+                    let _ = self
+                        .hooks
+                        .fire_permission_request(&tool_name, call.input.clone())
+                        .await;
+
                     let description = self.generate_description(&call);
                     let request =
                         PermissionRequest::new(&tool_name, input_str.as_deref(), &description);
@@ -761,5 +794,29 @@ mod tests {
 
         let results = executor.execute_batch_with_hooks(vec![]).await.unwrap();
         assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_hooks_accessor_returns_hook_manager() {
+        let hooks = HookManager::new("test-session-abc".to_string());
+        let executor = HookedToolExecutor::new(PathBuf::from("/tmp"), hooks);
+
+        assert_eq!(executor.hooks().session_id(), "test-session-abc");
+    }
+
+    #[test]
+    fn test_hooks_mut_allows_registration() {
+        let hooks = HookManager::new("test-session".to_string());
+        let mut executor = HookedToolExecutor::new(PathBuf::from("/tmp"), hooks);
+
+        // Register a hook via hooks_mut
+        executor.hooks_mut().register_tool_hook(
+            crate::hooks::HookEvent::PreToolUse,
+            Some("Bash"),
+            "echo test",
+        );
+
+        // Verify via hooks() accessor (session ID unchanged)
+        assert_eq!(executor.hooks().session_id(), "test-session");
     }
 }
