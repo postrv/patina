@@ -149,6 +149,77 @@ impl Summarizer for NoOpSummarizer {
     }
 }
 
+/// Provider-agnostic summarizer that works with any [`LlmProvider`].
+///
+/// Unlike [`ClaudeSummarizer`] which requires `Arc<AnthropicClient>`, this
+/// summarizer accepts `Arc<dyn LlmProvider>`, making it usable with any
+/// configured provider (Anthropic, OpenRouter, etc.).
+///
+/// Falls back to no-op summarization if the API call fails (graceful degradation).
+///
+/// # Example
+///
+/// ```rust,ignore
+/// use patina::api::compaction::ProviderSummarizer;
+/// use patina::api::LlmProvider;
+/// use std::sync::Arc;
+///
+/// let provider: Arc<dyn LlmProvider> = /* ... */;
+/// let summarizer = ProviderSummarizer::new(provider);
+/// ```
+pub struct ProviderSummarizer {
+    provider: Arc<dyn crate::api::LlmProvider>,
+}
+
+impl ProviderSummarizer {
+    /// Creates a new provider-backed summarizer.
+    ///
+    /// # Arguments
+    ///
+    /// * `provider` - The LLM provider to use for summarization requests
+    #[must_use]
+    pub fn new(provider: Arc<dyn crate::api::LlmProvider>) -> Self {
+        Self { provider }
+    }
+}
+
+impl Summarizer for ProviderSummarizer {
+    /// Generates a summary using the configured LLM provider.
+    ///
+    /// Builds a summarization prompt from the messages and config, sends it
+    /// to the provider via [`LlmProvider::summarize_messages`], and returns
+    /// the response. Falls back to no-op summarization on any error.
+    async fn summarize(&self, messages: &[ApiMessageV2], config: &CompactionConfig) -> String {
+        let formatted_messages = format_messages_for_summary(messages);
+        let prompt = format!(
+            "{}\n{}",
+            get_summarization_prompt(config.summary_style),
+            formatted_messages
+        );
+
+        let request_messages = vec![ApiMessageV2::user(prompt)];
+
+        match self
+            .provider
+            .summarize_messages(&request_messages, "")
+            .await
+        {
+            Ok(summary) if !summary.is_empty() => summary,
+            Ok(_) => {
+                warn!("Empty summary from provider, falling back to no-op summarization");
+                generate_noop_summary(messages, config)
+            }
+            Err(e) => {
+                warn!(
+                    error = %e,
+                    "Failed to generate provider summary, falling back to no-op summarization"
+                );
+                generate_noop_summary(messages, config)
+            }
+        }
+    }
+}
+
 /// Claude API-based summarizer for production use.
 ///
 /// Uses the Anthropic API to generate intelligent summaries of conversations.
@@ -1030,5 +1101,129 @@ mod tests {
                 panic!("ApiMessageV2::user() should produce Text content");
             }
         }
+    }
+
+    // =========================================================================
+    // ProviderSummarizer tests
+    // =========================================================================
+
+    /// Mock provider that returns a canned summary for testing.
+    struct MockSummaryProvider {
+        canned_response: String,
+    }
+
+    impl MockSummaryProvider {
+        fn new(response: &str) -> Self {
+            Self {
+                canned_response: response.to_string(),
+            }
+        }
+    }
+
+    impl crate::api::LlmProvider for MockSummaryProvider {
+        fn name(&self) -> &str {
+            "mock"
+        }
+
+        fn model(&self) -> &str {
+            "mock-model"
+        }
+
+        fn stream_message<'a>(
+            &'a self,
+            _messages: &'a [ApiMessageV2],
+            _tools: Option<&'a [crate::api::tools::ToolDefinition]>,
+            _tool_choice: Option<&'a crate::api::ToolChoice>,
+            _options: &'a crate::api::provider::RequestOptions,
+            tx: tokio::sync::mpsc::Sender<crate::types::StreamEvent>,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>> {
+            let response = self.canned_response.clone();
+            Box::pin(async move {
+                let _ = tx
+                    .send(crate::types::StreamEvent::ContentDelta(response))
+                    .await;
+                let _ = tx.send(crate::types::StreamEvent::MessageStop).await;
+                Ok(())
+            })
+        }
+    }
+
+    #[test]
+    fn test_provider_summarizer_new() {
+        let provider: Arc<dyn crate::api::LlmProvider> =
+            Arc::new(MockSummaryProvider::new("test summary"));
+        let _summarizer = ProviderSummarizer::new(provider);
+    }
+
+    #[tokio::test]
+    async fn test_provider_summarizer_returns_provider_response() {
+        let provider: Arc<dyn crate::api::LlmProvider> = Arc::new(MockSummaryProvider::new(
+            "LLM-generated summary of conversation",
+        ));
+        let summarizer = ProviderSummarizer::new(provider);
+
+        let messages = vec![
+            ApiMessageV2::user("Hello"),
+            ApiMessageV2::assistant("Hi! How can I help?"),
+            ApiMessageV2::user("Write some code"),
+            ApiMessageV2::assistant("Here is some code: fn main() {}"),
+        ];
+        let config = CompactionConfig::default();
+        let result = summarizer.summarize(&messages, &config).await;
+
+        assert_eq!(result, "LLM-generated summary of conversation");
+    }
+
+    #[tokio::test]
+    async fn test_provider_summarizer_falls_back_on_empty_response() {
+        let provider: Arc<dyn crate::api::LlmProvider> = Arc::new(MockSummaryProvider::new("")); // Empty response triggers fallback
+        let summarizer = ProviderSummarizer::new(provider);
+
+        let messages = vec![ApiMessageV2::user("Hello"), ApiMessageV2::assistant("Hi!")];
+        let config = CompactionConfig::default();
+        let result = summarizer.summarize(&messages, &config).await;
+
+        // Should fall back to no-op summary
+        assert!(
+            result.contains("Previous conversation"),
+            "Should contain no-op summary header, got: {result}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_provider_summarizer_with_compactor() {
+        let provider: Arc<dyn crate::api::LlmProvider> = Arc::new(MockSummaryProvider::new(
+            "Summary: explored codebase and fixed bugs",
+        ));
+        let summarizer = ProviderSummarizer::new(provider);
+        let compactor = ContextCompactor::with_summarizer(summarizer);
+
+        // Build a conversation large enough to trigger compaction
+        let mut messages = vec![ApiMessageV2::user("System prompt")];
+        for i in 0..20 {
+            let content = format!("Message {}: {}", i, "x".repeat(500));
+            if i % 2 == 0 {
+                messages.push(ApiMessageV2::assistant(&content));
+            } else {
+                messages.push(ApiMessageV2::user(&content));
+            }
+        }
+
+        let config = CompactionConfig {
+            target_tokens: 100, // Very low to force compaction
+            preserve_recent: 2,
+            ..Default::default()
+        };
+
+        let result = compactor.compact(&messages, &config).await.unwrap();
+
+        // Should have compacted: system + summary + recent messages
+        assert!(
+            result.messages.len() < messages.len(),
+            "Should compact: {} < {}",
+            result.messages.len(),
+            messages.len()
+        );
+        assert!(result.saved_tokens > 0);
     }
 }

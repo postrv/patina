@@ -125,10 +125,14 @@ impl AppState {
     /// # Returns
     ///
     /// A truncated, compacted message list safe to send to the API.
-    pub async fn prepare_api_messages_for_send(&mut self, model: &str) -> Vec<ApiMessageV2> {
+    pub async fn prepare_api_messages_for_send(
+        &mut self,
+        model: &str,
+        provider: Option<&Arc<dyn LlmProvider>>,
+    ) -> Vec<ApiMessageV2> {
         let context_limit = model_context_limit(model);
         if self
-            .maybe_compact_graceful(DEFAULT_COMPACTION_THRESHOLD, context_limit)
+            .maybe_compact_graceful(DEFAULT_COMPACTION_THRESHOLD, context_limit, provider)
             .await
         {
             tracing::info!(
@@ -258,7 +262,9 @@ impl AppState {
         self.streaming_rx = Some(rx);
 
         // Compact + truncate API messages for cost-controlled sending
-        let api_messages = self.prepare_api_messages_for_send(client.model()).await;
+        let api_messages = self
+            .prepare_api_messages_for_send(client.model(), Some(client))
+            .await;
 
         let client = std::sync::Arc::clone(client);
         let tools = self.all_tool_definitions();

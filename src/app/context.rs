@@ -175,7 +175,7 @@ impl<'a> AppContext<'a> {
 
         let api_messages = self
             .state
-            .prepare_api_messages_for_send(self.client.model())
+            .prepare_api_messages_for_send(self.client.model(), Some(&self.client))
             .await;
         let client_clone = Arc::clone(&self.client);
         let tools = self.state.all_tool_definitions();

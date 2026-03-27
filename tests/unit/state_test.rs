@@ -2110,7 +2110,7 @@ async fn test_maybe_compact_below_threshold() {
 
     // Try to compact at 80% threshold of 200k tokens
     // With minimal messages, we're well below threshold
-    let result = state.maybe_compact(0.8, 200_000).await;
+    let result = state.maybe_compact(0.8, 200_000, None).await;
 
     assert!(result.is_ok());
     assert!(!result.unwrap(), "Should not compact below threshold");
@@ -2122,7 +2122,7 @@ async fn test_maybe_compact_graceful_handles_small_conversation() {
 
     state.api_messages_mut().push(ApiMessageV2::user("Hello"));
 
-    let compacted = state.maybe_compact_graceful(0.8, 200_000).await;
+    let compacted = state.maybe_compact_graceful(0.8, 200_000, None).await;
 
     assert!(!compacted, "Should not compact small conversation");
 }
@@ -2150,7 +2150,7 @@ async fn test_maybe_compact_triggers_above_threshold() {
 
     // Compact at 80% of 200k = 160k tokens
     // We have >100k tokens, so use a lower context limit to trigger
-    let result = state.maybe_compact(0.5, before_tokens).await;
+    let result = state.maybe_compact(0.5, before_tokens, None).await;
 
     assert!(result.is_ok());
     // Whether it actually compacted depends on the compactor behavior
@@ -2228,7 +2228,7 @@ async fn test_compaction_metrics_record_on_compact() {
     assert!(before_tokens > 100_000);
 
     // Trigger compaction
-    let _ = state.maybe_compact(0.5, before_tokens).await;
+    let _ = state.maybe_compact(0.5, before_tokens, None).await;
 
     // Metrics should be recorded (if compaction ran)
     // We can at least verify the accessor works

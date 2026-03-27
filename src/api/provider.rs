@@ -110,6 +110,68 @@ pub trait LlmProvider: Send + Sync {
         options: &'a RequestOptions,
         tx: mpsc::Sender<StreamEvent>,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>>;
+
+    /// Sends a non-streaming summarization request and returns the full response text.
+    ///
+    /// This is a convenience method for summarization during context compaction.
+    /// The default implementation streams a message with no tools and collects
+    /// all `ContentDelta` events into a single string.
+    ///
+    /// Providers may override this for more efficient summarization (e.g.,
+    /// using a cheaper/faster model).
+    ///
+    /// # Arguments
+    ///
+    /// * `messages` - The messages to send (typically a single user message with
+    ///   the summarization prompt)
+    /// * `system_prompt` - Optional system prompt for the summarization request
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the streaming request fails or produces no content.
+    fn summarize_messages<'a>(
+        &'a self,
+        messages: &'a [ApiMessageV2],
+        system_prompt: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<String>> + Send + 'a>> {
+        Box::pin(async move {
+            let (tx, mut rx) = mpsc::channel::<StreamEvent>(64);
+
+            let options = if system_prompt.is_empty() {
+                RequestOptions::default()
+            } else {
+                RequestOptions {
+                    system: Some(vec![crate::api::SystemBlock {
+                        block_type: "text".to_string(),
+                        text: system_prompt.to_string(),
+                        cache_control: None,
+                    }]),
+                    ..Default::default()
+                }
+            };
+
+            self.stream_message(messages, None, None, &options, tx)
+                .await?;
+
+            let mut response = String::new();
+            while let Some(event) = rx.recv().await {
+                match event {
+                    StreamEvent::ContentDelta(delta) => response.push_str(&delta),
+                    StreamEvent::Error(err) => {
+                        return Err(anyhow::anyhow!("API error during summarization: {}", err));
+                    }
+                    StreamEvent::MessageStop => break,
+                    _ => {}
+                }
+            }
+
+            if response.is_empty() {
+                return Err(anyhow::anyhow!("Empty response from summarization API"));
+            }
+
+            Ok(response)
+        })
+    }
 }
 
 /// A provider that tries multiple providers in order, falling back on failure.
@@ -1147,5 +1209,65 @@ data: {"type":"message_stop"}
             first,
             StreamEvent::ContentDelta("Third provider".to_string())
         );
+    }
+
+    // =========================================================================
+    // summarize_messages default implementation tests
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_summarize_messages_collects_content_deltas() {
+        let events = vec![
+            StreamEvent::ContentDelta("Summary: ".to_string()),
+            StreamEvent::ContentDelta("things happened.".to_string()),
+            StreamEvent::MessageStop,
+        ];
+        let provider = MockProvider::new("test", "test-model", events);
+
+        let messages = vec![ApiMessageV2::user("Summarize this")];
+        let result = provider.summarize_messages(&messages, "").await;
+
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "Summary: things happened.");
+    }
+
+    #[tokio::test]
+    async fn test_summarize_messages_returns_error_on_empty_response() {
+        let events = vec![StreamEvent::MessageStop];
+        let provider = MockProvider::new("test", "test-model", events);
+
+        let messages = vec![ApiMessageV2::user("Summarize")];
+        let result = provider.summarize_messages(&messages, "").await;
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Empty response"));
+    }
+
+    #[tokio::test]
+    async fn test_summarize_messages_returns_error_on_stream_error() {
+        let events = vec![StreamEvent::Error("rate limited".to_string())];
+        let provider = MockProvider::new("test", "test-model", events);
+
+        let messages = vec![ApiMessageV2::user("Summarize")];
+        let result = provider.summarize_messages(&messages, "").await;
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("rate limited"));
+    }
+
+    #[tokio::test]
+    async fn test_summarize_messages_via_trait_object() {
+        let events = vec![
+            StreamEvent::ContentDelta("trait object summary".to_string()),
+            StreamEvent::MessageStop,
+        ];
+        let provider: std::sync::Arc<dyn LlmProvider> =
+            std::sync::Arc::new(MockProvider::new("test", "test-model", events));
+
+        let messages = vec![ApiMessageV2::user("Summarize")];
+        let result = provider.summarize_messages(&messages, "").await;
+
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "trait object summary");
     }
 }

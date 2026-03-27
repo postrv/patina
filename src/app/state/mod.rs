@@ -1222,7 +1222,7 @@ mod tests {
 
         let total_before = state.api_messages.len();
         let prepared = state
-            .prepare_api_messages_for_send("claude-sonnet-4-20250514")
+            .prepare_api_messages_for_send("claude-sonnet-4-20250514", None)
             .await;
 
         assert!(
@@ -1249,7 +1249,7 @@ mod tests {
         }
 
         let prepared = state
-            .prepare_api_messages_for_send("claude-sonnet-4-20250514")
+            .prepare_api_messages_for_send("claude-sonnet-4-20250514", None)
             .await;
 
         assert_eq!(
@@ -1269,7 +1269,7 @@ mod tests {
             .push(ApiMessageV2::assistant("Hi there!"));
 
         let prepared = state
-            .prepare_api_messages_for_send("claude-sonnet-4-20250514")
+            .prepare_api_messages_for_send("claude-sonnet-4-20250514", None)
             .await;
 
         assert_eq!(prepared.len(), 2, "Small conversation should be unchanged");

@@ -57,13 +57,20 @@ impl AppState {
     ///
     /// ```ignore
     /// // Trigger compaction at 80% of 200k context
-    /// let compacted = state.maybe_compact(0.8, 200_000).await?;
+    /// let compacted = state.maybe_compact(0.8, 200_000, None).await?;
     /// if compacted {
     ///     println!("Conversation was compacted");
     /// }
     /// ```
-    pub async fn maybe_compact(&mut self, threshold: f32, context_limit: usize) -> Result<bool> {
-        use crate::api::compaction::{CompactionConfig, ContextCompactor, NoOpSummarizer};
+    pub async fn maybe_compact(
+        &mut self,
+        threshold: f32,
+        context_limit: usize,
+        provider: Option<&Arc<dyn crate::api::LlmProvider>>,
+    ) -> Result<bool> {
+        use crate::api::compaction::{
+            CompactionConfig, ContextCompactor, NoOpSummarizer, ProviderSummarizer,
+        };
         use std::time::Instant;
 
         // Estimate current usage
@@ -112,10 +119,6 @@ impl AppState {
             let _ = executor.hooks().fire_pre_compact().await;
         });
 
-        // Uses NoOpSummarizer until the LlmProvider trait (Sprint 2) enables
-        // wiring a real summarizer without coupling to AnthropicClient.
-        let compactor = ContextCompactor::<NoOpSummarizer>::new_noop();
-
         let config = CompactionConfig {
             target_tokens,
             preserve_recent: 4,
@@ -125,8 +128,18 @@ impl AppState {
         // Start timing
         let start_time = Instant::now();
 
+        // Use provider-backed summarizer when available, otherwise fall back to no-op
+        let compact_result = if let Some(p) = provider {
+            let summarizer = ProviderSummarizer::new(Arc::clone(p));
+            let compactor = ContextCompactor::with_summarizer(summarizer);
+            compactor.compact(&self.api_messages, &config).await
+        } else {
+            let compactor = ContextCompactor::<NoOpSummarizer>::new_noop();
+            compactor.compact(&self.api_messages, &config).await
+        };
+
         // Perform compaction
-        match compactor.compact(&self.api_messages, &config).await {
+        match compact_result {
             Ok(result) => {
                 let duration = start_time.elapsed();
                 let after_tokens = crate::api::tokens::estimate_messages_tokens(&result.messages);
@@ -195,8 +208,13 @@ impl AppState {
     /// # Returns
     ///
     /// `true` if compaction was performed successfully, `false` otherwise.
-    pub async fn maybe_compact_graceful(&mut self, threshold: f32, context_limit: usize) -> bool {
-        match self.maybe_compact(threshold, context_limit).await {
+    pub async fn maybe_compact_graceful(
+        &mut self,
+        threshold: f32,
+        context_limit: usize,
+        provider: Option<&Arc<dyn crate::api::LlmProvider>>,
+    ) -> bool {
+        match self.maybe_compact(threshold, context_limit, provider).await {
             Ok(compacted) => compacted,
             Err(e) => {
                 tracing::warn!(

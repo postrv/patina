@@ -136,7 +136,9 @@ async fn run_tool_continuation_cycle(
         state.complete_tool_cycle()?;
 
         let (tx, mut rx) = mpsc::channel(STREAMING_CHANNEL_BUFFER);
-        let api_messages = state.prepare_api_messages_for_send(client.model()).await;
+        let api_messages = state
+            .prepare_api_messages_for_send(client.model(), Some(client))
+            .await;
         let client_clone = Arc::clone(client);
         let tools = state.all_tool_definitions();
 
