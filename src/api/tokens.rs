@@ -1,25 +1,26 @@
-//! Token estimation utilities.
+//! Token counting utilities.
 //!
-//! Provides heuristic-based token counting for API request budgeting.
-//! These estimates are intentionally conservative to avoid exceeding limits.
+//! Provides accurate BPE token counting using the `cl100k_base` tokenizer
+//! (via `tiktoken-rs`), with a character-based heuristic fallback when the
+//! tokenizer is unavailable.
 //!
-//! # Token Estimation
+//! # Token Counting
 //!
-//! The Claude API charges based on tokens, which roughly correspond to ~4 characters
-//! for English text. This module provides utilities to estimate token counts for:
+//! The Claude API charges based on tokens. This module provides utilities to
+//! count tokens for:
 //!
-//! - Raw text strings
+//! - Raw text strings (via BPE tokenizer)
 //! - API messages (with role overhead)
 //! - Content blocks (text, tool_use, tool_result)
 //!
 //! # Example
 //!
 //! ```rust
-//! use patina::api::tokens::{estimate_tokens, estimate_messages_tokens};
+//! use patina::api::tokens::{count_tokens, estimate_messages_tokens};
 //! use patina::types::ApiMessageV2;
 //!
-//! // Estimate tokens for raw text
-//! let tokens = estimate_tokens("Hello, how are you?");
+//! // Count tokens for raw text
+//! let tokens = count_tokens("Hello, how are you?");
 //! assert!(tokens >= 4 && tokens <= 10);
 //!
 //! // Estimate tokens for messages
@@ -31,6 +32,14 @@
 //! ```
 
 use crate::types::{ApiMessageV2, ContentBlock, MessageContent};
+use once_cell::sync::Lazy;
+
+/// Lazily-initialized BPE tokenizer (`cl100k_base`).
+///
+/// Returns `None` if the tokenizer data cannot be loaded, in which case
+/// callers fall back to the character-based heuristic.
+static TOKENIZER: Lazy<Option<tiktoken_rs::CoreBPE>> =
+    Lazy::new(|| tiktoken_rs::cl100k_base().ok());
 
 /// Default token estimate for images when dimensions are unknown.
 ///
@@ -71,19 +80,64 @@ pub fn estimate_image_tokens(width: u32, height: u32) -> usize {
     pixels.div_ceil(750) as usize
 }
 
-/// Estimates token count for a string.
+/// Counts tokens accurately using the `cl100k_base` BPE tokenizer.
 ///
-/// Uses the heuristic of ~4 characters per token, which is reasonably
-/// accurate for English text and code. This intentionally overestimates
-/// slightly to provide safety margin.
+/// Falls back to a character-based heuristic (~4 chars/token) if the
+/// tokenizer is unavailable.
 ///
 /// # Arguments
 ///
-/// * `text` - The text to estimate tokens for
+/// * `text` - The text to count tokens for
 ///
 /// # Returns
 ///
-/// Estimated token count (uses ceiling division to never underestimate)
+/// Token count (exact when tokenizer is available, estimated otherwise)
+///
+/// # Examples
+///
+/// ```rust
+/// use patina::api::tokens::count_tokens;
+///
+/// assert_eq!(count_tokens(""), 0);
+/// assert!(count_tokens("Hello, world!") > 0);
+/// ```
+#[must_use]
+pub fn count_tokens(text: &str) -> usize {
+    if text.is_empty() {
+        return 0;
+    }
+    if let Some(ref bpe) = *TOKENIZER {
+        bpe.encode_with_special_tokens(text).len()
+    } else {
+        estimate_tokens_heuristic(text)
+    }
+}
+
+/// Character-based heuristic fallback (~4 chars/token).
+///
+/// Used when the BPE tokenizer is unavailable. Uses ceiling division
+/// on byte length to avoid underestimation.
+///
+/// # Examples
+///
+/// ```rust
+/// use patina::api::tokens::estimate_tokens_heuristic;
+///
+/// assert_eq!(estimate_tokens_heuristic(""), 0);
+/// assert_eq!(estimate_tokens_heuristic("test"), 1);
+/// assert_eq!(estimate_tokens_heuristic("hello"), 2);
+/// ```
+#[must_use]
+pub fn estimate_tokens_heuristic(text: &str) -> usize {
+    if text.is_empty() {
+        return 0;
+    }
+    text.len().div_ceil(4)
+}
+
+/// Backward-compatible alias for [`count_tokens`].
+///
+/// Delegates to the BPE tokenizer when available, heuristic otherwise.
 ///
 /// # Examples
 ///
@@ -91,16 +145,11 @@ pub fn estimate_image_tokens(width: u32, height: u32) -> usize {
 /// use patina::api::tokens::estimate_tokens;
 ///
 /// assert_eq!(estimate_tokens(""), 0);
-/// assert_eq!(estimate_tokens("Hello"), 2); // 5 chars / 4 = 1.25, ceiling = 2
+/// assert!(estimate_tokens("Hello") > 0);
 /// ```
 #[must_use]
 pub fn estimate_tokens(text: &str) -> usize {
-    if text.is_empty() {
-        return 0;
-    }
-    // Use byte length for consistency with Unicode
-    // Ceiling division rounds up to avoid underestimation
-    text.len().div_ceil(4)
+    count_tokens(text)
 }
 
 /// Estimates total tokens for a slice of API messages.
@@ -237,25 +286,25 @@ impl TokenEstimator {
         self.safety_buffer_percent
     }
 
-    /// Estimates tokens for text without any adjustments.
+    /// Counts tokens for text without any adjustments.
     ///
-    /// Uses the standard ~4 characters per token heuristic.
+    /// Uses the BPE tokenizer when available, heuristic otherwise.
     #[must_use]
     pub fn estimate(&self, text: &str) -> usize {
-        estimate_tokens(text)
+        count_tokens(text)
     }
 
-    /// Estimates tokens with the configured safety buffer applied.
+    /// Counts tokens with the configured safety buffer applied.
     ///
-    /// The safety buffer adds a percentage on top of the base estimate
-    /// to avoid underestimation.
+    /// The safety buffer adds a percentage on top of the base count
+    /// to provide headroom.
     ///
     /// # Example
     ///
     /// With a 10% safety buffer, 100 base tokens becomes 110 tokens.
     #[must_use]
     pub fn estimate_with_buffer(&self, text: &str) -> usize {
-        let base = estimate_tokens(text);
+        let base = count_tokens(text);
         let buffer = base * usize::from(self.safety_buffer_percent) / 100;
         base + buffer
     }
@@ -759,26 +808,31 @@ mod tests {
     fn test_estimate_tokens_large_content() {
         let large = "x".repeat(100_000);
         let estimate = estimate_tokens(&large);
-        // 100k chars -> (100000 + 3) / 4 = 25000 tokens (approximately)
-        assert_eq!(estimate, 25_000);
+        // BPE tokenizer compresses repetitive single-char content efficiently.
+        // Accept a wide range since BPE and heuristic diverge on repetitive data.
+        assert!(
+            (5_000..=25_000).contains(&estimate),
+            "Expected 5000-25000 tokens for 100k repeated chars, got {}",
+            estimate,
+        );
     }
 
     #[test]
     fn test_estimate_tokens_single_char() {
-        // Single character should be 1 token (ceiling of 1/4)
+        // Single character is 1 token in both BPE and heuristic
         assert_eq!(estimate_tokens("x"), 1);
     }
 
     #[test]
     fn test_estimate_tokens_four_chars() {
-        // Exactly 4 chars should be 1 token
+        // "test" is 1 token in BPE (common word)
         assert_eq!(estimate_tokens("test"), 1);
     }
 
     #[test]
     fn test_estimate_tokens_five_chars() {
-        // 5 chars should be 2 tokens (ceiling of 5/4)
-        assert_eq!(estimate_tokens("hello"), 2);
+        // "hello" is 1 token in BPE (common word)
+        assert_eq!(estimate_tokens("hello"), 1);
     }
 
     // =========================================================================
@@ -914,8 +968,12 @@ mod tests {
         let large_output = "x".repeat(10_000);
         let block = ContentBlock::tool_result("toolu_1", &large_output);
         let estimate = estimate_block_tokens(&block);
-        // Should account for large content
-        assert!(estimate > 2500);
+        // BPE compresses repeated chars; must still exceed overhead (10+)
+        assert!(
+            estimate > 500,
+            "Expected >500 tokens for 10k-char tool result, got {}",
+            estimate,
+        );
     }
 
     // =========================================================================
@@ -1032,10 +1090,12 @@ mod tests {
     #[test]
     fn test_estimate_tokens_with_safety_buffer() {
         let estimator = TokenEstimator::with_safety_buffer(10);
-        // 100 base tokens + 10% = 110 tokens
-        let text = "x".repeat(400); // 100 base tokens at 4 chars/token
+        let text = "x".repeat(400);
+        let base = count_tokens(&text);
         let estimate = estimator.estimate_with_buffer(&text);
-        assert_eq!(estimate, 110);
+        // Buffer should add 10% on top of base
+        let expected = base + base / 10;
+        assert_eq!(estimate, expected);
     }
 
     #[test]
@@ -1349,5 +1409,52 @@ mod tests {
         let caps = ModelCapabilities::for_model("claude-2.1");
         assert!(!caps.supports_thinking);
         assert_eq!(caps.context_limit, 100_000);
+    }
+
+    // =========================================================================
+    // C1: BPE token counting tests
+    // =========================================================================
+
+    #[test]
+    fn test_count_tokens_basic() {
+        // "Hello, world!" is a known string; BPE should produce a reasonable count
+        let count = count_tokens("Hello, world!");
+        assert!(
+            (1..=6).contains(&count),
+            "Expected 1-6 tokens for 'Hello, world!', got {}",
+            count,
+        );
+    }
+
+    #[test]
+    fn test_count_tokens_empty() {
+        assert_eq!(count_tokens(""), 0);
+    }
+
+    #[test]
+    fn test_count_tokens_code() {
+        let code = r#"fn main() {
+    let x = 42;
+    println!("{}", x);
+}"#;
+        let count = count_tokens(code);
+        assert!(
+            count > 5,
+            "Code snippet should produce >5 tokens, got {}",
+            count,
+        );
+    }
+
+    #[test]
+    fn test_heuristic_fallback() {
+        // Verify the heuristic function directly
+        assert_eq!(estimate_tokens_heuristic(""), 0);
+        assert_eq!(estimate_tokens_heuristic("test"), 1);
+        assert_eq!(estimate_tokens_heuristic("hello"), 2); // 5.div_ceil(4) = 2
+        assert_eq!(estimate_tokens_heuristic("x"), 1);
+
+        // Large content: exactly byte_len.div_ceil(4)
+        let large = "a".repeat(100);
+        assert_eq!(estimate_tokens_heuristic(&large), 25);
     }
 }

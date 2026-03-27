@@ -1906,7 +1906,14 @@ mod tests {
 
         // Should not panic on UTF-8 boundary issues
         let content = result.content();
-        assert!(content.len() <= 25); // 5 tokens * 4 chars + "..."
+        // With BPE, 5 tokens covers more text than the old heuristic.
+        // The important invariant is: no panic and valid UTF-8.
+        assert!(!content.is_empty());
+        assert!(
+            content.len() <= 100,
+            "Content should be bounded, got {} bytes",
+            content.len()
+        );
     }
 
     #[test]

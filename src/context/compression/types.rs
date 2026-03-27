@@ -169,15 +169,14 @@ impl CompressionResult {
     }
 }
 
-/// Estimates token count from content.
+/// Counts tokens using the BPE tokenizer when available.
 ///
-/// Uses a simple heuristic of ~4 characters per token, which is
-/// a reasonable approximation for English text and code.
+/// Delegates to [`crate::api::tokens::count_tokens`] for accurate
+/// BPE-based counting, falling back to a ~4 chars/token heuristic
+/// if the tokenizer is unavailable.
 #[must_use]
 pub fn estimate_tokens(content: &str) -> usize {
-    // ~4 chars per token is a reasonable approximation
-    // Add 1 to avoid returning 0 for very short content
-    content.len().saturating_add(3) / 4
+    crate::api::tokens::count_tokens(content)
 }
 
 #[cfg(test)]
