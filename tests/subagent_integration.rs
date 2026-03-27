@@ -78,53 +78,6 @@ fn test_subagent_get_status_nonexistent() {
     );
 }
 
-#[tokio::test]
-async fn test_subagent_run_changes_status() {
-    let mut orchestrator = SubagentOrchestrator::new();
-    let config = test_config();
-
-    let id = orchestrator.spawn(config);
-    assert_eq!(orchestrator.get_status(id), Some("pending"));
-
-    let result = orchestrator.run(id).await;
-    assert!(result.is_ok(), "Run should succeed");
-    assert_eq!(
-        orchestrator.get_status(id),
-        Some("completed"),
-        "Status should be 'completed' after run"
-    );
-}
-
-#[tokio::test]
-async fn test_subagent_run_returns_result() {
-    let mut orchestrator = SubagentOrchestrator::new();
-    let config = SubagentConfig {
-        name: "result-test".to_string(),
-        description: "Tests result handling".to_string(),
-        system_prompt: "Test prompt".to_string(),
-        allowed_tools: vec![],
-        max_turns: 3,
-        color: None,
-        effort: None,
-    };
-
-    let id = orchestrator.spawn(config);
-    let result = orchestrator.run(id).await.expect("Run should succeed");
-
-    assert_eq!(result.id, id);
-    assert_eq!(result.name, "result-test");
-    assert!(result.success);
-}
-
-#[tokio::test]
-async fn test_subagent_run_nonexistent_fails() {
-    let mut orchestrator = SubagentOrchestrator::new();
-    let fake_id = uuid::Uuid::new_v4();
-
-    let result = orchestrator.run(fake_id).await;
-    assert!(result.is_err(), "Running nonexistent agent should fail");
-}
-
 // ============================================================================
 // 6.1.1 Subagent Config Tests
 // ============================================================================
@@ -212,22 +165,6 @@ fn test_subagent_config_clone() {
 }
 
 #[test]
-fn test_subagent_result_debug() {
-    use patina::agents::SubagentResult;
-
-    let result = SubagentResult {
-        id: uuid::Uuid::nil(),
-        name: "debug-test".to_string(),
-        output: "test output".to_string(),
-        success: true,
-    };
-
-    let debug = format!("{:?}", result);
-    assert!(debug.contains("debug-test"));
-    assert!(debug.contains("test output"));
-}
-
-#[test]
 fn test_subagent_orchestrator_default() {
     let orchestrator = SubagentOrchestrator::default();
     assert_eq!(orchestrator.active_count(), 0);
@@ -300,45 +237,6 @@ fn test_subagent_context_isolation_independent_state() {
         orchestrator.get_status(id2),
         Some("pending"),
         "Agent 2 should remain pending when Agent 1 is marked failed"
-    );
-}
-
-#[tokio::test]
-async fn test_subagent_context_isolation_independent_execution() {
-    let mut orchestrator = SubagentOrchestrator::new();
-
-    let config1 = SubagentConfig {
-        name: "exec-agent-1".to_string(),
-        description: "Execution test 1".to_string(),
-        system_prompt: "Test 1".to_string(),
-        allowed_tools: vec![],
-        max_turns: 3,
-        color: None,
-        effort: None,
-    };
-
-    let config2 = SubagentConfig {
-        name: "exec-agent-2".to_string(),
-        description: "Execution test 2".to_string(),
-        system_prompt: "Test 2".to_string(),
-        allowed_tools: vec![],
-        max_turns: 3,
-        color: None,
-        effort: None,
-    };
-
-    let id1 = orchestrator.spawn(config1);
-    let id2 = orchestrator.spawn(config2);
-
-    // Run only agent 1
-    let result1 = orchestrator.run(id1).await.expect("Run should succeed");
-
-    assert_eq!(result1.name, "exec-agent-1");
-    assert_eq!(orchestrator.get_status(id1), Some("completed"));
-    assert_eq!(
-        orchestrator.get_status(id2),
-        Some("pending"),
-        "Agent 2 should still be pending"
     );
 }
 
@@ -479,80 +377,6 @@ fn test_subagent_get_allowed_tools_nonexistent() {
 // 6.1.3 Subagent Concurrency Tests
 // ============================================================================
 
-#[tokio::test]
-async fn test_parallel_subagent_execution() {
-    let mut orchestrator = SubagentOrchestrator::new();
-
-    let configs: Vec<_> = (0..3)
-        .map(|i| SubagentConfig {
-            name: format!("parallel-agent-{}", i),
-            description: format!("Parallel test agent {}", i),
-            system_prompt: "Test".to_string(),
-            allowed_tools: vec![],
-            max_turns: 3,
-            color: None,
-            effort: None,
-        })
-        .collect();
-
-    let ids: Vec<_> = configs.into_iter().map(|c| orchestrator.spawn(c)).collect();
-
-    // All should start as pending
-    for id in &ids {
-        assert_eq!(orchestrator.get_status(*id), Some("pending"));
-    }
-
-    // Run all in sequence (actual parallel would require async spawning)
-    for id in &ids {
-        let result = orchestrator.run(*id).await;
-        assert!(result.is_ok(), "Each run should succeed");
-    }
-
-    // All should be completed
-    for id in &ids {
-        assert_eq!(orchestrator.get_status(*id), Some("completed"));
-    }
-}
-
-#[tokio::test]
-async fn test_parallel_subagent_independent_results() {
-    let mut orchestrator = SubagentOrchestrator::new();
-
-    let config1 = SubagentConfig {
-        name: "result-1".to_string(),
-        description: "First".to_string(),
-        system_prompt: "Test".to_string(),
-        allowed_tools: vec!["read".to_string()],
-        max_turns: 5,
-        color: None,
-        effort: None,
-    };
-
-    let config2 = SubagentConfig {
-        name: "result-2".to_string(),
-        description: "Second".to_string(),
-        system_prompt: "Test".to_string(),
-        allowed_tools: vec!["write".to_string()],
-        max_turns: 10,
-        color: None,
-        effort: None,
-    };
-
-    let id1 = orchestrator.spawn(config1);
-    let id2 = orchestrator.spawn(config2);
-
-    let result1 = orchestrator.run(id1).await.expect("Run 1 should succeed");
-    let result2 = orchestrator.run(id2).await.expect("Run 2 should succeed");
-
-    // Results should have correct agent names
-    assert_eq!(result1.name, "result-1");
-    assert_eq!(result2.name, "result-2");
-
-    // IDs should match
-    assert_eq!(result1.id, id1);
-    assert_eq!(result2.id, id2);
-}
-
 #[test]
 fn test_subagent_max_turns_config() {
     let mut orchestrator = SubagentOrchestrator::new();
@@ -654,28 +478,6 @@ fn test_subagent_can_spawn_returns_correct_value() {
     );
 }
 
-#[tokio::test]
-async fn test_subagent_running_counts_against_concurrent() {
-    let mut orchestrator = SubagentOrchestrator::new().with_max_concurrent(2);
-
-    let config1 = test_config();
-    let config2 = test_config();
-
-    let id1 = orchestrator.spawn(config1);
-    let id2 = orchestrator.spawn(config2);
-
-    // Initially both pending
-    assert_eq!(orchestrator.active_count(), 0);
-
-    // After running, they complete immediately in our simple impl
-    // So active_count goes 0 -> 1 -> 0
-    let _ = orchestrator.run(id1).await;
-    let _ = orchestrator.run(id2).await;
-
-    // After completion, active count returns to 0
-    assert_eq!(orchestrator.active_count(), 0);
-}
-
 #[test]
 fn test_subagent_list_all_agents() {
     let mut orchestrator = SubagentOrchestrator::new();
@@ -712,7 +514,7 @@ fn test_subagent_list_all_agents_empty() {
 }
 
 #[test]
-fn test_subagent_remove_completed() {
+fn test_subagent_remove_agent() {
     let mut orchestrator = SubagentOrchestrator::new();
 
     let id = orchestrator.spawn(test_config());

@@ -675,9 +675,6 @@ let id = orchestrator.spawn(SubagentConfig {
 // Check status
 let status = orchestrator.get_status(&id);
 
-// Run the subagent
-let result = orchestrator.run(&id, context).await?;
-
 // List all agents
 let agents = orchestrator.list_agents();
 ```

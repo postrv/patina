@@ -1,100 +1,33 @@
-//! Tests for IDE integration
+//! Tests for IDE integration protocol types
+//!
+//! The primary IDE protocol types live in `patina::ide::protocol`.
+//! Comprehensive serialization and round-trip tests are in `protocol.rs`.
+//! Controller integration tests live in the integration test suite.
 
-use patina::ide::{IdeMessage, IdeServer, Selection};
+use patina::ide::protocol::{
+    default_capabilities, parse_request, serialize_response, IdeRequest, IdeResponse,
+    TextSelection, PROTOCOL_VERSION,
+};
 use std::path::PathBuf;
-use uuid::Uuid;
 
 #[test]
-fn test_ide_server_new() {
-    let server = IdeServer::new(9000);
-    // Server should not be listening yet
-    assert!(server.get_session(Uuid::new_v4()).is_none());
+fn test_protocol_version_is_set() {
+    assert!(!PROTOCOL_VERSION.is_empty());
 }
 
 #[test]
-fn test_ide_server_register_session() {
-    let mut server = IdeServer::new(9000);
-    let session_id = Uuid::new_v4();
-    let workspace = PathBuf::from("/tmp/workspace");
-    let capabilities = vec!["edit".to_string(), "diff".to_string()];
-
-    server.register_session(session_id, workspace.clone(), capabilities.clone());
-
-    let session = server.get_session(session_id);
-    assert!(session.is_some());
-    let session = session.unwrap();
-    assert_eq!(session.id, session_id);
-    assert_eq!(session.workspace, workspace);
-    assert_eq!(session.capabilities, capabilities);
+fn test_default_capabilities_non_empty() {
+    let caps = default_capabilities();
+    assert!(!caps.is_empty(), "Default capabilities should not be empty");
+    assert!(caps.contains(&"streaming".to_string()));
 }
 
 #[test]
-fn test_ide_server_remove_session() {
-    let mut server = IdeServer::new(9000);
-    let session_id = Uuid::new_v4();
-    let workspace = PathBuf::from("/tmp/workspace");
-
-    server.register_session(session_id, workspace, vec![]);
-    assert!(server.get_session(session_id).is_some());
-
-    server.remove_session(session_id);
-    assert!(server.get_session(session_id).is_none());
-}
-
-#[test]
-fn test_ide_server_multiple_sessions() {
-    let mut server = IdeServer::new(9000);
-    let session1 = Uuid::new_v4();
-    let session2 = Uuid::new_v4();
-
-    server.register_session(
-        session1,
-        PathBuf::from("/workspace1"),
-        vec!["edit".to_string()],
-    );
-    server.register_session(
-        session2,
-        PathBuf::from("/workspace2"),
-        vec!["diff".to_string()],
-    );
-
-    let s1 = server.get_session(session1).unwrap();
-    assert_eq!(s1.workspace, PathBuf::from("/workspace1"));
-
-    let s2 = server.get_session(session2).unwrap();
-    assert_eq!(s2.workspace, PathBuf::from("/workspace2"));
-}
-
-#[test]
-fn test_ide_message_init_serialization() {
-    let msg = IdeMessage::Init {
-        workspace: PathBuf::from("/project"),
-        capabilities: vec!["edit".to_string(), "diff".to_string()],
-    };
-
-    let json = serde_json::to_string(&msg).unwrap();
-    assert!(json.contains("\"type\":\"init\""));
-    assert!(json.contains("/project"));
-
-    let deserialized: IdeMessage = serde_json::from_str(&json).unwrap();
-    match deserialized {
-        IdeMessage::Init {
-            workspace,
-            capabilities,
-        } => {
-            assert_eq!(workspace, PathBuf::from("/project"));
-            assert_eq!(capabilities, vec!["edit", "diff"]);
-        }
-        _ => panic!("Expected Init message"),
-    }
-}
-
-#[test]
-fn test_ide_message_prompt_serialization() {
-    let msg = IdeMessage::Prompt {
+fn test_send_prompt_with_selection_roundtrip() {
+    let request = IdeRequest::SendPrompt {
         text: "Explain this code".to_string(),
-        selection: Some(Selection {
-            file: PathBuf::from("src/main.rs"),
+        file: Some(PathBuf::from("src/main.rs")),
+        selection: Some(TextSelection {
             start_line: 10,
             start_column: 0,
             end_line: 20,
@@ -103,131 +36,88 @@ fn test_ide_message_prompt_serialization() {
         }),
     };
 
-    let json = serde_json::to_string(&msg).unwrap();
-    assert!(json.contains("\"type\":\"prompt\""));
-    assert!(json.contains("Explain this code"));
-
-    let deserialized: IdeMessage = serde_json::from_str(&json).unwrap();
-    match deserialized {
-        IdeMessage::Prompt { text, selection } => {
-            assert_eq!(text, "Explain this code");
-            assert!(selection.is_some());
-            let sel = selection.unwrap();
-            assert_eq!(sel.start_line, 10);
-            assert_eq!(sel.end_line, 20);
-        }
-        _ => panic!("Expected Prompt message"),
-    }
+    let json = serde_json::to_vec(&request).unwrap();
+    let deserialized: IdeRequest = serde_json::from_slice(&json).unwrap();
+    assert_eq!(request, deserialized);
 }
 
 #[test]
-fn test_ide_message_prompt_without_selection() {
-    let msg = IdeMessage::Prompt {
+fn test_send_prompt_without_selection_roundtrip() {
+    let request = IdeRequest::SendPrompt {
         text: "Hello".to_string(),
+        file: None,
         selection: None,
     };
 
-    let json = serde_json::to_string(&msg).unwrap();
-    let deserialized: IdeMessage = serde_json::from_str(&json).unwrap();
-    match deserialized {
-        IdeMessage::Prompt { text, selection } => {
-            assert_eq!(text, "Hello");
-            assert!(selection.is_none());
+    let json = serde_json::to_vec(&request).unwrap();
+    let deserialized: IdeRequest = serde_json::from_slice(&json).unwrap();
+    assert_eq!(request, deserialized);
+}
+
+#[test]
+fn test_init_request_serialization() {
+    let json = r#"{"type":"init","workspace":"/project","capabilities":["edit","diff"]}"#;
+    let request = parse_request(json.as_bytes()).unwrap();
+    match request {
+        IdeRequest::Init {
+            workspace,
+            capabilities,
+        } => {
+            assert_eq!(workspace, PathBuf::from("/project"));
+            assert_eq!(capabilities, vec!["edit", "diff"]);
         }
-        _ => panic!("Expected Prompt message"),
+        _ => panic!("Expected Init request"),
     }
 }
 
 #[test]
-fn test_ide_message_apply_edit_serialization() {
-    let msg = IdeMessage::ApplyEdit {
-        file: PathBuf::from("src/lib.rs"),
-        diff: "@@ -1,3 +1,4 @@".to_string(),
-    };
-
-    let json = serde_json::to_string(&msg).unwrap();
-    assert!(json.contains("\"type\":\"apply_edit\""));
-
-    let deserialized: IdeMessage = serde_json::from_str(&json).unwrap();
-    match deserialized {
-        IdeMessage::ApplyEdit { file, diff } => {
-            assert_eq!(file, PathBuf::from("src/lib.rs"));
-            assert!(diff.contains("@@"));
-        }
-        _ => panic!("Expected ApplyEdit message"),
-    }
-}
-
-#[test]
-fn test_ide_message_streaming_content_serialization() {
-    let msg = IdeMessage::StreamingContent {
+fn test_streaming_content_response_serialization() {
+    let response = IdeResponse::StreamingContent {
+        request_id: "req-1".to_string(),
         delta: "Hello ".to_string(),
+        done: false,
     };
 
-    let json = serde_json::to_string(&msg).unwrap();
-    assert!(json.contains("\"type\":\"streaming_content\""));
-
-    let deserialized: IdeMessage = serde_json::from_str(&json).unwrap();
-    match deserialized {
-        IdeMessage::StreamingContent { delta } => {
-            assert_eq!(delta, "Hello ");
-        }
-        _ => panic!("Expected StreamingContent message"),
-    }
+    let bytes = serialize_response(&response).unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["type"], "streaming_content");
+    assert_eq!(json["delta"], "Hello ");
 }
 
 #[test]
-fn test_ide_message_edit_proposal_serialization() {
-    let msg = IdeMessage::EditProposal {
+fn test_edit_proposal_response_serialization() {
+    let response = IdeResponse::EditProposal {
+        request_id: "req-2".to_string(),
         file: PathBuf::from("src/main.rs"),
         diff: "- old\n+ new".to_string(),
         description: "Fix bug".to_string(),
     };
 
-    let json = serde_json::to_string(&msg).unwrap();
-    assert!(json.contains("\"type\":\"edit_proposal\""));
-    assert!(json.contains("Fix bug"));
-
-    let deserialized: IdeMessage = serde_json::from_str(&json).unwrap();
-    match deserialized {
-        IdeMessage::EditProposal {
-            file,
-            diff,
-            description,
-        } => {
-            assert_eq!(file, PathBuf::from("src/main.rs"));
-            assert_eq!(diff, "- old\n+ new");
-            assert_eq!(description, "Fix bug");
-        }
-        _ => panic!("Expected EditProposal message"),
-    }
+    let bytes = serialize_response(&response).unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["type"], "edit_proposal");
+    assert_eq!(json["description"], "Fix bug");
 }
 
 #[test]
-fn test_ide_message_tool_use_serialization() {
-    let msg = IdeMessage::ToolUse {
+fn test_tool_execution_response_serialization() {
+    let response = IdeResponse::ToolExecution {
+        request_id: "req-3".to_string(),
         tool: "bash".to_string(),
         input: serde_json::json!({"command": "ls -la"}),
+        output: None,
     };
 
-    let json = serde_json::to_string(&msg).unwrap();
-    assert!(json.contains("\"type\":\"tool_use\""));
-    assert!(json.contains("bash"));
-
-    let deserialized: IdeMessage = serde_json::from_str(&json).unwrap();
-    match deserialized {
-        IdeMessage::ToolUse { tool, input } => {
-            assert_eq!(tool, "bash");
-            assert_eq!(input["command"], "ls -la");
-        }
-        _ => panic!("Expected ToolUse message"),
-    }
+    let bytes = serialize_response(&response).unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(json["type"], "tool_execution");
+    assert_eq!(json["tool"], "bash");
+    assert!(json.get("output").is_none());
 }
 
 #[test]
-fn test_selection_serialization() {
-    let selection = Selection {
-        file: PathBuf::from("test.rs"),
+fn test_text_selection_fields() {
+    let selection = TextSelection {
         start_line: 1,
         start_column: 0,
         end_line: 10,
@@ -236,16 +126,21 @@ fn test_selection_serialization() {
     };
 
     let json = serde_json::to_string(&selection).unwrap();
-    let deserialized: Selection = serde_json::from_str(&json).unwrap();
+    let deserialized: TextSelection = serde_json::from_str(&json).unwrap();
 
-    assert_eq!(deserialized.file, PathBuf::from("test.rs"));
     assert_eq!(deserialized.start_line, 1);
     assert_eq!(deserialized.end_column, 50);
     assert_eq!(deserialized.text, "selected text");
 }
 
-#[tokio::test]
-async fn test_ide_server_start() {
-    let _server = IdeServer::new(0); // Port 0 = random available port
-                                     // This test verifies basic construction; actual server start needs integration tests
+#[test]
+fn test_authenticate_request_parsing() {
+    let json = r#"{"type": "authenticate", "token": "test-auth-value"}"#;
+    let request = parse_request(json.as_bytes()).unwrap();
+    assert_eq!(
+        request,
+        IdeRequest::Authenticate {
+            token: "test-auth-value".to_string(),
+        }
+    );
 }

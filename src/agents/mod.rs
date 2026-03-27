@@ -115,19 +115,6 @@ pub struct SubagentConfig {
     pub effort: Option<String>,
 }
 
-/// Result returned when a subagent completes execution.
-#[derive(Debug)]
-pub struct SubagentResult {
-    /// The unique ID of the subagent.
-    pub id: Uuid,
-    /// The name of the subagent (from config).
-    pub name: String,
-    /// The output produced by the subagent.
-    pub output: String,
-    /// Whether the subagent completed successfully.
-    pub success: bool,
-}
-
 /// Orchestrator for managing multiple subagents with concurrency control.
 ///
 /// The orchestrator tracks agent lifecycles, enforces concurrency limits,
@@ -148,10 +135,6 @@ struct ActiveSubagent {
 enum SubagentStatus {
     /// Agent has been spawned but not yet started.
     Pending,
-    /// Agent is currently executing.
-    Running,
-    /// Agent completed successfully.
-    Completed,
     /// Agent failed during execution.
     Failed,
 }
@@ -177,8 +160,7 @@ impl SubagentOrchestrator {
 
     /// Spawns a new subagent with the given configuration.
     ///
-    /// Returns the unique ID assigned to the agent. The agent starts in `pending` status
-    /// and must be explicitly run with [`run`](Self::run).
+    /// Returns the unique ID assigned to the agent. The agent starts in `pending` status.
     pub fn spawn(&mut self, config: SubagentConfig) -> Uuid {
         let id = Uuid::new_v4();
 
@@ -193,30 +175,6 @@ impl SubagentOrchestrator {
         id
     }
 
-    /// Runs a subagent to completion.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the agent ID does not exist.
-    pub async fn run(&mut self, id: Uuid) -> Result<SubagentResult> {
-        let agent = self
-            .active_agents
-            .get_mut(&id)
-            .ok_or_else(|| anyhow::anyhow!("Subagent not found: {}", id))?;
-
-        agent.status = SubagentStatus::Running;
-
-        // Stub implementation - actual API execution handled by integration layer
-        agent.status = SubagentStatus::Completed;
-
-        Ok(SubagentResult {
-            id,
-            name: agent.config.name.clone(),
-            output: "Subagent completed".to_string(),
-            success: true,
-        })
-    }
-
     /// Returns the current status of an agent.
     ///
     /// Returns `None` if the agent ID does not exist.
@@ -224,19 +182,18 @@ impl SubagentOrchestrator {
     pub fn get_status(&self, id: Uuid) -> Option<&str> {
         self.active_agents.get(&id).map(|a| match a.status {
             SubagentStatus::Pending => "pending",
-            SubagentStatus::Running => "running",
-            SubagentStatus::Completed => "completed",
             SubagentStatus::Failed => "failed",
         })
     }
 
-    /// Returns the count of currently running agents.
+    /// Returns the count of currently active (non-failed, non-pending) agents.
+    ///
+    /// With the current status model, this always returns 0 because agents start
+    /// as pending and can only transition to failed. Real agent execution is handled
+    /// by [`WorktreeAgentManager`] and [`ParallelAgentOrchestrator`].
     #[must_use]
     pub fn active_count(&self) -> usize {
-        self.active_agents
-            .values()
-            .filter(|a| a.status == SubagentStatus::Running)
-            .count()
+        0
     }
 
     /// Marks a subagent as failed.
