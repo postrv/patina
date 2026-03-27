@@ -16,7 +16,7 @@ use crate::permissions::{
     PermissionDecision, PermissionManager, PermissionRequest, PermissionResponse,
 };
 
-use super::parallel::{ParallelConfig, ParallelExecutor, SortByIndex};
+use super::parallel::{ParallelConfig, ParallelExecutor};
 use super::security::ToolExecutionPolicy;
 use super::stateful::{ShellState, StatefulToolExecutor};
 use super::{ToolCall, ToolResult};
@@ -486,33 +486,46 @@ impl HookedToolExecutor {
             return Ok(Vec::new());
         }
 
-        // For batch execution, we need to handle hooks and permissions through
-        // the parallel executor. We pass a closure that wraps single tool execution.
-        let indexed_results = self
-            .parallel
-            .execute_batch(
-                calls
-                    .iter()
-                    .map(|call| (call.name.as_str(), call.input.clone())),
-                |name, input| {
-                    let call = ToolCall {
-                        name: name.to_string(),
-                        input,
-                    };
-                    // Note: We can't easily integrate hooks here because we need &self
-                    // For now, execute directly on inner without hooks
-                    // Full hook integration would require Arc<Self> or similar
-                    async move {
-                        // Simple execution without hooks for parallel batch
-                        // This is a trade-off: parallel but no hooks per tool
-                        ToolResult::Success(format!("Executed {}", call.name))
+        // Classify tools and group consecutive parallelizable ones.
+        // ReadOnly tools in the same group run concurrently via join_all;
+        // all other tools run sequentially (one-element groups).
+        let mut results = Vec::with_capacity(calls.len());
+        let mut parallel_group: Vec<ToolCall> = Vec::new();
+
+        for call in calls {
+            let class = super::parallel::classify_tool(&call.name);
+            let is_parallelizable = self.parallel.is_parallelizable(class);
+
+            if is_parallelizable {
+                parallel_group.push(call);
+            } else {
+                // Flush any accumulated parallel group first
+                if !parallel_group.is_empty() {
+                    let group = std::mem::take(&mut parallel_group);
+                    let group_results =
+                        futures::future::join_all(group.into_iter().map(|c| self.inner.execute(c)))
+                            .await;
+                    for r in group_results {
+                        results.push(r?);
                     }
-                },
+                }
+                // Execute the non-parallelizable tool sequentially
+                results.push(self.inner.execute(call).await?);
+            }
+        }
+
+        // Flush any remaining parallel group
+        if !parallel_group.is_empty() {
+            let group_results = futures::future::join_all(
+                parallel_group.into_iter().map(|c| self.inner.execute(c)),
             )
             .await;
+            for r in group_results {
+                results.push(r?);
+            }
+        }
 
-        // Sort by original index and extract results
-        Ok(indexed_results.into_sorted_results())
+        Ok(results)
     }
 
     /// Executes a batch of tool calls with full hook support.
@@ -818,5 +831,107 @@ mod tests {
 
         // Verify via hooks() accessor (session ID unchanged)
         assert_eq!(executor.hooks().session_id(), "test-session");
+    }
+
+    // =========================================================================
+    // A5: execute_batch returns real results
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_execute_batch_returns_real_results() {
+        let hooks = HookManager::new("test".to_string());
+        let executor = HookedToolExecutor::new(PathBuf::from("/tmp"), hooks);
+
+        let calls = vec![ToolCall {
+            name: "bash".to_string(),
+            input: json!({"command": "echo batch_test_output"}),
+        }];
+
+        let results = executor.execute_batch(calls).await.unwrap();
+        assert_eq!(results.len(), 1);
+
+        match &results[0] {
+            ToolResult::Success(output) => {
+                assert!(
+                    output.contains("batch_test_output"),
+                    "Expected real command output, got: {output}"
+                );
+                assert!(
+                    !output.contains("Executed bash"),
+                    "Should not return fake placeholder result"
+                );
+            }
+            other => panic!("Expected Success, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_execute_batch_multiple_tools() {
+        let hooks = HookManager::new("test".to_string());
+        let executor = HookedToolExecutor::new(PathBuf::from("/tmp"), hooks);
+
+        let calls = vec![
+            ToolCall {
+                name: "bash".to_string(),
+                input: json!({"command": "echo first"}),
+            },
+            ToolCall {
+                name: "bash".to_string(),
+                input: json!({"command": "echo second"}),
+            },
+        ];
+
+        let results = executor.execute_batch(calls).await.unwrap();
+        assert_eq!(results.len(), 2);
+
+        // Both should contain real output, not fake placeholders
+        for (i, result) in results.iter().enumerate() {
+            match result {
+                ToolResult::Success(output) => {
+                    assert!(
+                        !output.starts_with("Executed "),
+                        "Result {i} should not be a fake placeholder: {output}"
+                    );
+                }
+                other => panic!("Result {i}: expected Success, got: {other:?}"),
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_execute_batch_unknown_tool_returns_error() {
+        let hooks = HookManager::new("test".to_string());
+        let executor = HookedToolExecutor::new(PathBuf::from("/tmp"), hooks);
+
+        let calls = vec![ToolCall {
+            name: "nonexistent_tool".to_string(),
+            input: json!({}),
+        }];
+
+        let results = executor.execute_batch(calls).await.unwrap();
+        assert_eq!(results.len(), 1);
+
+        match &results[0] {
+            ToolResult::Error(msg) => {
+                assert!(
+                    msg.contains("Unknown tool"),
+                    "Expected unknown tool error, got: {msg}"
+                );
+            }
+            other => panic!("Expected Error for unknown tool, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_policy_accessor() {
+        let hooks = HookManager::new("test".to_string());
+        let executor = HookedToolExecutor::new(PathBuf::from("/tmp"), hooks);
+
+        let policy = executor.policy();
+        assert!(
+            !policy.dangerous_patterns.is_empty(),
+            "Default policy should have dangerous patterns"
+        );
+        assert!(!policy.allowlist_mode);
     }
 }
