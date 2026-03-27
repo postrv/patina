@@ -191,6 +191,121 @@ fn test_project_context_outside_project_root() {
 }
 
 // =============================================================================
+// .claude/CLAUDE.md Support Tests (C4)
+// =============================================================================
+
+/// ProjectContext discovers .claude/CLAUDE.md at the project root.
+#[test]
+fn test_project_context_finds_dot_claude_dir_claude_md() {
+    let temp = setup_temp_project();
+    let claude_dir = temp.path().join(".claude");
+    fs::create_dir_all(&claude_dir).unwrap();
+    fs::write(
+        claude_dir.join("CLAUDE.md"),
+        "# Dot-Claude Instructions\n\nAlways use snake_case.",
+    )
+    .unwrap();
+
+    let mut ctx = ProjectContext::new(temp.path().to_path_buf());
+    ctx.load().unwrap();
+
+    let content = ctx.get_context(temp.path());
+    assert!(
+        content.contains("Dot-Claude Instructions"),
+        "Should find .claude/CLAUDE.md: got {content}"
+    );
+}
+
+/// All three root-level CLAUDE.md sources are merged in order:
+/// CLAUDE.md, .claude/CLAUDE.md, .patina/CLAUDE.md
+#[test]
+fn test_project_context_merges_all_root_sources() {
+    let temp = setup_temp_project();
+
+    fs::write(temp.path().join("CLAUDE.md"), "ROOT_CONTENT").unwrap();
+
+    let claude_dir = temp.path().join(".claude");
+    fs::create_dir_all(&claude_dir).unwrap();
+    fs::write(claude_dir.join("CLAUDE.md"), "DOT_CLAUDE_CONTENT").unwrap();
+
+    let patina_dir = temp.path().join(".patina");
+    fs::create_dir_all(&patina_dir).unwrap();
+    fs::write(patina_dir.join("CLAUDE.md"), "PATINA_CONTENT").unwrap();
+
+    let mut ctx = ProjectContext::new(temp.path().to_path_buf());
+    ctx.load().unwrap();
+
+    let content = ctx.get_context(temp.path());
+    assert!(
+        content.contains("ROOT_CONTENT"),
+        "Should contain root CLAUDE.md"
+    );
+    assert!(
+        content.contains("DOT_CLAUDE_CONTENT"),
+        "Should contain .claude/CLAUDE.md"
+    );
+    assert!(
+        content.contains("PATINA_CONTENT"),
+        "Should contain .patina/CLAUDE.md"
+    );
+
+    let root_pos = content.find("ROOT_CONTENT").unwrap();
+    let dot_claude_pos = content.find("DOT_CLAUDE_CONTENT").unwrap();
+    let patina_pos = content.find("PATINA_CONTENT").unwrap();
+    assert!(root_pos < dot_claude_pos, "Root should come before .claude");
+    assert!(
+        dot_claude_pos < patina_pos,
+        ".claude should come before .patina"
+    );
+}
+
+/// .claude/CLAUDE.md alone (without root CLAUDE.md) works.
+#[test]
+fn test_project_context_dot_claude_only() {
+    let temp = setup_temp_project();
+    let claude_dir = temp.path().join(".claude");
+    fs::create_dir_all(&claude_dir).unwrap();
+    fs::write(claude_dir.join("CLAUDE.md"), "Only dot-claude content").unwrap();
+
+    let mut ctx = ProjectContext::new(temp.path().to_path_buf());
+    ctx.load().unwrap();
+
+    let content = ctx.get_context(temp.path());
+    assert!(
+        content.contains("Only dot-claude content"),
+        "Should load .claude/CLAUDE.md when no root CLAUDE.md exists"
+    );
+}
+
+/// root_context() returns only the root-level content, not subdirectory contexts.
+#[test]
+fn test_project_context_root_context_accessor() {
+    let temp = setup_temp_project();
+    let claude_dir = temp.path().join(".claude");
+    fs::create_dir_all(&claude_dir).unwrap();
+    fs::write(claude_dir.join("CLAUDE.md"), "Root level context").unwrap();
+
+    let subdir = temp.path().join("src");
+    fs::create_dir_all(&subdir).unwrap();
+    fs::write(subdir.join("CLAUDE.md"), "Subdir context").unwrap();
+
+    let mut ctx = ProjectContext::new(temp.path().to_path_buf());
+    ctx.load().unwrap();
+
+    let root = ctx.root_context();
+    assert!(root.is_some(), "root_context() should return Some");
+    let root_str = root.unwrap();
+    assert!(
+        root_str.contains("Root level context"),
+        "root_context() should contain root content"
+    );
+    assert!(
+        !root_str.contains("Subdir context"),
+        "root_context() should NOT contain subdir content"
+    );
+}
+
+// =============================================================================
 // Graceful Degradation Tests (4.2.1)
 // =============================================================================
 

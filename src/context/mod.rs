@@ -22,6 +22,13 @@ impl ProjectContext {
 
     /// Loads project context from CLAUDE.md files.
     ///
+    /// Checks the following root-level locations in order (content is concatenated):
+    /// 1. `CLAUDE.md` at the project root
+    /// 2. `.claude/CLAUDE.md` (standard Claude Code location)
+    /// 3. `.patina/CLAUDE.md` (Patina-specific location)
+    ///
+    /// Then recursively walks subdirectories for additional `CLAUDE.md` files.
+    ///
     /// This method uses graceful degradation:
     /// - If a CLAUDE.md file cannot be read, a warning is logged and loading continues
     /// - If a subdirectory cannot be traversed, a warning is logged and loading continues
@@ -31,25 +38,40 @@ impl ProjectContext {
     ///
     /// Returns an error only for critical failures that should stop the application.
     pub fn load(&mut self) -> anyhow::Result<()> {
+        // 1. Root CLAUDE.md
         let root_path = self.project_root.join("CLAUDE.md");
         if root_path.exists() {
             match std::fs::read_to_string(&root_path) {
                 Ok(content) => self.root_context = Some(content),
                 Err(e) => {
-                    // Root CLAUDE.md is more important - log warning but don't fail
                     tracing::warn!("Failed to read root CLAUDE.md at {:?}: {}", root_path, e);
                 }
             }
         }
 
+        // 2. .claude/CLAUDE.md (standard Claude Code location)
+        let dot_claude_path = self.project_root.join(".claude/CLAUDE.md");
+        if dot_claude_path.exists() {
+            match std::fs::read_to_string(&dot_claude_path) {
+                Ok(dot_claude_content) => {
+                    self.append_root_context(dot_claude_content);
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to read .claude/CLAUDE.md at {:?}: {}",
+                        dot_claude_path,
+                        e
+                    );
+                }
+            }
+        }
+
+        // 3. .patina/CLAUDE.md (Patina-specific location)
         let patina_path = self.project_root.join(".patina/CLAUDE.md");
         if patina_path.exists() {
             match std::fs::read_to_string(&patina_path) {
                 Ok(patina_content) => {
-                    self.root_context = Some(match &self.root_context {
-                        Some(existing) => format!("{}\n\n{}", existing, patina_content),
-                        None => patina_content,
-                    });
+                    self.append_root_context(patina_content);
                 }
                 Err(e) => {
                     tracing::warn!(
@@ -64,6 +86,23 @@ impl ProjectContext {
         self.walk_for_claude_md(&self.project_root.clone());
 
         Ok(())
+    }
+
+    /// Appends content to the root context, separating with double newline.
+    fn append_root_context(&mut self, content: String) {
+        self.root_context = Some(match &self.root_context {
+            Some(existing) => format!("{}\n\n{}", existing, content),
+            None => content,
+        });
+    }
+
+    /// Returns the root-level context content, if any.
+    ///
+    /// This includes content from `CLAUDE.md`, `.claude/CLAUDE.md`, and
+    /// `.patina/CLAUDE.md` at the project root, but not subdirectory contexts.
+    #[must_use]
+    pub fn root_context(&self) -> Option<&str> {
+        self.root_context.as_deref()
     }
 
     /// Recursively walks directories looking for CLAUDE.md files.

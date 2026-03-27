@@ -5,6 +5,7 @@
 //! [`AppState::set_system_prompt`] at startup and included in every API
 //! request through [`AppState::build_request_options`].
 
+use crate::context::ProjectContext;
 use std::fmt::Write as _;
 use std::path::Path;
 use tracing::debug;
@@ -16,7 +17,7 @@ use tracing::debug;
 ///
 /// # Arguments
 ///
-/// * `working_dir` - Project root directory for loading `.claude/CLAUDE.md`
+/// * `working_dir` - Project root directory for loading CLAUDE.md files
 #[must_use]
 pub fn build_system_prompt(working_dir: &Path) -> String {
     build_system_prompt_with_skills(working_dir, None)
@@ -30,7 +31,7 @@ pub fn build_system_prompt(working_dir: &Path) -> String {
 ///
 /// # Arguments
 ///
-/// * `working_dir` - Project root directory for loading `.claude/CLAUDE.md`
+/// * `working_dir` - Project root directory for loading CLAUDE.md files
 /// * `skill_engine` - Optional skill engine for context-aware skill injection
 #[must_use]
 pub fn build_system_prompt_with_skills(
@@ -45,18 +46,15 @@ pub fn build_system_prompt_with_skills(
     // Tool guidance
     parts.push(TOOL_GUIDANCE.to_string());
 
-    // Project instructions from .claude/CLAUDE.md
-    if let Some(project_instructions) = load_claude_md(working_dir) {
+    // Project instructions from CLAUDE.md, .claude/CLAUDE.md, .patina/CLAUDE.md
+    if let Some(project_instructions) = load_project_instructions(working_dir) {
         parts.push(format!(
             "# Project Instructions\n\n\
-             The following instructions are from the project's .claude/CLAUDE.md file. \
+             The following instructions are from the project's CLAUDE.md files. \
              Follow them carefully.\n\n{}",
             project_instructions
         ));
-        debug!(
-            "Loaded project CLAUDE.md from {}",
-            working_dir.join(".claude/CLAUDE.md").display()
-        );
+        debug!("Loaded project CLAUDE.md from {}", working_dir.display());
     }
 
     // User-global instructions from ~/.claude/CLAUDE.md
@@ -89,10 +87,23 @@ pub fn build_system_prompt_with_skills(
     parts.join("\n\n")
 }
 
-/// Loads `.claude/CLAUDE.md` from the project directory.
-fn load_claude_md(working_dir: &Path) -> Option<String> {
-    let path = working_dir.join(".claude").join("CLAUDE.md");
-    std::fs::read_to_string(path).ok().filter(|s| !s.is_empty())
+/// Loads project instructions from all CLAUDE.md locations.
+///
+/// Uses [`ProjectContext`] to discover and merge content from:
+/// - `CLAUDE.md` at the project root
+/// - `.claude/CLAUDE.md` (standard Claude Code location)
+/// - `.patina/CLAUDE.md` (Patina-specific location)
+///
+/// Returns `None` if no CLAUDE.md files are found or all are empty.
+fn load_project_instructions(working_dir: &Path) -> Option<String> {
+    let mut ctx = ProjectContext::new(working_dir.to_path_buf());
+    if let Err(e) = ctx.load() {
+        tracing::warn!("Failed to load project context: {}", e);
+        return None;
+    }
+    ctx.root_context()
+        .map(String::from)
+        .filter(|s| !s.is_empty())
 }
 
 /// Loads `~/.claude/CLAUDE.md` from the user's home directory.
@@ -426,10 +437,9 @@ mod tests {
     #[test]
     fn test_build_system_prompt_works_without_claude_md() {
         let dir = TempDir::new().unwrap();
-        // No .claude/CLAUDE.md exists
         let prompt = build_system_prompt(dir.path());
         assert!(!prompt.contains("Project Instructions"));
-        assert!(prompt.contains("Patina")); // identity still present
+        assert!(prompt.contains("Patina"));
     }
 
     #[test]
@@ -441,18 +451,60 @@ mod tests {
     }
 
     #[test]
-    fn test_load_claude_md_returns_none_for_missing() {
+    fn test_build_system_prompt_loads_patina_claude_md() {
         let dir = TempDir::new().unwrap();
-        assert!(load_claude_md(dir.path()).is_none());
+        let patina_dir = dir.path().join(".patina");
+        fs::create_dir_all(&patina_dir).unwrap();
+        fs::write(patina_dir.join("CLAUDE.md"), "Patina-specific rules.").unwrap();
+
+        let prompt = build_system_prompt(dir.path());
+        assert!(prompt.contains("Patina-specific rules."));
+        assert!(prompt.contains("Project Instructions"));
     }
 
     #[test]
-    fn test_load_claude_md_returns_none_for_empty() {
+    fn test_build_system_prompt_loads_root_claude_md() {
+        let dir = TempDir::new().unwrap();
+        fs::write(dir.path().join("CLAUDE.md"), "Root project rules.").unwrap();
+
+        let prompt = build_system_prompt(dir.path());
+        assert!(prompt.contains("Root project rules."));
+        assert!(prompt.contains("Project Instructions"));
+    }
+
+    #[test]
+    fn test_build_system_prompt_merges_multiple_claude_md() {
+        let dir = TempDir::new().unwrap();
+
+        fs::write(dir.path().join("CLAUDE.md"), "FROM_ROOT").unwrap();
+
+        let claude_dir = dir.path().join(".claude");
+        fs::create_dir_all(&claude_dir).unwrap();
+        fs::write(claude_dir.join("CLAUDE.md"), "FROM_DOT_CLAUDE").unwrap();
+
+        let patina_dir = dir.path().join(".patina");
+        fs::create_dir_all(&patina_dir).unwrap();
+        fs::write(patina_dir.join("CLAUDE.md"), "FROM_PATINA").unwrap();
+
+        let prompt = build_system_prompt(dir.path());
+        assert!(prompt.contains("FROM_ROOT"));
+        assert!(prompt.contains("FROM_DOT_CLAUDE"));
+        assert!(prompt.contains("FROM_PATINA"));
+    }
+
+    #[test]
+    fn test_load_project_instructions_returns_none_for_missing() {
+        let dir = TempDir::new().unwrap();
+        assert!(load_project_instructions(dir.path()).is_none());
+    }
+
+    #[test]
+    fn test_load_project_instructions_returns_none_for_empty() {
         let dir = TempDir::new().unwrap();
         let claude_dir = dir.path().join(".claude");
         fs::create_dir_all(&claude_dir).unwrap();
         fs::write(claude_dir.join("CLAUDE.md"), "").unwrap();
-        assert!(load_claude_md(dir.path()).is_none());
+        assert!(load_project_instructions(dir.path()).is_none());
     }
 
     #[test]
@@ -497,12 +549,9 @@ mod tests {
         assert!(prompt.contains("test-skill"));
     }
 
-    // B3 tests: git status summary
-
     #[test]
     fn test_get_git_status_summary_clean() {
         let dir = TempDir::new().unwrap();
-        // Initialize a git repo and make an initial commit so it's clean
         std::process::Command::new("git")
             .args(["init"])
             .current_dir(dir.path())
@@ -564,9 +613,7 @@ mod tests {
             .output()
             .unwrap();
 
-        // Now modify the file
         fs::write(dir.path().join("file.txt"), "changed").unwrap();
-        // Add an untracked file
         fs::write(dir.path().join("new.txt"), "new").unwrap();
 
         let result = get_git_status_summary(dir.path()).unwrap();
@@ -579,8 +626,6 @@ mod tests {
         let dir = TempDir::new().unwrap();
         assert!(get_git_status_summary(dir.path()).is_none());
     }
-
-    // B3 tests: project tree
 
     #[test]
     fn test_get_project_tree_basic() {
@@ -617,17 +662,14 @@ mod tests {
         fs::write(dir.path().join("a/b/c/d/deep.txt"), "deep").unwrap();
 
         let tree = get_project_tree(dir.path(), 2).unwrap();
-        // depth 0 = "a/", depth 1 = "b/", depth 2 would be stopped
         assert!(tree.contains("a/"));
         assert!(tree.contains("b/"));
-        // "c/" is at depth 2 which is >= max_depth, so not shown
         assert!(!tree.contains("c/"));
     }
 
     #[test]
     fn test_get_project_tree_truncates_long_output() {
         let dir = TempDir::new().unwrap();
-        // Create many top-level directories to exceed the line limit
         for i in 0..40 {
             fs::create_dir_all(dir.path().join(format!("dir_{i:03}"))).unwrap();
         }
@@ -636,8 +678,6 @@ mod tests {
         assert!(tree.contains("... and"));
         assert!(tree.contains("more"));
     }
-
-    // B3 tests: recent commits
 
     #[test]
     fn test_get_recent_commits_in_repo() {
@@ -678,8 +718,6 @@ mod tests {
         let dir = TempDir::new().unwrap();
         assert!(get_recent_commits(dir.path()).is_none());
     }
-
-    // B3 tests: environment context integration
 
     #[test]
     fn test_build_environment_context_includes_git_status() {
