@@ -14,7 +14,7 @@ use std::pin::Pin;
 use anyhow::Result;
 use tracing::debug;
 
-use crate::agents::AgentEvent;
+use crate::agents::{AgentEvent, AgentProgress};
 use crate::app::context::AppContext;
 use crate::app::dispatch::{EventHandler, Handled};
 use crate::app::events::AppEvent;
@@ -73,6 +73,30 @@ impl EventHandler for AgentHandler {
                 return Ok(Handled::IGNORED);
             };
             debug!("Agent event received");
+
+            // Fire SubagentStop hook for terminal agent states
+            if let AgentEvent::Progress {
+                agent_id, progress, ..
+            } = agent_event
+            {
+                let stop_reason = match progress {
+                    AgentProgress::Completed { .. } => Some("completed"),
+                    AgentProgress::Failed { error, .. } => Some(error.as_str()),
+                    _ => None,
+                };
+                if let Some(reason) = stop_reason {
+                    let executor = std::sync::Arc::clone(&ctx.state.tool_state().tool_executor);
+                    let agent_id = agent_id.clone();
+                    let reason = reason.to_string();
+                    tokio::spawn(async move {
+                        let _ = executor
+                            .hooks()
+                            .fire_subagent_stop(&agent_id, &reason)
+                            .await;
+                    });
+                }
+            }
+
             Self::handle_agent_event(agent_event, ctx.state.agent_panel_mut())
         })
     }

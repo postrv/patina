@@ -329,10 +329,11 @@ impl OAuthFlow {
                     let _ = tx.send(Ok(code));
                     return;
                 } else if let Some(error) = extract_error_from_url(&url) {
-                    // Send error response
+                    // Send error response (HTML-escaped to prevent XSS via URL-decoded error)
+                    let safe_error = html_escape(&error);
                     let response = Response::from_string(format!(
                         "<html><body><h1>Authentication failed</h1><p>{}</p></body></html>",
-                        error
+                        safe_error
                     ))
                     .with_header(
                         tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"text/html"[..])
@@ -441,6 +442,27 @@ fn extract_state_from_url(url: &str) -> Option<String> {
             None
         }
     })
+}
+
+/// Escapes HTML special characters to prevent XSS in OAuth error responses.
+///
+/// Replaces the five characters that have special meaning in HTML with their
+/// corresponding character entity references, preventing injection attacks
+/// when error messages are interpolated into HTML responses.
+///
+/// # Arguments
+///
+/// * `s` - The string to escape
+///
+/// # Returns
+///
+/// A new string with HTML special characters replaced by entity references.
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#x27;")
 }
 
 /// Extracts the error from a callback URL.
@@ -646,5 +668,73 @@ mod tests {
         let flow = OAuthFlow::new();
         // OAuth is disabled by default (no custom client_id and OAUTH_DISABLED is true)
         assert!(!flow.is_enabled(), "OAuth should be disabled by default");
+    }
+
+    // =========================================================================
+    // A3: HTML escape tests for XSS prevention in OAuth error responses
+    // =========================================================================
+
+    #[test]
+    fn test_html_escape_script_tag() {
+        let input = "<script>alert(1)</script>";
+        let escaped = html_escape(input);
+        assert_eq!(escaped, "&lt;script&gt;alert(1)&lt;/script&gt;");
+        assert!(!escaped.contains('<'));
+        assert!(!escaped.contains('>'));
+    }
+
+    #[test]
+    fn test_html_escape_ampersand() {
+        let input = "a&b";
+        let escaped = html_escape(input);
+        assert_eq!(escaped, "a&amp;b");
+    }
+
+    #[test]
+    fn test_html_escape_quotes() {
+        let input = r#""hello""#;
+        let escaped = html_escape(input);
+        assert_eq!(escaped, "&quot;hello&quot;");
+    }
+
+    #[test]
+    fn test_html_escape_single_quotes() {
+        let input = "it's";
+        let escaped = html_escape(input);
+        assert_eq!(escaped, "it&#x27;s");
+    }
+
+    #[test]
+    fn test_html_escape_combined() {
+        let input = r#"<img src="x" onerror="alert('xss')">"#;
+        let escaped = html_escape(input);
+        assert!(!escaped.contains('<'));
+        assert!(!escaped.contains('>'));
+        assert!(!escaped.contains('"'));
+        assert!(!escaped.contains('\''));
+    }
+
+    #[test]
+    fn test_html_escape_plain_text_unchanged() {
+        let input = "access_denied";
+        let escaped = html_escape(input);
+        assert_eq!(escaped, "access_denied");
+    }
+
+    #[test]
+    fn test_html_escape_empty_string() {
+        assert_eq!(html_escape(""), "");
+    }
+
+    #[test]
+    fn test_extract_error_from_url_with_xss_payload() {
+        let url = "/callback?error=%3Cscript%3Ealert(1)%3C%2Fscript%3E";
+        let error = extract_error_from_url(url).unwrap();
+        // URL-decoding produces the raw XSS payload
+        assert_eq!(error, "<script>alert(1)</script>");
+        // html_escape neutralizes it
+        let safe = html_escape(&error);
+        assert!(!safe.contains('<'));
+        assert!(!safe.contains('>'));
     }
 }
