@@ -254,11 +254,13 @@ struct DirtyFlags {
     messages: bool,
     input: bool,
     full: bool,
+    /// Throbber animation only -- avoids dirtying `messages` every 250ms.
+    throbber: bool,
 }
 
 impl DirtyFlags {
     fn any(&self) -> bool {
-        self.messages || self.input || self.full
+        self.messages || self.input || self.full || self.throbber
     }
 
     fn clear(&mut self) {
@@ -874,7 +876,7 @@ impl AppState {
 
     pub fn tick_throbber(&mut self) {
         self.display.throbber_frame = (self.display.throbber_frame + 1) % 4;
-        self.dirty.messages = true;
+        self.dirty.throbber = true;
     }
 
     pub fn throbber_char(&self) -> char {
@@ -887,6 +889,15 @@ impl AppState {
             || self.continuous.is_dirty()
             || self.display.is_dirty()
             || self.input_state.is_dirty()
+    }
+
+    /// Returns `true` when the only pending dirty state is the throbber animation.
+    ///
+    /// This allows the render path to skip the expensive full timeline rebuild
+    /// when only the throbber character has changed.
+    #[must_use]
+    pub fn is_throbber_only_dirty(&self) -> bool {
+        self.dirty.throbber && !self.dirty.messages && !self.dirty.input && !self.dirty.full
     }
 
     pub fn mark_rendered(&mut self) {
@@ -1040,6 +1051,7 @@ impl AppState {
             pending_permission: self.tool_state.pending_permission.as_ref(),
             pending_plan: self.pending_plan.as_ref(),
             pending_question: self.pending_question.as_ref(),
+            throbber_only: self.is_throbber_only_dirty(),
         }
     }
 
@@ -2040,5 +2052,49 @@ mod tests {
         // Second take should be empty (drained)
         let reports = state.take_conflict_reports();
         assert!(reports.is_empty(), "Should be empty after drain");
+    }
+
+    #[test]
+    fn test_tick_throbber_does_not_dirty_messages() {
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+        state.mark_rendered(); // Clear all dirty flags
+
+        state.tick_throbber();
+
+        // Throbber tick should NOT mark messages as dirty
+        assert!(
+            !state.dirty.messages,
+            "tick_throbber must not dirty messages"
+        );
+        // But the overall needs_render should still be true
+        assert!(
+            state.needs_render(),
+            "needs_render must be true after tick_throbber"
+        );
+        // The throbber flag specifically should be set
+        assert!(
+            state.dirty.throbber,
+            "tick_throbber must set dirty.throbber"
+        );
+    }
+
+    #[test]
+    fn test_throbber_only_dirty() {
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+        state.mark_rendered(); // Clear all dirty flags
+
+        // After tick_throbber, only the throbber flag should be dirty
+        state.tick_throbber();
+        assert!(
+            state.is_throbber_only_dirty(),
+            "is_throbber_only_dirty must be true after only tick_throbber"
+        );
+
+        // After a message change, throbber_only should be false
+        state.dirty.messages = true;
+        assert!(
+            !state.is_throbber_only_dirty(),
+            "is_throbber_only_dirty must be false when messages also dirty"
+        );
     }
 }

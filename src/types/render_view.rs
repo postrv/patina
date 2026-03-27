@@ -103,6 +103,11 @@ pub struct RenderView<'a> {
     pub pending_plan: Option<&'a PlanState>,
     /// Pending question for user response.
     pub pending_question: Option<&'a QuestionState>,
+
+    // -- Dirty flags --
+    /// When `true`, only the throbber character changed since last render.
+    /// The render path may skip the full timeline rebuild.
+    pub throbber_only: bool,
 }
 
 /// Feedback from the render pass that must be applied to AppState.
@@ -163,6 +168,7 @@ mod tests {
             pending_permission: None,
             pending_plan: None,
             pending_question: None,
+            throbber_only: false,
         }
     }
 

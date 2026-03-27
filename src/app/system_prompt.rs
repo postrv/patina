@@ -5,6 +5,7 @@
 //! [`AppState::set_system_prompt`] at startup and included in every API
 //! request through [`AppState::build_request_options`].
 
+use std::fmt::Write as _;
 use std::path::Path;
 use tracing::debug;
 
@@ -104,7 +105,211 @@ fn load_user_claude_md() -> Option<String> {
     std::fs::read_to_string(path).ok().filter(|s| !s.is_empty())
 }
 
-/// Builds environment context (current date, git branch).
+/// Returns a compact summary of `git status --porcelain` output.
+///
+/// Categorises working-tree changes into modified, added, deleted, and
+/// untracked counts. Returns `"Clean working tree"` when there are no
+/// changes, or `None` when `working_dir` is not inside a git repository.
+///
+/// # Errors
+///
+/// Returns `None` if the `git` command fails (e.g. not a repo).
+fn get_git_status_summary(working_dir: &Path) -> Option<String> {
+    let output = std::process::Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(working_dir)
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    if stdout.trim().is_empty() {
+        return Some("Clean working tree".to_string());
+    }
+
+    let mut modified = 0u32;
+    let mut added = 0u32;
+    let mut deleted = 0u32;
+    let mut untracked = 0u32;
+
+    for line in stdout.lines() {
+        if line.len() < 2 {
+            continue;
+        }
+        let index = line.as_bytes()[0];
+        let worktree = line.as_bytes()[1];
+
+        match (index, worktree) {
+            (b'?', b'?') => untracked += 1,
+            _ => {
+                // Index status
+                match index {
+                    b'A' => added += 1,
+                    b'D' => deleted += 1,
+                    b'M' | b'R' | b'C' => modified += 1,
+                    _ => {}
+                }
+                // Worktree status (unstaged changes)
+                match worktree {
+                    b'M' => modified += 1,
+                    b'D' => deleted += 1,
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    let mut parts = Vec::new();
+    if modified > 0 {
+        parts.push(format!("{modified} modified"));
+    }
+    if added > 0 {
+        parts.push(format!("{added} added"));
+    }
+    if deleted > 0 {
+        parts.push(format!("{deleted} deleted"));
+    }
+    if untracked > 0 {
+        parts.push(format!("{untracked} untracked"));
+    }
+
+    if parts.is_empty() {
+        Some("Clean working tree".to_string())
+    } else {
+        Some(parts.join(", "))
+    }
+}
+
+/// Returns the last 5 commits as a compact oneline summary.
+///
+/// # Errors
+///
+/// Returns `None` if the working directory is not a git repository or
+/// has no commits.
+fn get_recent_commits(working_dir: &Path) -> Option<String> {
+    let output = std::process::Command::new("git")
+        .args(["log", "--oneline", "-5"])
+        .current_dir(working_dir)
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if text.is_empty() {
+        None
+    } else {
+        Some(text)
+    }
+}
+
+/// Maximum number of output lines before the tree is truncated.
+const PROJECT_TREE_MAX_LINES: usize = 30;
+
+/// Directories that are excluded from the project tree because they are
+/// noisy or auto-generated.
+const NOISE_DIRS: &[&str] = &[
+    ".git",
+    "target",
+    "node_modules",
+    ".DS_Store",
+    "__pycache__",
+    ".mypy_cache",
+    ".pytest_cache",
+    "dist",
+    "build",
+    ".next",
+    ".cache",
+    "coverage",
+    ".tox",
+    ".eggs",
+    ".venv",
+    "venv",
+];
+
+/// Returns a compact directory tree for the given project root.
+///
+/// Walks the directory up to `max_depth` levels, skipping common noise
+/// directories (`.git`, `target`, `node_modules`, etc.). Only top-level
+/// files are shown; files inside subdirectories are omitted to keep the
+/// output compact. Output is truncated to [`PROJECT_TREE_MAX_LINES`].
+///
+/// # Errors
+///
+/// Returns `None` if the directory cannot be read.
+fn get_project_tree(working_dir: &Path, max_depth: usize) -> Option<String> {
+    let mut tree = String::new();
+    let mut line_count = 0usize;
+    build_tree_recursive(working_dir, &mut tree, 0, max_depth, &mut line_count);
+
+    if tree.is_empty() {
+        return None;
+    }
+
+    Some(tree)
+}
+
+/// Recursively builds the tree string, counting lines and truncating when
+/// the limit is exceeded.
+fn build_tree_recursive(
+    dir: &Path,
+    output: &mut String,
+    depth: usize,
+    max_depth: usize,
+    line_count: &mut usize,
+) {
+    if depth >= max_depth {
+        return;
+    }
+
+    let mut entries: Vec<_> = match std::fs::read_dir(dir) {
+        Ok(rd) => rd.filter_map(|e| e.ok()).collect(),
+        Err(_) => return,
+    };
+    entries.sort_by_key(|e| e.file_name());
+
+    // Count remaining entries that we haven't shown yet (for truncation msg)
+    let mut remaining_after_limit = 0usize;
+
+    for entry in &entries {
+        let name = entry.file_name().to_string_lossy().to_string();
+
+        // Skip noise directories and hidden files (except at depth 0 for dirs)
+        if NOISE_DIRS.contains(&name.as_str()) {
+            continue;
+        }
+
+        let path = entry.path();
+
+        if *line_count >= PROJECT_TREE_MAX_LINES {
+            remaining_after_limit += 1;
+            continue;
+        }
+
+        let indent = "  ".repeat(depth);
+
+        if path.is_dir() {
+            let _ = writeln!(output, "{indent}{name}/");
+            *line_count += 1;
+            build_tree_recursive(&path, output, depth + 1, max_depth, line_count);
+        } else if depth == 0 {
+            // Only show top-level files
+            let _ = writeln!(output, "{indent}{name}");
+            *line_count += 1;
+        }
+    }
+
+    if depth == 0 && remaining_after_limit > 0 {
+        let _ = writeln!(output, "... and {remaining_after_limit} more entries");
+    }
+}
+
+/// Builds environment context (current date, git branch, status, tree).
 fn build_environment_context(working_dir: &Path) -> String {
     let mut ctx = String::from("# Environment\n");
 
@@ -118,11 +323,26 @@ fn build_environment_context(working_dir: &Path) -> String {
 
     // Git branch
     if let Some(branch) = get_git_branch(working_dir) {
-        ctx.push_str(&format!("Current git branch: {}\n", branch));
+        ctx.push_str(&format!("Current git branch: {branch}\n"));
+    }
+
+    // Git status summary
+    if let Some(status) = get_git_status_summary(working_dir) {
+        ctx.push_str(&format!("Git status: {status}\n"));
+    }
+
+    // Recent commits
+    if let Some(commits) = get_recent_commits(working_dir) {
+        ctx.push_str(&format!("Recent commits:\n{commits}\n"));
     }
 
     // Working directory
     ctx.push_str(&format!("Working directory: {}\n", working_dir.display()));
+
+    // Project structure
+    if let Some(tree) = get_project_tree(working_dir, 2) {
+        ctx.push_str(&format!("\nProject structure:\n{tree}"));
+    }
 
     ctx
 }
@@ -275,5 +495,235 @@ mod tests {
         let prompt = build_system_prompt_with_skills(dir.path(), Some(&engine));
         assert!(prompt.contains("Available Skills"));
         assert!(prompt.contains("test-skill"));
+    }
+
+    // B3 tests: git status summary
+
+    #[test]
+    fn test_get_git_status_summary_clean() {
+        let dir = TempDir::new().unwrap();
+        // Initialize a git repo and make an initial commit so it's clean
+        std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        fs::write(dir.path().join("README.md"), "hello").unwrap();
+        std::process::Command::new("git")
+            .args(["add", "."])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["commit", "-m", "init"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+
+        let result = get_git_status_summary(dir.path());
+        assert_eq!(result, Some("Clean working tree".to_string()));
+    }
+
+    #[test]
+    fn test_get_git_status_summary_modified_files() {
+        let dir = TempDir::new().unwrap();
+        std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        fs::write(dir.path().join("file.txt"), "hello").unwrap();
+        std::process::Command::new("git")
+            .args(["add", "."])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["commit", "-m", "init"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+
+        // Now modify the file
+        fs::write(dir.path().join("file.txt"), "changed").unwrap();
+        // Add an untracked file
+        fs::write(dir.path().join("new.txt"), "new").unwrap();
+
+        let result = get_git_status_summary(dir.path()).unwrap();
+        assert!(result.contains("1 modified"));
+        assert!(result.contains("1 untracked"));
+    }
+
+    #[test]
+    fn test_get_git_status_summary_non_repo() {
+        let dir = TempDir::new().unwrap();
+        assert!(get_git_status_summary(dir.path()).is_none());
+    }
+
+    // B3 tests: project tree
+
+    #[test]
+    fn test_get_project_tree_basic() {
+        let dir = TempDir::new().unwrap();
+        fs::create_dir_all(dir.path().join("src")).unwrap();
+        fs::write(dir.path().join("src/main.rs"), "fn main() {}").unwrap();
+        fs::write(dir.path().join("Cargo.toml"), "[package]").unwrap();
+
+        let tree = get_project_tree(dir.path(), 2).unwrap();
+        assert!(tree.contains("src/"));
+        assert!(tree.contains("Cargo.toml"));
+    }
+
+    #[test]
+    fn test_get_project_tree_skips_noise() {
+        let dir = TempDir::new().unwrap();
+        fs::create_dir_all(dir.path().join(".git")).unwrap();
+        fs::create_dir_all(dir.path().join("target")).unwrap();
+        fs::create_dir_all(dir.path().join("node_modules")).unwrap();
+        fs::create_dir_all(dir.path().join("src")).unwrap();
+        fs::write(dir.path().join("src/lib.rs"), "").unwrap();
+
+        let tree = get_project_tree(dir.path(), 2).unwrap();
+        assert!(!tree.contains(".git"));
+        assert!(!tree.contains("target"));
+        assert!(!tree.contains("node_modules"));
+        assert!(tree.contains("src/"));
+    }
+
+    #[test]
+    fn test_get_project_tree_respects_max_depth() {
+        let dir = TempDir::new().unwrap();
+        fs::create_dir_all(dir.path().join("a/b/c/d")).unwrap();
+        fs::write(dir.path().join("a/b/c/d/deep.txt"), "deep").unwrap();
+
+        let tree = get_project_tree(dir.path(), 2).unwrap();
+        // depth 0 = "a/", depth 1 = "b/", depth 2 would be stopped
+        assert!(tree.contains("a/"));
+        assert!(tree.contains("b/"));
+        // "c/" is at depth 2 which is >= max_depth, so not shown
+        assert!(!tree.contains("c/"));
+    }
+
+    #[test]
+    fn test_get_project_tree_truncates_long_output() {
+        let dir = TempDir::new().unwrap();
+        // Create many top-level directories to exceed the line limit
+        for i in 0..40 {
+            fs::create_dir_all(dir.path().join(format!("dir_{i:03}"))).unwrap();
+        }
+
+        let tree = get_project_tree(dir.path(), 2).unwrap();
+        assert!(tree.contains("... and"));
+        assert!(tree.contains("more"));
+    }
+
+    // B3 tests: recent commits
+
+    #[test]
+    fn test_get_recent_commits_in_repo() {
+        let dir = TempDir::new().unwrap();
+        std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        fs::write(dir.path().join("file.txt"), "hello").unwrap();
+        std::process::Command::new("git")
+            .args(["add", "."])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["commit", "-m", "Initial commit"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+
+        let result = get_recent_commits(dir.path()).unwrap();
+        assert!(result.contains("Initial commit"));
+    }
+
+    #[test]
+    fn test_get_recent_commits_non_repo() {
+        let dir = TempDir::new().unwrap();
+        assert!(get_recent_commits(dir.path()).is_none());
+    }
+
+    // B3 tests: environment context integration
+
+    #[test]
+    fn test_build_environment_context_includes_git_status() {
+        let dir = TempDir::new().unwrap();
+        std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        fs::write(dir.path().join("file.txt"), "hello").unwrap();
+        std::process::Command::new("git")
+            .args(["add", "."])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["commit", "-m", "init"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+
+        let ctx = build_environment_context(dir.path());
+        assert!(ctx.contains("Git status:"));
+        assert!(ctx.contains("Clean working tree"));
+    }
+
+    #[test]
+    fn test_build_environment_context_includes_project_structure() {
+        let dir = TempDir::new().unwrap();
+        fs::create_dir_all(dir.path().join("src")).unwrap();
+        fs::write(dir.path().join("src/main.rs"), "fn main() {}").unwrap();
+
+        let ctx = build_environment_context(dir.path());
+        assert!(ctx.contains("Project structure:"));
+        assert!(ctx.contains("src/"));
     }
 }
