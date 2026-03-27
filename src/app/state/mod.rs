@@ -1041,6 +1041,7 @@ impl AppState {
             worktree_behind: self.worktree.behind(),
             token_budget: self.compression.token_budget(),
             context_tokens_injected: self.compression.context_tokens_injected(),
+            session_cost_usd: self.cost_tracker.session_cost(),
             update_available: self.display.update_available(),
             continuous_status: self.continuous.status(),
             continuous_iterations_completed: self.continuous.iterations_completed(),

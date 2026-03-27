@@ -735,4 +735,72 @@ mod tests {
             record_cache.cost
         );
     }
+
+    // =========================================================================
+    // C2: Session cost tracking integration tests
+    // =========================================================================
+
+    #[test]
+    fn test_cost_tracker_accumulates() {
+        let config = CostConfig::default();
+        let mut tracker = CostTracker::new(config);
+
+        let r1 = UsageRecord::new(
+            "claude-sonnet-4-20250514",
+            10_000,
+            5_000,
+            Duration::from_secs(1),
+        );
+        let r2 = UsageRecord::new(
+            "claude-sonnet-4-20250514",
+            20_000,
+            10_000,
+            Duration::from_secs(1),
+        );
+        tracker.record_usage(r1);
+        tracker.record_usage(r2);
+
+        let stats = tracker.statistics();
+        assert_eq!(stats.total_requests, 2);
+        assert_eq!(stats.total_input_tokens, 30_000);
+        assert_eq!(stats.total_output_tokens, 15_000);
+        assert!(
+            stats.total_cost > 0.0,
+            "Total cost should be positive after usage"
+        );
+    }
+
+    #[test]
+    fn test_cost_tracker_usd_calculation() {
+        let config = CostConfig::default();
+        let mut tracker = CostTracker::new(config);
+
+        // Claude Sonnet 4: $3/1M input, $15/1M output
+        let record = UsageRecord::new(
+            "claude-sonnet-4-20250514",
+            1_000_000,
+            1_000_000,
+            Duration::from_secs(1),
+        );
+        tracker.record_usage(record);
+
+        // Expected: $3 + $15 = $18
+        let cost = tracker.session_cost();
+        assert!(
+            (cost - 18.0).abs() < 0.01,
+            "Expected $18.00, got ${:.4}",
+            cost
+        );
+    }
+
+    #[test]
+    fn test_cost_zero_initially() {
+        let config = CostConfig::default();
+        let tracker = CostTracker::new(config);
+        assert!(
+            (tracker.session_cost() - 0.0).abs() < f64::EPSILON,
+            "New tracker should have zero cost"
+        );
+        assert_eq!(tracker.total_cost(), 0.0);
+    }
 }

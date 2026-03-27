@@ -196,6 +196,34 @@ pub fn context_spans(ctx_tokens: usize) -> Vec<Span<'static>> {
     ]
 }
 
+/// Produces session cost spans.
+///
+/// Returns an empty vec when cost is below the display threshold ($0.001).
+/// Uses 3 decimal places for sub-cent amounts, 2 decimal places otherwise.
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// let spans = cost_spans(0.123);
+/// assert_eq!(spans.len(), 2);
+/// assert_eq!(spans[1].content, "$0.12");
+/// ```
+#[must_use]
+pub fn cost_spans(cost_usd: f64) -> Vec<Span<'static>> {
+    if cost_usd < 0.001 {
+        return Vec::new();
+    }
+    let cost_str = if cost_usd < 0.01 {
+        format!("${:.3}", cost_usd)
+    } else {
+        format!("${:.2}", cost_usd)
+    };
+    vec![
+        Span::raw(" "),
+        Span::styled(cost_str, Style::default().fg(PatinaTheme::VERDIGRIS)),
+    ]
+}
+
 /// Produces scroll mode and position spans.
 ///
 /// # Examples
@@ -280,6 +308,7 @@ pub fn build_status_bar_spans(view: &RenderView, feedback: &RenderFeedback) -> V
     ));
 
     spans.extend(context_spans(view.context_tokens_injected));
+    spans.extend(cost_spans(view.session_cost_usd));
     spans.extend(update_spans(view.update_available));
 
     // Use feedback-provided viewport/content heights so the scroll indicator
@@ -457,5 +486,39 @@ mod tests {
         assert_eq!(spans.len(), 2);
         assert_eq!(spans[1].content, "UPD:2.0.0");
         assert_eq!(spans[1].style.fg, Some(PatinaTheme::WARNING));
+    }
+
+    // =========================================================================
+    // C2: cost_spans tests
+    // =========================================================================
+
+    #[test]
+    fn cost_spans_below_threshold_returns_empty() {
+        let spans = cost_spans(0.0);
+        assert!(spans.is_empty());
+        let spans = cost_spans(0.0005);
+        assert!(spans.is_empty());
+    }
+
+    #[test]
+    fn cost_spans_sub_cent_uses_three_decimals() {
+        let spans = cost_spans(0.005);
+        assert_eq!(spans.len(), 2);
+        assert_eq!(spans[1].content, "$0.005");
+    }
+
+    #[test]
+    fn cost_spans_above_cent_uses_two_decimals() {
+        let spans = cost_spans(0.12);
+        assert_eq!(spans.len(), 2);
+        assert_eq!(spans[1].content, "$0.12");
+    }
+
+    #[test]
+    fn cost_spans_dollar_amount() {
+        let spans = cost_spans(1.50);
+        assert_eq!(spans.len(), 2);
+        assert_eq!(spans[1].content, "$1.50");
+        assert_eq!(spans[1].style.fg, Some(PatinaTheme::VERDIGRIS));
     }
 }

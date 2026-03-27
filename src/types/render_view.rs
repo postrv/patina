@@ -76,6 +76,10 @@ pub struct RenderView<'a> {
     /// Number of context tokens injected (e.g., from CLAUDE.md).
     pub context_tokens_injected: usize,
 
+    // -- Status bar: cost --
+    /// Cumulative session cost in USD (from CostTracker).
+    pub session_cost_usd: f64,
+
     // -- Status bar: update --
     /// Available update version string, if any.
     pub update_available: Option<&'a str>,
@@ -158,6 +162,7 @@ mod tests {
             worktree_behind: 0,
             token_budget,
             context_tokens_injected: 0,
+            session_cost_usd: 0.0,
             update_available: None,
             continuous_status,
             continuous_iterations_completed: 0,
@@ -249,5 +254,32 @@ mod tests {
         assert_eq!(view.worktree_modified, 3);
         assert_eq!(view.worktree_ahead, 1);
         assert_eq!(view.worktree_behind, 2);
+    }
+
+    #[test]
+    fn render_view_includes_cost() {
+        let timeline = Timeline::new();
+        let scroll = ScrollState::new();
+        let selection = SelectionState::new();
+        let budget = TokenBudget::new(200_000);
+        let status = ContinuousLoopStatus::Inactive;
+
+        let view = RenderView {
+            session_cost_usd: 1.234,
+            ..minimal_view(&timeline, &scroll, &selection, &budget, &status)
+        };
+        assert!((view.session_cost_usd - 1.234).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn render_view_cost_defaults_to_zero() {
+        let timeline = Timeline::new();
+        let scroll = ScrollState::new();
+        let selection = SelectionState::new();
+        let budget = TokenBudget::new(200_000);
+        let status = ContinuousLoopStatus::Inactive;
+
+        let view = minimal_view(&timeline, &scroll, &selection, &budget, &status);
+        assert!((view.session_cost_usd - 0.0).abs() < f64::EPSILON);
     }
 }
