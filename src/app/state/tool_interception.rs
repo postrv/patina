@@ -307,3 +307,197 @@ pub(super) fn execute_builtin_tool_result(
         Err(e) => ToolResultBlock::error(tool_id, e.to_string()),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use serde_json::json;
+    use tokio::sync::mpsc;
+
+    use crate::app::state::AppState;
+    use crate::tools::ToolResult;
+    use crate::types::config::ParallelMode;
+    use crate::types::content::{ToolResultBlock, ToolUseBlock};
+
+    fn test_state() -> AppState {
+        AppState::new(PathBuf::from("/tmp/test"), false, ParallelMode::Enabled)
+    }
+
+    fn make_tool_use(name: &str, input: serde_json::Value) -> ToolUseBlock {
+        ToolUseBlock {
+            id: format!("test_{name}"),
+            name: name.to_string(),
+            input,
+        }
+    }
+
+    // =========================================================================
+    // Interception dispatch
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_intercept_plan_tool() {
+        let mut state = test_state();
+        let (tx, _rx) = mpsc::channel::<(String, ToolResultBlock)>(100);
+
+        let plan_input = json!({
+            "title": "My Plan",
+            "steps": [
+                { "description": "Step one", "tool_calls": ["bash"] }
+            ]
+        });
+        let tool_use = make_tool_use("plan", plan_input);
+        let pending = vec![("toolu_plan_1".to_string(), tool_use)];
+
+        let (intercepted, remaining) = state.intercept_special_tools(pending, &tx);
+
+        assert_eq!(intercepted.len(), 1);
+        assert_eq!(intercepted[0], "toolu_plan_1");
+        assert!(remaining.is_empty());
+        assert!(state.has_pending_plan());
+
+        let plan = state.pending_plan().expect("plan should be set");
+        assert_eq!(plan.title, "My Plan");
+        assert_eq!(plan.steps.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_intercept_ask_user_tool() {
+        let mut state = test_state();
+        let (tx, _rx) = mpsc::channel::<(String, ToolResultBlock)>(100);
+
+        let question_input = json!({
+            "question": "Which database should I use?",
+            "options": ["PostgreSQL", "MySQL"]
+        });
+        let tool_use = make_tool_use("ask_user", question_input);
+        let pending = vec![("toolu_ask_1".to_string(), tool_use)];
+
+        let (intercepted, remaining) = state.intercept_special_tools(pending, &tx);
+
+        assert_eq!(intercepted.len(), 1);
+        assert_eq!(intercepted[0], "toolu_ask_1");
+        assert!(remaining.is_empty());
+        assert!(state.has_pending_question());
+
+        let q = state.pending_question().expect("question should be set");
+        assert_eq!(q.question, "Which database should I use?");
+        assert_eq!(q.options.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_intercept_passes_through_normal_tools() {
+        let mut state = test_state();
+        let (tx, _rx) = mpsc::channel::<(String, ToolResultBlock)>(100);
+
+        let bash_tool = ToolUseBlock {
+            id: "toolu_bash_1".to_string(),
+            name: "bash".to_string(),
+            input: json!({"command": "ls -la"}),
+        };
+        let read_tool = ToolUseBlock {
+            id: "toolu_read_1".to_string(),
+            name: "read".to_string(),
+            input: json!({"file_path": "/tmp/test.txt"}),
+        };
+        let pending = vec![
+            ("toolu_bash_1".to_string(), bash_tool),
+            ("toolu_read_1".to_string(), read_tool),
+        ];
+
+        let (intercepted, remaining) = state.intercept_special_tools(pending, &tx);
+
+        assert!(intercepted.is_empty());
+        assert_eq!(remaining.len(), 2);
+        assert_eq!(remaining[0].0, "toolu_bash_1");
+        assert_eq!(remaining[1].0, "toolu_read_1");
+    }
+
+    // =========================================================================
+    // Background tasks
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_intercept_background_bash_tool() {
+        let mut state = test_state();
+        let (tx, mut rx) = mpsc::channel::<(String, ToolResultBlock)>(100);
+
+        let tool_use = ToolUseBlock {
+            id: "toolu_bg_1".to_string(),
+            name: "bash".to_string(),
+            input: json!({"command": "echo hello", "run_in_background": true}),
+        };
+        let pending = vec![("toolu_bg_1".to_string(), tool_use)];
+
+        let (intercepted, remaining) = state.intercept_special_tools(pending, &tx);
+
+        assert_eq!(intercepted.len(), 1);
+        assert_eq!(intercepted[0], "toolu_bg_1");
+        assert!(remaining.is_empty());
+
+        // A result should be sent through the channel with the task ID
+        let (id, result) = rx.recv().await.expect("should receive result");
+        assert_eq!(id, "toolu_bg_1");
+        assert!(!result.is_error);
+        assert!(
+            result.content.contains("Background task"),
+            "Expected background task message, got: {}",
+            result.content
+        );
+    }
+
+    #[tokio::test]
+    async fn test_intercept_task_stop_no_such_task() {
+        let mut state = test_state();
+        let (tx, mut rx) = mpsc::channel::<(String, ToolResultBlock)>(100);
+
+        let tool_use = ToolUseBlock {
+            id: "toolu_stop_1".to_string(),
+            name: "task_stop".to_string(),
+            input: json!({"task_id": "nonexistent_task"}),
+        };
+        let pending = vec![("toolu_stop_1".to_string(), tool_use)];
+
+        let (intercepted, remaining) = state.intercept_special_tools(pending, &tx);
+
+        assert_eq!(intercepted.len(), 1);
+        assert!(remaining.is_empty());
+
+        // Should get an error because the task does not exist
+        let (id, result) = rx.recv().await.expect("should receive result");
+        assert_eq!(id, "toolu_stop_1");
+        assert!(result.is_error);
+        assert!(
+            result.content.contains("No task with ID"),
+            "Expected task-not-found error, got: {}",
+            result.content
+        );
+    }
+
+    // =========================================================================
+    // Free functions
+    // =========================================================================
+
+    #[test]
+    fn test_execute_builtin_tool_result_success() {
+        let result: Result<ToolResult, anyhow::Error> =
+            Ok(ToolResult::Success("output data".to_string()));
+        let block = super::execute_builtin_tool_result("toolu_ok", result);
+
+        assert_eq!(block.tool_use_id, "toolu_ok");
+        assert_eq!(block.content, "output data");
+        assert!(!block.is_error);
+    }
+
+    #[test]
+    fn test_execute_builtin_tool_result_error() {
+        let result: Result<ToolResult, anyhow::Error> =
+            Err(anyhow::anyhow!("something went wrong"));
+        let block = super::execute_builtin_tool_result("toolu_err", result);
+
+        assert_eq!(block.tool_use_id, "toolu_err");
+        assert_eq!(block.content, "something went wrong");
+        assert!(block.is_error);
+    }
+}

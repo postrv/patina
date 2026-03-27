@@ -651,3 +651,340 @@ impl AppState {
         self.dirty.messages = true;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use crate::app::state::AppState;
+    use crate::permissions::PermissionRequest;
+    use crate::types::config::ParallelMode;
+    use crate::types::content::ToolResultBlock;
+    use crate::types::ui_state::{PlanState, PlanStep, QuestionState};
+
+    fn test_state() -> AppState {
+        AppState::new(PathBuf::from("/tmp/test"), false, ParallelMode::Enabled)
+    }
+
+    fn sample_steps() -> Vec<PlanStep> {
+        vec![
+            PlanStep {
+                description: "Read config".to_string(),
+                tool_calls: vec!["read_file".to_string()],
+            },
+            PlanStep {
+                description: "Edit config".to_string(),
+                tool_calls: vec!["edit".to_string()],
+            },
+        ]
+    }
+
+    // =========================================================================
+    // Plan round-trip
+    // =========================================================================
+
+    #[test]
+    fn test_set_and_approve_plan() {
+        let mut state = test_state();
+        let plan = PlanState::new("toolu_plan_1".into(), "My Plan".into(), sample_steps());
+
+        assert!(!state.has_pending_plan());
+        state.set_pending_plan(plan);
+        assert!(state.has_pending_plan());
+
+        let result = state.approve_plan();
+        assert!(result.is_some());
+        let block = result.unwrap();
+        assert_eq!(block.tool_use_id, "toolu_plan_1");
+        assert!(!block.is_error);
+        assert!(block.content.contains("approved"));
+        assert!(!state.has_pending_plan());
+    }
+
+    #[test]
+    fn test_set_and_reject_plan() {
+        let mut state = test_state();
+        let plan = PlanState::new("toolu_plan_2".into(), "Bad Plan".into(), sample_steps());
+
+        state.set_pending_plan(plan);
+        assert!(state.has_pending_plan());
+
+        let result = state.reject_plan();
+        assert!(result.is_some());
+        let block = result.unwrap();
+        assert_eq!(block.tool_use_id, "toolu_plan_2");
+        assert!(block.is_error);
+        assert!(block.content.contains("rejected"));
+        assert!(!state.has_pending_plan());
+    }
+
+    #[test]
+    fn test_approve_plan_when_none() {
+        let mut state = test_state();
+        assert!(!state.has_pending_plan());
+        let result = state.approve_plan();
+        assert!(result.is_none());
+    }
+
+    // =========================================================================
+    // Question round-trip
+    // =========================================================================
+
+    #[test]
+    fn test_set_and_submit_question() {
+        let mut state = test_state();
+        let question = QuestionState::new(
+            "toolu_q_1".into(),
+            "Which DB?".into(),
+            vec!["PostgreSQL".into(), "SQLite".into()],
+            false,
+        );
+
+        assert!(!state.has_pending_question());
+        state.set_pending_question(question);
+        assert!(state.has_pending_question());
+
+        // The default selection is the first option
+        let result = state.submit_question();
+        assert!(result.is_some());
+        let block = result.unwrap();
+        assert_eq!(block.tool_use_id, "toolu_q_1");
+        assert!(!block.is_error);
+        assert_eq!(block.content, "PostgreSQL");
+        assert!(!state.has_pending_question());
+    }
+
+    #[test]
+    fn test_set_and_cancel_question() {
+        let mut state = test_state();
+        let question = QuestionState::new(
+            "toolu_q_2".into(),
+            "Pick a color".into(),
+            vec!["Red".into()],
+            false,
+        );
+
+        state.set_pending_question(question);
+        let result = state.cancel_question();
+        assert!(result.is_some());
+        let block = result.unwrap();
+        assert_eq!(block.tool_use_id, "toolu_q_2");
+        assert!(block.is_error);
+        assert!(block.content.contains("cancelled"));
+        assert!(!state.has_pending_question());
+    }
+
+    #[test]
+    fn test_cancel_question_when_none() {
+        let mut state = test_state();
+        assert!(!state.has_pending_question());
+        let result = state.cancel_question();
+        assert!(result.is_none());
+    }
+
+    // =========================================================================
+    // Permission
+    // =========================================================================
+
+    #[test]
+    fn test_set_and_clear_permission() {
+        let mut state = test_state();
+        let request = PermissionRequest::new("bash", Some("rm -rf /tmp"), "Delete temp files");
+
+        state.set_pending_permission(request);
+        assert!(state.tool_state().has_pending_permission());
+
+        state.clear_pending_permission();
+        assert!(!state.tool_state().has_pending_permission());
+    }
+
+    #[test]
+    fn test_permission_initially_none() {
+        let state = test_state();
+        assert!(!state.tool_state().has_pending_permission());
+        assert!(state.tool_state().pending_permission().is_none());
+    }
+
+    // =========================================================================
+    // Tool blocks
+    // =========================================================================
+
+    #[test]
+    fn test_start_and_complete_tool_block() {
+        let mut state = test_state();
+        let idx = state.start_tool_block("bash", "ls -la");
+
+        // The block should exist and not yet be complete
+        let blocks = state.tool_state().tool_blocks();
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[idx].tool_name(), "bash");
+        assert_eq!(blocks[idx].tool_input(), "ls -la");
+        assert!(!blocks[idx].is_complete());
+
+        // Complete it
+        state.complete_tool_block(idx, "file1.txt\nfile2.txt", false);
+        let blocks = state.tool_state().tool_blocks();
+        assert!(blocks[idx].is_complete());
+        assert_eq!(blocks[idx].result(), Some("file1.txt\nfile2.txt"));
+        assert!(!blocks[idx].is_error());
+    }
+
+    #[test]
+    fn test_clear_tool_blocks() {
+        let mut state = test_state();
+        state.start_tool_block("bash", "ls");
+        state.start_tool_block("read", "/tmp/file.txt");
+        state.start_tool_block("grep", "pattern");
+
+        assert_eq!(state.tool_state().tool_blocks().len(), 3);
+
+        state.clear_tool_blocks();
+        assert!(state.tool_state().tool_blocks().is_empty());
+    }
+
+    #[test]
+    fn test_multiple_tool_blocks() {
+        let mut state = test_state();
+        let idx0 = state.start_tool_block("bash", "pwd");
+        let idx1 = state.start_tool_block("read", "/etc/hosts");
+        let idx2 = state.start_tool_block("grep", "error");
+
+        // Each gets a unique, sequential index
+        assert_eq!(idx0, 0);
+        assert_eq!(idx1, 1);
+        assert_eq!(idx2, 2);
+
+        assert_eq!(state.tool_state().tool_blocks().len(), 3);
+        assert_eq!(state.tool_state().tool_blocks()[0].tool_name(), "bash");
+        assert_eq!(state.tool_state().tool_blocks()[1].tool_name(), "read");
+        assert_eq!(state.tool_state().tool_blocks()[2].tool_name(), "grep");
+    }
+
+    // =========================================================================
+    // Streaming
+    // =========================================================================
+
+    #[test]
+    fn test_streaming_lifecycle() {
+        let mut state = test_state();
+
+        state.set_streaming(true);
+        // Timeline should have a streaming entry
+        assert!(!state.timeline().entries().is_empty());
+
+        state.append_streaming_text("Hello ");
+        state.append_streaming_text("World");
+
+        state.finalize_streaming_as_message();
+        // After finalize, the streaming entry becomes an assistant message
+        let entries = state.timeline().entries();
+        let last = entries.last().expect("should have at least one entry");
+        assert!(
+            matches!(last, crate::types::ConversationEntry::AssistantMessage(_)),
+            "Expected AssistantMessage after finalize, got: {last:?}"
+        );
+    }
+
+    #[test]
+    fn test_append_streaming_text_accumulates() {
+        let mut state = test_state();
+        state.set_streaming(true);
+        state.append_streaming_text("one ");
+        state.append_streaming_text("two ");
+        state.append_streaming_text("three");
+
+        // Finalize and check accumulated text
+        state.finalize_streaming_as_message();
+        let entries = state.timeline().entries();
+        let last = entries.last().expect("should have an entry");
+        if let crate::types::ConversationEntry::AssistantMessage(content) = last {
+            assert_eq!(content, "one two three");
+        } else {
+            panic!("Expected AssistantMessage, got: {last:?}");
+        }
+    }
+
+    #[test]
+    fn test_finalize_converts_to_message() {
+        let mut state = test_state();
+        state.set_streaming(true);
+        state.append_streaming_text("response text");
+        state.finalize_streaming_as_message();
+
+        // loading should be cleared
+        assert!(!state.display.loading);
+
+        // The timeline should contain the finalized message
+        let found = state.timeline().entries().iter().any(|e| {
+            matches!(e, crate::types::ConversationEntry::AssistantMessage(content) if content == "response text")
+        });
+        assert!(found, "Finalized message should appear in timeline");
+    }
+
+    // =========================================================================
+    // Completion
+    // =========================================================================
+
+    #[test]
+    fn test_show_and_dismiss_completion() {
+        let mut state = test_state();
+        assert!(!state.has_completion());
+
+        state.show_completion();
+        assert!(state.has_completion());
+
+        state.dismiss_completion();
+        assert!(!state.has_completion());
+    }
+
+    #[test]
+    fn test_completion_initially_none() {
+        let state = test_state();
+        assert!(!state.has_completion());
+        assert!(state.completion().is_none());
+    }
+
+    // =========================================================================
+    // Tool execution helpers
+    // =========================================================================
+
+    #[test]
+    fn test_reset_tool_loop() {
+        let mut state = test_state();
+
+        // Set up various state
+        state.set_pending_permission(PermissionRequest::new("bash", Some("ls"), "test"));
+        state.start_tool_block("bash", "ls");
+
+        // Reset should clear tool loop and pending permission
+        state.reset_tool_loop();
+        assert!(!state.tool_state().has_pending_permission());
+    }
+
+    #[test]
+    fn test_record_tool_result() {
+        let mut state = test_state();
+
+        // Add a tool to the timeline in executing state
+        state.add_tool_to_timeline_executing("bash", "echo hello");
+
+        // Record a result
+        let result = ToolResultBlock::success("toolu_rec_1", "hello");
+        state.record_tool_result("toolu_rec_1", result);
+
+        // The timeline entry should now have an output
+        let tool_entry = state.timeline().entries().iter().find(|e| {
+            matches!(
+                e,
+                crate::types::ConversationEntry::ToolExecution {
+                    output: Some(_),
+                    ..
+                }
+            )
+        });
+        assert!(
+            tool_entry.is_some(),
+            "Timeline should contain a completed tool entry"
+        );
+    }
+}
