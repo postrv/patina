@@ -747,56 +747,108 @@ fn render_permission_modal_dangerous(frame: &mut Frame, area: Rect, state: &Perm
 }
 
 fn render_messages(frame: &mut Frame, area: Rect, view: &RenderView) -> RenderFeedback {
-    // Render using unified timeline
+    use crate::tui::scroll::VirtualizedViewport;
+
     let throbber = view.throbber_char;
     let timeline_entry_count = view.timeline.len();
-    let lines = render_timeline_with_throbber(view.timeline, throbber);
 
-    tracing::debug!(
-        timeline_entries = timeline_entry_count,
-        rendered_lines = lines.len(),
-        "render_messages: timeline to lines"
-    );
-
-    // Calculate content dimensions first (needed for cache wrapping)
-    // Subtract 2 for borders (top and bottom)
+    // Subtract 2 for borders (top and bottom / left and right)
     let viewport_height = area.height.saturating_sub(2) as usize;
-    // Subtract 2 for borders (left and right)
     let content_width = area.width.saturating_sub(2) as usize;
 
-    // Wrap lines for copy/paste cache (visual lines, not logical lines)
-    let wrapped_lines = wrap_lines_to_strings(&lines, content_width);
+    // ---------------------------------------------------------------
+    // B1: Build a viewport index from estimated line counts.
+    // This is O(n) in entries but does NO rendering work.
+    // ---------------------------------------------------------------
+    let mut viewport = VirtualizedViewport::new();
+    for (i, entry) in view.timeline.entries().iter().enumerate() {
+        viewport.add_content(i, entry.estimated_line_count());
+    }
 
-    tracing::debug!(
-        cache_size = wrapped_lines.len(),
-        "render_messages: wrapped lines computed"
-    );
+    let total_estimated_lines = viewport.total_lines();
 
-    // Calculate actual wrapped content height
-    // Each Line may wrap to multiple displayed lines based on content width
-    let wrapped_height = calculate_wrapped_height(&lines, content_width);
-
-    // Convert scroll offset: our model uses "offset from bottom" (0 = at bottom),
-    // but ratatui Paragraph uses "offset from top" (0 = at top).
-    //
-    // The scroll offset may exceed max_scroll if the user scrolled up and then
-    // content height decreased (e.g., wrapping calculation changed). We clamp
-    // to ensure valid scroll position.
-    let max_scroll = wrapped_height.saturating_sub(viewport_height);
+    // Compute the global scroll position (same model as before).
+    let max_scroll = total_estimated_lines.saturating_sub(viewport_height);
     let clamped_offset = view.scroll_offset.min(max_scroll);
     let scroll_from_top = max_scroll.saturating_sub(clamped_offset);
 
+    // Determine which entries overlap the visible window.
+    let (vis_start, vis_end) = viewport.visible_line_range(view.scroll_offset, viewport_height);
+    let visible_indices = viewport.visible_indices(vis_start, vis_end);
+
     tracing::debug!(
-        logical_lines = lines.len(),
-        wrapped_height,
+        timeline_entries = timeline_entry_count,
+        total_estimated_lines,
         viewport_height,
         content_width,
         max_scroll,
         raw_offset = view.scroll_offset,
         clamped_offset,
         scroll_from_top,
+        visible_count = visible_indices.len(),
         mode = ?view.scroll_state.mode(),
-        "scroll calculation"
+        "render_messages: viewport-culled"
+    );
+
+    // ---------------------------------------------------------------
+    // B1: Render only visible entries, then pad to maintain correct
+    //     scroll position within the Paragraph widget.
+    // ---------------------------------------------------------------
+    //
+    // `Paragraph::new(lines).scroll((scroll_from_top, 0))` expects the
+    // full content height so that its internal scroll arithmetic works.
+    // We supply:
+    //   1. `scroll_from_top` blank lines (invisible, skipped by scroll)
+    //   2. The rendered visible lines
+    //   3. Enough trailing blank lines to reach total_estimated_lines
+    //
+    // This keeps ratatui happy while only allocating styled Lines for
+    // the visible portion.
+
+    let visible_lines = render_visible_entries(view.timeline, throbber, &visible_indices);
+    let visible_line_count = visible_lines.len();
+
+    // Calculate how many lines the visible entries span in the global
+    // coordinate space (sum of their estimated counts).
+    let visible_estimated: usize = visible_indices
+        .iter()
+        .filter_map(|&i| view.timeline.entries().get(i))
+        .map(|e| e.estimated_line_count())
+        .sum();
+
+    // The first visible entry starts at this global line offset.
+    let first_visible_global_start = visible_indices
+        .first()
+        .and_then(|&i| viewport.range_for(i))
+        .map_or(0, |r| r.start_line);
+
+    // Build the final line buffer with padding.
+    let pre_pad = first_visible_global_start;
+    let post_pad = total_estimated_lines.saturating_sub(pre_pad + visible_estimated);
+
+    let mut lines: Vec<Line<'static>> = Vec::with_capacity(pre_pad + visible_line_count + post_pad);
+    lines.extend((0..pre_pad).map(|_| Line::from("")));
+    lines.extend(visible_lines);
+    lines.extend((0..post_pad).map(|_| Line::from("")));
+
+    // Wrap only the visible portion for the copy/paste cache.
+    // Indices pre_pad..pre_pad+visible_line_count contain real content.
+    let visible_slice = &lines[pre_pad..pre_pad + visible_line_count];
+    let wrapped_lines = wrap_lines_to_strings(visible_slice, content_width);
+
+    // Compute wrapped height: use estimated total for padding regions
+    // (each pad line = 1 row) plus accurate wrapped height for visible
+    // content to give the scrollbar a correct total.
+    let visible_wrapped = calculate_wrapped_height(visible_slice, content_width);
+    let wrapped_height = pre_pad + visible_wrapped + post_pad;
+
+    tracing::debug!(
+        visible_line_count,
+        pre_pad,
+        post_pad,
+        total_lines = lines.len(),
+        wrapped_height,
+        "render_messages: padded line buffer"
     );
 
     let messages = Paragraph::new(lines)
@@ -1595,6 +1647,9 @@ mod tests {
         timeline.push_user_message("Hello");
 
         let visible = render_visible_entries(&timeline, ' ', &[]);
-        assert!(visible.is_empty(), "No visible indices should produce no lines");
+        assert!(
+            visible.is_empty(),
+            "No visible indices should produce no lines"
+        );
     }
 }
