@@ -8,19 +8,17 @@
 //! - Store overwrites existing credentials
 //! - Credentials expiry is preserved through storage
 //!
-//! Note: These tests use a mock storage backend to avoid
-//! interacting with the real OS keychain during testing.
+//! All tests use MockCredentialStorage to avoid interacting with
+//! the real OS keychain. Real keychain integration tests are in
+//! src/auth/storage.rs (run with --ignored).
 
-use patina::auth::storage::{
-    clear_oauth_credentials, has_stored_credentials, load_oauth_credentials,
-    store_oauth_credentials,
-};
+use patina::auth::storage::{CredentialStorage, MockCredentialStorage};
 use patina::auth::OAuthCredentials;
 use secrecy::{ExposeSecret, SecretString};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 // ============================================================================
-// Mock Storage Tests - These run without real keychain access
+// CredentialStorage roundtrip tests (via MockCredentialStorage)
 // ============================================================================
 
 /// Tests that credentials can be stored and loaded back (roundtrip).
@@ -30,25 +28,27 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 /// - Refresh token is preserved
 /// - Token can be loaded after storing
 #[tokio::test]
-#[ignore = "requires real keychain - run with --ignored"]
 async fn test_store_and_load_credentials_roundtrip() {
-    // Use unique test identifiers to avoid conflicts
-    let access_token = format!("test_access_{}", std::process::id());
-    let refresh_token = format!("test_refresh_{}", std::process::id());
+    let mut storage = MockCredentialStorage::new();
+
+    let access_value = "roundtrip_access_val";
+    let refresh_value = "roundtrip_refresh_val";
 
     let creds = OAuthCredentials::new(
-        SecretString::new(access_token.clone().into()),
-        SecretString::new(refresh_token.clone().into()),
+        SecretString::new(access_value.into()),
+        SecretString::new(refresh_value.into()),
         Duration::from_secs(3600),
     );
 
     // Store credentials
-    store_oauth_credentials(&creds)
+    storage
+        .store(&creds)
         .await
         .expect("Failed to store credentials");
 
     // Load credentials
-    let loaded = load_oauth_credentials()
+    let loaded = storage
+        .load()
         .await
         .expect("Failed to load credentials")
         .expect("Credentials should be present");
@@ -56,29 +56,25 @@ async fn test_store_and_load_credentials_roundtrip() {
     // Verify tokens match
     assert_eq!(
         loaded.access_token().expose_secret(),
-        &access_token,
+        access_value,
         "Access token should be preserved"
     );
     assert_eq!(
         loaded.refresh_token().expose_secret(),
-        &refresh_token,
+        refresh_value,
         "Refresh token should be preserved"
     );
-
-    // Cleanup
-    clear_oauth_credentials()
-        .await
-        .expect("Failed to clear credentials");
 }
 
 /// Tests that clearing credentials removes all stored data.
 ///
 /// After clearing:
-/// - has_stored_credentials() returns false
-/// - load_oauth_credentials() returns None
+/// - has_stored() returns false
+/// - load() returns None
 #[tokio::test]
-#[ignore = "requires real keychain - run with --ignored"]
 async fn test_clear_credentials_removes_all() {
+    let mut storage = MockCredentialStorage::new();
+
     // Store some credentials first
     let creds = OAuthCredentials::new(
         SecretString::new("clear_test_access".into()),
@@ -86,47 +82,40 @@ async fn test_clear_credentials_removes_all() {
         Duration::from_secs(3600),
     );
 
-    store_oauth_credentials(&creds)
+    storage
+        .store(&creds)
         .await
         .expect("Failed to store credentials");
 
     // Verify they exist
     assert!(
-        has_stored_credentials(),
+        storage.has_stored(),
         "Credentials should exist before clearing"
     );
 
     // Clear credentials
-    clear_oauth_credentials()
-        .await
-        .expect("Failed to clear credentials");
+    storage.clear().await.expect("Failed to clear credentials");
 
     // Verify they're gone
     assert!(
-        !has_stored_credentials(),
-        "has_stored_credentials should return false after clearing"
+        !storage.has_stored(),
+        "has_stored should return false after clearing"
     );
 
-    let loaded = load_oauth_credentials()
-        .await
-        .expect("Load should not error");
-    assert!(
-        loaded.is_none(),
-        "load_oauth_credentials should return None after clearing"
-    );
+    let loaded = storage.load().await.expect("Load should not error");
+    assert!(loaded.is_none(), "load should return None after clearing");
 }
 
 /// Tests that loading nonexistent credentials returns None.
 ///
 /// This ensures clean behavior when no credentials are stored.
 #[tokio::test]
-#[ignore = "requires real keychain - run with --ignored"]
 async fn test_load_nonexistent_returns_none() {
-    // First ensure no credentials exist
-    let _ = clear_oauth_credentials().await;
+    let storage = MockCredentialStorage::new();
 
     // Load should return None, not an error
-    let loaded = load_oauth_credentials()
+    let loaded = storage
+        .load()
         .await
         .expect("Load should not error for nonexistent");
 
@@ -140,8 +129,9 @@ async fn test_load_nonexistent_returns_none() {
 ///
 /// When storing new credentials, the old ones should be replaced.
 #[tokio::test]
-#[ignore = "requires real keychain - run with --ignored"]
 async fn test_store_overwrites_existing() {
+    let mut storage = MockCredentialStorage::new();
+
     // Store initial credentials
     let initial_creds = OAuthCredentials::new(
         SecretString::new("initial_access".into()),
@@ -149,7 +139,8 @@ async fn test_store_overwrites_existing() {
         Duration::from_secs(3600),
     );
 
-    store_oauth_credentials(&initial_creds)
+    storage
+        .store(&initial_creds)
         .await
         .expect("Failed to store initial credentials");
 
@@ -160,12 +151,14 @@ async fn test_store_overwrites_existing() {
         Duration::from_secs(7200),
     );
 
-    store_oauth_credentials(&new_creds)
+    storage
+        .store(&new_creds)
         .await
         .expect("Failed to store new credentials");
 
     // Load and verify new credentials are returned
-    let loaded = load_oauth_credentials()
+    let loaded = storage
+        .load()
         .await
         .expect("Failed to load credentials")
         .expect("Credentials should be present");
@@ -180,19 +173,15 @@ async fn test_store_overwrites_existing() {
         "new_refresh",
         "Refresh token should be from new credentials"
     );
-
-    // Cleanup
-    clear_oauth_credentials()
-        .await
-        .expect("Failed to clear credentials");
 }
 
 /// Tests that credentials expiry is preserved through storage.
 ///
 /// The expiry timestamp should survive the store/load cycle.
 #[tokio::test]
-#[ignore = "requires real keychain - run with --ignored"]
 async fn test_credentials_expiry_preserved() {
+    let mut storage = MockCredentialStorage::new();
+
     // Create credentials with a specific expiry time
     let expiry_secs: u64 = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -209,43 +198,24 @@ async fn test_credentials_expiry_preserved() {
     );
 
     // Store credentials
-    store_oauth_credentials(&creds)
+    storage
+        .store(&creds)
         .await
         .expect("Failed to store credentials");
 
     // Load credentials
-    let loaded = load_oauth_credentials()
+    let loaded = storage
+        .load()
         .await
         .expect("Failed to load credentials")
         .expect("Credentials should be present");
 
-    // Verify expiry is preserved (within 1 second tolerance due to storage format)
-    let loaded_expiry = loaded.expires_at();
-    let expected_duration = expected_expiry
-        .duration_since(UNIX_EPOCH)
-        .expect("Expected expiry should be after UNIX_EPOCH");
-    let loaded_duration = loaded_expiry
-        .duration_since(UNIX_EPOCH)
-        .expect("Loaded expiry should be after UNIX_EPOCH");
-
-    // Allow 1 second tolerance for rounding
-    let diff = if loaded_duration > expected_duration {
-        loaded_duration - expected_duration
-    } else {
-        expected_duration - loaded_duration
-    };
-
-    assert!(
-        diff <= Duration::from_secs(1),
-        "Expiry should be preserved within 1 second tolerance. Expected: {:?}, Loaded: {:?}",
-        expected_duration,
-        loaded_duration
+    // Verify expiry is preserved exactly (mock storage has no serialization overhead)
+    assert_eq!(
+        loaded.expires_at(),
+        expected_expiry,
+        "Expiry should be preserved exactly in mock storage"
     );
-
-    // Cleanup
-    clear_oauth_credentials()
-        .await
-        .expect("Failed to clear credentials");
 }
 
 // ============================================================================
@@ -257,8 +227,6 @@ async fn test_credentials_expiry_preserved() {
 /// This test verifies the trait exists and has the expected methods.
 #[test]
 fn test_credential_storage_trait_exists() {
-    use patina::auth::storage::CredentialStorage;
-
     // The trait should be importable - this is a compile-time check
     fn _assert_trait_bounds<T: CredentialStorage>() {}
 
@@ -269,8 +237,6 @@ fn test_credential_storage_trait_exists() {
 /// Tests that MockCredentialStorage can be used for testing.
 #[tokio::test]
 async fn test_mock_storage_store_and_load() {
-    use patina::auth::storage::{CredentialStorage, MockCredentialStorage};
-
     let mut storage = MockCredentialStorage::new();
 
     let creds = OAuthCredentials::new(
@@ -302,8 +268,6 @@ async fn test_mock_storage_store_and_load() {
 /// Tests that MockCredentialStorage properly handles clear.
 #[tokio::test]
 async fn test_mock_storage_clear() {
-    use patina::auth::storage::{CredentialStorage, MockCredentialStorage};
-
     let mut storage = MockCredentialStorage::new();
 
     // Store credentials
@@ -331,8 +295,6 @@ async fn test_mock_storage_clear() {
 /// Tests that MockCredentialStorage preserves expiry.
 #[tokio::test]
 async fn test_mock_storage_preserves_expiry() {
-    use patina::auth::storage::{CredentialStorage, MockCredentialStorage};
-
     let mut storage = MockCredentialStorage::new();
 
     let expiry = SystemTime::now() + Duration::from_secs(7200);
@@ -364,7 +326,7 @@ fn test_storage_error_variants() {
 
     // Test each variant can be created
     let unavailable = StorageError::KeyringUnavailable("test platform".to_string());
-    let not_found = StorageError::EntryNotFound("access_token".to_string());
+    let not_found = StorageError::EntryNotFound("access_value".to_string());
     let access_denied = StorageError::AccessDenied("permission denied".to_string());
     let platform = StorageError::Platform("specific error".to_string());
 
@@ -456,7 +418,7 @@ fn test_storage_error_from_keyring_error() {
 /// Tests that MockCredentialStorage can simulate errors for testing.
 #[tokio::test]
 async fn test_mock_storage_error_simulation() {
-    use patina::auth::storage::{CredentialStorage, MockCredentialStorage, StorageError};
+    use patina::auth::storage::StorageError;
 
     let mut storage = MockCredentialStorage::new();
 
@@ -488,7 +450,6 @@ async fn test_mock_storage_error_simulation() {
 /// Tests that AuthManager can store credentials to keyring.
 #[tokio::test]
 async fn test_auth_manager_stores_to_keyring() {
-    use patina::auth::storage::{CredentialStorage, MockCredentialStorage};
     use patina::auth::{AuthManager, OAuthCredentials};
 
     let mut storage = MockCredentialStorage::new();
@@ -514,7 +475,6 @@ async fn test_auth_manager_stores_to_keyring() {
 /// Tests that AuthManager clears credentials from keyring.
 #[tokio::test]
 async fn test_auth_manager_clears_keyring() {
-    use patina::auth::storage::{CredentialStorage, MockCredentialStorage};
     use patina::auth::AuthManager;
 
     let mut storage = MockCredentialStorage::new();
@@ -540,7 +500,6 @@ async fn test_auth_manager_clears_keyring() {
 /// Tests that credentials persist across AuthManager instances (simulated).
 #[tokio::test]
 async fn test_credentials_persist_across_sessions() {
-    use patina::auth::storage::{CredentialStorage, MockCredentialStorage};
     use patina::auth::{AuthManager, OAuthCredentials};
 
     // Simulate session 1: Store credentials
