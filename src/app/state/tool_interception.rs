@@ -115,8 +115,9 @@ impl AppState {
 
     /// Intercepts a bash tool with `run_in_background`, spawning a background task.
     ///
-    /// Extracts the command from the tool input, spawns it as a background task,
-    /// and sends a success result with the task ID.
+    /// Extracts the command from the tool input, validates it against the security
+    /// policy, then spawns it as a background task. Returns an error result if the
+    /// command is blocked by the security policy.
     fn intercept_background_bash_tool(
         &mut self,
         id: &str,
@@ -129,6 +130,19 @@ impl AppState {
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
+
+        // Validate the command against the security policy before spawning
+        let policy = self.tool_state.tool_executor.policy();
+        if let Err(msg) = crate::tools::validate_command(&command, policy) {
+            let result = ToolResultBlock::error(id, msg);
+            let tx_clone = tx.clone();
+            let id_clone = id.to_string();
+            tokio::spawn(async move {
+                let _ = tx_clone.send((id_clone, result)).await;
+            });
+            return;
+        }
+
         let task_id = self.background_tasks.spawn(command, &self.working_dir);
         let result = ToolResultBlock::success(id, format!("Background task {task_id} started"));
         let tx_clone = tx.clone();

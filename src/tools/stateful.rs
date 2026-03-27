@@ -208,6 +208,12 @@ impl StatefulToolExecutor {
         })
     }
 
+    /// Returns a reference to the current execution policy.
+    #[must_use]
+    pub fn policy(&self) -> &ToolExecutionPolicy {
+        &self.inner.policy
+    }
+
     /// Sets a custom execution policy for the tool executor.
     ///
     /// # Arguments

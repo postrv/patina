@@ -13,7 +13,7 @@ use tokio::process::Command;
 use tracing::{debug, warn};
 use walkdir::WalkDir;
 
-use super::security::{normalize_command, ToolExecutionPolicy};
+use super::security::ToolExecutionPolicy;
 use super::{vision, web_fetch, web_search};
 use crate::agents::AgentRegistry;
 use crate::permissions::PermissionRequest;
@@ -314,9 +314,8 @@ impl ToolExecutor {
 
     /// Validates a bash command against dangerous patterns and allowlist policy.
     ///
-    /// Normalizes the command to detect escape-based bypasses (e.g., `r\m` -> `rm`),
-    /// then checks both the original and normalized forms against dangerous patterns.
-    /// If allowlist mode is enabled, also verifies the command matches an allowed pattern.
+    /// Delegates to the standalone [`validate_command`](super::security::validate_command)
+    /// function, adding tracing warnings on rejection.
     ///
     /// # Errors
     ///
@@ -324,40 +323,10 @@ impl ToolExecutor {
     /// - The command matches a dangerous pattern
     /// - Allowlist mode is enabled and the command does not match any allowed pattern
     fn validate_bash_command(&self, command: &str) -> std::result::Result<(), ToolResult> {
-        let normalized = normalize_command(command);
-
-        for pattern in &self.policy.dangerous_patterns {
-            if pattern.is_match(command) || pattern.is_match(&normalized) {
-                warn!(
-                    pattern = %pattern.as_str(),
-                    command = %command,
-                    "Security violation: command blocked by dangerous pattern"
-                );
-                return Err(ToolResult::Error(format!(
-                    "Command blocked by security policy: matches {:?}",
-                    pattern.as_str()
-                )));
-            }
-        }
-
-        if self.policy.allowlist_mode {
-            let is_allowed = self
-                .policy
-                .allowed_commands
-                .iter()
-                .any(|pattern| pattern.is_match(command) || pattern.is_match(&normalized));
-            if !is_allowed {
-                warn!(
-                    command = %command,
-                    "Security: command blocked by allowlist policy"
-                );
-                return Err(ToolResult::Error(
-                    "Command blocked: not in allowlist".to_string(),
-                ));
-            }
-        }
-
-        Ok(())
+        super::security::validate_command(command, &self.policy).map_err(|msg| {
+            warn!(command = %command, "Security: {msg}");
+            ToolResult::Error(msg)
+        })
     }
 
     /// Builds the shell command program and arguments for bash execution.
