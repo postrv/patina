@@ -112,7 +112,7 @@ pub fn initialize_compression_orchestrator(state: &mut AppState, config: &Config
 pub(crate) async fn initialize_mcp_servers(
     working_dir: &std::path::Path,
 ) -> Option<crate::mcp::manager::McpManager> {
-    let configs = match crate::mcp::config::load_mcp_config(working_dir) {
+    let config_result = match crate::mcp::config::load_mcp_config(working_dir) {
         Ok(c) => c,
         Err(e) => {
             warn!("Failed to load MCP config: {}", e);
@@ -120,17 +120,54 @@ pub(crate) async fn initialize_mcp_servers(
         }
     };
 
-    if configs.is_empty() {
+    if config_result.servers.is_empty() {
         return None;
     }
 
+    // Try Forge mode if configured
+    if let Some(ref forge_settings) = config_result.forge {
+        if crate::mcp::forge::is_forge_available(forge_settings) {
+            let session_dir = std::env::temp_dir().join("patina");
+            match crate::mcp::forge::ForgeContext::prepare(
+                forge_settings,
+                &config_result.servers,
+                &session_dir,
+            ) {
+                Ok(context) => {
+                    info!(
+                        server_count = context.server_count(),
+                        "Starting MCP servers via Forge gateway"
+                    );
+                    let timeout = Duration::from_secs(forge_settings.timeout_secs.unwrap_or(30));
+                    let manager =
+                        crate::mcp::manager::McpManager::start_with_forge(&context, timeout).await;
+
+                    if manager.connected_count() > 0 {
+                        info!(
+                            tools = manager.tool_count(),
+                            managed = context.server_count(),
+                            "Forge gateway connected"
+                        );
+                        return Some(manager);
+                    }
+                    warn!("Forge gateway failed to connect, falling back to direct connections");
+                }
+                Err(e) => {
+                    warn!("Failed to prepare Forge config: {}, falling back", e);
+                }
+            }
+        }
+    }
+
+    // Fallback: direct connections (existing behavior)
     info!(
-        server_count = configs.len(),
+        server_count = config_result.servers.len(),
         "Starting MCP servers from config"
     );
 
     let manager =
-        crate::mcp::manager::McpManager::start_all(configs, Duration::from_secs(10)).await;
+        crate::mcp::manager::McpManager::start_all(config_result.servers, Duration::from_secs(10))
+            .await;
 
     // Log server statuses
     for (name, status) in manager.server_statuses() {

@@ -356,11 +356,13 @@ pub fn generate_forge_toml(
 /// # Examples
 ///
 /// ```
+/// use patina::mcp::forge::collect_merged_env;
 /// use patina::mcp::config::McpServerEntry;
 /// use std::collections::HashMap;
 ///
 /// let servers = HashMap::new();
-/// // With no servers, returns empty map
+/// let env = collect_merged_env(&servers);
+/// assert!(env.is_empty());
 /// ```
 #[must_use]
 pub fn collect_merged_env(servers: &HashMap<String, McpServerEntry>) -> HashMap<String, String> {

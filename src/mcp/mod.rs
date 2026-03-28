@@ -14,7 +14,7 @@
 pub mod auth;
 pub mod config;
 pub mod connection;
-pub mod forge; // Forge (Forgemax) integration — registered here for test compilation
+pub mod forge;
 pub mod handler;
 pub mod legacy_sse;
 pub mod manager;

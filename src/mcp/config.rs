@@ -31,8 +31,8 @@
 //! use std::path::Path;
 //!
 //! # fn example() -> anyhow::Result<()> {
-//! let configs = load_mcp_config(Path::new("."))?;
-//! for (name, entry) in &configs {
+//! let result = load_mcp_config(Path::new("."))?;
+//! for (name, entry) in &result.servers {
 //!     println!("Server '{}': command={}", name, entry.command);
 //! }
 //! # Ok(())
@@ -184,12 +184,29 @@ impl McpServerEntry {
 /// let json = r#"{"mcpServers":{}}"#;
 /// let config: McpConfigFile = serde_json::from_str(json).unwrap();
 /// assert!(config.mcp_servers.is_empty());
+/// assert!(config.forge.is_none());
 /// ```
 #[derive(Debug, Clone, Deserialize)]
 pub struct McpConfigFile {
     /// Map of server name to server entry.
     #[serde(rename = "mcpServers", default)]
     pub mcp_servers: HashMap<String, McpServerEntry>,
+
+    /// Optional Forge gateway configuration.
+    #[serde(default)]
+    pub forge: Option<super::forge::ForgeSettings>,
+}
+
+/// Result of loading MCP configuration, including optional Forge settings.
+///
+/// Returned by [`load_mcp_config`] and related functions. Contains the merged
+/// server map plus any Forge gateway settings from the project-local config.
+#[derive(Debug)]
+pub struct McpConfigResult {
+    /// Merged and filtered MCP server entries.
+    pub servers: HashMap<String, McpServerEntry>,
+    /// Forge gateway settings from the project-local `.mcp.json`, if present.
+    pub forge: Option<super::forge::ForgeSettings>,
 }
 
 /// Loads and merges MCP configuration from project-local and user-global files.
@@ -216,16 +233,20 @@ pub struct McpConfigFile {
 /// use std::path::Path;
 ///
 /// # fn example() -> anyhow::Result<()> {
-/// let configs = load_mcp_config(Path::new("."))?;
-/// println!("Found {} MCP servers", configs.len());
+/// let result = load_mcp_config(Path::new("."))?;
+/// println!("Found {} MCP servers", result.servers.len());
 /// # Ok(())
 /// # }
 /// ```
-pub fn load_mcp_config(working_dir: &Path) -> Result<HashMap<String, McpServerEntry>> {
-    let project_config = load_config_file(&working_dir.join(".mcp.json"))?;
+pub fn load_mcp_config(working_dir: &Path) -> Result<McpConfigResult> {
+    let project_path = working_dir.join(".mcp.json");
+    let (project_servers, project_forge) = load_config_file_full(&project_path)?;
     let user_config = load_user_global_config()?;
-    let merged = merge_configs(project_config, user_config);
-    Ok(merged)
+    let merged = merge_configs(project_servers, user_config);
+    Ok(McpConfigResult {
+        servers: merged,
+        forge: project_forge,
+    })
 }
 
 /// Loads MCP configuration with trust verification for project configs.
@@ -303,8 +324,25 @@ pub fn load_project_config(working_dir: &Path) -> Result<HashMap<String, McpServ
 ///
 /// Returns an error if the file exists but contains invalid JSON.
 fn load_config_file(path: &Path) -> Result<HashMap<String, McpServerEntry>> {
+    let (servers, _forge) = load_config_file_full(path)?;
+    Ok(servers)
+}
+
+/// Loads a single config file, returning both the server map and any Forge settings.
+///
+/// Returns `(empty_map, None)` if the file doesn't exist.
+///
+/// # Errors
+///
+/// Returns an error if the file exists but contains invalid JSON.
+fn load_config_file_full(
+    path: &Path,
+) -> Result<(
+    HashMap<String, McpServerEntry>,
+    Option<super::forge::ForgeSettings>,
+)> {
     if !path.exists() {
-        return Ok(HashMap::new());
+        return Ok((HashMap::new(), None));
     }
 
     let content = std::fs::read_to_string(path)
@@ -313,7 +351,7 @@ fn load_config_file(path: &Path) -> Result<HashMap<String, McpServerEntry>> {
     let config: McpConfigFile = serde_json::from_str(&content)
         .with_context(|| format!("Failed to parse config file: {}", path.display()))?;
 
-    Ok(config.mcp_servers)
+    Ok((config.mcp_servers, config.forge))
 }
 
 /// Loads the user-global config from `~/.claude.json`.
@@ -788,5 +826,54 @@ mod tests {
         let json = serde_json::to_string(&config).unwrap();
         assert!(!json.contains("auth_url"));
         assert!(!json.contains("token_url"));
+    }
+
+    // =========================================================================
+    // Forge configuration tests
+    // =========================================================================
+
+    #[test]
+    fn config_file_with_forge_section() {
+        let json = r#"{
+            "mcpServers": {"fs": {"command": "fs-server"}},
+            "forge": {"enabled": true, "timeout_secs": 45}
+        }"#;
+        let config: McpConfigFile = serde_json::from_str(json).unwrap();
+        assert_eq!(config.mcp_servers.len(), 1);
+        let forge = config.forge.unwrap();
+        assert!(forge.enabled);
+        assert_eq!(forge.timeout_secs, Some(45));
+    }
+
+    #[test]
+    fn config_file_without_forge_section() {
+        let json = r#"{"mcpServers": {"test": {"command": "echo"}}}"#;
+        let config: McpConfigFile = serde_json::from_str(json).unwrap();
+        assert!(config.forge.is_none());
+    }
+
+    #[test]
+    fn mcp_config_result_has_forge() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let config_content = r#"{
+            "mcpServers": {"srv": {"command": "echo"}},
+            "forge": {"enabled": true}
+        }"#;
+        std::fs::write(dir.path().join(".mcp.json"), config_content).unwrap();
+
+        let result = load_mcp_config(dir.path()).unwrap();
+        assert!(result.servers.contains_key("srv"));
+        assert!(result.forge.unwrap().enabled);
+    }
+
+    #[test]
+    fn mcp_config_result_no_forge_when_absent() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let config_content = r#"{"mcpServers": {"srv": {"command": "echo"}}}"#;
+        std::fs::write(dir.path().join(".mcp.json"), config_content).unwrap();
+
+        let result = load_mcp_config(dir.path()).unwrap();
+        assert!(result.servers.contains_key("srv"));
+        assert!(result.forge.is_none());
     }
 }

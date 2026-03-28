@@ -17,8 +17,8 @@
 //! use std::time::Duration;
 //!
 //! # async fn example() -> anyhow::Result<()> {
-//! let configs = load_mcp_config(Path::new("."))?;
-//! let mut manager = McpManager::start_all(configs, Duration::from_secs(10)).await;
+//! let result = load_mcp_config(Path::new("."))?;
+//! let mut manager = McpManager::start_all(result.servers, Duration::from_secs(10)).await;
 //!
 //! // Get all tool definitions for the API
 //! let tools = manager.tool_definitions();
@@ -141,6 +141,37 @@ impl McpManager {
         let servers = futures::future::join_all(futures).await;
 
         Self { servers }
+    }
+
+    /// Creates an MCP manager connected to Forge as a single gateway server.
+    ///
+    /// Instead of connecting to individual MCP servers, this connects to the
+    /// Forge process which routes tool calls through a V8 sandbox. The Forge
+    /// binary is started as a stdio MCP server using the prepared context.
+    ///
+    /// # Arguments
+    ///
+    /// * `forge_context` - Prepared Forge context with binary path, args, and env
+    /// * `timeout` - Connection timeout for the Forge process
+    pub async fn start_with_forge(
+        forge_context: &super::forge::ForgeContext,
+        timeout: Duration,
+    ) -> Self {
+        let entry = McpServerEntry {
+            command: forge_context.command().to_string_lossy().to_string(),
+            args: forge_context.args(),
+            env: forge_context.env().clone(),
+            url: None,
+            headers: None,
+            transport_type: None,
+            disabled: false,
+            auth: None,
+        };
+
+        let server = start_stdio_server("forge".to_string(), entry, timeout).await;
+        Self {
+            servers: vec![server],
+        }
     }
 
     /// Returns namespaced tool definitions for all connected servers.
