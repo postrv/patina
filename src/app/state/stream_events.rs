@@ -44,6 +44,7 @@ impl AppState {
                     self.conversation
                         .timeline
                         .push_assistant_message(format!("[Thought for ~{} tokens]", token_count));
+                    self.conversation.dirty = true;
                 }
             }
             StreamEvent::Usage(usage) => {
@@ -208,7 +209,8 @@ impl AppState {
     }
 
     /// Handles a stream `Error` event by logging the error, firing the
-    /// `StopFailure` hook, and resetting the streaming state.
+    /// `StopFailure` hook, resetting the tool loop state machine, finalizing
+    /// any partial streaming timeline entry, and clearing the streaming state.
     fn handle_stream_error(&mut self, error: String) {
         tracing::error!("Stream error: {}", error);
 
@@ -221,6 +223,16 @@ impl AppState {
                     tracing::debug!("Hook fire failed: {e}");
                 }
             });
+        }
+
+        // F1: Reset tool loop state machine so it doesn't stay stuck in Streaming
+        self.tool_state.tool_loop.reset();
+
+        // F2: Finalize any partial streaming entry so it doesn't remain as a ghost.
+        // finalize_streaming_as_message is safe to call when there's no streaming
+        // entry — it checks streaming_idx and returns early if None.
+        if self.conversation.timeline.is_streaming() {
+            self.conversation.timeline.finalize_streaming_as_message();
         }
 
         self.view.display.loading = false;
@@ -321,6 +333,25 @@ mod tests {
             state.conversation.timeline.len(),
             timeline_before + 1,
             "summary entry must be added to timeline"
+        );
+    }
+
+    #[test]
+    fn test_thinking_complete_sets_dirty_flag() {
+        let mut state = test_state();
+        state
+            .append_chunk(StreamEvent::ThinkingDelta("some reasoning".to_string()))
+            .unwrap();
+        // Clear dirty so we can detect the flag being set by ThinkingComplete
+        state.mark_rendered();
+
+        state
+            .append_chunk(StreamEvent::ThinkingComplete { index: 0 })
+            .unwrap();
+
+        assert!(
+            state.needs_render(),
+            "dirty flag must be set after ThinkingComplete pushes to timeline"
         );
     }
 
@@ -528,7 +559,53 @@ mod tests {
             state.conversation.streaming_rx.is_none(),
             "rx must be cleared"
         );
-        // Note: stream error does NOT finalize the timeline streaming entry
+        // F2: streaming entry should be finalized (no ghost entry)
+        assert!(
+            !state.conversation.timeline.is_streaming(),
+            "streaming entry must be finalized after error"
+        );
+    }
+
+    #[test]
+    fn test_stream_error_resets_tool_loop_state_machine() {
+        use crate::app::tool_loop::ToolLoopState;
+
+        let mut state = test_state();
+        start_streaming(&mut state);
+        // Force the tool loop into Streaming state to simulate mid-stream
+        state
+            .tool_state
+            .tool_loop
+            .start_streaming()
+            .expect("should transition to Streaming");
+        assert!(
+            matches!(state.tool_state.tool_loop.state(), ToolLoopState::Streaming),
+            "precondition: tool loop must be in Streaming"
+        );
+
+        state
+            .append_chunk(StreamEvent::Error("connection reset".to_string()))
+            .unwrap();
+
+        // F1: tool loop must be reset to Idle
+        assert!(
+            matches!(state.tool_state.tool_loop.state(), ToolLoopState::Idle),
+            "tool loop must be reset to Idle after stream error"
+        );
+    }
+
+    #[test]
+    fn test_stream_error_without_streaming_entry_is_safe() {
+        let mut state = test_state();
+        // No streaming started — error should not panic
+        state.view.display.loading = true;
+
+        state
+            .append_chunk(StreamEvent::Error("unexpected error".to_string()))
+            .unwrap();
+
+        assert!(!state.view.display.loading, "loading must be cleared");
+        assert!(!state.conversation.timeline.is_streaming());
     }
 
     // ======================================================================
