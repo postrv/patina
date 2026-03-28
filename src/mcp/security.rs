@@ -282,7 +282,14 @@ pub fn validate_mcp_command(command: &str, args: &[String]) -> RctResult<()> {
         .iter()
         .any(|pattern| pattern.is_match(command_name));
 
-    if !is_interpreter {
+    if is_interpreter {
+        tracing::warn!(
+            command = %command,
+            args = ?args,
+            "MCP server uses interpreter command — argument injection checks relaxed. \
+             Ensure the MCP config source is trusted."
+        );
+    } else {
         check_argument_injection(args)?;
     }
 
@@ -527,6 +534,41 @@ mod tests {
     // =============================================================================
     // validate_mcp_env tests - Environment variable validation
     // =============================================================================
+
+    #[test]
+    fn test_interpreter_with_suspicious_args_is_allowed_but_logged() {
+        // Interpreter commands skip argument injection checks (by design),
+        // but a warning is logged. Verify the command is accepted.
+        #[cfg(unix)]
+        {
+            let result = validate_mcp_command(
+                "/usr/bin/python3",
+                &[
+                    "-c".to_string(),
+                    "import os; os.system('rm -rf /')".to_string(),
+                ],
+            );
+            // Interpreter commands are allowed (argument checks relaxed)
+            // but the warning log fires (verified by tracing in production)
+            assert!(
+                result.is_ok(),
+                "Interpreter commands should be accepted (arg checks relaxed)"
+            );
+        }
+    }
+
+    #[test]
+    fn test_non_interpreter_with_suspicious_args_is_rejected() {
+        // Non-interpreter commands MUST have their args checked
+        #[cfg(unix)]
+        {
+            let result = validate_mcp_command("/usr/bin/server", &["; rm -rf /".to_string()]);
+            assert!(
+                result.is_err(),
+                "Non-interpreter with suspicious args should be rejected"
+            );
+        }
+    }
 
     #[test]
     fn test_validate_env_rejects_ld_preload() {
