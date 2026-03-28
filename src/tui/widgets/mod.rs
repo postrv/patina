@@ -9,6 +9,7 @@ pub mod image_display;
 pub mod permission_prompt;
 pub mod plan_review;
 pub mod question_prompt;
+pub mod rewind_picker;
 pub mod subagent;
 pub mod tool_block;
 pub mod worktree_picker;
@@ -27,6 +28,7 @@ pub use permission_prompt::{
 };
 pub use plan_review::PlanReviewWidget;
 pub use question_prompt::QuestionPromptWidget;
+pub use rewind_picker::{CheckpointEntry, RewindPickerState, RewindPickerWidget};
 pub use subagent::{
     SubagentDisplayInfo, SubagentDisplayStatus, SubagentPanelState, SubagentPanelWidget,
 };

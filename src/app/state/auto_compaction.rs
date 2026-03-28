@@ -280,6 +280,11 @@ impl AppState {
         );
         session.set_ui_state(Some(ui_state));
 
+        // Copy checkpoints from session tracking
+        for cp in self.session.checkpoints() {
+            session.add_checkpoint_raw(cp.clone());
+        }
+
         session
     }
 
@@ -316,6 +321,9 @@ impl AppState {
         if let Some(id) = session.id() {
             self.session.set_id(id.to_string());
         }
+
+        // Restore checkpoints
+        self.session.set_checkpoints(session.checkpoints().to_vec());
 
         // Mark for full redraw
         self.dirty.full = true;

@@ -398,6 +398,13 @@ fn handle_command_action(
         CommandAction::SideQuestion(question) => {
             format!("(btw) {question}")
         }
+        CommandAction::ForkSession { branch_name } => {
+            let label = branch_name.as_deref().unwrap_or("unnamed");
+            format!("Fork requested: branch '{label}'. Use session manager to complete the fork.")
+        }
+        CommandAction::ShowRewindPicker => {
+            "Rewind picker requested. Use /rewind in TUI mode to select a checkpoint.".to_string()
+        }
     };
 
     ctx.state.add_message(Message {

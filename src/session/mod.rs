@@ -25,6 +25,7 @@
 //! # }
 //! ```
 
+mod checkpoint;
 mod context;
 mod format;
 mod manager;
@@ -33,6 +34,7 @@ mod ui_state;
 mod worktree;
 
 // Re-export types
+pub use checkpoint::Checkpoint;
 pub use context::{ContextFile, ContextRestoreResult, SessionContext};
 pub use format::{format_session_entry, format_session_list};
 pub use manager::{SessionManager, SessionMetadata, SessionRestoreResult, WorktreeRestoreContext};
@@ -118,6 +120,10 @@ pub struct Session {
     /// e.g., "explore-auth-refactor".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     branch_name: Option<String>,
+
+    /// Checkpoints for session branching and rewind.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    checkpoints: Vec<Checkpoint>,
 }
 
 impl Session {
@@ -140,6 +146,7 @@ impl Session {
             context: None,
             parent_session_id: None,
             branch_name: None,
+            checkpoints: Vec::new(),
         }
     }
 
@@ -268,6 +275,77 @@ impl Session {
     /// Sets the parent session ID for forked sessions.
     pub(crate) fn set_parent_session_id(&mut self, id: Option<String>) {
         self.parent_session_id = id;
+    }
+
+    /// Returns the checkpoints for this session.
+    #[must_use]
+    pub fn checkpoints(&self) -> &[Checkpoint] {
+        &self.checkpoints
+    }
+
+    /// Adds a pre-built checkpoint directly to the session.
+    ///
+    /// Unlike [`add_checkpoint`](Self::add_checkpoint), this method does not
+    /// compute a new checkpoint from the current messages. It is used when
+    /// copying checkpoints from session tracking state.
+    ///
+    /// # Arguments
+    ///
+    /// * `checkpoint` - A previously constructed checkpoint.
+    pub fn add_checkpoint_raw(&mut self, checkpoint: Checkpoint) {
+        self.checkpoints.push(checkpoint);
+    }
+
+    /// Adds a checkpoint at the current message count.
+    ///
+    /// Creates a checkpoint capturing all messages up to the last message in
+    /// the session. If the session has no messages, this is a no-op.
+    ///
+    /// # Arguments
+    ///
+    /// * `label` - Optional human-readable label for the checkpoint.
+    pub fn add_checkpoint(&mut self, label: Option<String>) {
+        if self.messages.is_empty() {
+            return;
+        }
+        let message_index = self.messages.len() - 1;
+        let cp = match label {
+            Some(l) => Checkpoint::with_label(message_index, &self.messages, l),
+            None => Checkpoint::new(message_index, &self.messages),
+        };
+        self.checkpoints.push(cp);
+        self.updated_at = SystemTime::now();
+    }
+
+    /// Creates a new session truncated to the given checkpoint index.
+    ///
+    /// The returned session contains only messages up to and including the
+    /// checkpoint's message index, with the current session as its parent.
+    /// Returns `None` if `checkpoint_idx` is out of bounds.
+    ///
+    /// # Arguments
+    ///
+    /// * `checkpoint_idx` - Index into this session's `checkpoints` vector.
+    #[must_use]
+    pub fn truncate_to_checkpoint(&self, checkpoint_idx: usize) -> Option<Session> {
+        let checkpoint = self.checkpoints.get(checkpoint_idx)?;
+        let truncate_at = checkpoint.message_index() + 1;
+
+        if truncate_at > self.messages.len() {
+            return None;
+        }
+
+        let mut new_session = Session::new(self.working_dir.clone());
+        for msg in &self.messages[..truncate_at] {
+            new_session.add_message(msg.clone());
+        }
+
+        // Preserve lineage
+        if let Some(ref id) = self.id {
+            new_session.set_parent_session_id(Some(id.clone()));
+        }
+
+        Some(new_session)
     }
 }
 
@@ -1334,5 +1412,110 @@ mod tests {
         let session: Session = serde_json::from_str(json).unwrap();
         assert!(session.parent_session_id().is_none());
         assert!(session.branch_name().is_none());
+    }
+
+    // =========================================================================
+    // Phase 2D: Checkpoint and rewind tests
+    // =========================================================================
+
+    #[test]
+    fn test_session_add_checkpoint_adds_to_vec() {
+        let mut session = Session::new(PathBuf::from("/test"));
+        session.add_message(test_message(Role::User, "Hello"));
+        session.add_message(test_message(Role::Assistant, "Hi!"));
+
+        assert!(session.checkpoints().is_empty());
+        session.add_checkpoint(None);
+        assert_eq!(session.checkpoints().len(), 1);
+        assert_eq!(session.checkpoints()[0].message_index(), 1);
+    }
+
+    #[test]
+    fn test_session_add_checkpoint_with_label() {
+        let mut session = Session::new(PathBuf::from("/test"));
+        session.add_message(test_message(Role::User, "Hello"));
+        session.add_checkpoint(Some("after greeting".to_string()));
+
+        assert_eq!(session.checkpoints().len(), 1);
+        assert_eq!(session.checkpoints()[0].label(), Some("after greeting"));
+    }
+
+    #[test]
+    fn test_session_add_checkpoint_empty_session_is_noop() {
+        let mut session = Session::new(PathBuf::from("/test"));
+        session.add_checkpoint(None);
+        assert!(
+            session.checkpoints().is_empty(),
+            "Adding checkpoint to empty session should be a no-op"
+        );
+    }
+
+    #[test]
+    fn test_session_truncate_to_checkpoint_creates_correct_session() {
+        let mut session = Session::new(PathBuf::from("/test"));
+        session.set_id(Some("original-id".to_string()));
+        session.add_message(test_message(Role::User, "Hello"));
+        session.add_message(test_message(Role::Assistant, "Hi!"));
+        session.add_checkpoint(Some("after greeting".to_string()));
+
+        session.add_message(test_message(Role::User, "Follow up"));
+        session.add_message(test_message(Role::Assistant, "Sure thing"));
+        session.add_checkpoint(None);
+
+        // Truncate to first checkpoint (message index 1 => 2 messages)
+        let rewound = session.truncate_to_checkpoint(0).unwrap();
+        assert_eq!(rewound.messages().len(), 2);
+        assert_eq!(rewound.messages()[0].content, "Hello");
+        assert_eq!(rewound.messages()[1].content, "Hi!");
+        assert_eq!(rewound.parent_session_id(), Some("original-id"));
+    }
+
+    #[test]
+    fn test_session_truncate_to_checkpoint_invalid_index_returns_none() {
+        let mut session = Session::new(PathBuf::from("/test"));
+        session.add_message(test_message(Role::User, "Hello"));
+        session.add_checkpoint(None);
+
+        assert!(
+            session.truncate_to_checkpoint(5).is_none(),
+            "Out-of-bounds checkpoint index should return None"
+        );
+    }
+
+    #[test]
+    fn test_session_checkpoint_serialization_roundtrip() {
+        let mut session = Session::new(PathBuf::from("/test"));
+        session.add_message(test_message(Role::User, "Hello"));
+        session.add_message(test_message(Role::Assistant, "Hi!"));
+        session.add_checkpoint(Some("test label".to_string()));
+
+        let json = serde_json::to_string(&session).expect("Failed to serialize");
+        let deserialized: Session = serde_json::from_str(&json).expect("Failed to deserialize");
+
+        assert_eq!(deserialized.checkpoints().len(), 1);
+        assert_eq!(deserialized.checkpoints()[0].message_index(), 1);
+        assert_eq!(deserialized.checkpoints()[0].label(), Some("test label"));
+    }
+
+    #[test]
+    fn test_session_checkpoints_absent_in_json_deserializes() {
+        let json = r#"{
+            "messages": [],
+            "working_dir": "/test",
+            "created_at": {"secs_since_epoch": 0, "nanos_since_epoch": 0},
+            "updated_at": {"secs_since_epoch": 0, "nanos_since_epoch": 0}
+        }"#;
+        let session: Session = serde_json::from_str(json).unwrap();
+        assert!(session.checkpoints().is_empty());
+    }
+
+    #[test]
+    fn test_session_checkpoints_omitted_when_empty() {
+        let session = Session::new(PathBuf::from("/test"));
+        let json = serde_json::to_string(&session).expect("Failed to serialize");
+        assert!(
+            !json.contains("checkpoints"),
+            "JSON should not contain checkpoints field when empty"
+        );
     }
 }

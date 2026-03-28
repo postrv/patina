@@ -80,6 +80,13 @@ pub enum CommandAction {
     SetColor(String),
     /// Send a side-question that doesn't interrupt the current flow.
     SideQuestion(String),
+    /// Fork the current session with an optional branch name.
+    ForkSession {
+        /// Optional branch name for the forked session.
+        branch_name: Option<String>,
+    },
+    /// Show the rewind picker to select a checkpoint.
+    ShowRewindPicker,
 }
 
 /// Result of handling a slash command.
@@ -224,6 +231,7 @@ impl SlashCommandHandler {
             "context" => self.handle_context(),
             "export" => self.handle_export(&args),
             "fork" | "branch" => self.handle_fork(&args),
+            "rewind" => self.handle_rewind(),
             "help" => self.handle_help(if args.is_empty() { None } else { Some(&args) }),
             "memory" => self.handle_memory(&args),
             "plugins" => self.handle_plugins(),
@@ -827,7 +835,8 @@ impl SlashCommandHandler {
     /// Handles the `/fork` (or `/branch`) command.
     ///
     /// Creates a new session forked from the current one, preserving
-    /// conversation history up to this point.
+    /// conversation history up to this point. When called with a branch name,
+    /// dispatches a `ForkSession` action to the event loop.
     fn handle_fork(&self, args: &str) -> CommandResult {
         let name = args.trim();
         if name.is_empty() {
@@ -839,14 +848,23 @@ impl SlashCommandHandler {
             );
         }
         match &self.session_id {
-            Some(sid) => CommandResult::Executed(format!(
-                "Fork requested: branch '{}' from session {}.\n\
-                 The session manager will create the fork on the next save cycle.",
-                name,
-                &sid[..sid.len().min(8)]
-            )),
+            Some(_) => CommandResult::Action(CommandAction::ForkSession {
+                branch_name: Some(name.to_string()),
+            }),
             None => CommandResult::Error(
                 "Cannot fork: no active session. Start a conversation first.".to_string(),
+            ),
+        }
+    }
+
+    /// Handles the `/rewind` command.
+    ///
+    /// Shows the rewind picker for selecting a checkpoint to rewind to.
+    fn handle_rewind(&self) -> CommandResult {
+        match &self.session_id {
+            Some(_) => CommandResult::Action(CommandAction::ShowRewindPicker),
+            None => CommandResult::Error(
+                "Cannot rewind: no active session. Start a conversation first.".to_string(),
             ),
         }
     }
@@ -3071,14 +3089,14 @@ mod tests {
             .with_session_id(Some("abc12345-defg".to_string()));
         let result = handler.handle("/fork explore-auth");
         match result {
-            CommandResult::Executed(output) => {
-                assert!(
-                    output.contains("explore-auth"),
-                    "Should show branch name: {}",
-                    output
+            CommandResult::Action(CommandAction::ForkSession { branch_name }) => {
+                assert_eq!(
+                    branch_name,
+                    Some("explore-auth".to_string()),
+                    "Should pass branch name to action"
                 );
             }
-            other => panic!("Expected executed result: {:?}", other),
+            other => panic!("Expected ForkSession action: {:?}", other),
         }
     }
 
@@ -3105,14 +3123,48 @@ mod tests {
             .with_session_id(Some("xyz98765-hijk".to_string()));
         let result = handler.handle("/branch my-experiment");
         match result {
-            CommandResult::Executed(output) => {
-                assert!(
-                    output.contains("my-experiment"),
-                    "Branch alias should work: {}",
-                    output
+            CommandResult::Action(CommandAction::ForkSession { branch_name }) => {
+                assert_eq!(
+                    branch_name,
+                    Some("my-experiment".to_string()),
+                    "Branch alias should produce ForkSession action"
                 );
             }
-            other => panic!("Expected executed result: {:?}", other),
+            other => panic!("Expected ForkSession action: {:?}", other),
+        }
+    }
+
+    // =========================================================================
+    // Rewind command tests (Phase 2D)
+    // =========================================================================
+
+    #[test]
+    fn test_handle_rewind_with_session() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let handler = SlashCommandHandler::new(temp_dir.path().to_path_buf())
+            .with_session_id(Some("session-123".to_string()));
+        let result = handler.handle("/rewind");
+        match result {
+            CommandResult::Action(CommandAction::ShowRewindPicker) => {
+                // Expected
+            }
+            other => panic!("Expected ShowRewindPicker action: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_handle_rewind_no_session() {
+        let (handler, _temp) = create_handler_in_temp();
+        let result = handler.handle("/rewind");
+        match result {
+            CommandResult::Error(msg) => {
+                assert!(
+                    msg.contains("no active session"),
+                    "Should report no session: {}",
+                    msg
+                );
+            }
+            other => panic!("Expected error: {:?}", other),
         }
     }
 

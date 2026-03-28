@@ -152,7 +152,49 @@ impl AppState {
         self.display.loading = false;
         self.streaming_rx = None;
         self.dirty.messages = true;
+
+        // Auto-checkpoint on EndTurn (assistant turn completion)
+        if stop_reason == StopReason::EndTurn {
+            self.auto_checkpoint_on_end_turn();
+        }
+
         Ok(())
+    }
+
+    /// Creates an automatic checkpoint when an assistant turn completes.
+    ///
+    /// Builds the current session messages from the timeline and creates a
+    /// checkpoint at the last message index. Skips if a checkpoint already
+    /// exists at that index (deduplication handled by `SessionTracking`).
+    fn auto_checkpoint_on_end_turn(&mut self) {
+        let messages: Vec<Message> = self
+            .timeline
+            .entries()
+            .iter()
+            .filter_map(|entry| match entry {
+                crate::types::ConversationEntry::UserMessage(text) => Some(Message {
+                    role: Role::User,
+                    content: text.clone(),
+                }),
+                crate::types::ConversationEntry::AssistantMessage(text) => Some(Message {
+                    role: Role::Assistant,
+                    content: text.clone(),
+                }),
+                _ => None,
+            })
+            .collect();
+
+        if messages.is_empty() {
+            return;
+        }
+
+        let message_index = messages.len() - 1;
+        let checkpoint = crate::session::Checkpoint::new(message_index, &messages);
+        self.session.add_checkpoint(checkpoint);
+        tracing::debug!(
+            message_index = message_index,
+            "Auto-checkpoint created on end_turn"
+        );
     }
 
     /// Handles a stream `Error` event by logging the error, firing the

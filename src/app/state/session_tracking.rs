@@ -1,6 +1,9 @@
+use crate::session::Checkpoint;
+
 /// Session tracking state extracted from AppState.
 ///
-/// Groups the session ID, name, and dirty flag for auto-save functionality.
+/// Groups the session ID, name, dirty flag, and checkpoints for auto-save
+/// and session branching functionality.
 #[derive(Debug, Clone, Default)]
 pub struct SessionTracking {
     /// Current session ID, assigned on first save or restore.
@@ -9,6 +12,8 @@ pub struct SessionTracking {
     name: Option<String>,
     /// Whether the session needs to be saved.
     dirty: bool,
+    /// Checkpoints for session branching and rewind.
+    checkpoints: Vec<Checkpoint>,
 }
 
 impl SessionTracking {
@@ -57,5 +62,30 @@ impl SessionTracking {
     pub fn set_name(&mut self, name: Option<String>) {
         self.name = name;
         self.dirty = true;
+    }
+
+    /// Returns the checkpoints for this session.
+    #[must_use]
+    pub fn checkpoints(&self) -> &[Checkpoint] {
+        &self.checkpoints
+    }
+
+    /// Adds a checkpoint, skipping if one already exists at the same message index.
+    ///
+    /// # Arguments
+    ///
+    /// * `checkpoint` - The checkpoint to add.
+    pub fn add_checkpoint(&mut self, checkpoint: Checkpoint) {
+        let idx = checkpoint.message_index();
+        if self.checkpoints.iter().any(|c| c.message_index() == idx) {
+            return;
+        }
+        self.checkpoints.push(checkpoint);
+        self.dirty = true;
+    }
+
+    /// Replaces all checkpoints (used when restoring from a session).
+    pub fn set_checkpoints(&mut self, checkpoints: Vec<Checkpoint>) {
+        self.checkpoints = checkpoints;
     }
 }
