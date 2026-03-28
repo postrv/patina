@@ -887,6 +887,7 @@ impl AppState {
             || self.continuous.is_dirty()
             || self.display.is_dirty()
             || self.input_state.is_dirty()
+            || self.worktree.is_dirty()
     }
 
     /// Returns `true` when the only pending dirty state is the throbber animation.
@@ -901,6 +902,7 @@ impl AppState {
             && !self.input_state.is_dirty()
             && !self.agent_panel.is_dirty()
             && !self.continuous.is_dirty()
+            && !self.worktree.is_dirty()
     }
 
     pub fn mark_rendered(&mut self) {
@@ -909,6 +911,7 @@ impl AppState {
         self.continuous.mark_clean();
         self.display.mark_clean();
         self.input_state.mark_clean();
+        self.worktree.mark_clean();
     }
 
     pub fn mark_full_redraw(&mut self) {
@@ -928,25 +931,21 @@ impl AppState {
     /// Sets the current worktree branch name.
     pub fn set_worktree_branch(&mut self, branch: String) {
         self.worktree.set_branch(branch);
-        self.dirty.full = true;
     }
 
     /// Sets the number of modified files in the worktree.
     pub fn set_worktree_modified(&mut self, count: usize) {
         self.worktree.set_modified(count);
-        self.dirty.full = true;
     }
 
     /// Sets the number of commits ahead of upstream.
     pub fn set_worktree_ahead(&mut self, count: usize) {
         self.worktree.set_ahead(count);
-        self.dirty.full = true;
     }
 
     /// Sets the number of commits behind upstream.
     pub fn set_worktree_behind(&mut self, count: usize) {
         self.worktree.set_behind(count);
-        self.dirty.full = true;
     }
 
     // ========================================================================
@@ -1581,24 +1580,25 @@ mod tests {
     }
 
     #[test]
-    fn test_worktree_setters_set_dirty_flag() {
+    fn test_worktree_setters_trigger_render_via_self_tracking() {
         let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
 
-        state.dirty.clear();
+        state.mark_rendered();
         state.set_worktree_branch("main".to_string());
-        assert!(state.dirty.full);
+        assert!(state.worktree.is_dirty(), "set_branch self-tracks dirty");
+        assert!(state.needs_render());
 
-        state.dirty.clear();
+        state.mark_rendered();
         state.set_worktree_modified(1);
-        assert!(state.dirty.full);
+        assert!(state.worktree.is_dirty());
 
-        state.dirty.clear();
+        state.mark_rendered();
         state.set_worktree_ahead(1);
-        assert!(state.dirty.full);
+        assert!(state.worktree.is_dirty());
 
-        state.dirty.clear();
+        state.mark_rendered();
         state.set_worktree_behind(1);
-        assert!(state.dirty.full);
+        assert!(state.worktree.is_dirty());
     }
 
     #[test]
