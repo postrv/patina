@@ -94,7 +94,10 @@ impl AppState {
 
         // Fire desktop notification when the full response cycle completes
         if !self.tool_state.tool_loop_is_active() {
-            if let Err(e) = self.notification_manager.notify("Patina", "Response complete") {
+            if let Err(e) = self
+                .notification_manager
+                .notify("Patina", "Response complete")
+            {
                 tracing::debug!("Failed to send completion notification: {e}");
             }
         }

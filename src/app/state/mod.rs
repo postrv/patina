@@ -51,11 +51,11 @@ use crate::enterprise::cost::{CostConfig, CostTracker, UsageRecord};
 use crate::hooks::HookManager;
 use crate::keybindings::KeybindingManager;
 use crate::mcp::connection::McpConnection;
-use crate::terminal::notifications::NotificationManager;
 use crate::narsil::context::ContextSuggestion;
 use crate::permissions::{PermissionManager, PermissionRequest, PermissionResponse};
 use crate::plugins::PluginRegistry;
 use crate::session::Session;
+use crate::terminal::notifications::NotificationManager;
 use crate::tools::HookedToolExecutor;
 use crate::types::config::ParallelMode;
 use crate::types::content::{StopReason, ToolResultBlock, ToolUseBlock};
@@ -645,7 +645,6 @@ impl AppState {
     pub fn set_keybindings(&mut self, manager: KeybindingManager) {
         self.keybinding_mgr = manager;
     }
-
 
     /// Returns a reference to the notification manager.
     #[must_use]
