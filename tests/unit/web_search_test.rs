@@ -88,7 +88,7 @@ async fn test_search_returns_results() {
         allow_localhost: true,
         ..Default::default()
     };
-    let tool = WebSearchTool::new(config);
+    let tool = WebSearchTool::new(config).expect("Failed to build WebSearchTool");
     let results = tool.search("test query", 10).await;
 
     assert!(results.is_ok(), "Search should succeed: {:?}", results);
@@ -98,7 +98,8 @@ async fn test_search_returns_results() {
 
 #[tokio::test]
 async fn test_search_empty_query_returns_error() {
-    let tool = WebSearchTool::new(WebSearchConfig::default());
+    let tool =
+        WebSearchTool::new(WebSearchConfig::default()).expect("Failed to build WebSearchTool");
 
     let result = tool.search("", 10).await;
 
@@ -158,7 +159,7 @@ async fn test_search_respects_max_results() {
         allow_localhost: true,
         ..Default::default()
     };
-    let tool = WebSearchTool::new(config);
+    let tool = WebSearchTool::new(config).expect("Failed to build WebSearchTool");
     let results = tool.search("many results", 3).await;
 
     assert!(results.is_ok());
@@ -190,7 +191,7 @@ async fn test_search_timeout_returns_error() {
         allow_localhost: true,
         ..Default::default()
     };
-    let tool = WebSearchTool::new(config);
+    let tool = WebSearchTool::new(config).expect("Failed to build WebSearchTool");
     let result = tool.search("slow query", 10).await;
 
     assert!(result.is_err(), "Should timeout");
@@ -214,7 +215,7 @@ async fn test_search_api_error_returns_error() {
         allow_localhost: true,
         ..Default::default()
     };
-    let tool = WebSearchTool::new(config);
+    let tool = WebSearchTool::new(config).expect("Failed to build WebSearchTool");
     let result = tool.search("error query", 10).await;
 
     assert!(result.is_err(), "Should return error for 5xx response");
@@ -249,7 +250,7 @@ async fn test_search_formats_results_as_markdown() {
         allow_localhost: true,
         ..Default::default()
     };
-    let tool = WebSearchTool::new(config);
+    let tool = WebSearchTool::new(config).expect("Failed to build WebSearchTool");
     let results = tool.search("rust programming", 10).await;
 
     assert!(results.is_ok());

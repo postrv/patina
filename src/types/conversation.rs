@@ -24,7 +24,7 @@
 //! timeline.push_user_message("Hello!");
 //!
 //! // Assistant starts streaming
-//! timeline.push_streaming();
+//! timeline.push_streaming().unwrap();
 //! timeline.append_to_streaming("Hi there!");
 //! timeline.finalize_streaming_as_message();
 //!
@@ -325,13 +325,11 @@ impl Timeline {
 
     /// Starts a new streaming entry.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if already streaming. Use [`try_push_streaming`](Self::try_push_streaming)
-    /// for fallible version.
-    pub fn push_streaming(&mut self) {
+    /// Returns [`TimelineError::AlreadyStreaming`] if already streaming.
+    pub fn push_streaming(&mut self) -> Result<(), TimelineError> {
         self.try_push_streaming()
-            .expect("Cannot start streaming: already streaming");
     }
 
     /// Attempts to start a new streaming entry.
@@ -774,5 +772,46 @@ mod tests {
         };
         // 1 header + 1 alt text + 1 spacer = 3
         assert_eq!(entry.estimated_line_count(), 3);
+    }
+
+    // =========================================================================
+    // push_streaming error handling tests (E-2)
+    // =========================================================================
+
+    /// Verifies that `push_streaming` returns an error (not a panic) when
+    /// called while already streaming.
+    #[test]
+    fn test_push_streaming_double_call_returns_error() {
+        let mut timeline = Timeline::new();
+
+        // First call should succeed
+        let first = timeline.push_streaming();
+        assert!(first.is_ok(), "First push_streaming should succeed");
+
+        // Second call while still streaming should return AlreadyStreaming error
+        let second = timeline.push_streaming();
+        assert!(
+            second.is_err(),
+            "Second push_streaming should return an error"
+        );
+        assert_eq!(second.unwrap_err(), TimelineError::AlreadyStreaming);
+    }
+
+    /// Verifies that `push_streaming` succeeds again after finalizing
+    /// the previous streaming entry.
+    #[test]
+    fn test_push_streaming_succeeds_after_finalize() {
+        let mut timeline = Timeline::new();
+
+        timeline.push_streaming().unwrap();
+        timeline.append_to_streaming("Hello");
+        timeline.finalize_streaming_as_message();
+
+        // Should succeed now that we're no longer streaming
+        let result = timeline.push_streaming();
+        assert!(
+            result.is_ok(),
+            "push_streaming should succeed after finalize"
+        );
     }
 }
