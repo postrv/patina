@@ -57,6 +57,11 @@ impl DisplayState {
         self.dirty = false;
     }
 
+    /// Marks the display as needing a re-render.
+    pub fn mark_dirty(&mut self) {
+        self.dirty = true;
+    }
+
     /// Returns the current scroll offset.
     #[must_use]
     pub fn scroll_offset(&self) -> usize {

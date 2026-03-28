@@ -44,7 +44,7 @@ impl AppState {
             Role::User => self.timeline.push_user_message(&message.content),
             Role::Assistant => self.timeline.push_assistant_message(&message.content),
         }
-        self.dirty.messages = true;
+        self.dirty.full = true;
     }
 
     /// Returns the API messages for continuation.
@@ -364,7 +364,7 @@ impl AppState {
     /// When loading is true, the throbber animates and content accumulates.
     pub fn set_loading(&mut self, loading: bool) {
         self.display.loading = loading;
-        self.dirty.messages = true;
+        self.dirty.full = true;
     }
 
     /// Initializes the streaming buffer for continuation streaming.
@@ -375,7 +375,7 @@ impl AppState {
         if self.timeline.try_push_streaming().is_ok() && !response.is_empty() {
             self.timeline.append_to_streaming(&response);
         }
-        self.dirty.messages = true;
+        self.dirty.full = true;
     }
 }
 
@@ -389,7 +389,7 @@ impl AppState {
             Role::Assistant => self.timeline.push_assistant_message(&legacy.content),
         }
         self.api_messages.push(message);
-        self.dirty.messages = true;
+        self.dirty.full = true;
     }
 }
 
@@ -432,8 +432,8 @@ mod tests {
             content: "I can help.".to_string(),
         });
 
-        // Dirty flag should be set
-        assert!(state.dirty.messages);
+        // Dirty flag should be set (timeline mutation sets dirty.full)
+        assert!(state.dirty.full);
 
         // Timeline should contain the assistant message
         let entries: Vec<_> = state.timeline().iter().collect();

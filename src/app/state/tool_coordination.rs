@@ -397,7 +397,7 @@ impl AppState {
             tracing::warn!("set_streaming called but timeline already streaming");
         }
 
-        self.dirty.messages = true;
+        self.dirty.full = true;
     }
 
     /// Appends text to the current streaming response.
@@ -406,7 +406,7 @@ impl AppState {
     pub fn append_streaming_text(&mut self, text: &str) {
         // Update timeline streaming entry
         self.timeline.append_to_streaming(text);
-        self.dirty.messages = true;
+        self.dirty.full = true;
     }
 
     /// Finalizes streaming as a complete assistant message.
@@ -416,7 +416,7 @@ impl AppState {
         // Finalize timeline streaming entry
         self.timeline.finalize_streaming_as_message();
         self.display.loading = false;
-        self.dirty.messages = true;
+        self.dirty.full = true;
     }
 
     /// Adds a tool block with result to both legacy tool_blocks and timeline.
@@ -451,7 +451,7 @@ impl AppState {
             is_error,
         );
 
-        self.dirty.messages = true;
+        self.dirty.full = true;
     }
 
     /// Clears conversation history while preserving configuration.
@@ -470,7 +470,7 @@ impl AppState {
         self.display.scroll = crate::tui::scroll::ScrollState::new();
         self.display.loading = false;
         self.streaming_rx = None;
-        self.dirty.messages = true;
+        self.dirty.full = true;
         self.session.mark_dirty();
     }
 
@@ -585,7 +585,7 @@ impl AppState {
             tool_name, input, None, // No output yet - executing
             false,
         );
-        self.dirty.messages = true;
+        self.dirty.full = true;
     }
 
     /// Updates a tool in the timeline with its result.
@@ -606,7 +606,7 @@ impl AppState {
     ) {
         self.timeline
             .update_tool_result(tool_name, output, is_error);
-        self.dirty.messages = true;
+        self.dirty.full = true;
     }
 
     /// Updates a tool in the timeline by its ID.
@@ -632,7 +632,7 @@ impl AppState {
                 break;
             }
         }
-        self.dirty.messages = true;
+        self.dirty.full = true;
     }
 }
 

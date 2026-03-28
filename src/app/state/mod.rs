@@ -246,15 +246,15 @@ pub struct AppState {
 
 #[derive(Default)]
 struct DirtyFlags {
-    messages: bool,
+    /// Cross-cutting dirty flag for operations that don't belong to a single component.
     full: bool,
-    /// Throbber animation only -- avoids dirtying `messages` every 250ms.
+    /// Throbber animation only -- avoids dirtying other flags every 250ms.
     throbber: bool,
 }
 
 impl DirtyFlags {
     fn any(&self) -> bool {
-        self.messages || self.full || self.throbber
+        self.full || self.throbber
     }
 
     fn clear(&mut self) {
@@ -799,7 +799,7 @@ impl AppState {
             timeline_entries = self.timeline.len(),
             "scroll_up"
         );
-        self.dirty.messages = true;
+        self.display.mark_dirty();
     }
 
     /// Scrolls down by the specified number of lines.
@@ -816,7 +816,7 @@ impl AppState {
             mode = ?self.display.scroll.mode(),
             "scroll_down"
         );
-        self.dirty.messages = true;
+        self.display.mark_dirty();
     }
 
     /// Scrolls to the bottom of the content.
@@ -824,7 +824,7 @@ impl AppState {
     /// This resumes Follow mode for auto-scroll.
     pub fn scroll_to_bottom(&mut self, content_height: usize) {
         self.display.scroll.scroll_to_bottom(content_height);
-        self.dirty.messages = true;
+        self.display.mark_dirty();
     }
 
     /// Scrolls to the top of the content.
@@ -832,7 +832,7 @@ impl AppState {
     /// This switches to Manual mode.
     pub fn scroll_to_top(&mut self) {
         self.display.scroll.scroll_to_top();
-        self.dirty.messages = true;
+        self.display.mark_dirty();
     }
 
     /// Updates the content height for scroll calculations.
@@ -841,7 +841,7 @@ impl AppState {
     pub fn update_content_height(&mut self, height: usize) {
         self.display.scroll.set_content_height(height);
         if self.display.scroll.mode().should_auto_scroll() {
-            self.dirty.messages = true;
+            self.display.mark_dirty();
         }
     }
 
@@ -902,7 +902,6 @@ impl AppState {
     #[must_use]
     pub fn is_throbber_only_dirty(&self) -> bool {
         self.dirty.throbber
-            && !self.dirty.messages
             && !self.dirty.full
             && !self.input_state.is_dirty()
             && !self.agent_panel.is_dirty()
@@ -2096,11 +2095,8 @@ mod tests {
 
         state.tick_throbber();
 
-        // Throbber tick should NOT mark messages as dirty
-        assert!(
-            !state.dirty.messages,
-            "tick_throbber must not dirty messages"
-        );
+        // Throbber tick should NOT mark full as dirty
+        assert!(!state.dirty.full, "tick_throbber must not dirty full");
         // But the overall needs_render should still be true
         assert!(
             state.needs_render(),
@@ -2125,11 +2121,11 @@ mod tests {
             "is_throbber_only_dirty must be true after only tick_throbber"
         );
 
-        // After a message change, throbber_only should be false
-        state.dirty.messages = true;
+        // After a full dirty, throbber_only should be false
+        state.dirty.full = true;
         assert!(
             !state.is_throbber_only_dirty(),
-            "is_throbber_only_dirty must be false when messages also dirty"
+            "is_throbber_only_dirty must be false when full also dirty"
         );
     }
 

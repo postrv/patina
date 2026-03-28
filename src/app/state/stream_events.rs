@@ -71,7 +71,7 @@ impl AppState {
     fn handle_content_delta(&mut self, text: String) {
         self.timeline.append_to_streaming(&text);
         self.tool_state.tool_loop.append_text(&text);
-        self.dirty.messages = true;
+        self.dirty.full = true;
     }
 
     /// Handles a `MessageStop` stream event by finalizing the streaming entry
@@ -90,7 +90,7 @@ impl AppState {
         }
         self.display.loading = false;
         self.streaming_rx = None;
-        self.dirty.messages = true;
+        self.dirty.full = true;
 
         // Fire desktop notification when the full response cycle completes
         if !self.tool_state.tool_loop_is_active() {
@@ -155,7 +155,7 @@ impl AppState {
         self.tool_state.handle_message_complete(stop_reason)?;
         self.display.loading = false;
         self.streaming_rx = None;
-        self.dirty.messages = true;
+        self.dirty.full = true;
 
         // Auto-checkpoint on EndTurn (assistant turn completion)
         if stop_reason == StopReason::EndTurn {
@@ -219,6 +219,6 @@ impl AppState {
 
         self.display.loading = false;
         self.streaming_rx = None;
-        self.dirty.messages = true;
+        self.dirty.full = true;
     }
 }
