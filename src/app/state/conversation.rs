@@ -14,7 +14,8 @@ impl AppState {
     /// Returns the display messages from the timeline for clipboard copy.
     #[must_use]
     pub fn messages(&self) -> Vec<Message> {
-        self.timeline
+        self.conversation
+            .timeline
             .entries()
             .iter()
             .filter_map(|entry| {
@@ -41,8 +42,14 @@ impl AppState {
     pub fn add_message(&mut self, message: Message) {
         // Add to unified timeline based on role
         match message.role {
-            Role::User => self.timeline.push_user_message(&message.content),
-            Role::Assistant => self.timeline.push_assistant_message(&message.content),
+            Role::User => self
+                .conversation
+                .timeline
+                .push_user_message(&message.content),
+            Role::Assistant => self
+                .conversation
+                .timeline
+                .push_assistant_message(&message.content),
         }
         self.dirty.full = true;
     }
@@ -53,18 +60,18 @@ impl AppState {
     /// and should be used when sending to the API.
     #[must_use]
     pub fn api_messages(&self) -> &[ApiMessageV2] {
-        &self.api_messages
+        &self.conversation.api_messages
     }
 
     /// Returns a mutable reference to the API messages.
     pub fn api_messages_mut(&mut self) -> &mut Vec<ApiMessageV2> {
-        &mut self.api_messages
+        &mut self.conversation.api_messages
     }
 
     /// Returns the count of API messages.
     #[must_use]
     pub fn api_messages_len(&self) -> usize {
-        self.api_messages.len()
+        self.conversation.api_messages.len()
     }
 
     // ========================================================================
@@ -87,7 +94,7 @@ impl AppState {
     #[must_use]
     pub fn api_messages_truncated(&self) -> Vec<ApiMessageV2> {
         use crate::api::{truncate_context, DEFAULT_MAX_INPUT_TOKENS};
-        truncate_context(&self.api_messages, DEFAULT_MAX_INPUT_TOKENS)
+        truncate_context(&self.conversation.api_messages, DEFAULT_MAX_INPUT_TOKENS)
     }
 
     /// Prepares API messages for sending by compacting and truncating.
@@ -126,7 +133,7 @@ impl AppState {
             );
         }
 
-        let total = self.api_messages.len();
+        let total = self.conversation.api_messages.len();
         let truncated = self.api_messages_truncated();
         let sent = truncated.len();
         if sent < total {
@@ -217,14 +224,14 @@ impl AppState {
         };
 
         // Timeline shows original user input (cleaner UI)
-        self.timeline.push_user_message(&content);
+        self.conversation.timeline.push_user_message(&content);
         // API gets potentially context-augmented message
         let user_msg = ApiMessageV2::user(&api_content);
-        self.api_messages.push(user_msg);
+        self.conversation.api_messages.push(user_msg);
 
         self.view.display.loading = true;
         // Start streaming in timeline
-        if self.timeline.try_push_streaming().is_err() {
+        if self.conversation.timeline.try_push_streaming().is_err() {
             tracing::warn!("Timeline already streaming when submitting message");
         }
 
@@ -243,7 +250,7 @@ impl AppState {
         }
 
         let (tx, rx) = mpsc::channel(STREAMING_CHANNEL_BUFFER);
-        self.streaming_rx = Some(rx);
+        self.conversation.streaming_rx = Some(rx);
 
         // Compact + truncate API messages for cost-controlled sending
         let api_messages = self
@@ -286,7 +293,7 @@ impl AppState {
     /// - `Some(chunk)` - Next streaming event from the API
     /// - `None` - Channel closed or no active streaming
     pub async fn recv_api_chunk(&mut self) -> Option<StreamEvent> {
-        match &mut self.streaming_rx {
+        match &mut self.conversation.streaming_rx {
             Some(rx) => rx.recv().await,
             None => None, // Return immediately - don't block with pending()
         }
@@ -298,7 +305,7 @@ impl AppState {
     /// when no streaming is active.
     #[must_use]
     pub fn has_streaming(&self) -> bool {
-        self.streaming_rx.is_some()
+        self.conversation.streaming_rx.is_some()
     }
 
     /// Returns true if there are any active background channels (API streaming or tool results).
@@ -306,7 +313,7 @@ impl AppState {
     /// Used for guard conditions in the event loop.
     #[must_use]
     pub fn has_background_work(&self) -> bool {
-        self.streaming_rx.is_some() || self.tool_state.tool_result_rx.is_some()
+        self.conversation.streaming_rx.is_some() || self.tool_state.tool_result_rx.is_some()
     }
 
     /// Receives the next background event from either API streaming or tool execution.
@@ -338,11 +345,11 @@ impl AppState {
 
             // Then API streaming chunks
             chunk = async {
-                match &mut self.streaming_rx {
+                match &mut self.conversation.streaming_rx {
                     Some(rx) => rx.recv().await,
                     None => std::future::pending().await,
                 }
-            }, if self.streaming_rx.is_some() => {
+            }, if self.conversation.streaming_rx.is_some() => {
                 chunk.map(BackgroundEvent::ApiChunk)
             }
 
@@ -356,7 +363,7 @@ impl AppState {
     /// This is used by the tool execution flow to set up continuation streaming
     /// without blocking the event loop.
     pub fn set_streaming_rx(&mut self, rx: mpsc::Receiver<StreamEvent>) {
-        self.streaming_rx = Some(rx);
+        self.conversation.streaming_rx = Some(rx);
     }
 
     /// Sets the loading state.
@@ -372,8 +379,8 @@ impl AppState {
     /// This starts a new streaming entry in the timeline with optional initial content.
     pub fn set_current_response(&mut self, response: String) {
         // Start streaming in timeline if not already streaming
-        if self.timeline.try_push_streaming().is_ok() && !response.is_empty() {
-            self.timeline.append_to_streaming(&response);
+        if self.conversation.timeline.try_push_streaming().is_ok() && !response.is_empty() {
+            self.conversation.timeline.append_to_streaming(&response);
         }
         self.dirty.full = true;
     }
@@ -385,10 +392,16 @@ impl AppState {
     pub fn add_api_message(&mut self, message: ApiMessageV2) {
         let legacy = message.to_legacy();
         match legacy.role {
-            Role::User => self.timeline.push_user_message(&legacy.content),
-            Role::Assistant => self.timeline.push_assistant_message(&legacy.content),
+            Role::User => self
+                .conversation
+                .timeline
+                .push_user_message(&legacy.content),
+            Role::Assistant => self
+                .conversation
+                .timeline
+                .push_assistant_message(&legacy.content),
         }
-        self.api_messages.push(message);
+        self.conversation.api_messages.push(message);
         self.dirty.full = true;
     }
 }

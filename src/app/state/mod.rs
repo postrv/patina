@@ -29,8 +29,8 @@ pub use agent_panel::AgentPanelState;
 pub use background::*;
 pub use background_tasks::BackgroundTaskRegistry;
 pub use compression::CompressionState;
-pub use conversation_engine::ConversationEngine;
 pub use continuous::ContinuousLoopState;
+pub use conversation_engine::ConversationEngine;
 pub use display::DisplayState;
 pub use input::InputState;
 pub use model_config::ModelConfigState;
@@ -177,16 +177,13 @@ pub fn get_git_head_hash(working_dir: &std::path::Path) -> Option<String> {
 }
 
 pub struct AppState {
-    /// Full API messages with content blocks (tool_use, tool_result).
-    /// This is the authoritative conversation history sent to the API.
-    api_messages: Vec<ApiMessageV2>,
+    /// Core conversation state (api_messages, timeline, streaming, thinking).
+    pub(crate) conversation: ConversationEngine,
 
     /// All view/presentation state (display, input, selection, worktree).
     pub(crate) view: ViewState,
 
     pub working_dir: PathBuf,
-
-    streaming_rx: Option<mpsc::Receiver<StreamEvent>>,
 
     dirty: DirtyFlags,
 
@@ -199,11 +196,6 @@ pub struct AppState {
 
     /// All tool execution state grouped together.
     tool_state: ToolExecutionState,
-
-    /// Unified timeline for conversation display.
-    /// This is the single source of truth for display ordering, replacing the
-    /// dual-system of `messages` + `current_response`.
-    timeline: Timeline,
 
     /// All compression, context injection, and compaction state grouped together.
     compression: CompressionState,
@@ -229,9 +221,6 @@ pub struct AppState {
 
     /// Model selection, effort, and thinking configuration.
     model_config: ModelConfigState,
-
-    /// Buffer for accumulating thinking text from stream events.
-    thinking_buffer: String,
 
     /// Keybinding manager for customizable key mappings.
     keybinding_mgr: KeybindingManager,
@@ -399,7 +388,7 @@ impl AppState {
         };
 
         Self {
-            api_messages: Vec::new(),
+            conversation: ConversationEngine::new(),
             view: ViewState {
                 display: DisplayState::new(),
                 ui_selection: UISelectionState {
@@ -412,7 +401,6 @@ impl AppState {
                 input_state: InputState::new(),
             },
             working_dir,
-            streaming_rx: None,
             dirty: DirtyFlags {
                 full: true,
                 ..Default::default()
@@ -433,7 +421,6 @@ impl AppState {
                 dirty_modal: false,
                 dirty_content: false,
             },
-            timeline: Timeline::new(),
             compression: CompressionState {
                 token_budget: TokenBudget::new(100_000), // Claude's typical context window
                 compaction_state: None,
@@ -470,7 +457,6 @@ impl AppState {
                 }
                 mc
             },
-            thinking_buffer: String::new(),
             keybinding_mgr: KeybindingManager::with_defaults(),
             notification_manager: NotificationManager::detect(),
         }
@@ -794,7 +780,7 @@ impl AppState {
             content_height = self.view.display.scroll.content_height(),
             viewport_height = self.view.display.scroll.viewport_height(),
             cache_size = self.view.ui_selection.rendered_lines_cache.len(),
-            timeline_entries = self.timeline.len(),
+            timeline_entries = self.conversation.timeline.len(),
             "scroll_up"
         );
         self.view.display.mark_dirty();
@@ -1025,7 +1011,7 @@ impl AppState {
     #[must_use]
     pub fn as_render_view(&self) -> RenderView<'_> {
         RenderView {
-            timeline: self.timeline(),
+            timeline: self.conversation.timeline(),
             throbber_char: self.view.display.throbber_char(),
             scroll_offset: self.view.display.scroll_offset(),
             scroll_state: self.view.display.scroll_state(),
@@ -1168,6 +1154,7 @@ mod tests {
         // Add many messages to potentially exceed budget
         for i in 0..50 {
             state
+                .conversation
                 .api_messages
                 .push(ApiMessageV2::user(format!("Message {}", i)));
         }
@@ -1186,8 +1173,12 @@ mod tests {
     fn test_api_messages_truncated_under_budget_unchanged() {
         let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
 
-        state.api_messages.push(ApiMessageV2::user("Hello"));
         state
+            .conversation
+            .api_messages
+            .push(ApiMessageV2::user("Hello"));
+        state
+            .conversation
             .api_messages
             .push(ApiMessageV2::assistant("Hi there!"));
 
@@ -1204,13 +1195,17 @@ mod tests {
         let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
 
         // Add first message (will be preserved)
-        state.api_messages.push(ApiMessageV2::user("System prompt"));
+        state
+            .conversation
+            .api_messages
+            .push(ApiMessageV2::user("System prompt"));
 
         // Add many large messages that would exceed 100k tokens
         let large_content = "x".repeat(10_000); // ~2500 tokens each
         for _ in 0..50 {
             // 50 * 2500 = 125k tokens
             state
+                .conversation
                 .api_messages
                 .push(ApiMessageV2::assistant(&large_content));
         }
@@ -1232,17 +1227,21 @@ mod tests {
         let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
 
         // Add first message (always preserved)
-        state.api_messages.push(ApiMessageV2::user("System prompt"));
+        state
+            .conversation
+            .api_messages
+            .push(ApiMessageV2::user("System prompt"));
 
         // Add many large messages that exceed 100k tokens
         let large_content = "x".repeat(10_000);
         for _ in 0..60 {
             state
+                .conversation
                 .api_messages
                 .push(ApiMessageV2::assistant(&large_content));
         }
 
-        let total_before = state.api_messages.len();
+        let total_before = state.conversation.api_messages.len();
         let prepared = state
             .prepare_api_messages_for_send("claude-sonnet-4-20250514", None)
             .await;
@@ -1260,12 +1259,14 @@ mod tests {
         let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
 
         state
+            .conversation
             .api_messages
             .push(ApiMessageV2::user("Important system prompt"));
 
         let large_content = "x".repeat(10_000);
         for _ in 0..60 {
             state
+                .conversation
                 .api_messages
                 .push(ApiMessageV2::assistant(&large_content));
         }
@@ -1285,8 +1286,12 @@ mod tests {
     async fn test_prepare_api_messages_identical_for_small_conversation() {
         let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
 
-        state.api_messages.push(ApiMessageV2::user("Hello"));
         state
+            .conversation
+            .api_messages
+            .push(ApiMessageV2::user("Hello"));
+        state
+            .conversation
             .api_messages
             .push(ApiMessageV2::assistant("Hi there!"));
 
@@ -1553,7 +1558,7 @@ mod tests {
         assert!(state.has_background_work());
 
         // Clear streaming, set tool channel
-        state.streaming_rx = None;
+        state.conversation.streaming_rx = None;
         let (_tx, rx) = mpsc::channel(100);
         state.set_tool_result_rx(rx);
         assert!(state.has_background_work());
@@ -2009,7 +2014,10 @@ mod tests {
     fn test_sync_token_budget_sets_dirty_flag() {
         let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
         // Add a message so there are tokens to count
-        state.api_messages.push(ApiMessageV2::user("Hello, world!"));
+        state
+            .conversation
+            .api_messages
+            .push(ApiMessageV2::user("Hello, world!"));
 
         state.mark_rendered();
         state.sync_token_budget();

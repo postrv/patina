@@ -30,18 +30,19 @@ impl AppState {
                 tracing::debug!("Content block complete");
             }
             StreamEvent::ThinkingStart { .. } => {
-                self.thinking_buffer.clear();
+                self.conversation.thinking_buffer.clear();
                 tracing::debug!("Thinking block started");
             }
             StreamEvent::ThinkingDelta(text) => {
-                self.thinking_buffer.push_str(&text);
+                self.conversation.thinking_buffer.push_str(&text);
             }
             StreamEvent::ThinkingComplete { .. } => {
-                if !self.thinking_buffer.is_empty() {
-                    let thinking_text = std::mem::take(&mut self.thinking_buffer);
+                if !self.conversation.thinking_buffer.is_empty() {
+                    let thinking_text = std::mem::take(&mut self.conversation.thinking_buffer);
                     let token_count = crate::api::tokens::estimate_tokens(&thinking_text);
                     tracing::info!("Thinking complete: {} tokens", token_count);
-                    self.timeline
+                    self.conversation
+                        .timeline
                         .push_assistant_message(format!("[Thought for ~{} tokens]", token_count));
                 }
             }
@@ -69,7 +70,7 @@ impl AppState {
     /// Handles a `ContentDelta` stream event by appending text to the timeline
     /// and forwarding it to the tool loop for assistant text tracking.
     fn handle_content_delta(&mut self, text: String) {
-        self.timeline.append_to_streaming(&text);
+        self.conversation.timeline.append_to_streaming(&text);
         self.tool_state.tool_loop.append_text(&text);
         self.dirty.full = true;
     }
@@ -80,16 +81,18 @@ impl AppState {
     /// Only processes if currently streaming, to prevent duplicates when
     /// `MessageComplete` has already handled finalization.
     fn handle_message_stop(&mut self) {
-        if self.timeline.is_streaming() {
-            self.timeline.finalize_streaming_as_message();
+        if self.conversation.timeline.is_streaming() {
+            self.conversation.timeline.finalize_streaming_as_message();
             if let Some(crate::types::ConversationEntry::AssistantMessage(text)) =
-                self.timeline.entries().last()
+                self.conversation.timeline.entries().last()
             {
-                self.api_messages.push(ApiMessageV2::assistant(text));
+                self.conversation
+                    .api_messages
+                    .push(ApiMessageV2::assistant(text));
             }
         }
         self.view.display.loading = false;
-        self.streaming_rx = None;
+        self.conversation.streaming_rx = None;
         self.dirty.full = true;
 
         // Fire desktop notification when the full response cycle completes
@@ -117,14 +120,16 @@ impl AppState {
         let needs_tool_execution = stop_reason.needs_tool_execution();
 
         if needs_tool_execution {
-            self.timeline.finalize_streaming_for_tool_use();
+            self.conversation.timeline.finalize_streaming_for_tool_use();
             tracing::debug!("Tool use response - text stored in tool_loop, not adding to API yet");
         } else {
-            self.timeline.finalize_streaming_as_message();
+            self.conversation.timeline.finalize_streaming_as_message();
             if let Some(crate::types::ConversationEntry::AssistantMessage(text)) =
-                self.timeline.entries().last()
+                self.conversation.timeline.entries().last()
             {
-                self.api_messages.push(ApiMessageV2::assistant(text));
+                self.conversation
+                    .api_messages
+                    .push(ApiMessageV2::assistant(text));
             }
 
             // Fire Stop hook for non-tool-use completions (EndTurn, StopSequence, MaxTokens)
@@ -154,7 +159,7 @@ impl AppState {
         }
         self.tool_state.handle_message_complete(stop_reason)?;
         self.view.display.loading = false;
-        self.streaming_rx = None;
+        self.conversation.streaming_rx = None;
         self.dirty.full = true;
 
         // Auto-checkpoint on EndTurn (assistant turn completion)
@@ -172,6 +177,7 @@ impl AppState {
     /// exists at that index (deduplication handled by `SessionTracking`).
     fn auto_checkpoint_on_end_turn(&mut self) {
         let messages: Vec<Message> = self
+            .conversation
             .timeline
             .entries()
             .iter()
@@ -218,7 +224,7 @@ impl AppState {
         }
 
         self.view.display.loading = false;
-        self.streaming_rx = None;
+        self.conversation.streaming_rx = None;
         self.dirty.full = true;
     }
 }
@@ -260,7 +266,7 @@ mod tests {
             .unwrap();
 
         // The streaming entry should contain accumulated text
-        assert!(state.timeline.is_streaming());
+        assert!(state.conversation.timeline.is_streaming());
         assert!(state.needs_render(), "dirty flag must be set");
     }
 
@@ -287,7 +293,7 @@ mod tests {
         state
             .append_chunk(StreamEvent::ThinkingStart { index: 0 })
             .unwrap();
-        assert!(state.thinking_buffer.is_empty());
+        assert!(state.conversation.thinking_buffer.is_empty());
 
         // ThinkingDelta accumulates
         state
@@ -296,20 +302,23 @@ mod tests {
         state
             .append_chunk(StreamEvent::ThinkingDelta("reason step 2".to_string()))
             .unwrap();
-        assert_eq!(state.thinking_buffer, "reason step 1, reason step 2");
+        assert_eq!(
+            state.conversation.thinking_buffer,
+            "reason step 1, reason step 2"
+        );
 
         // ThinkingComplete drains buffer and pushes summary to timeline
-        let timeline_before = state.timeline.len();
+        let timeline_before = state.conversation.timeline.len();
         state
             .append_chunk(StreamEvent::ThinkingComplete { index: 0 })
             .unwrap();
 
         assert!(
-            state.thinking_buffer.is_empty(),
+            state.conversation.thinking_buffer.is_empty(),
             "buffer must be drained on complete"
         );
         assert_eq!(
-            state.timeline.len(),
+            state.conversation.timeline.len(),
             timeline_before + 1,
             "summary entry must be added to timeline"
         );
@@ -318,7 +327,7 @@ mod tests {
     #[test]
     fn test_thinking_complete_with_empty_buffer_is_noop() {
         let mut state = test_state();
-        let timeline_before = state.timeline.len();
+        let timeline_before = state.conversation.timeline.len();
 
         state
             .append_chunk(StreamEvent::ThinkingStart { index: 0 })
@@ -329,7 +338,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            state.timeline.len(),
+            state.conversation.timeline.len(),
             timeline_before,
             "no timeline entry for empty thinking"
         );
@@ -347,7 +356,7 @@ mod tests {
             .append_chunk(StreamEvent::ThinkingStart { index: 1 })
             .unwrap();
         assert!(
-            state.thinking_buffer.is_empty(),
+            state.conversation.thinking_buffer.is_empty(),
             "ThinkingStart must clear previous buffer"
         );
     }
@@ -365,22 +374,25 @@ mod tests {
         state
             .append_chunk(StreamEvent::ContentDelta("assistant reply".to_string()))
             .unwrap();
-        assert!(state.timeline.is_streaming());
+        assert!(state.conversation.timeline.is_streaming());
 
-        let api_before = state.api_messages.len();
+        let api_before = state.conversation.api_messages.len();
         state.append_chunk(StreamEvent::MessageStop).unwrap();
 
         assert!(
-            !state.timeline.is_streaming(),
+            !state.conversation.timeline.is_streaming(),
             "streaming must be finalized"
         );
         assert_eq!(
-            state.api_messages.len(),
+            state.conversation.api_messages.len(),
             api_before + 1,
             "assistant message must be pushed to api_messages"
         );
         assert!(!state.view.display.loading, "loading must be cleared");
-        assert!(state.streaming_rx.is_none(), "streaming_rx must be cleared");
+        assert!(
+            state.conversation.streaming_rx.is_none(),
+            "streaming_rx must be cleared"
+        );
     }
 
     #[test]
@@ -388,11 +400,11 @@ mod tests {
         let mut state = test_state();
         // No streaming active
 
-        let api_before = state.api_messages.len();
+        let api_before = state.conversation.api_messages.len();
         state.append_chunk(StreamEvent::MessageStop).unwrap();
 
         // Should not panic, and should not add api message
-        assert_eq!(state.api_messages.len(), api_before);
+        assert_eq!(state.conversation.api_messages.len(), api_before);
         assert!(!state.view.display.loading);
     }
 
@@ -413,7 +425,7 @@ mod tests {
             .append_chunk(StreamEvent::ContentDelta("Hi there!".to_string()))
             .unwrap();
 
-        let api_before = state.api_messages.len();
+        let api_before = state.conversation.api_messages.len();
         state
             .append_chunk(StreamEvent::MessageComplete {
                 stop_reason: StopReason::EndTurn,
@@ -421,16 +433,16 @@ mod tests {
             .unwrap();
 
         assert!(
-            !state.timeline.is_streaming(),
+            !state.conversation.timeline.is_streaming(),
             "streaming must be finalized"
         );
         assert_eq!(
-            state.api_messages.len(),
+            state.conversation.api_messages.len(),
             api_before + 1,
             "assistant message pushed to api_messages"
         );
         assert!(!state.view.display.loading);
-        assert!(state.streaming_rx.is_none());
+        assert!(state.conversation.streaming_rx.is_none());
         // auto_checkpoint should have created a checkpoint
         assert!(
             !state.session.checkpoints().is_empty(),
@@ -450,7 +462,7 @@ mod tests {
             .append_chunk(StreamEvent::ContentDelta("I'll use a tool".to_string()))
             .unwrap();
 
-        let api_before = state.api_messages.len();
+        let api_before = state.conversation.api_messages.len();
         state
             .append_chunk(StreamEvent::MessageComplete {
                 stop_reason: StopReason::ToolUse,
@@ -458,12 +470,12 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            state.api_messages.len(),
+            state.conversation.api_messages.len(),
             api_before,
             "ToolUse must NOT push to api_messages (handled by tool execution)"
         );
         assert!(!state.view.display.loading);
-        assert!(state.streaming_rx.is_none());
+        assert!(state.conversation.streaming_rx.is_none());
     }
 
     // ======================================================================
@@ -478,7 +490,7 @@ mod tests {
             .append_chunk(StreamEvent::ContentDelta("partial resp".to_string()))
             .unwrap();
 
-        let api_before = state.api_messages.len();
+        let api_before = state.conversation.api_messages.len();
         state
             .append_chunk(StreamEvent::MessageComplete {
                 stop_reason: StopReason::MaxTokens,
@@ -486,7 +498,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            state.api_messages.len(),
+            state.conversation.api_messages.len(),
             api_before + 1,
             "MaxTokens should push assistant message"
         );
@@ -512,7 +524,10 @@ mod tests {
             .unwrap();
 
         assert!(!state.view.display.loading, "loading must be cleared");
-        assert!(state.streaming_rx.is_none(), "rx must be cleared");
+        assert!(
+            state.conversation.streaming_rx.is_none(),
+            "rx must be cleared"
+        );
         // Note: stream error does NOT finalize the timeline streaming entry
     }
 
@@ -580,12 +595,12 @@ mod tests {
     #[test]
     fn test_content_block_complete_is_noop() {
         let mut state = test_state();
-        let timeline_before = state.timeline.len();
+        let timeline_before = state.conversation.timeline.len();
 
         state
             .append_chunk(StreamEvent::ContentBlockComplete { index: 0 })
             .unwrap();
 
-        assert_eq!(state.timeline.len(), timeline_before);
+        assert_eq!(state.conversation.timeline.len(), timeline_before);
     }
 }

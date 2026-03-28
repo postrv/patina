@@ -38,6 +38,12 @@ pub struct ConversationEngine {
     pub(crate) dirty: bool,
 }
 
+impl Default for ConversationEngine {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ConversationEngine {
     /// Creates a new empty conversation engine.
     #[must_use]
@@ -195,9 +201,7 @@ mod tests {
         let mut engine = ConversationEngine::new();
         assert_eq!(engine.api_messages_len(), 0);
 
-        engine
-            .api_messages_mut()
-            .push(ApiMessageV2::user("Hello"));
+        engine.api_messages_mut().push(ApiMessageV2::user("Hello"));
         assert_eq!(engine.api_messages_len(), 1);
         assert_eq!(engine.api_messages()[0].content.to_text(), "Hello");
     }

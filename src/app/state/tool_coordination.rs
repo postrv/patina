@@ -317,7 +317,7 @@ impl AppState {
         let continuation = self.tool_state.finish_tool_execution()?;
         let (assistant_msg, mut user_msg) = continuation.build_messages();
 
-        self.api_messages_mut().push(assistant_msg);
+        self.conversation.api_messages_mut().push(assistant_msg);
 
         truncate_tool_results(&mut user_msg);
 
@@ -326,7 +326,7 @@ impl AppState {
             role: Role::User,
             content: tool_result_summary,
         });
-        self.api_messages_mut().push(user_msg);
+        self.conversation.api_messages_mut().push(user_msg);
 
         self.tool_state.tool_loop_mut().start_streaming()?;
         Ok(())
@@ -378,12 +378,12 @@ impl AppState {
     /// Returns a reference to the conversation timeline.
     #[must_use]
     pub fn timeline(&self) -> &Timeline {
-        &self.timeline
+        &self.conversation.timeline
     }
 
     /// Returns a mutable reference to the conversation timeline.
     pub fn timeline_mut(&mut self) -> &mut Timeline {
-        &mut self.timeline
+        &mut self.conversation.timeline
     }
 
     /// Starts streaming mode.
@@ -393,7 +393,7 @@ impl AppState {
         self.view.display.loading = true;
 
         // Add streaming entry to timeline
-        if self.timeline.try_push_streaming().is_err() {
+        if self.conversation.timeline.try_push_streaming().is_err() {
             // Already streaming - this is a no-op
             tracing::warn!("set_streaming called but timeline already streaming");
         }
@@ -406,7 +406,7 @@ impl AppState {
     /// Updates the timeline streaming entry.
     pub fn append_streaming_text(&mut self, text: &str) {
         // Update timeline streaming entry
-        self.timeline.append_to_streaming(text);
+        self.conversation.timeline.append_to_streaming(text);
         self.dirty.full = true;
     }
 
@@ -415,7 +415,7 @@ impl AppState {
     /// Converts the streaming entry to an assistant message in the timeline.
     pub fn finalize_streaming_as_message(&mut self) {
         // Finalize timeline streaming entry
-        self.timeline.finalize_streaming_as_message();
+        self.conversation.timeline.finalize_streaming_as_message();
         self.view.display.loading = false;
         self.dirty.full = true;
     }
@@ -445,12 +445,14 @@ impl AppState {
         self.tool_state.tool_blocks.push(block);
 
         // Add to timeline with message index tracking
-        self.timeline.push_tool_after_current_assistant(
-            tool_name,
-            input,
-            Some(output.to_string()),
-            is_error,
-        );
+        self.conversation
+            .timeline
+            .push_tool_after_current_assistant(
+                tool_name,
+                input,
+                Some(output.to_string()),
+                is_error,
+            );
 
         self.dirty.full = true;
     }
@@ -461,16 +463,16 @@ impl AppState {
     /// Preserves working directory, model, memory, MCP servers, plugins, cost
     /// tracker, system prompt, effort, and thinking budget.
     pub fn clear_conversation(&mut self) {
-        self.api_messages.clear();
+        self.conversation.api_messages.clear();
         self.tool_state.clear_tool_blocks();
         self.tool_state.clear_pending_permission();
-        self.timeline = Timeline::new();
+        self.conversation.timeline = Timeline::new();
         self.reset_tool_loop();
         self.reset_token_budget();
-        self.thinking_buffer.clear();
+        self.conversation.thinking_buffer.clear();
         self.view.display.scroll = crate::tui::scroll::ScrollState::new();
         self.view.display.loading = false;
-        self.streaming_rx = None;
+        self.conversation.streaming_rx = None;
         self.dirty.full = true;
         self.session.mark_dirty();
     }
@@ -582,10 +584,12 @@ impl AppState {
     /// * `tool_name` - Name of the tool (e.g., "bash")
     /// * `input` - The tool input/command
     pub fn add_tool_to_timeline_executing(&mut self, tool_name: &str, input: &str) {
-        self.timeline.push_tool_after_current_assistant(
-            tool_name, input, None, // No output yet - executing
-            false,
-        );
+        self.conversation
+            .timeline
+            .push_tool_after_current_assistant(
+                tool_name, input, None, // No output yet - executing
+                false,
+            );
         self.dirty.full = true;
     }
 
@@ -605,7 +609,8 @@ impl AppState {
         output: Option<String>,
         is_error: bool,
     ) {
-        self.timeline
+        self.conversation
+            .timeline
             .update_tool_result(tool_name, output, is_error);
         self.dirty.full = true;
     }
@@ -621,7 +626,7 @@ impl AppState {
     ) {
         // For now, update the most recent executing tool
         // In the future, we could track tool_id -> timeline_index mapping
-        for entry in self.timeline.entries_mut().iter_mut().rev() {
+        for entry in self.conversation.timeline.entries_mut().iter_mut().rev() {
             if let crate::types::ConversationEntry::ToolExecution {
                 output: ref mut o @ None,
                 is_error: ref mut err,
@@ -863,14 +868,14 @@ mod tests {
 
         state.set_streaming(true);
         // Timeline should have a streaming entry
-        assert!(!state.timeline().entries().is_empty());
+        assert!(!state.conversation.timeline().entries().is_empty());
 
         state.append_streaming_text("Hello ");
         state.append_streaming_text("World");
 
         state.finalize_streaming_as_message();
         // After finalize, the streaming entry becomes an assistant message
-        let entries = state.timeline().entries();
+        let entries = state.conversation.timeline().entries();
         let last = entries.last().expect("should have at least one entry");
         assert!(
             matches!(last, crate::types::ConversationEntry::AssistantMessage(_)),
@@ -888,7 +893,7 @@ mod tests {
 
         // Finalize and check accumulated text
         state.finalize_streaming_as_message();
-        let entries = state.timeline().entries();
+        let entries = state.conversation.timeline().entries();
         let last = entries.last().expect("should have an entry");
         if let crate::types::ConversationEntry::AssistantMessage(content) = last {
             assert_eq!(content, "one two three");
@@ -908,7 +913,7 @@ mod tests {
         assert!(!state.view.display.loading);
 
         // The timeline should contain the finalized message
-        let found = state.timeline().entries().iter().any(|e| {
+        let found = state.conversation.timeline().entries().iter().any(|e| {
             matches!(e, crate::types::ConversationEntry::AssistantMessage(content) if content == "response text")
         });
         assert!(found, "Finalized message should appear in timeline");
@@ -966,7 +971,7 @@ mod tests {
         state.record_tool_result("toolu_rec_1", result);
 
         // The timeline entry should now have an output
-        let tool_entry = state.timeline().entries().iter().find(|e| {
+        let tool_entry = state.conversation.timeline().entries().iter().find(|e| {
             matches!(
                 e,
                 crate::types::ConversationEntry::ToolExecution {

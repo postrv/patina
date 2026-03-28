@@ -19,7 +19,7 @@ impl AppState {
     #[must_use]
     pub fn estimate_conversation_tokens(&self) -> usize {
         use crate::api::tokens::estimate_messages_tokens;
-        estimate_messages_tokens(&self.api_messages)
+        estimate_messages_tokens(&self.conversation.api_messages)
     }
 
     /// Updates the token budget based on the current conversation size.
@@ -134,10 +134,14 @@ impl AppState {
         let compact_result = if let Some(p) = provider {
             let summarizer = ProviderSummarizer::new(Arc::clone(p));
             let compactor = ContextCompactor::with_summarizer(summarizer);
-            compactor.compact(&self.api_messages, &config).await
+            compactor
+                .compact(&self.conversation.api_messages, &config)
+                .await
         } else {
             let compactor = ContextCompactor::<NoOpSummarizer>::new_noop();
-            compactor.compact(&self.api_messages, &config).await
+            compactor
+                .compact(&self.conversation.api_messages, &config)
+                .await
         };
 
         // Perform compaction
@@ -164,7 +168,7 @@ impl AppState {
                 );
 
                 // Update state with compacted messages
-                self.api_messages = result.messages;
+                self.conversation.api_messages = result.messages;
 
                 // Sync token budget with new size
                 self.sync_token_budget();
@@ -257,7 +261,7 @@ impl AppState {
         let mut session = Session::new(self.working_dir.clone());
 
         // Convert timeline entries to messages for session persistence
-        for entry in self.timeline.iter() {
+        for entry in self.conversation.timeline.iter() {
             match entry {
                 crate::types::ConversationEntry::UserMessage(text) => {
                     session.add_message(Message {
@@ -304,11 +308,17 @@ impl AppState {
     /// * `session` - The session to restore from.
     pub fn restore_from_session(&mut self, session: &Session) {
         // Clear and rebuild timeline from session messages
-        self.timeline = Timeline::new();
+        self.conversation.timeline = Timeline::new();
         for message in session.messages() {
             match message.role {
-                Role::User => self.timeline.push_user_message(&message.content),
-                Role::Assistant => self.timeline.push_assistant_message(&message.content),
+                Role::User => self
+                    .conversation
+                    .timeline
+                    .push_user_message(&message.content),
+                Role::Assistant => self
+                    .conversation
+                    .timeline
+                    .push_assistant_message(&message.content),
             }
         }
 
