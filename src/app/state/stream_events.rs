@@ -222,3 +222,370 @@ impl AppState {
         self.dirty.full = true;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::config::ParallelMode;
+    use crate::types::content::StopReason;
+    use crate::types::stream::{ApiUsage, StreamEvent};
+    use std::path::PathBuf;
+
+    fn test_state() -> AppState {
+        AppState::new(PathBuf::from("/tmp/test"), false, ParallelMode::Enabled)
+    }
+
+    /// Sets up streaming mode: timeline gets a streaming entry, tool loop enters Streaming.
+    fn start_streaming(state: &mut AppState) {
+        state.set_streaming(true);
+        // Tool loop must be in Streaming for handle_message_complete to succeed
+        // set_streaming already tries to push streaming to timeline
+    }
+
+    // ======================================================================
+    // ContentDelta
+    // ======================================================================
+
+    #[test]
+    fn test_content_delta_appends_to_timeline() {
+        let mut state = test_state();
+        start_streaming(&mut state);
+        state.mark_rendered();
+
+        state
+            .append_chunk(StreamEvent::ContentDelta("Hello ".to_string()))
+            .unwrap();
+        state
+            .append_chunk(StreamEvent::ContentDelta("world".to_string()))
+            .unwrap();
+
+        // The streaming entry should contain accumulated text
+        assert!(state.timeline.is_streaming());
+        assert!(state.needs_render(), "dirty flag must be set");
+    }
+
+    #[test]
+    fn test_content_delta_without_streaming_is_safe() {
+        let mut state = test_state();
+        // Do NOT call start_streaming — no streaming entry
+
+        // Should not panic even without an active streaming entry
+        state
+            .append_chunk(StreamEvent::ContentDelta("orphan text".to_string()))
+            .unwrap();
+    }
+
+    // ======================================================================
+    // ThinkingStart / ThinkingDelta / ThinkingComplete
+    // ======================================================================
+
+    #[test]
+    fn test_thinking_buffer_lifecycle() {
+        let mut state = test_state();
+
+        // ThinkingStart clears buffer
+        state
+            .append_chunk(StreamEvent::ThinkingStart { index: 0 })
+            .unwrap();
+        assert!(state.thinking_buffer.is_empty());
+
+        // ThinkingDelta accumulates
+        state
+            .append_chunk(StreamEvent::ThinkingDelta("reason step 1, ".to_string()))
+            .unwrap();
+        state
+            .append_chunk(StreamEvent::ThinkingDelta("reason step 2".to_string()))
+            .unwrap();
+        assert_eq!(state.thinking_buffer, "reason step 1, reason step 2");
+
+        // ThinkingComplete drains buffer and pushes summary to timeline
+        let timeline_before = state.timeline.len();
+        state
+            .append_chunk(StreamEvent::ThinkingComplete { index: 0 })
+            .unwrap();
+
+        assert!(
+            state.thinking_buffer.is_empty(),
+            "buffer must be drained on complete"
+        );
+        assert_eq!(
+            state.timeline.len(),
+            timeline_before + 1,
+            "summary entry must be added to timeline"
+        );
+    }
+
+    #[test]
+    fn test_thinking_complete_with_empty_buffer_is_noop() {
+        let mut state = test_state();
+        let timeline_before = state.timeline.len();
+
+        state
+            .append_chunk(StreamEvent::ThinkingStart { index: 0 })
+            .unwrap();
+        // No ThinkingDelta — buffer stays empty
+        state
+            .append_chunk(StreamEvent::ThinkingComplete { index: 0 })
+            .unwrap();
+
+        assert_eq!(
+            state.timeline.len(),
+            timeline_before,
+            "no timeline entry for empty thinking"
+        );
+    }
+
+    #[test]
+    fn test_multiple_thinking_starts_reset_buffer() {
+        let mut state = test_state();
+
+        state
+            .append_chunk(StreamEvent::ThinkingDelta("old content".to_string()))
+            .unwrap();
+        // Second ThinkingStart clears the accumulated content
+        state
+            .append_chunk(StreamEvent::ThinkingStart { index: 1 })
+            .unwrap();
+        assert!(
+            state.thinking_buffer.is_empty(),
+            "ThinkingStart must clear previous buffer"
+        );
+    }
+
+    // ======================================================================
+    // MessageStop
+    // ======================================================================
+
+    #[test]
+    fn test_message_stop_finalizes_streaming_and_pushes_api_message() {
+        let mut state = test_state();
+        start_streaming(&mut state);
+
+        // Append some content first
+        state
+            .append_chunk(StreamEvent::ContentDelta("assistant reply".to_string()))
+            .unwrap();
+        assert!(state.timeline.is_streaming());
+
+        let api_before = state.api_messages.len();
+        state.append_chunk(StreamEvent::MessageStop).unwrap();
+
+        assert!(
+            !state.timeline.is_streaming(),
+            "streaming must be finalized"
+        );
+        assert_eq!(
+            state.api_messages.len(),
+            api_before + 1,
+            "assistant message must be pushed to api_messages"
+        );
+        assert!(!state.view.display.loading, "loading must be cleared");
+        assert!(state.streaming_rx.is_none(), "streaming_rx must be cleared");
+    }
+
+    #[test]
+    fn test_message_stop_when_not_streaming_skips_finalization() {
+        let mut state = test_state();
+        // No streaming active
+
+        let api_before = state.api_messages.len();
+        state.append_chunk(StreamEvent::MessageStop).unwrap();
+
+        // Should not panic, and should not add api message
+        assert_eq!(state.api_messages.len(), api_before);
+        assert!(!state.view.display.loading);
+    }
+
+    // ======================================================================
+    // MessageComplete — EndTurn
+    // ======================================================================
+
+    #[test]
+    fn test_message_complete_end_turn_finalizes_and_checkpoints() {
+        let mut state = test_state();
+        // Add a user message first so auto_checkpoint has content
+        state.add_message(Message {
+            role: Role::User,
+            content: "Hello".to_string(),
+        });
+        start_streaming(&mut state);
+        state
+            .append_chunk(StreamEvent::ContentDelta("Hi there!".to_string()))
+            .unwrap();
+
+        let api_before = state.api_messages.len();
+        state
+            .append_chunk(StreamEvent::MessageComplete {
+                stop_reason: StopReason::EndTurn,
+            })
+            .unwrap();
+
+        assert!(
+            !state.timeline.is_streaming(),
+            "streaming must be finalized"
+        );
+        assert_eq!(
+            state.api_messages.len(),
+            api_before + 1,
+            "assistant message pushed to api_messages"
+        );
+        assert!(!state.view.display.loading);
+        assert!(state.streaming_rx.is_none());
+        // auto_checkpoint should have created a checkpoint
+        assert!(
+            !state.session.checkpoints().is_empty(),
+            "EndTurn should trigger auto-checkpoint"
+        );
+    }
+
+    // ======================================================================
+    // MessageComplete — ToolUse
+    // ======================================================================
+
+    #[test]
+    fn test_message_complete_tool_use_does_not_push_api_message() {
+        let mut state = test_state();
+        start_streaming(&mut state);
+        state
+            .append_chunk(StreamEvent::ContentDelta("I'll use a tool".to_string()))
+            .unwrap();
+
+        let api_before = state.api_messages.len();
+        state
+            .append_chunk(StreamEvent::MessageComplete {
+                stop_reason: StopReason::ToolUse,
+            })
+            .unwrap();
+
+        assert_eq!(
+            state.api_messages.len(),
+            api_before,
+            "ToolUse must NOT push to api_messages (handled by tool execution)"
+        );
+        assert!(!state.view.display.loading);
+        assert!(state.streaming_rx.is_none());
+    }
+
+    // ======================================================================
+    // MessageComplete — MaxTokens
+    // ======================================================================
+
+    #[test]
+    fn test_message_complete_max_tokens_finalizes() {
+        let mut state = test_state();
+        start_streaming(&mut state);
+        state
+            .append_chunk(StreamEvent::ContentDelta("partial resp".to_string()))
+            .unwrap();
+
+        let api_before = state.api_messages.len();
+        state
+            .append_chunk(StreamEvent::MessageComplete {
+                stop_reason: StopReason::MaxTokens,
+            })
+            .unwrap();
+
+        assert_eq!(
+            state.api_messages.len(),
+            api_before + 1,
+            "MaxTokens should push assistant message"
+        );
+        // MaxTokens does NOT trigger auto-checkpoint (only EndTurn does)
+        assert!(
+            state.session.checkpoints().is_empty(),
+            "MaxTokens should not checkpoint"
+        );
+    }
+
+    // ======================================================================
+    // Error handling
+    // ======================================================================
+
+    #[test]
+    fn test_stream_error_clears_streaming_state() {
+        let mut state = test_state();
+        start_streaming(&mut state);
+        state.view.display.loading = true;
+
+        state
+            .append_chunk(StreamEvent::Error("API timeout".to_string()))
+            .unwrap();
+
+        assert!(!state.view.display.loading, "loading must be cleared");
+        assert!(state.streaming_rx.is_none(), "rx must be cleared");
+        // Note: stream error does NOT finalize the timeline streaming entry
+    }
+
+    // ======================================================================
+    // Usage tracking
+    // ======================================================================
+
+    #[test]
+    fn test_usage_event_records_cost() {
+        let mut state = test_state();
+        let cost_before = state.cost_tracker.session_cost();
+
+        state
+            .append_chunk(StreamEvent::Usage(ApiUsage {
+                input_tokens: 100,
+                output_tokens: 50,
+                cache_read_input_tokens: 10,
+                cache_creation_input_tokens: 5,
+            }))
+            .unwrap();
+
+        assert!(
+            state.cost_tracker.session_cost() >= cost_before,
+            "usage must be recorded"
+        );
+    }
+
+    // ======================================================================
+    // auto_checkpoint_on_end_turn
+    // ======================================================================
+
+    #[test]
+    fn test_auto_checkpoint_empty_timeline_is_noop() {
+        let mut state = test_state();
+        state.auto_checkpoint_on_end_turn();
+        assert!(
+            state.session.checkpoints().is_empty(),
+            "no checkpoint for empty timeline"
+        );
+    }
+
+    #[test]
+    fn test_auto_checkpoint_deduplicates() {
+        let mut state = test_state();
+        state.add_message(Message {
+            role: Role::User,
+            content: "Hello".to_string(),
+        });
+        state.auto_checkpoint_on_end_turn();
+        let count_after_first = state.session.checkpoints().len();
+
+        // Call again with same message count — should deduplicate
+        state.auto_checkpoint_on_end_turn();
+        assert_eq!(
+            state.session.checkpoints().len(),
+            count_after_first,
+            "duplicate checkpoint must be skipped"
+        );
+    }
+
+    // ======================================================================
+    // ContentBlockComplete (no-op)
+    // ======================================================================
+
+    #[test]
+    fn test_content_block_complete_is_noop() {
+        let mut state = test_state();
+        let timeline_before = state.timeline.len();
+
+        state
+            .append_chunk(StreamEvent::ContentBlockComplete { index: 0 })
+            .unwrap();
+
+        assert_eq!(state.timeline.len(), timeline_before);
+    }
+}
