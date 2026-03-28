@@ -150,31 +150,21 @@ impl AppState {
 
     /// Builds the final API message list for sending to the LLM.
     ///
-    /// This is the single entry point for constructing the message payload
-    /// before an API call. When auto-context is enabled and cached CCG
-    /// context is available, a context message is prepended to the
-    /// conversation history.
+    /// Returns the truncated message history ready for an API call. Context
+    /// injection is **not** performed here — callers that need CCG context
+    /// should inject it into the user message before appending to
+    /// `api_messages` (see `submit_message()` and `print::run_print_mode()`).
     ///
-    /// The cached context is read (not consumed) so it remains available
-    /// for subsequent calls until explicitly refreshed or cleared.
+    /// This avoids double-injection: `submit_message()` already embeds
+    /// context into the user message via `.take()`, so a second injection
+    /// here would duplicate it.
     ///
     /// # Returns
     ///
-    /// A new vector containing the message history ready for the API call,
-    /// optionally prefixed with a CCG context message.
+    /// A new vector containing the truncated message history.
     #[must_use]
     pub fn build_api_messages(&self) -> Vec<ApiMessageV2> {
-        let mut messages = self.api_messages_truncated();
-
-        // Inject cached CCG context as a leading user message when available
-        if self.compression.auto_context_enabled {
-            if let Some(context) = &self.compression.cached_ccg_context {
-                let context_msg = ApiMessageV2::user(format!("<context>\n{context}\n</context>"));
-                messages.insert(0, context_msg);
-            }
-        }
-
-        messages
+        self.api_messages_truncated()
     }
 
     // ========================================================================
@@ -340,7 +330,14 @@ impl AppState {
                     None => std::future::pending().await,
                 }
             }, if self.tool_state.tool_result_rx.is_some() => {
-                result.map(|(id, r)| BackgroundEvent::ToolResult(id, r))
+                match result {
+                    Some((id, r)) => Some(BackgroundEvent::ToolResult(id, r)),
+                    None => {
+                        // Sender dropped (task panicked/completed) — clear to prevent busy-loop
+                        self.tool_state.tool_result_rx = None;
+                        None
+                    }
+                }
             }
 
             // Then API streaming chunks
@@ -350,7 +347,14 @@ impl AppState {
                     None => std::future::pending().await,
                 }
             }, if self.conversation.streaming_rx.is_some() => {
-                chunk.map(BackgroundEvent::ApiChunk)
+                match chunk {
+                    Some(event) => Some(BackgroundEvent::ApiChunk(event)),
+                    None => {
+                        // Sender dropped (task panicked/completed) — clear to prevent busy-loop
+                        self.conversation.streaming_rx = None;
+                        None
+                    }
+                }
             }
 
             // If neither channel is active, return None immediately
@@ -466,5 +470,73 @@ mod tests {
 
         assert_eq!(state.api_messages_len(), 1);
         assert_eq!(state.api_messages()[0].to_legacy().content, "test prompt");
+    }
+
+    #[tokio::test]
+    async fn recv_background_event_clears_streaming_rx_on_sender_drop() {
+        let mut state = new_state();
+        let (tx, rx) = mpsc::channel::<StreamEvent>(1);
+        state.conversation.streaming_rx = Some(rx);
+
+        assert!(state.has_background_work(), "streaming_rx is set");
+
+        // Drop the sender to simulate a task panic / completion without explicit close
+        drop(tx);
+
+        // recv_background_event should return None and clear streaming_rx
+        let event = state.recv_background_event().await;
+        assert!(event.is_none(), "closed channel should yield None");
+        assert!(
+            state.conversation.streaming_rx.is_none(),
+            "streaming_rx must be cleared when sender is dropped"
+        );
+        assert!(
+            !state.has_background_work(),
+            "no background work after cleanup"
+        );
+    }
+
+    #[tokio::test]
+    async fn recv_background_event_clears_tool_result_rx_on_sender_drop() {
+        let mut state = new_state();
+        let (tx, rx) = mpsc::channel::<(String, crate::types::ToolResultBlock)>(1);
+        state.tool_state.tool_result_rx = Some(rx);
+
+        assert!(state.has_background_work(), "tool_result_rx is set");
+
+        // Drop the sender
+        drop(tx);
+
+        let event = state.recv_background_event().await;
+        assert!(event.is_none(), "closed channel should yield None");
+        assert!(
+            state.tool_state.tool_result_rx.is_none(),
+            "tool_result_rx must be cleared when sender is dropped"
+        );
+        assert!(
+            !state.has_background_work(),
+            "no background work after cleanup"
+        );
+    }
+
+    #[tokio::test]
+    async fn build_api_messages_does_not_inject_context() {
+        // build_api_messages is now a pure passthrough — context injection
+        // is handled by submit_message / print mode callers.
+        let mut state = new_state();
+        state.compression_mut().set_auto_context_enabled(true);
+        state.compression.cached_ccg_context = Some("## Context Data".to_string());
+
+        state
+            .conversation
+            .api_messages
+            .push(ApiMessageV2::user("Hello"));
+
+        let messages = state.build_api_messages();
+        assert_eq!(messages.len(), 1, "no context message should be injected");
+        assert_eq!(messages[0].content.to_text(), "Hello");
+
+        // Context should remain unconsumed
+        assert!(state.compression().has_cached_ccg_context());
     }
 }

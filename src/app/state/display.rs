@@ -88,6 +88,7 @@ impl DisplayState {
     /// Sets the loading state.
     pub fn set_loading(&mut self, loading: bool) {
         self.loading = loading;
+        self.dirty = true;
     }
 
     /// Advances the throbber animation frame.
@@ -111,6 +112,7 @@ impl DisplayState {
     /// Sets the cached terminal height.
     pub fn set_terminal_height(&mut self, height: u16) {
         self.terminal_height = height;
+        self.dirty = true;
     }
 
     /// Returns the available update version, if any.
@@ -122,6 +124,7 @@ impl DisplayState {
     /// Sets the available update version from background check.
     pub fn set_update_available(&mut self, version: String) {
         self.update_available = Some(version);
+        self.dirty = true;
     }
 
     /// Returns the custom prompt bar color, if set.
@@ -133,6 +136,7 @@ impl DisplayState {
     /// Sets or clears the custom prompt bar color.
     pub fn set_prompt_color(&mut self, color: Option<String>) {
         self.prompt_color = color;
+        self.dirty = true;
     }
 }
 
@@ -163,6 +167,42 @@ mod tests {
         assert!(state.is_loading());
         state.set_loading(false);
         assert!(!state.is_loading());
+    }
+
+    #[test]
+    fn test_set_loading_marks_dirty() {
+        let mut state = DisplayState::new();
+        state.mark_clean();
+        assert!(!state.is_dirty());
+        state.set_loading(true);
+        assert!(state.is_dirty(), "set_loading should mark dirty");
+    }
+
+    #[test]
+    fn test_set_update_available_marks_dirty() {
+        let mut state = DisplayState::new();
+        state.mark_clean();
+        assert!(!state.is_dirty());
+        state.set_update_available("2.0.0".to_string());
+        assert!(state.is_dirty(), "set_update_available should mark dirty");
+    }
+
+    #[test]
+    fn test_set_prompt_color_marks_dirty() {
+        let mut state = DisplayState::new();
+        state.mark_clean();
+        assert!(!state.is_dirty());
+        state.set_prompt_color(Some("red".to_string()));
+        assert!(state.is_dirty(), "set_prompt_color should mark dirty");
+    }
+
+    #[test]
+    fn test_set_terminal_height_marks_dirty() {
+        let mut state = DisplayState::new();
+        state.mark_clean();
+        assert!(!state.is_dirty());
+        state.set_terminal_height(50);
+        assert!(state.is_dirty(), "set_terminal_height should mark dirty");
     }
 
     #[test]
