@@ -429,7 +429,7 @@ pub fn bridge_plugin_hooks(
     hooks_config: &HooksConfig,
     hook_manager: &mut crate::hooks::HookManager,
 ) {
-    use crate::hooks::{HookCommand, HookDefinition, HookEvent};
+    use crate::hooks::{HookAction, HookDefinition, HookEvent};
 
     let event_pairs: &[(&[HookDef], HookEvent)] = &[
         (&hooks_config.pre_tool_use, HookEvent::PreToolUse),
@@ -460,8 +460,7 @@ pub fn bridge_plugin_hooks(
         for def in *defs {
             let definition = HookDefinition {
                 matcher: def.matcher.clone(),
-                hooks: vec![HookCommand {
-                    hook_type: "command".to_string(),
+                hooks: vec![HookAction::Command {
                     command: def.command.clone(),
                     timeout_ms: Some(30_000),
                 }],

@@ -4,9 +4,11 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::process::Stdio;
+use std::sync::Arc;
 use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 
+use crate::api::provider::LlmProvider;
 use crate::shell::ShellConfig;
 use crate::tools::{normalize_command, ToolExecutionPolicy};
 
@@ -66,20 +68,64 @@ pub struct HookContext {
     pub stop_reason: Option<String>,
 }
 
+/// A hook definition that specifies an optional matcher pattern and a list of hook actions.
+///
+/// When `matcher` is set, the hooks only fire for tool events whose tool name matches
+/// the pattern (exact, glob, or pipe-separated).
 #[derive(Debug, Deserialize, Clone)]
 pub struct HookDefinition {
+    /// Optional matcher pattern (glob, pipe-separated, or exact match).
     pub matcher: Option<String>,
-    pub hooks: Vec<HookCommand>,
+    /// The hook actions to execute when this definition fires.
+    pub hooks: Vec<HookAction>,
 }
 
-#[derive(Debug, Deserialize, Clone)]
-pub struct HookCommand {
-    #[serde(rename = "type")]
-    pub hook_type: String,
-    pub command: String,
-    #[serde(default)]
-    pub timeout_ms: Option<u64>,
+/// Default prompt hook timeout (30 seconds).
+fn default_prompt_timeout() -> Option<u64> {
+    Some(30_000)
 }
+
+/// A single hook action that can be either a shell command or an LLM prompt evaluation.
+///
+/// Deserialized with a `type` tag: `"command"` or `"prompt"`.
+///
+/// # Examples
+///
+/// ```toml
+/// # Command hook
+/// { type = "command", command = "echo hello" }
+///
+/// # Prompt hook
+/// { type = "prompt", prompt = "Should this tool be allowed?" }
+/// ```
+#[derive(Debug, Deserialize, Clone)]
+#[serde(tag = "type")]
+pub enum HookAction {
+    /// Execute a shell command. Exit code 0 = continue, 2 = block.
+    #[serde(rename = "command")]
+    Command {
+        /// The shell command to execute.
+        command: String,
+        /// Optional timeout in milliseconds.
+        #[serde(default)]
+        timeout_ms: Option<u64>,
+    },
+    /// Evaluate a prompt via an LLM provider to make a hook decision.
+    #[serde(rename = "prompt")]
+    Prompt {
+        /// The prompt text sent to the LLM along with hook context.
+        prompt: String,
+        /// Timeout in milliseconds (defaults to 30,000).
+        #[serde(default = "default_prompt_timeout")]
+        timeout_ms: Option<u64>,
+    },
+}
+
+/// Backward-compatible alias for `HookAction`.
+///
+/// Existing code that uses `HookCommand` will continue to work. New code should
+/// prefer `HookAction` directly.
+pub type HookCommand = HookAction;
 
 #[derive(Debug)]
 pub struct HookResult {
@@ -100,8 +146,14 @@ pub enum HookDecision {
     Deny,
 }
 
+/// Executes registered hook actions for lifecycle events.
+///
+/// Supports both shell command hooks and LLM prompt hooks. The LLM provider
+/// must be set via [`set_provider`](HookExecutor::set_provider) before prompt
+/// hooks can fire; if no provider is set, prompt hooks are skipped with a warning.
 pub struct HookExecutor {
     hooks: HashMap<HookEvent, Vec<HookDefinition>>,
+    llm_provider: Option<Arc<dyn LlmProvider>>,
 }
 
 /// Checks if a tool name matches a matcher pattern.
@@ -137,16 +189,35 @@ fn matches_pattern(matcher: &str, tool_name: &str) -> Result<bool> {
 }
 
 impl HookExecutor {
+    /// Creates a new hook executor with no registered hooks and no LLM provider.
     pub fn new() -> Self {
         Self {
             hooks: HashMap::new(),
+            llm_provider: None,
         }
     }
 
+    /// Sets the LLM provider used for prompt-based hooks.
+    ///
+    /// Must be called before prompt hooks can fire. If not set, prompt hooks
+    /// are skipped with a warning log.
+    pub fn set_provider(&mut self, provider: Arc<dyn LlmProvider>) {
+        self.llm_provider = Some(provider);
+    }
+
+    /// Registers hook definitions for a specific event.
     pub fn register(&mut self, event: HookEvent, hooks: Vec<HookDefinition>) {
         self.hooks.entry(event).or_default().extend(hooks);
     }
 
+    /// Executes all matching hooks for the given event and context.
+    ///
+    /// Hooks are executed sequentially. A command hook with exit code 2 or a prompt
+    /// hook returning "deny"/"block" will short-circuit and return the blocking decision.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if context serialization, command execution, or LLM communication fails.
     pub async fn execute(&self, event: HookEvent, context: &HookContext) -> Result<HookResult> {
         let definitions = match self.hooks.get(&event) {
             Some(defs) => defs,
@@ -172,24 +243,44 @@ impl HookExecutor {
             }
 
             for hook in &def.hooks {
-                let result = self.run_hook_command(&hook.command, &context_json).await?;
+                match hook {
+                    HookAction::Command {
+                        command,
+                        timeout_ms: _,
+                    } => {
+                        let result = self.run_hook_command(command, &context_json).await?;
 
-                match result.exit_code {
-                    0 => continue,
-                    2 => {
-                        return Ok(HookResult {
-                            decision: HookDecision::Block {
-                                reason: result.stdout.clone(),
-                            },
-                            ..result
-                        })
+                        match result.exit_code {
+                            0 => continue,
+                            2 => {
+                                return Ok(HookResult {
+                                    decision: HookDecision::Block {
+                                        reason: result.stdout.clone(),
+                                    },
+                                    ..result
+                                })
+                            }
+                            _ => {
+                                tracing::warn!(
+                                    "Hook exited with code {}: {}",
+                                    result.exit_code,
+                                    result.stderr
+                                );
+                            }
+                        }
                     }
-                    _ => {
-                        tracing::warn!(
-                            "Hook exited with code {}: {}",
-                            result.exit_code,
-                            result.stderr
-                        );
+                    HookAction::Prompt { prompt, timeout_ms } => {
+                        let result = self
+                            .run_prompt_hook(prompt, &context_json, *timeout_ms)
+                            .await?;
+
+                        match &result.decision {
+                            HookDecision::Continue => continue,
+                            HookDecision::Block { .. } | HookDecision::Deny => {
+                                return Ok(result);
+                            }
+                            HookDecision::Allow => continue,
+                        }
                     }
                 }
             }
@@ -271,6 +362,140 @@ impl HookExecutor {
             stderr: String::from_utf8_lossy(&output.stderr).to_string(),
             decision: HookDecision::Continue,
         })
+    }
+
+    /// Evaluates a prompt-based hook by sending the prompt and context to the LLM provider.
+    ///
+    /// The LLM is asked to respond with a JSON object containing `decision` and `reason`
+    /// fields. Falls back to text matching ("APPROVE"/"DENY"/"BLOCK") if JSON parsing fails.
+    ///
+    /// # Arguments
+    ///
+    /// * `prompt` - The hook evaluation prompt
+    /// * `context_json` - Serialized hook context
+    /// * `timeout_ms` - Optional timeout in milliseconds
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the LLM provider is not set, communication fails, or the
+    /// request times out.
+    async fn run_prompt_hook(
+        &self,
+        prompt: &str,
+        context_json: &str,
+        timeout_ms: Option<u64>,
+    ) -> Result<HookResult> {
+        let provider = match &self.llm_provider {
+            Some(p) => p,
+            None => {
+                tracing::warn!("Prompt hook skipped: no LLM provider configured");
+                return Ok(HookResult {
+                    exit_code: 0,
+                    stdout: String::new(),
+                    stderr: "No LLM provider configured for prompt hooks".to_string(),
+                    decision: HookDecision::Continue,
+                });
+            }
+        };
+
+        tracing::info!("Executing prompt hook via LLM provider");
+
+        let system_prompt = "You are a hook evaluator. Respond ONLY with JSON: \
+            {\"decision\": \"approve\"|\"deny\"|\"block\", \"reason\": \"...\"}";
+
+        let user_message = format!("{prompt}\n\nContext:\n{context_json}");
+        let messages = vec![crate::types::ApiMessageV2::user(&user_message)];
+
+        let timeout = std::time::Duration::from_millis(timeout_ms.unwrap_or(30_000));
+        let response = tokio::time::timeout(
+            timeout,
+            provider.summarize_messages(&messages, system_prompt),
+        )
+        .await;
+
+        let response_text = match response {
+            Ok(Ok(text)) => text,
+            Ok(Err(e)) => {
+                tracing::warn!("Prompt hook LLM error: {e}");
+                return Ok(HookResult {
+                    exit_code: 1,
+                    stdout: String::new(),
+                    stderr: format!("LLM error: {e}"),
+                    decision: HookDecision::Continue,
+                });
+            }
+            Err(_) => {
+                tracing::warn!("Prompt hook timed out after {timeout_ms:?}ms");
+                return Ok(HookResult {
+                    exit_code: 1,
+                    stdout: String::new(),
+                    stderr: "Prompt hook timed out".to_string(),
+                    decision: HookDecision::Continue,
+                });
+            }
+        };
+
+        let decision = parse_prompt_response(&response_text);
+
+        Ok(HookResult {
+            exit_code: match &decision {
+                HookDecision::Continue | HookDecision::Allow => 0,
+                HookDecision::Block { .. } => 2,
+                HookDecision::Deny => 1,
+            },
+            stdout: response_text,
+            stderr: String::new(),
+            decision,
+        })
+    }
+}
+
+/// Parses an LLM response into a [`HookDecision`].
+///
+/// Tries JSON parsing first, then falls back to case-insensitive text matching.
+///
+/// # JSON Format
+///
+/// ```json
+/// {"decision": "approve"|"deny"|"block", "reason": "..."}
+/// ```
+///
+/// # Text Fallback
+///
+/// If JSON parsing fails, the response is checked for the substrings
+/// "APPROVE", "DENY", or "BLOCK" (case-insensitive).
+#[must_use]
+fn parse_prompt_response(response: &str) -> HookDecision {
+    // Try JSON parsing first
+    if let Ok(json) = serde_json::from_str::<serde_json::Value>(response) {
+        if let Some(decision_str) = json.get("decision").and_then(|v| v.as_str()) {
+            let reason = json
+                .get("reason")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+
+            return match decision_str.to_lowercase().as_str() {
+                "approve" => HookDecision::Allow,
+                "deny" => HookDecision::Deny,
+                "block" => HookDecision::Block { reason },
+                _ => HookDecision::Continue,
+            };
+        }
+    }
+
+    // Fallback: text matching
+    let upper = response.to_uppercase();
+    if upper.contains("APPROVE") {
+        HookDecision::Allow
+    } else if upper.contains("BLOCK") {
+        HookDecision::Block {
+            reason: response.to_string(),
+        }
+    } else if upper.contains("DENY") {
+        HookDecision::Deny
+    } else {
+        HookDecision::Continue
     }
 }
 
@@ -424,13 +649,19 @@ impl HookManager {
     pub fn register_tool_hook(&mut self, event: HookEvent, matcher: Option<&str>, command: &str) {
         let definition = HookDefinition {
             matcher: matcher.map(String::from),
-            hooks: vec![HookCommand {
-                hook_type: "command".to_string(),
+            hooks: vec![HookAction::Command {
                 command: command.to_string(),
                 timeout_ms: Some(30000),
             }],
         };
         self.executor.register(event, vec![definition]);
+    }
+
+    /// Sets the LLM provider on the underlying executor for prompt-based hooks.
+    ///
+    /// Must be called before any prompt hooks can fire.
+    pub fn set_provider(&mut self, provider: Arc<dyn LlmProvider>) {
+        self.executor.set_provider(provider);
     }
 
     /// Fires the SessionStart event.
@@ -1013,5 +1244,366 @@ hooks = [{ type = "command", command = "echo pre-tool" }]
 
         // Verify manager is intact (hooks were registered without error)
         assert_eq!(manager.session_id(), "test");
+    }
+
+    // =========================================================================
+    // HookAction serde tests
+    // =========================================================================
+
+    #[test]
+    fn test_hook_action_deserialize_command() {
+        let json = r#"{"type": "command", "command": "echo hello", "timeout_ms": 5000}"#;
+        let action: HookAction = serde_json::from_str(json).unwrap();
+        match action {
+            HookAction::Command {
+                command,
+                timeout_ms,
+            } => {
+                assert_eq!(command, "echo hello");
+                assert_eq!(timeout_ms, Some(5000));
+            }
+            other => panic!("Expected Command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_hook_action_deserialize_prompt() {
+        let json = r#"{"type": "prompt", "prompt": "Should this be allowed?"}"#;
+        let action: HookAction = serde_json::from_str(json).unwrap();
+        match action {
+            HookAction::Prompt { prompt, timeout_ms } => {
+                assert_eq!(prompt, "Should this be allowed?");
+                // Default timeout
+                assert_eq!(timeout_ms, Some(30_000));
+            }
+            other => panic!("Expected Prompt, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_hook_action_deserialize_prompt_custom_timeout() {
+        let json = r#"{"type": "prompt", "prompt": "Check safety", "timeout_ms": 10000}"#;
+        let action: HookAction = serde_json::from_str(json).unwrap();
+        match action {
+            HookAction::Prompt { prompt, timeout_ms } => {
+                assert_eq!(prompt, "Check safety");
+                assert_eq!(timeout_ms, Some(10000));
+            }
+            other => panic!("Expected Prompt, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_backward_compat_toml_command_format() {
+        let toml = r#"
+[[SessionStart]]
+hooks = [{ type = "command", command = "echo started" }]
+"#;
+        let config: HooksConfig = toml::from_str(toml).unwrap();
+        let defs = config.session_start.unwrap();
+        assert_eq!(defs.len(), 1);
+        assert_eq!(defs[0].hooks.len(), 1);
+        match &defs[0].hooks[0] {
+            HookAction::Command {
+                command,
+                timeout_ms,
+            } => {
+                assert_eq!(command, "echo started");
+                assert!(timeout_ms.is_none());
+            }
+            other => panic!("Expected Command, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_toml_prompt_hook_format() {
+        let toml = r#"
+[[PreToolUse]]
+matcher = "Bash"
+hooks = [{ type = "prompt", prompt = "Is this tool safe?" }]
+"#;
+        let config: HooksConfig = toml::from_str(toml).unwrap();
+        let defs = config.pre_tool_use.unwrap();
+        assert_eq!(defs.len(), 1);
+        assert_eq!(defs[0].matcher.as_deref(), Some("Bash"));
+        match &defs[0].hooks[0] {
+            HookAction::Prompt { prompt, timeout_ms } => {
+                assert_eq!(prompt, "Is this tool safe?");
+                assert_eq!(*timeout_ms, Some(30_000));
+            }
+            other => panic!("Expected Prompt, got {other:?}"),
+        }
+    }
+
+    // =========================================================================
+    // parse_prompt_response tests
+    // =========================================================================
+
+    #[test]
+    fn test_parse_prompt_response_json_approve() {
+        let response = r#"{"decision": "approve", "reason": "Looks safe"}"#;
+        let decision = parse_prompt_response(response);
+        assert!(
+            matches!(decision, HookDecision::Allow),
+            "Expected Allow, got {decision:?}"
+        );
+    }
+
+    #[test]
+    fn test_parse_prompt_response_json_deny() {
+        let response = r#"{"decision": "deny", "reason": "Too dangerous"}"#;
+        let decision = parse_prompt_response(response);
+        assert!(
+            matches!(decision, HookDecision::Deny),
+            "Expected Deny, got {decision:?}"
+        );
+    }
+
+    #[test]
+    fn test_parse_prompt_response_json_block() {
+        let response = r#"{"decision": "block", "reason": "Security concern"}"#;
+        let decision = parse_prompt_response(response);
+        match decision {
+            HookDecision::Block { reason } => {
+                assert_eq!(reason, "Security concern");
+            }
+            other => panic!("Expected Block, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_parse_prompt_response_text_approve() {
+        let response = "I think we should APPROVE this action.";
+        let decision = parse_prompt_response(response);
+        assert!(
+            matches!(decision, HookDecision::Allow),
+            "Expected Allow, got {decision:?}"
+        );
+    }
+
+    #[test]
+    fn test_parse_prompt_response_text_deny() {
+        let response = "I DENY this request.";
+        let decision = parse_prompt_response(response);
+        assert!(
+            matches!(decision, HookDecision::Deny),
+            "Expected Deny, got {decision:?}"
+        );
+    }
+
+    #[test]
+    fn test_parse_prompt_response_text_block() {
+        let response = "We should BLOCK this operation.";
+        let decision = parse_prompt_response(response);
+        assert!(
+            matches!(decision, HookDecision::Block { .. }),
+            "Expected Block, got {decision:?}"
+        );
+    }
+
+    #[test]
+    fn test_parse_prompt_response_unknown_falls_through() {
+        let response = "I'm not sure what to do.";
+        let decision = parse_prompt_response(response);
+        assert!(
+            matches!(decision, HookDecision::Continue),
+            "Expected Continue for ambiguous response, got {decision:?}"
+        );
+    }
+
+    #[test]
+    fn test_parse_prompt_response_json_unknown_decision() {
+        let response = r#"{"decision": "maybe", "reason": "unclear"}"#;
+        let decision = parse_prompt_response(response);
+        assert!(
+            matches!(decision, HookDecision::Continue),
+            "Expected Continue for unknown decision, got {decision:?}"
+        );
+    }
+
+    // =========================================================================
+    // Prompt hook execution tests (with mock provider)
+    // =========================================================================
+
+    /// Mock LLM provider for testing prompt hooks.
+    struct MockHookProvider {
+        response: String,
+    }
+
+    impl MockHookProvider {
+        fn new(response: &str) -> Self {
+            Self {
+                response: response.to_string(),
+            }
+        }
+    }
+
+    impl LlmProvider for MockHookProvider {
+        fn name(&self) -> &str {
+            "mock-hook"
+        }
+
+        fn model(&self) -> &str {
+            "mock-model"
+        }
+
+        fn stream_message<'a>(
+            &'a self,
+            _messages: &'a [crate::types::ApiMessageV2],
+            _tools: Option<&'a [crate::api::tools::ToolDefinition]>,
+            _tool_choice: Option<&'a crate::api::tools::ToolChoice>,
+            _options: &'a crate::api::provider::RequestOptions,
+            tx: tokio::sync::mpsc::Sender<crate::types::StreamEvent>,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>> {
+            let response = self.response.clone();
+            Box::pin(async move {
+                let _ = tx
+                    .send(crate::types::StreamEvent::ContentDelta(response))
+                    .await;
+                let _ = tx.send(crate::types::StreamEvent::MessageStop).await;
+                Ok(())
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn test_run_prompt_hook_json_approve() {
+        let mut executor = HookExecutor::new();
+        let provider = Arc::new(MockHookProvider::new(
+            r#"{"decision": "approve", "reason": "Safe operation"}"#,
+        ));
+        executor.set_provider(provider);
+
+        let result = executor
+            .run_prompt_hook("Is this safe?", "{}", None)
+            .await
+            .unwrap();
+        assert!(
+            matches!(result.decision, HookDecision::Allow),
+            "Expected Allow, got {:?}",
+            result.decision
+        );
+        assert_eq!(result.exit_code, 0);
+    }
+
+    #[tokio::test]
+    async fn test_run_prompt_hook_json_deny() {
+        let mut executor = HookExecutor::new();
+        let provider = Arc::new(MockHookProvider::new(
+            r#"{"decision": "deny", "reason": "Dangerous command"}"#,
+        ));
+        executor.set_provider(provider);
+
+        let result = executor
+            .run_prompt_hook("Is this safe?", "{}", None)
+            .await
+            .unwrap();
+        assert!(
+            matches!(result.decision, HookDecision::Deny),
+            "Expected Deny, got {:?}",
+            result.decision
+        );
+        assert_eq!(result.exit_code, 1);
+    }
+
+    #[tokio::test]
+    async fn test_run_prompt_hook_json_block() {
+        let mut executor = HookExecutor::new();
+        let provider = Arc::new(MockHookProvider::new(
+            r#"{"decision": "block", "reason": "Security violation"}"#,
+        ));
+        executor.set_provider(provider);
+
+        let result = executor
+            .run_prompt_hook("Is this safe?", "{}", None)
+            .await
+            .unwrap();
+        match &result.decision {
+            HookDecision::Block { reason } => {
+                assert_eq!(reason, "Security violation");
+            }
+            other => panic!("Expected Block, got {other:?}"),
+        }
+        assert_eq!(result.exit_code, 2);
+    }
+
+    #[tokio::test]
+    async fn test_run_prompt_hook_text_approve() {
+        let mut executor = HookExecutor::new();
+        let provider = Arc::new(MockHookProvider::new(
+            "I think we should APPROVE this action because it is safe.",
+        ));
+        executor.set_provider(provider);
+
+        let result = executor
+            .run_prompt_hook("Is this safe?", "{}", None)
+            .await
+            .unwrap();
+        assert!(
+            matches!(result.decision, HookDecision::Allow),
+            "Expected Allow, got {:?}",
+            result.decision
+        );
+    }
+
+    #[tokio::test]
+    async fn test_run_prompt_hook_no_provider_skips() {
+        let executor = HookExecutor::new();
+
+        let result = executor
+            .run_prompt_hook("Is this safe?", "{}", None)
+            .await
+            .unwrap();
+        assert!(
+            matches!(result.decision, HookDecision::Continue),
+            "Expected Continue when no provider, got {:?}",
+            result.decision
+        );
+    }
+
+    /// Mock provider that hangs forever (for timeout testing).
+    struct HangingProvider;
+
+    impl LlmProvider for HangingProvider {
+        fn name(&self) -> &str {
+            "hanging"
+        }
+
+        fn model(&self) -> &str {
+            "hanging-model"
+        }
+
+        fn stream_message<'a>(
+            &'a self,
+            _messages: &'a [crate::types::ApiMessageV2],
+            _tools: Option<&'a [crate::api::tools::ToolDefinition]>,
+            _tool_choice: Option<&'a crate::api::tools::ToolChoice>,
+            _options: &'a crate::api::provider::RequestOptions,
+            _tx: tokio::sync::mpsc::Sender<crate::types::StreamEvent>,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>> {
+            Box::pin(async move {
+                // Never complete - simulates a hanging provider
+                tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+                Ok(())
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn test_run_prompt_hook_timeout() {
+        let mut executor = HookExecutor::new();
+        let provider: Arc<dyn LlmProvider> = Arc::new(HangingProvider);
+        executor.set_provider(provider);
+
+        let result = executor
+            .run_prompt_hook("Is this safe?", "{}", Some(100)) // 100ms timeout
+            .await
+            .unwrap();
+        assert!(
+            matches!(result.decision, HookDecision::Continue),
+            "Expected Continue on timeout, got {:?}",
+            result.decision
+        );
+        assert!(result.stderr.contains("timed out"));
     }
 }

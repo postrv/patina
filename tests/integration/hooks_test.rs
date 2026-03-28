@@ -6,7 +6,7 @@
 //! marked with #[cfg(unix)]. Cross-platform tests use the helper functions below.
 
 use patina::hooks::{
-    HookCommand, HookContext, HookDecision, HookDefinition, HookEvent, HookExecutor,
+    HookAction, HookContext, HookDecision, HookDefinition, HookEvent, HookExecutor,
 };
 use serde_json::json;
 use serial_test::serial;
@@ -62,8 +62,7 @@ fn tool_context(event: HookEvent, tool_name: &str) -> HookContext {
 fn simple_hook(command: &str) -> HookDefinition {
     HookDefinition {
         matcher: None,
-        hooks: vec![HookCommand {
-            hook_type: "command".to_string(),
+        hooks: vec![HookAction::Command {
             command: command.to_string(),
             timeout_ms: Some(5000),
         }],
@@ -74,8 +73,7 @@ fn simple_hook(command: &str) -> HookDefinition {
 fn hook_with_matcher(matcher: &str, command: &str) -> HookDefinition {
     HookDefinition {
         matcher: Some(matcher.to_string()),
-        hooks: vec![HookCommand {
-            hook_type: "command".to_string(),
+        hooks: vec![HookAction::Command {
             command: command.to_string(),
             timeout_ms: Some(5000),
         }],
@@ -505,8 +503,7 @@ async fn test_hook_timeout() {
         HookEvent::PreToolUse,
         vec![HookDefinition {
             matcher: None,
-            hooks: vec![HookCommand {
-                hook_type: "command".to_string(),
+            hooks: vec![HookAction::Command {
                 command: "sleep 0.1 && exit 0".to_string(),
                 timeout_ms: Some(5000), // 5 second timeout
             }],
@@ -562,8 +559,7 @@ async fn test_hook_completes_before_timeout() {
         HookEvent::PreToolUse,
         vec![HookDefinition {
             matcher: None,
-            hooks: vec![HookCommand {
-                hook_type: "command".to_string(),
+            hooks: vec![HookAction::Command {
                 command: "echo 'fast' && exit 0".to_string(),
                 timeout_ms: Some(10000),
             }],
