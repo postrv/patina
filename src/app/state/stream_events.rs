@@ -243,9 +243,9 @@ mod tests {
 
     /// Sets up streaming mode: timeline gets a streaming entry, tool loop enters Streaming.
     fn start_streaming(state: &mut AppState) {
-        state.set_streaming(true);
+        state.start_streaming_mode();
         // Tool loop must be in Streaming for handle_message_complete to succeed
-        // set_streaming already tries to push streaming to timeline
+        // start_streaming_mode already tries to push streaming to timeline
     }
 
     // ======================================================================

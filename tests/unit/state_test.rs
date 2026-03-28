@@ -429,7 +429,7 @@ fn test_append_chunk_content_delta() {
     state.mark_rendered();
 
     // Simulate starting a response
-    state.set_streaming(true);
+    state.start_streaming_mode();
 
     let result = state.append_chunk(StreamEvent::ContentDelta("Hello ".to_string()));
     assert!(result.is_ok());
@@ -446,7 +446,7 @@ fn test_append_chunk_accumulates_content() {
     use patina::types::StreamEvent;
 
     let mut state = new_state();
-    state.set_streaming(true);
+    state.start_streaming_mode();
 
     state
         .append_chunk(StreamEvent::ContentDelta("Hello ".to_string()))
@@ -466,7 +466,7 @@ fn test_append_chunk_message_stop() {
     use patina::types::{ConversationEntry, StreamEvent};
 
     let mut state = new_state();
-    state.set_streaming(true);
+    state.start_streaming_mode();
     state
         .append_chunk(StreamEvent::ContentDelta("Test response".to_string()))
         .unwrap();
@@ -492,7 +492,7 @@ fn test_append_chunk_error() {
     use patina::types::StreamEvent;
 
     let mut state = new_state();
-    state.set_streaming(true);
+    state.start_streaming_mode();
     state
         .append_chunk(StreamEvent::ContentDelta("Partial response".to_string()))
         .unwrap();
@@ -537,7 +537,7 @@ fn test_tool_use_response_not_added_to_display_by_append_chunk() {
         .tool_loop_mut()
         .start_streaming()
         .unwrap();
-    state.set_streaming(true);
+    state.start_streaming_mode();
 
     // Simulate streaming text via ContentDelta
     state
@@ -589,7 +589,7 @@ fn test_normal_response_added_to_display_by_append_chunk() {
         .tool_loop_mut()
         .start_streaming()
         .unwrap();
-    state.set_streaming(true);
+    state.start_streaming_mode();
     state
         .append_chunk(StreamEvent::ContentDelta("Here's my response.".to_string()))
         .unwrap();
@@ -623,7 +623,7 @@ fn test_tool_loop_preserves_text_content() {
         .tool_loop_mut()
         .start_streaming()
         .unwrap();
-    state.set_streaming(true);
+    state.start_streaming_mode();
 
     // Stream some text
     state

@@ -167,7 +167,7 @@ fn test_streaming_response_render() {
     });
 
     // Simulate streaming response using the timeline API
-    state.set_streaming(true);
+    state.start_streaming_mode();
     state.append_streaming_text("Rust is a systems programming language that...");
 
     let output = render_to_string(&mut state, 60, 20);

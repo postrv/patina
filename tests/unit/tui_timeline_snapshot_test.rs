@@ -113,7 +113,7 @@ fn test_timeline_streaming_at_end() {
     });
 
     // Start streaming
-    state.set_streaming(true);
+    state.start_streaming_mode();
     state.append_streaming_text("Responding...");
 
     // Streaming should be the last entry
@@ -230,7 +230,7 @@ fn test_empty_timeline() {
 fn test_timeline_only_streaming() {
     let mut state = AppState::new(PathBuf::from("/tmp"), true, ParallelMode::Enabled);
 
-    state.set_streaming(true);
+    state.start_streaming_mode();
     state.append_streaming_text("Starting...");
 
     let entries: Vec<_> = state.timeline().iter().collect();
@@ -384,7 +384,7 @@ fn test_timeline_renders_streaming_at_end() {
     });
 
     // Start streaming
-    state.set_streaming(true);
+    state.start_streaming_mode();
     state.append_streaming_text("Rust is a systems programming language...");
 
     let lines = render_timeline_to_lines(state.timeline(), 80);

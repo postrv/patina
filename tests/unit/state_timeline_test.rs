@@ -60,7 +60,7 @@ fn test_streaming_updates_timeline() {
     let mut state = AppState::new(PathBuf::from("/tmp"), true, ParallelMode::Enabled);
 
     // Start streaming - this should create a streaming entry in timeline
-    state.set_streaming(true);
+    state.start_streaming_mode();
 
     // Verify timeline has streaming entry
     assert!(state.timeline().is_streaming());
@@ -80,7 +80,7 @@ fn test_streaming_complete_updates_timeline() {
     let mut state = AppState::new(PathBuf::from("/tmp"), true, ParallelMode::Enabled);
 
     // Start and complete streaming as a normal message
-    state.set_streaming(true);
+    state.start_streaming_mode();
     state.append_streaming_text("Complete response.");
     state.finalize_streaming_as_message();
 

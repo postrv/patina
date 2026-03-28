@@ -57,6 +57,7 @@ fn test_tool_execution_entry() {
         output: Some("file1.txt\nfile2.txt".to_string()),
         is_error: false,
         follows_message_idx: Some(0),
+        tool_id: None,
     };
 
     assert!(!entry.is_user());
@@ -160,7 +161,13 @@ fn test_tool_block_follows_message_idx() {
     let mut timeline = Timeline::new();
     timeline.push_user_message("Run ls");
     timeline.push_assistant_message("I'll run that command.");
-    timeline.push_tool_after_current_assistant("bash", "ls -la", Some("output".to_string()), false);
+    timeline.push_tool_after_current_assistant(
+        "bash",
+        "ls -la",
+        Some("output".to_string()),
+        false,
+        None,
+    );
 
     let entries: Vec<_> = timeline.iter().collect();
     if let ConversationEntry::ToolExecution {

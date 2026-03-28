@@ -26,7 +26,7 @@ fn test_tool_block_shows_running() {
     state.timeline_mut().push_assistant_message("Let me check.");
 
     // Add tool in executing state (no output)
-    state.add_tool_to_timeline_executing("bash", "pwd");
+    state.add_tool_to_timeline_executing("bash", "pwd", None);
 
     // Render the timeline
     let lines = render_timeline_with_throbber(state.timeline(), '⠋');
@@ -70,7 +70,7 @@ fn test_tool_block_updates_on_complete() {
     state.timeline_mut().push_assistant_message("Let me check.");
 
     // Add tool in executing state
-    state.add_tool_to_timeline_executing("bash", "pwd");
+    state.add_tool_to_timeline_executing("bash", "pwd", None);
 
     // Verify it's executing (no output)
     {
@@ -131,7 +131,7 @@ fn test_tool_block_shows_error() {
         .push_assistant_message("Let me run that.");
 
     // Add tool in executing state
-    state.add_tool_to_timeline_executing("bash", "invalid_cmd");
+    state.add_tool_to_timeline_executing("bash", "invalid_cmd", None);
 
     // Complete with error
     state.update_tool_in_timeline("bash", Some("command not found".to_string()), true);
@@ -160,10 +160,10 @@ fn test_multiple_tools_different_states() {
         .push_assistant_message("Running commands.");
 
     // Add first tool (executing)
-    state.add_tool_to_timeline_executing("bash", "pwd");
+    state.add_tool_to_timeline_executing("bash", "pwd", None);
 
     // Add second tool (also executing)
-    state.add_tool_to_timeline_executing("bash", "ls");
+    state.add_tool_to_timeline_executing("bash", "ls", None);
 
     // Complete a tool - update_tool_in_timeline finds the MOST RECENT matching tool with no output
     // (iterates in reverse), so this will update "ls" (the second one)
@@ -209,7 +209,7 @@ fn test_throbber_shown_during_execution() {
     let mut state = new_state();
 
     // Add assistant streaming with tool
-    state.set_streaming(true);
+    state.start_streaming_mode();
     state.append_streaming_text("Running...");
 
     // The throbber should be animated during streaming

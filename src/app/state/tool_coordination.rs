@@ -388,14 +388,16 @@ impl AppState {
 
     /// Starts streaming mode.
     ///
-    /// This creates a streaming entry in the timeline.
-    pub fn set_streaming(&mut self, _streaming: bool) {
+    /// Sets the loading flag to `true` and creates a streaming entry in the
+    /// timeline. If the timeline is already streaming, this is a no-op (with
+    /// a warning log).
+    pub fn start_streaming_mode(&mut self) {
         self.view.display.loading = true;
 
         // Add streaming entry to timeline
         if self.conversation.timeline.try_push_streaming().is_err() {
             // Already streaming - this is a no-op
-            tracing::warn!("set_streaming called but timeline already streaming");
+            tracing::warn!("start_streaming_mode called but timeline already streaming");
         }
 
         self.conversation.dirty = true;
@@ -452,6 +454,7 @@ impl AppState {
                 input,
                 Some(output.to_string()),
                 is_error,
+                None,
             );
 
         self.conversation.dirty = true;
@@ -583,12 +586,21 @@ impl AppState {
     ///
     /// * `tool_name` - Name of the tool (e.g., "bash")
     /// * `input` - The tool input/command
-    pub fn add_tool_to_timeline_executing(&mut self, tool_name: &str, input: &str) {
+    /// * `tool_id` - Unique tool use ID from the API for matching results
+    pub fn add_tool_to_timeline_executing(
+        &mut self,
+        tool_name: &str,
+        input: &str,
+        tool_id: Option<&str>,
+    ) {
         self.conversation
             .timeline
             .push_tool_after_current_assistant(
-                tool_name, input, None, // No output yet - executing
+                tool_name,
+                input,
+                None, // No output yet - executing
                 false,
+                tool_id.map(String::from),
             );
         self.conversation.dirty = true;
     }
@@ -615,29 +627,20 @@ impl AppState {
         self.conversation.dirty = true;
     }
 
-    /// Updates a tool in the timeline by its ID.
+    /// Updates a tool in the timeline by its unique tool use ID.
     ///
-    /// This is used internally when recording tool results.
+    /// Delegates to [`Timeline::update_tool_result_by_id`] which first tries
+    /// to match by `tool_id`, falling back to the most recent executing entry.
+    /// This ensures correct attribution during concurrent tool execution.
     fn update_timeline_tool_by_id(
         &mut self,
-        _tool_id: &str,
+        tool_id: &str,
         output: Option<String>,
         is_error: bool,
     ) {
-        // For now, update the most recent executing tool
-        // In the future, we could track tool_id -> timeline_index mapping
-        for entry in self.conversation.timeline.entries_mut().iter_mut().rev() {
-            if let crate::types::ConversationEntry::ToolExecution {
-                output: ref mut o @ None,
-                is_error: ref mut err,
-                ..
-            } = entry
-            {
-                *o = output;
-                *err = is_error;
-                break;
-            }
-        }
+        self.conversation
+            .timeline
+            .update_tool_result_by_id(tool_id, output, is_error);
         self.conversation.dirty = true;
     }
 }
@@ -866,7 +869,7 @@ mod tests {
     fn test_streaming_lifecycle() {
         let mut state = test_state();
 
-        state.set_streaming(true);
+        state.start_streaming_mode();
         // Timeline should have a streaming entry
         assert!(!state.conversation.timeline().entries().is_empty());
 
@@ -886,7 +889,7 @@ mod tests {
     #[test]
     fn test_append_streaming_text_accumulates() {
         let mut state = test_state();
-        state.set_streaming(true);
+        state.start_streaming_mode();
         state.append_streaming_text("one ");
         state.append_streaming_text("two ");
         state.append_streaming_text("three");
@@ -905,7 +908,7 @@ mod tests {
     #[test]
     fn test_finalize_converts_to_message() {
         let mut state = test_state();
-        state.set_streaming(true);
+        state.start_streaming_mode();
         state.append_streaming_text("response text");
         state.finalize_streaming_as_message();
 
@@ -964,7 +967,7 @@ mod tests {
         let mut state = test_state();
 
         // Add a tool to the timeline in executing state
-        state.add_tool_to_timeline_executing("bash", "echo hello");
+        state.add_tool_to_timeline_executing("bash", "echo hello", Some("toolu_rec_1"));
 
         // Record a result
         let result = ToolResultBlock::success("toolu_rec_1", "hello");
@@ -983,6 +986,156 @@ mod tests {
         assert!(
             tool_entry.is_some(),
             "Timeline should contain a completed tool entry"
+        );
+    }
+
+    // =========================================================================
+    // F5: update_timeline_tool_by_id matches by tool_id
+    // =========================================================================
+
+    #[test]
+    fn test_concurrent_tools_matched_by_id() {
+        let mut state = test_state();
+
+        // Add two tools executing concurrently with distinct IDs
+        state.add_tool_to_timeline_executing("bash", "pwd", Some("toolu_first"));
+        state.add_tool_to_timeline_executing("bash", "ls", Some("toolu_second"));
+
+        // Complete the FIRST tool (not the most recent) - this was the F5 bug
+        let result = ToolResultBlock::success("toolu_first", "/home/user");
+        state.record_tool_result("toolu_first", result);
+
+        // The first tool entry (pwd) should have the output, not the second (ls)
+        let entries = state.conversation.timeline().entries();
+        let first = &entries[0];
+        let second = &entries[1];
+
+        if let crate::types::ConversationEntry::ToolExecution {
+            input,
+            output,
+            tool_id,
+            ..
+        } = first
+        {
+            assert_eq!(input, "pwd");
+            assert_eq!(tool_id.as_deref(), Some("toolu_first"));
+            assert_eq!(
+                output.as_deref(),
+                Some("/home/user"),
+                "First tool should have output"
+            );
+        } else {
+            panic!("Expected ToolExecution for first entry");
+        }
+
+        if let crate::types::ConversationEntry::ToolExecution { input, output, .. } = second {
+            assert_eq!(input, "ls");
+            assert!(output.is_none(), "Second tool should still be executing");
+        } else {
+            panic!("Expected ToolExecution for second entry");
+        }
+    }
+
+    #[test]
+    fn test_concurrent_tools_second_completed_first() {
+        let mut state = test_state();
+
+        // Add two tools executing concurrently
+        state.add_tool_to_timeline_executing("read", "file_a.rs", Some("toolu_read"));
+        state.add_tool_to_timeline_executing("bash", "echo hi", Some("toolu_bash"));
+
+        // Complete the second tool first (out of order)
+        let result = ToolResultBlock::success("toolu_bash", "hi");
+        state.record_tool_result("toolu_bash", result);
+
+        // Then complete the first
+        let result = ToolResultBlock::success("toolu_read", "fn main() {}");
+        state.record_tool_result("toolu_read", result);
+
+        // Both should have their correct outputs
+        let entries = state.conversation.timeline().entries();
+        if let crate::types::ConversationEntry::ToolExecution { input, output, .. } = &entries[0] {
+            assert_eq!(input, "file_a.rs");
+            assert_eq!(output.as_deref(), Some("fn main() {}"));
+        } else {
+            panic!("Expected ToolExecution");
+        }
+
+        if let crate::types::ConversationEntry::ToolExecution { input, output, .. } = &entries[1] {
+            assert_eq!(input, "echo hi");
+            assert_eq!(output.as_deref(), Some("hi"));
+        } else {
+            panic!("Expected ToolExecution");
+        }
+    }
+
+    #[test]
+    fn test_tool_id_fallback_when_no_id_match() {
+        let mut state = test_state();
+
+        // Add a tool without a tool_id (legacy path)
+        state.add_tool_to_timeline_executing("bash", "date", None);
+
+        // Recording a result with an unknown ID should still update via fallback
+        let result = ToolResultBlock::success("toolu_unknown", "Mon Jan 1");
+        state.record_tool_result("toolu_unknown", result);
+
+        let entries = state.conversation.timeline().entries();
+        if let crate::types::ConversationEntry::ToolExecution { output, .. } = &entries[0] {
+            assert_eq!(
+                output.as_deref(),
+                Some("Mon Jan 1"),
+                "Fallback should update the most recent executing tool"
+            );
+        } else {
+            panic!("Expected ToolExecution");
+        }
+    }
+
+    // =========================================================================
+    // F6: start_streaming_mode (formerly set_streaming)
+    // =========================================================================
+
+    #[test]
+    fn test_start_streaming_mode_sets_loading() {
+        let mut state = test_state();
+        assert!(!state.view.display.loading);
+
+        state.start_streaming_mode();
+
+        assert!(state.view.display.loading);
+    }
+
+    #[test]
+    fn test_start_streaming_mode_creates_timeline_entry() {
+        let mut state = test_state();
+        assert!(state.conversation.timeline().entries().is_empty());
+
+        state.start_streaming_mode();
+
+        let entries = state.conversation.timeline().entries();
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].is_streaming());
+    }
+
+    #[test]
+    fn test_start_streaming_mode_idempotent() {
+        let mut state = test_state();
+
+        state.start_streaming_mode();
+        state.start_streaming_mode(); // Second call should be a no-op
+
+        // Should still have exactly one streaming entry
+        let streaming_count = state
+            .conversation
+            .timeline()
+            .entries()
+            .iter()
+            .filter(|e| e.is_streaming())
+            .count();
+        assert_eq!(
+            streaming_count, 1,
+            "Should have exactly one streaming entry"
         );
     }
 }
