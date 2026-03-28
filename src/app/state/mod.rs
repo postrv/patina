@@ -253,6 +253,8 @@ pub struct AppState {
     /// Keybinding manager for customizable key mappings.
     keybinding_mgr: KeybindingManager,
 
+    /// Terminal notification manager for desktop notifications.
+    notification_manager: NotificationManager,
 }
 
 #[derive(Default)]
