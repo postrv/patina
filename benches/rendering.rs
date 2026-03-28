@@ -74,7 +74,7 @@ fn bench_streaming_token_append(c: &mut Criterion) {
                 // Setup: Create state with some messages and a streaming response
                 let mut state = create_state_with_messages(10);
                 // Simulate streaming state by starting streaming in timeline
-                state.set_streaming(true);
+                state.start_streaming_mode();
                 state
             },
             |mut state| {
@@ -101,7 +101,7 @@ fn bench_streaming_cycle(c: &mut Criterion) {
             || {
                 // Setup: Create state with some messages and a streaming response
                 let mut state = create_state_with_messages(10);
-                state.set_streaming(true);
+                state.start_streaming_mode();
                 state
             },
             |mut state| {

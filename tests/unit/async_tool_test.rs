@@ -205,7 +205,7 @@ fn test_tool_progress_in_timeline() {
         .push_assistant_message("Let me check that.");
 
     // Add tool execution (in progress)
-    state.add_tool_to_timeline_executing("bash", "pwd");
+    state.add_tool_to_timeline_executing("bash", "pwd", None);
 
     // Timeline should show the tool as executing (no output yet)
     let entries: Vec<_> = state.timeline().iter().collect();
@@ -290,7 +290,7 @@ fn test_tool_error_handling() {
     let mut state = new_state();
 
     // Add tool to timeline as executing
-    state.add_tool_to_timeline_executing("bash", "invalid_command");
+    state.add_tool_to_timeline_executing("bash", "invalid_command", None);
 
     // Record error result
     let error_result = mock_tool_result("tool_bash", "command not found", true);

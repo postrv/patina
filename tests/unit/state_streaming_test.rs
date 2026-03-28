@@ -33,7 +33,7 @@ fn test_tool_use_no_duplicate_message() {
     let mut state = AppState::new(PathBuf::from("/tmp"), true, ParallelMode::Enabled);
 
     // Start streaming
-    state.set_streaming(true);
+    state.start_streaming_mode();
     state
         .append_chunk(StreamEvent::ContentDelta(
             "I'll run that command.".to_string(),
@@ -71,7 +71,7 @@ fn test_normal_completion_adds_message() {
     let mut state = AppState::new(PathBuf::from("/tmp"), true, ParallelMode::Enabled);
 
     // Initialize streaming
-    state.set_streaming(true);
+    state.start_streaming_mode();
 
     // Stream content
     state
@@ -108,7 +108,7 @@ fn test_streaming_updates_timeline() {
     let mut state = AppState::new(PathBuf::from("/tmp"), true, ParallelMode::Enabled);
 
     // Initialize streaming
-    state.set_streaming(true);
+    state.start_streaming_mode();
 
     // Stream content
     state
@@ -239,7 +239,7 @@ fn test_scroll_follows_streaming() {
     state.scroll_to_bottom(100);
 
     // Start streaming and append content
-    state.set_streaming(true);
+    state.start_streaming_mode();
     state.append_streaming_text("Hello");
     state.append_streaming_text(" world!");
 
@@ -287,7 +287,7 @@ fn test_message_stop_updates_timeline() {
     let mut state = AppState::new(PathBuf::from("/tmp"), true, ParallelMode::Enabled);
 
     // Initialize streaming
-    state.set_streaming(true);
+    state.start_streaming_mode();
 
     // Stream content
     state
@@ -312,7 +312,7 @@ fn test_empty_streaming_content() {
     let mut state = AppState::new(PathBuf::from("/tmp"), true, ParallelMode::Enabled);
 
     // Initialize streaming
-    state.set_streaming(true);
+    state.start_streaming_mode();
 
     // Complete without any content
     state
@@ -339,7 +339,7 @@ fn test_message_complete_and_stop_no_duplicate() {
     let mut state = AppState::new(PathBuf::from("/tmp"), true, ParallelMode::Enabled);
 
     // Initialize streaming
-    state.set_streaming(true);
+    state.start_streaming_mode();
 
     // Stream content
     state
@@ -380,7 +380,7 @@ fn test_message_stop_alone_works() {
     let mut state = AppState::new(PathBuf::from("/tmp"), true, ParallelMode::Enabled);
 
     // Initialize streaming
-    state.set_streaming(true);
+    state.start_streaming_mode();
 
     // Stream content
     state
@@ -415,7 +415,7 @@ fn test_tool_use_no_duplicate_with_both_events() {
     let mut state = AppState::new(PathBuf::from("/tmp"), true, ParallelMode::Enabled);
 
     // Initialize streaming
-    state.set_streaming(true);
+    state.start_streaming_mode();
 
     // Stream content
     state

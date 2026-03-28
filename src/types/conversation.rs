@@ -68,6 +68,10 @@ pub enum ConversationEntry {
         /// Index of the assistant message this tool block follows.
         /// Used for rendering tool blocks inline with their producing message.
         follows_message_idx: Option<usize>,
+        /// Unique tool use ID from the API (e.g., "toolu_abc123").
+        /// Used to match tool results to the correct timeline entry during
+        /// concurrent execution.
+        tool_id: Option<String>,
     },
 
     /// An image for display in the conversation.
@@ -429,6 +433,7 @@ impl Timeline {
             output,
             is_error,
             follows_message_idx: None,
+            tool_id: None,
         });
     }
 
@@ -436,12 +441,21 @@ impl Timeline {
     ///
     /// This sets `follows_message_idx` to track which assistant message the tool
     /// block should be rendered after.
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - Tool name (e.g., "bash", "read_file")
+    /// * `input` - Tool input/command
+    /// * `output` - Tool output, if complete
+    /// * `is_error` - Whether the execution resulted in an error
+    /// * `tool_id` - Unique tool use ID from the API, used for matching results
     pub fn push_tool_after_current_assistant(
         &mut self,
         name: impl Into<String>,
         input: impl Into<String>,
         output: Option<String>,
         is_error: bool,
+        tool_id: Option<String>,
     ) {
         // Find the index of the most recent assistant message
         let follows_idx = self
@@ -458,6 +472,7 @@ impl Timeline {
             output,
             is_error,
             follows_message_idx: follows_idx,
+            tool_id,
         });
     }
 
@@ -489,6 +504,55 @@ impl Timeline {
             pixels,
             alt_text,
         });
+    }
+
+    /// Updates a tool execution entry by its unique tool ID.
+    ///
+    /// Finds the tool entry with matching `tool_id` and no output yet,
+    /// and updates it with the provided output and error status.
+    /// Falls back to updating the most recent executing tool if no
+    /// `tool_id` match is found.
+    ///
+    /// # Arguments
+    ///
+    /// * `target_tool_id` - The unique tool use ID from the API
+    /// * `output` - The tool output
+    /// * `is_error` - Whether the result is an error
+    pub fn update_tool_result_by_id(
+        &mut self,
+        target_tool_id: &str,
+        output: Option<String>,
+        is_error: bool,
+    ) {
+        // First, try to find by tool_id (preferred, correct for concurrent execution)
+        for entry in self.entries.iter_mut().rev() {
+            if let ConversationEntry::ToolExecution {
+                tool_id: Some(ref id),
+                output: ref mut o @ None,
+                is_error: ref mut err,
+                ..
+            } = entry
+            {
+                if id == target_tool_id {
+                    *o = output;
+                    *err = is_error;
+                    return;
+                }
+            }
+        }
+        // Fallback: update the most recent executing tool with no output
+        for entry in self.entries.iter_mut().rev() {
+            if let ConversationEntry::ToolExecution {
+                output: ref mut o @ None,
+                is_error: ref mut err,
+                ..
+            } = entry
+            {
+                *o = output;
+                *err = is_error;
+                return;
+            }
+        }
     }
 
     /// Updates the most recent tool execution with the given name.
@@ -545,6 +609,7 @@ mod tests {
             output: Some("files".to_string()),
             is_error: false,
             follows_message_idx: None,
+            tool_id: None,
         };
         assert_eq!(format!("{tool}"), "Tool[bash] (success): ls -> files");
     }
@@ -666,6 +731,7 @@ mod tests {
             output: None,
             is_error: false,
             follows_message_idx: None,
+            tool_id: None,
         };
         assert!(tool.as_image_display().is_none());
     }
@@ -730,6 +796,7 @@ mod tests {
             output: None,
             is_error: false,
             follows_message_idx: None,
+            tool_id: None,
         };
         // 1 header + 1 input + 1 "Running..." + 1 spacer = 4
         assert_eq!(entry.estimated_line_count(), 4);
@@ -743,6 +810,7 @@ mod tests {
             output: Some("hello".to_string()),
             is_error: false,
             follows_message_idx: None,
+            tool_id: None,
         };
         // 1 header + 1 input + 1 output line + 1 spacer = 4
         assert_eq!(entry.estimated_line_count(), 4);
@@ -757,6 +825,7 @@ mod tests {
             output: Some(long_output.to_string()),
             is_error: false,
             follows_message_idx: None,
+            tool_id: None,
         };
         // 1 header + 1 input + 5 output lines (capped) + 1 truncation + 1 spacer = 9
         assert_eq!(entry.estimated_line_count(), 9);
@@ -813,5 +882,103 @@ mod tests {
             result.is_ok(),
             "push_streaming should succeed after finalize"
         );
+    }
+
+    // =========================================================================
+    // update_tool_result_by_id tests (F5)
+    // =========================================================================
+
+    #[test]
+    fn test_update_tool_result_by_id_matches_correct_tool() {
+        let mut timeline = Timeline::new();
+        timeline.push_tool_after_current_assistant(
+            "bash",
+            "pwd",
+            None,
+            false,
+            Some("toolu_1".to_string()),
+        );
+        timeline.push_tool_after_current_assistant(
+            "bash",
+            "ls",
+            None,
+            false,
+            Some("toolu_2".to_string()),
+        );
+
+        // Update the first tool by its ID
+        timeline.update_tool_result_by_id("toolu_1", Some("/home".to_string()), false);
+
+        let entries = timeline.entries();
+        if let ConversationEntry::ToolExecution { output, .. } = &entries[0] {
+            assert_eq!(output.as_deref(), Some("/home"));
+        } else {
+            panic!("Expected ToolExecution");
+        }
+        if let ConversationEntry::ToolExecution { output, .. } = &entries[1] {
+            assert!(output.is_none(), "Second tool should remain executing");
+        } else {
+            panic!("Expected ToolExecution");
+        }
+    }
+
+    #[test]
+    fn test_update_tool_result_by_id_fallback_no_id() {
+        let mut timeline = Timeline::new();
+        // Tool without a tool_id
+        timeline.push_tool_execution("bash", "date", None, false);
+
+        // Should fall back to matching the most recent executing tool
+        timeline.update_tool_result_by_id("unknown_id", Some("2026-01-01".to_string()), false);
+
+        let entries = timeline.entries();
+        if let ConversationEntry::ToolExecution { output, .. } = &entries[0] {
+            assert_eq!(output.as_deref(), Some("2026-01-01"));
+        } else {
+            panic!("Expected ToolExecution");
+        }
+    }
+
+    #[test]
+    fn test_update_tool_result_by_id_no_match_no_panic() {
+        let mut timeline = Timeline::new();
+        // All tools already have output
+        timeline.push_tool_execution("bash", "echo a", Some("a".to_string()), false);
+
+        // Should be a no-op (no tools with output: None)
+        timeline.update_tool_result_by_id("toolu_x", Some("b".to_string()), false);
+
+        // Output unchanged
+        if let ConversationEntry::ToolExecution { output, .. } = &timeline.entries()[0] {
+            assert_eq!(output.as_deref(), Some("a"));
+        } else {
+            panic!("Expected ToolExecution");
+        }
+    }
+
+    #[test]
+    fn test_push_tool_after_current_assistant_with_tool_id() {
+        let mut timeline = Timeline::new();
+        timeline.push_assistant_message("Let me run that.");
+        timeline.push_tool_after_current_assistant(
+            "bash",
+            "ls",
+            None,
+            false,
+            Some("toolu_abc".to_string()),
+        );
+
+        let entries = timeline.entries();
+        if let ConversationEntry::ToolExecution {
+            tool_id,
+            follows_message_idx,
+            ..
+        } = &entries[1]
+        {
+            assert_eq!(tool_id.as_deref(), Some("toolu_abc"));
+            assert_eq!(*follows_message_idx, Some(0));
+        } else {
+            panic!("Expected ToolExecution");
+        }
     }
 }
