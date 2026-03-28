@@ -15,8 +15,7 @@ use std::future::Future;
 
 use rmcp::handler::client::ClientHandler;
 use rmcp::model::{
-    ClientCapabilities, ClientInfo, Implementation, LoggingMessageNotificationParam,
-    ProgressNotificationParam, Tool,
+    ClientInfo, Implementation, LoggingMessageNotificationParam, ProgressNotificationParam, Tool,
 };
 use rmcp::service::{NotificationContext, RoleClient};
 use std::sync::{Arc, RwLock};
@@ -107,19 +106,9 @@ impl PatinaClientHandler {
 
 impl ClientHandler for PatinaClientHandler {
     fn get_info(&self) -> ClientInfo {
-        ClientInfo {
-            protocol_version: Default::default(),
-            capabilities: ClientCapabilities::default(),
-            client_info: Implementation {
-                name: "patina".to_string(),
-                version: env!("CARGO_PKG_VERSION").to_string(),
-                title: None,
-                description: None,
-                icons: None,
-                website_url: None,
-            },
-            meta: None,
-        }
+        let mut info = ClientInfo::default();
+        info.client_info = Implementation::new("patina", env!("CARGO_PKG_VERSION"));
+        info
     }
 
     fn on_tool_list_changed(

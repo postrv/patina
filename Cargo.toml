@@ -71,7 +71,7 @@ urlencoding = "2.1"
 bytes = "1"
 
 # MCP SDK
-rmcp = { version = "0.16", features = [
+rmcp = { version = "1.2", features = [
     "client",
     "transport-child-process",
     "transport-streamable-http-client-reqwest",

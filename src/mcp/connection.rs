@@ -30,7 +30,6 @@ use anyhow::{anyhow, Context, Result};
 use rmcp::model::{CallToolRequestParams, CallToolResult, Tool};
 use rmcp::service::{RoleClient, RunningService, ServiceExt};
 use rmcp::transport::TokioChildProcess;
-use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
@@ -336,12 +335,7 @@ impl McpConnection {
             _ => serde_json::Map::new(),
         };
 
-        let params = CallToolRequestParams {
-            name: Cow::Owned(name.to_string()),
-            arguments: Some(json_object),
-            meta: None,
-            task: None,
-        };
+        let params = CallToolRequestParams::new(name.to_string()).with_arguments(json_object);
 
         client
             .call_tool(params)

@@ -765,12 +765,7 @@ mod tests {
     #[test]
     fn convert_sdk_result_text_success() {
         use rmcp::model::Content;
-        let result = SdkCallToolResult {
-            content: vec![Content::text("hello world")],
-            is_error: None,
-            meta: None,
-            structured_content: None,
-        };
+        let result = SdkCallToolResult::success(vec![Content::text("hello world")]);
         match convert_sdk_result(&result) {
             ToolResult::Success(text) => assert_eq!(text, "hello world"),
             other => panic!("Expected Success, got {:?}", other),
@@ -780,12 +775,7 @@ mod tests {
     #[test]
     fn convert_sdk_result_error() {
         use rmcp::model::Content;
-        let result = SdkCallToolResult {
-            content: vec![Content::text("something went wrong")],
-            is_error: Some(true),
-            meta: None,
-            structured_content: None,
-        };
+        let result = SdkCallToolResult::error(vec![Content::text("something went wrong")]);
         match convert_sdk_result(&result) {
             ToolResult::Error(text) => assert_eq!(text, "something went wrong"),
             other => panic!("Expected Error, got {:?}", other),
@@ -795,12 +785,8 @@ mod tests {
     #[test]
     fn convert_sdk_result_multiple_content() {
         use rmcp::model::Content;
-        let result = SdkCallToolResult {
-            content: vec![Content::text("line 1"), Content::text("line 2")],
-            is_error: None,
-            meta: None,
-            structured_content: None,
-        };
+        let result =
+            SdkCallToolResult::success(vec![Content::text("line 1"), Content::text("line 2")]);
         match convert_sdk_result(&result) {
             ToolResult::Success(text) => assert_eq!(text, "line 1\nline 2"),
             other => panic!("Expected Success, got {:?}", other),
@@ -809,12 +795,7 @@ mod tests {
 
     #[test]
     fn convert_sdk_result_empty_content() {
-        let result = SdkCallToolResult {
-            content: vec![],
-            is_error: None,
-            meta: None,
-            structured_content: None,
-        };
+        let result = SdkCallToolResult::success(vec![]);
         match convert_sdk_result(&result) {
             ToolResult::Success(text) => assert!(text.is_empty()),
             other => panic!("Expected Success, got {:?}", other),
