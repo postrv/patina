@@ -252,8 +252,6 @@ pub struct AppState {
     /// Keybinding manager for customizable key mappings.
     keybinding_mgr: KeybindingManager,
 
-    /// Terminal notification manager for desktop notifications.
-    notification_manager: NotificationManager,
 }
 
 #[derive(Default)]
@@ -485,7 +483,6 @@ impl AppState {
             pending_question: None,
             background_tasks: BackgroundTaskRegistry::new(),
             keybinding_mgr: KeybindingManager::with_defaults(),
-            notification_manager: NotificationManager::detect(),
         }
     }
 
@@ -645,11 +642,6 @@ impl AppState {
         self.keybinding_mgr = manager;
     }
 
-    /// Returns a reference to the notification manager.
-    #[must_use]
-    pub fn notification_manager(&self) -> &NotificationManager {
-        &self.notification_manager
-    }
 
     /// Returns a reference to the tool execution state.
     #[must_use]
