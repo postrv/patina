@@ -21,6 +21,7 @@ mod tool_coordination;
 mod tool_execution;
 mod tool_interception;
 mod ui_selection;
+mod view_state;
 mod worktree;
 
 pub use agent_panel::AgentPanelState;
@@ -36,6 +37,7 @@ pub use question::QuestionState;
 pub use session_tracking::SessionTracking;
 pub use tool_execution::ToolExecutionState;
 pub use ui_selection::UISelectionState;
+pub use view_state::ViewState;
 pub use worktree::WorktreeStatus;
 
 use crate::agents::{AgentProgress, ConflictReport, SubagentSpawner};
@@ -177,19 +179,14 @@ pub struct AppState {
     /// This is the authoritative conversation history sent to the API.
     api_messages: Vec<ApiMessageV2>,
 
-    /// Input buffer state (text, cursor, completion).
-    input_state: InputState,
-    pub working_dir: PathBuf,
+    /// All view/presentation state (display, input, selection, worktree).
+    pub(crate) view: ViewState,
 
-    /// Display, scroll, and animation state.
-    display: DisplayState,
+    pub working_dir: PathBuf,
 
     streaming_rx: Option<mpsc::Receiver<StreamEvent>>,
 
     dirty: DirtyFlags,
-
-    /// Git worktree status (branch, modified, ahead/behind).
-    worktree: WorktreeStatus,
 
     /// Session tracking for auto-save (ID + dirty flag).
     session: SessionTracking,
@@ -205,9 +202,6 @@ pub struct AppState {
     /// This is the single source of truth for display ordering, replacing the
     /// dual-system of `messages` + `current_response`.
     timeline: Timeline,
-
-    /// All UI selection and copy state grouped together.
-    ui_selection: UISelectionState,
 
     /// All compression, context injection, and compaction state grouped together.
     compression: CompressionState,
@@ -404,15 +398,23 @@ impl AppState {
 
         Self {
             api_messages: Vec::new(),
-            input_state: InputState::new(),
+            view: ViewState {
+                display: DisplayState::new(),
+                ui_selection: UISelectionState {
+                    selection: SelectionState::new(),
+                    copy_pending: false,
+                    rendered_lines_cache: Vec::new(),
+                    focus_area: FocusArea::default(),
+                },
+                worktree: WorktreeStatus::new(),
+                input_state: InputState::new(),
+            },
             working_dir,
-            display: DisplayState::new(),
             streaming_rx: None,
             dirty: DirtyFlags {
                 full: true,
                 ..Default::default()
             },
-            worktree: WorktreeStatus::new(),
             session: SessionTracking::new(),
             quit_requested: false,
             tool_state: ToolExecutionState {
@@ -430,12 +432,6 @@ impl AppState {
                 dirty_content: false,
             },
             timeline: Timeline::new(),
-            ui_selection: UISelectionState {
-                selection: SelectionState::new(),
-                copy_pending: false,
-                rendered_lines_cache: Vec::new(),
-                focus_area: FocusArea::default(),
-            },
             compression: CompressionState {
                 token_budget: TokenBudget::new(100_000), // Claude's typical context window
                 compaction_state: None,
@@ -567,12 +563,12 @@ impl AppState {
     /// Returns a reference to the display state.
     #[must_use]
     pub fn display(&self) -> &DisplayState {
-        &self.display
+        &self.view.display
     }
 
     /// Returns a mutable reference to the display state.
     pub fn display_mut(&mut self) -> &mut DisplayState {
-        &mut self.display
+        &mut self.view.display
     }
 
     /// Returns a mutable reference to the continuous loop state.
@@ -587,7 +583,7 @@ impl AppState {
 
     /// Returns a mutable reference to the worktree status.
     pub fn worktree_mut(&mut self) -> &mut WorktreeStatus {
-        &mut self.worktree
+        &mut self.view.worktree
     }
 
     /// Returns a mutable reference to the session tracking state.
@@ -597,12 +593,12 @@ impl AppState {
 
     /// Returns a mutable reference to the input state.
     pub fn input_state_mut(&mut self) -> &mut InputState {
-        &mut self.input_state
+        &mut self.view.input_state
     }
 
     /// Returns a mutable reference to the UI selection state.
     pub fn ui_selection_mut(&mut self) -> &mut UISelectionState {
-        &mut self.ui_selection
+        &mut self.view.ui_selection
     }
 
     /// Returns a reference to the model configuration state.
@@ -739,12 +735,12 @@ impl AppState {
     /// Returns a reference to the input state.
     #[must_use]
     pub fn input_state(&self) -> &InputState {
-        &self.input_state
+        &self.view.input_state
     }
 
     /// Inserts a character at the current cursor position.
     pub fn insert_char(&mut self, c: char) {
-        let needs_completion = self.input_state.insert_char(c);
+        let needs_completion = self.view.input_state.insert_char(c);
         if needs_completion {
             self.show_completion();
         }
@@ -752,32 +748,32 @@ impl AppState {
 
     /// Deletes the character before the cursor (backspace behavior).
     pub fn delete_char(&mut self) {
-        self.input_state.delete_char();
+        self.view.input_state.delete_char();
     }
 
     /// Takes and returns the current input, clearing the buffer and resetting cursor.
     pub fn take_input(&mut self) -> String {
-        self.input_state.take()
+        self.view.input_state.take()
     }
 
     /// Moves the cursor left by one character.
     pub fn cursor_left(&mut self) {
-        self.input_state.cursor_left();
+        self.view.input_state.cursor_left();
     }
 
     /// Moves the cursor right by one character.
     pub fn cursor_right(&mut self) {
-        self.input_state.cursor_right();
+        self.view.input_state.cursor_right();
     }
 
     /// Moves the cursor to the beginning of the input.
     pub fn cursor_home(&mut self) {
-        self.input_state.cursor_home();
+        self.view.input_state.cursor_home();
     }
 
     /// Moves the cursor to the end of the input.
     pub fn cursor_end(&mut self) {
-        self.input_state.cursor_end();
+        self.view.input_state.cursor_end();
     }
 
     /// Scrolls up by the specified number of lines.
@@ -785,79 +781,79 @@ impl AppState {
     /// This switches to Manual mode, preserving the scroll position
     /// during streaming updates.
     pub fn scroll_up(&mut self, lines: usize) {
-        let before = self.display.scroll.offset();
-        self.display.scroll.scroll_up(lines);
-        let after = self.display.scroll.offset();
+        let before = self.view.display.scroll.offset();
+        self.view.display.scroll.scroll_up(lines);
+        let after = self.view.display.scroll.offset();
         tracing::debug!(
             lines,
             before,
             after,
-            mode = ?self.display.scroll.mode(),
-            content_height = self.display.scroll.content_height(),
-            viewport_height = self.display.scroll.viewport_height(),
-            cache_size = self.ui_selection.rendered_lines_cache.len(),
+            mode = ?self.view.display.scroll.mode(),
+            content_height = self.view.display.scroll.content_height(),
+            viewport_height = self.view.display.scroll.viewport_height(),
+            cache_size = self.view.ui_selection.rendered_lines_cache.len(),
             timeline_entries = self.timeline.len(),
             "scroll_up"
         );
-        self.display.mark_dirty();
+        self.view.display.mark_dirty();
     }
 
     /// Scrolls down by the specified number of lines.
     ///
     /// If scrolling to the bottom, resumes Follow mode for auto-scroll.
     pub fn scroll_down(&mut self, lines: usize) {
-        let before = self.display.scroll.offset();
-        self.display.scroll.scroll_down(lines);
-        let after = self.display.scroll.offset();
+        let before = self.view.display.scroll.offset();
+        self.view.display.scroll.scroll_down(lines);
+        let after = self.view.display.scroll.offset();
         tracing::debug!(
             lines,
             before,
             after,
-            mode = ?self.display.scroll.mode(),
+            mode = ?self.view.display.scroll.mode(),
             "scroll_down"
         );
-        self.display.mark_dirty();
+        self.view.display.mark_dirty();
     }
 
     /// Scrolls to the bottom of the content.
     ///
     /// This resumes Follow mode for auto-scroll.
     pub fn scroll_to_bottom(&mut self, content_height: usize) {
-        self.display.scroll.scroll_to_bottom(content_height);
-        self.display.mark_dirty();
+        self.view.display.scroll.scroll_to_bottom(content_height);
+        self.view.display.mark_dirty();
     }
 
     /// Scrolls to the top of the content.
     ///
     /// This switches to Manual mode.
     pub fn scroll_to_top(&mut self) {
-        self.display.scroll.scroll_to_top();
-        self.display.mark_dirty();
+        self.view.display.scroll.scroll_to_top();
+        self.view.display.mark_dirty();
     }
 
     /// Updates the content height for scroll calculations.
     ///
     /// In Follow mode, this auto-scrolls to show new content.
     pub fn update_content_height(&mut self, height: usize) {
-        self.display.scroll.set_content_height(height);
-        if self.display.scroll.mode().should_auto_scroll() {
-            self.display.mark_dirty();
+        self.view.display.scroll.set_content_height(height);
+        if self.view.display.scroll.mode().should_auto_scroll() {
+            self.view.display.mark_dirty();
         }
     }
 
     /// Updates the viewport height for scroll calculations.
     pub fn set_viewport_height(&mut self, height: usize) {
-        self.display.scroll.set_viewport_height(height);
+        self.view.display.scroll.set_viewport_height(height);
     }
 
     /// Returns a reference to the UI selection state.
     #[must_use]
     pub fn ui_selection(&self) -> &UISelectionState {
-        &self.ui_selection
+        &self.view.ui_selection
     }
 
     pub fn is_loading(&self) -> bool {
-        self.display.loading
+        self.view.display.loading
     }
 
     /// Signals that the application should exit the event loop.
@@ -876,21 +872,19 @@ impl AppState {
     }
 
     pub fn tick_throbber(&mut self) {
-        self.display.throbber_frame = (self.display.throbber_frame + 1) % 4;
+        self.view.display.throbber_frame = (self.view.display.throbber_frame + 1) % 4;
         self.dirty.throbber = true;
     }
 
     pub fn throbber_char(&self) -> char {
-        ['⠋', '⠙', '⠹', '⠸'][self.display.throbber_frame]
+        ['⠋', '⠙', '⠹', '⠸'][self.view.display.throbber_frame]
     }
 
     pub fn needs_render(&self) -> bool {
         self.dirty.any()
+            || self.view.needs_render()
             || self.agent_panel.is_dirty()
             || self.continuous.is_dirty()
-            || self.display.is_dirty()
-            || self.input_state.is_dirty()
-            || self.worktree.is_dirty()
             || self.compression.is_render_dirty()
             || self.tool_state.is_dirty()
     }
@@ -903,21 +897,19 @@ impl AppState {
     pub fn is_throbber_only_dirty(&self) -> bool {
         self.dirty.throbber
             && !self.dirty.full
-            && !self.input_state.is_dirty()
+            && !self.view.input_state.is_dirty()
             && !self.agent_panel.is_dirty()
             && !self.continuous.is_dirty()
-            && !self.worktree.is_dirty()
+            && !self.view.worktree.is_dirty()
             && !self.compression.is_render_dirty()
             && !self.tool_state.is_dirty()
     }
 
     pub fn mark_rendered(&mut self) {
         self.dirty.clear();
+        self.view.mark_rendered();
         self.agent_panel.mark_clean();
         self.continuous.mark_clean();
-        self.display.mark_clean();
-        self.input_state.mark_clean();
-        self.worktree.mark_clean();
         self.compression.mark_render_clean();
         self.tool_state.mark_clean();
     }
@@ -933,27 +925,27 @@ impl AppState {
     /// Returns a reference to the worktree status.
     #[must_use]
     pub fn worktree(&self) -> &WorktreeStatus {
-        &self.worktree
+        &self.view.worktree
     }
 
     /// Sets the current worktree branch name.
     pub fn set_worktree_branch(&mut self, branch: String) {
-        self.worktree.set_branch(branch);
+        self.view.worktree.set_branch(branch);
     }
 
     /// Sets the number of modified files in the worktree.
     pub fn set_worktree_modified(&mut self, count: usize) {
-        self.worktree.set_modified(count);
+        self.view.worktree.set_modified(count);
     }
 
     /// Sets the number of commits ahead of upstream.
     pub fn set_worktree_ahead(&mut self, count: usize) {
-        self.worktree.set_ahead(count);
+        self.view.worktree.set_ahead(count);
     }
 
     /// Sets the number of commits behind upstream.
     pub fn set_worktree_behind(&mut self, count: usize) {
-        self.worktree.set_behind(count);
+        self.view.worktree.set_behind(count);
     }
 
     // ========================================================================
@@ -1032,21 +1024,21 @@ impl AppState {
     pub fn as_render_view(&self) -> RenderView<'_> {
         RenderView {
             timeline: self.timeline(),
-            throbber_char: self.display.throbber_char(),
-            scroll_offset: self.display.scroll_offset(),
-            scroll_state: self.display.scroll_state(),
-            selection: self.ui_selection.selection(),
-            focus_area: self.ui_selection.focus_area(),
-            input: self.input_state.text(),
-            completion: self.input_state.completion(),
-            worktree_branch: self.worktree.branch(),
-            worktree_modified: self.worktree.modified(),
-            worktree_ahead: self.worktree.ahead(),
-            worktree_behind: self.worktree.behind(),
+            throbber_char: self.view.display.throbber_char(),
+            scroll_offset: self.view.display.scroll_offset(),
+            scroll_state: self.view.display.scroll_state(),
+            selection: self.view.ui_selection.selection(),
+            focus_area: self.view.ui_selection.focus_area(),
+            input: self.view.input_state.text(),
+            completion: self.view.input_state.completion(),
+            worktree_branch: self.view.worktree.branch(),
+            worktree_modified: self.view.worktree.modified(),
+            worktree_ahead: self.view.worktree.ahead(),
+            worktree_behind: self.view.worktree.behind(),
             token_budget: self.compression.token_budget(),
             context_tokens_injected: self.compression.context_tokens_injected(),
             session_cost_usd: self.cost_tracker.session_cost(),
-            update_available: self.display.update_available(),
+            update_available: self.view.display.update_available(),
             continuous_status: self.continuous.status(),
             continuous_iterations_completed: self.continuous.iterations_completed(),
             continuous_gate_results: self.continuous.gate_results(),
@@ -1070,12 +1062,15 @@ impl AppState {
     ///
     /// * `feedback` - Layout metrics from the most recent render pass
     pub fn apply_render_feedback(&mut self, feedback: &RenderFeedback) {
-        self.ui_selection
+        self.view
+            .ui_selection
             .update_rendered_lines_from_strings(&feedback.wrapped_lines);
-        self.display
+        self.view
+            .display
             .scroll
             .set_viewport_height(feedback.viewport_height);
-        self.display
+        self.view
+            .display
             .scroll
             .set_content_height(feedback.content_height);
     }
@@ -1105,9 +1100,9 @@ mod tests {
     fn test_restore_from_session_without_ui_state() {
         let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
         // Set some initial state
-        state.display.scroll.restore_offset(100);
+        state.view.display.scroll.restore_offset(100);
         *state.input_state_mut().text_mut() = "existing".to_string();
-        state.input_state.set_cursor_position(8);
+        state.view.input_state.set_cursor_position(8);
 
         // Create a session without UI state
         let mut session = Session::new(PathBuf::from("/project"));
@@ -1124,9 +1119,9 @@ mod tests {
     #[test]
     fn test_to_session_preserves_ui_state() {
         let mut state = AppState::new(PathBuf::from("/project"), false, ParallelMode::Enabled);
-        state.display.scroll.restore_offset(42);
+        state.view.display.scroll.restore_offset(42);
         *state.input_state_mut().text_mut() = "draft text".to_string();
-        state.input_state.set_cursor_position(5);
+        state.view.input_state.set_cursor_position(5);
 
         let session = state.to_session();
         let ui_state = session.ui_state().expect("UI state should be present");
@@ -1141,9 +1136,9 @@ mod tests {
         // Create state with data
         let mut state = AppState::new(PathBuf::from("/project"), false, ParallelMode::Enabled);
         state.add_message(test_message(Role::User, "Test message"));
-        state.display.scroll.restore_offset(100);
+        state.view.display.scroll.restore_offset(100);
         *state.input_state_mut().text_mut() = "unsent input".to_string();
-        state.input_state.set_cursor_position(6);
+        state.view.input_state.set_cursor_position(6);
 
         // Convert to session
         let session = state.to_session();
@@ -1572,7 +1567,7 @@ mod tests {
         state.mark_rendered();
         state.show_completion();
         assert!(
-            state.input_state.is_dirty(),
+            state.view.input_state.is_dirty(),
             "InputState self-tracks dirty on completion"
         );
         assert!(
@@ -1587,20 +1582,23 @@ mod tests {
 
         state.mark_rendered();
         state.set_worktree_branch("main".to_string());
-        assert!(state.worktree.is_dirty(), "set_branch self-tracks dirty");
+        assert!(
+            state.view.worktree.is_dirty(),
+            "set_branch self-tracks dirty"
+        );
         assert!(state.needs_render());
 
         state.mark_rendered();
         state.set_worktree_modified(1);
-        assert!(state.worktree.is_dirty());
+        assert!(state.view.worktree.is_dirty());
 
         state.mark_rendered();
         state.set_worktree_ahead(1);
-        assert!(state.worktree.is_dirty());
+        assert!(state.view.worktree.is_dirty());
 
         state.mark_rendered();
         state.set_worktree_behind(1);
-        assert!(state.worktree.is_dirty());
+        assert!(state.view.worktree.is_dirty());
     }
 
     #[test]
@@ -2137,7 +2135,7 @@ mod tests {
         // InputState self-tracks dirty — no central dirty.input needed
         state.insert_char('a');
         assert!(
-            state.input_state.is_dirty(),
+            state.view.input_state.is_dirty(),
             "InputState must self-track dirty on insert_char"
         );
         assert!(

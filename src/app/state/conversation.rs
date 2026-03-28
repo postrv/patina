@@ -222,7 +222,7 @@ impl AppState {
         let user_msg = ApiMessageV2::user(&api_content);
         self.api_messages.push(user_msg);
 
-        self.display.loading = true;
+        self.view.display.loading = true;
         // Start streaming in timeline
         if self.timeline.try_push_streaming().is_err() {
             tracing::warn!("Timeline already streaming when submitting message");
@@ -363,7 +363,7 @@ impl AppState {
     ///
     /// When loading is true, the throbber animates and content accumulates.
     pub fn set_loading(&mut self, loading: bool) {
-        self.display.loading = loading;
+        self.view.display.loading = loading;
         self.dirty.full = true;
     }
 

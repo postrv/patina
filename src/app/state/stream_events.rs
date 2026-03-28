@@ -88,7 +88,7 @@ impl AppState {
                 self.api_messages.push(ApiMessageV2::assistant(text));
             }
         }
-        self.display.loading = false;
+        self.view.display.loading = false;
         self.streaming_rx = None;
         self.dirty.full = true;
 
@@ -153,7 +153,7 @@ impl AppState {
             }
         }
         self.tool_state.handle_message_complete(stop_reason)?;
-        self.display.loading = false;
+        self.view.display.loading = false;
         self.streaming_rx = None;
         self.dirty.full = true;
 
@@ -217,7 +217,7 @@ impl AppState {
             });
         }
 
-        self.display.loading = false;
+        self.view.display.loading = false;
         self.streaming_rx = None;
         self.dirty.full = true;
     }

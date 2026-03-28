@@ -144,19 +144,19 @@ impl AppState {
     /// Returns the active completion state, if any.
     #[must_use]
     pub fn completion(&self) -> Option<&crate::types::CompletionState> {
-        self.input_state.completion()
+        self.view.input_state.completion()
     }
 
     /// Returns a mutable reference to the active completion state.
     #[must_use]
     pub fn completion_mut(&mut self) -> Option<&mut crate::types::CompletionState> {
-        self.input_state.completion_mut()
+        self.view.input_state.completion_mut()
     }
 
     /// Returns true if the completion popup is currently active.
     #[must_use]
     pub fn has_completion(&self) -> bool {
-        self.input_state.has_completion()
+        self.view.input_state.has_completion()
     }
 
     /// Activates the completion popup by gathering candidates from all providers.
@@ -177,20 +177,21 @@ impl AppState {
         candidates.extend(plugins.candidates());
         candidates.extend(mcp.candidates());
 
-        self.input_state
+        self.view
+            .input_state
             .set_completion(CompletionState::new(candidates));
     }
 
     /// Dismisses the completion popup.
     pub fn dismiss_completion(&mut self) {
-        self.input_state.dismiss_completion();
+        self.view.input_state.dismiss_completion();
     }
 
     /// Accepts the selected completion and replaces input with `/name `.
     ///
     /// Returns the accepted command name, or `None` if nothing was selected.
     pub fn accept_completion(&mut self) -> Option<String> {
-        self.input_state.accept_completion()
+        self.view.input_state.accept_completion()
     }
 
     // ========================================================================
@@ -389,7 +390,7 @@ impl AppState {
     ///
     /// This creates a streaming entry in the timeline.
     pub fn set_streaming(&mut self, _streaming: bool) {
-        self.display.loading = true;
+        self.view.display.loading = true;
 
         // Add streaming entry to timeline
         if self.timeline.try_push_streaming().is_err() {
@@ -415,7 +416,7 @@ impl AppState {
     pub fn finalize_streaming_as_message(&mut self) {
         // Finalize timeline streaming entry
         self.timeline.finalize_streaming_as_message();
-        self.display.loading = false;
+        self.view.display.loading = false;
         self.dirty.full = true;
     }
 
@@ -467,8 +468,8 @@ impl AppState {
         self.reset_tool_loop();
         self.reset_token_budget();
         self.thinking_buffer.clear();
-        self.display.scroll = crate::tui::scroll::ScrollState::new();
-        self.display.loading = false;
+        self.view.display.scroll = crate::tui::scroll::ScrollState::new();
+        self.view.display.loading = false;
         self.streaming_rx = None;
         self.dirty.full = true;
         self.session.mark_dirty();
@@ -904,7 +905,7 @@ mod tests {
         state.finalize_streaming_as_message();
 
         // loading should be cleared
-        assert!(!state.display.loading);
+        assert!(!state.view.display.loading);
 
         // The timeline should contain the finalized message
         let found = state.timeline().entries().iter().any(|e| {

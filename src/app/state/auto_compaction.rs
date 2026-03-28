@@ -278,9 +278,9 @@ impl AppState {
 
         // Capture UI state (use scroll offset for backward compatibility)
         let ui_state = UiState::with_state(
-            self.display.scroll.offset(),
-            self.input_state.text().to_string(),
-            self.input_state.cursor_position(),
+            self.view.display.scroll.offset(),
+            self.view.input_state.text().to_string(),
+            self.view.input_state.cursor_position(),
         );
         session.set_ui_state(Some(ui_state));
 
@@ -314,10 +314,15 @@ impl AppState {
 
         // Restore UI state if available
         if let Some(ui_state) = session.ui_state() {
-            self.display.scroll.restore_offset(ui_state.scroll_offset());
-            self.input_state
+            self.view
+                .display
+                .scroll
+                .restore_offset(ui_state.scroll_offset());
+            self.view
+                .input_state
                 .set_text(ui_state.input_buffer().to_string());
-            self.input_state
+            self.view
+                .input_state
                 .set_cursor_position(ui_state.cursor_position());
         }
 
