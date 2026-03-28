@@ -393,7 +393,15 @@ impl ParallelExecutor {
                 async move {
                     // Acquire semaphore permit; if the semaphore is closed,
                     // fall through and execute anyway rather than panicking.
-                    let _permit = sem.acquire().await.ok();
+                    let _permit = match sem.acquire().await {
+                        Ok(permit) => Some(permit),
+                        Err(e) => {
+                            tracing::warn!(
+                                "Semaphore closed, proceeding without concurrency limit: {e}"
+                            );
+                            None
+                        }
+                    };
                     let result = exec(&name, input).await;
                     IndexedResult { index, result }
                 }
@@ -839,5 +847,46 @@ mod tests {
 
         let sorted = results.into_sorted_results();
         assert_eq!(sorted, vec!["a", "b", "c"]);
+    }
+
+    // =========================================================================
+    // T-1: Closed semaphore logs warning but still executes
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_execute_batch_with_closed_semaphore() {
+        // Verify that tasks still complete when the semaphore is closed,
+        // exercising the T-1 fix path.
+        let executor = ParallelExecutor::new(ParallelConfig::default());
+        // Close the semaphore to trigger the error handling path
+        executor.semaphore.close();
+
+        let tools = [
+            ("read_file", json!({"path": "a.txt"})),
+            ("read_file", json!({"path": "b.txt"})),
+        ];
+
+        let execution_count = Arc::new(AtomicUsize::new(0));
+        let count_clone = execution_count.clone();
+
+        let results = executor
+            .execute_batch(
+                tools.iter().map(|(n, i)| (*n, i.clone())),
+                move |name, _input| {
+                    let cnt = count_clone.clone();
+                    let name = name.to_string();
+                    async move {
+                        cnt.fetch_add(1, Ordering::SeqCst);
+                        format!("executed:{name}")
+                    }
+                },
+            )
+            .await;
+
+        // Despite closed semaphore, all tasks should still complete
+        assert_eq!(results.len(), 2);
+        assert_eq!(execution_count.load(Ordering::SeqCst), 2);
+        assert!(results[0].result.starts_with("executed:"));
+        assert!(results[1].result.starts_with("executed:"));
     }
 }

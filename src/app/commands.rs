@@ -433,7 +433,9 @@ impl SlashCommandHandler {
                     Ok(output) => {
                         if output.status.success() {
                             // Clean up after successful merge
-                            let _ = manager.cleanup(&name);
+                            if let Err(e) = manager.cleanup(&name) {
+                                tracing::warn!("Worktree cleanup failed for {name}: {e}");
+                            }
                             CommandResult::Executed(format!(
                                 "Merged agent '{}' (branch: {}) into current branch.\nAgent cleaned up.",
                                 name, branch,

@@ -141,7 +141,9 @@ impl AppState {
             let executor = Arc::clone(&self.tool_state.tool_executor);
             if let Ok(handle) = tokio::runtime::Handle::try_current() {
                 handle.spawn(async move {
-                    let _ = executor.hooks().fire_stop(&reason_owned).await;
+                    if let Err(e) = executor.hooks().fire_stop(&reason_owned).await {
+                        tracing::debug!("Hook fire failed: {e}");
+                    }
                     tracing::debug!(
                         session_id = %hooks_clone_session,
                         stop_reason = %reason_owned,
@@ -209,7 +211,9 @@ impl AppState {
         let error_clone = error.clone();
         if let Ok(handle) = tokio::runtime::Handle::try_current() {
             handle.spawn(async move {
-                let _ = executor.hooks().fire_stop_failure(&error_clone).await;
+                if let Err(e) = executor.hooks().fire_stop_failure(&error_clone).await {
+                    tracing::debug!("Hook fire failed: {e}");
+                }
             });
         }
 
