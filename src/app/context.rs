@@ -14,7 +14,6 @@ use std::io;
 use std::sync::Arc;
 use tracing::debug;
 
-use crate::api::provider::RequestOptions;
 use crate::api::LlmProvider;
 use crate::app::events::AppEvent;
 use crate::app::state::{AppState, BackgroundEvent};
@@ -179,6 +178,7 @@ impl<'a> AppContext<'a> {
             .await;
         let client_clone = Arc::clone(&self.client);
         let tools = self.state.all_tool_definitions();
+        let options = self.state.build_request_options(self.client.model());
 
         tokio::spawn(async move {
             if let Err(e) = client_clone
@@ -186,7 +186,7 @@ impl<'a> AppContext<'a> {
                     &api_messages,
                     Some(&tools),
                     Some(&ToolChoice::Auto),
-                    &RequestOptions::default(),
+                    &options,
                     tx,
                 )
                 .await
@@ -747,5 +747,160 @@ mod tests {
         ctx.start_tool_execution().unwrap();
 
         assert!(ctx.state.is_loading());
+    }
+
+    // ── finish_tool_execution_and_continue tests ──
+
+    /// Mock provider that captures the `RequestOptions` passed to `stream_message`.
+    struct CapturingProvider {
+        captured_options: std::sync::Mutex<Option<crate::api::provider::RequestOptions>>,
+    }
+
+    impl CapturingProvider {
+        fn new() -> Self {
+            Self {
+                captured_options: std::sync::Mutex::new(None),
+            }
+        }
+
+        /// Returns the captured `RequestOptions`, panicking if none were captured.
+        fn take_captured_options(&self) -> crate::api::provider::RequestOptions {
+            self.captured_options
+                .lock()
+                .unwrap()
+                .take()
+                .expect("No RequestOptions were captured")
+        }
+    }
+
+    impl crate::api::LlmProvider for CapturingProvider {
+        fn name(&self) -> &str {
+            "capturing"
+        }
+
+        fn model(&self) -> &str {
+            "claude-sonnet-4-20250514"
+        }
+
+        fn stream_message<'a>(
+            &'a self,
+            _messages: &'a [crate::types::ApiMessageV2],
+            _tools: Option<&'a [crate::api::tools::ToolDefinition]>,
+            _tool_choice: Option<&'a crate::api::ToolChoice>,
+            options: &'a crate::api::provider::RequestOptions,
+            _tx: tokio::sync::mpsc::Sender<StreamEvent>,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send + 'a>>
+        {
+            *self.captured_options.lock().unwrap() = Some(options.clone());
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    /// Helper: creates an AppState with tool loop driven through execution,
+    /// ready for `complete_tool_cycle`.
+    async fn state_with_executed_tools() -> AppState {
+        use crate::hooks::HookManager;
+        use crate::tools::HookedToolExecutor;
+
+        let temp_dir = tempfile::TempDir::new().expect("create temp dir");
+        let working_dir = temp_dir.path().to_path_buf();
+        let hooks = HookManager::new("test-session".to_string());
+        let executor = HookedToolExecutor::new(working_dir.clone(), hooks);
+
+        let mut state = AppState::new(
+            working_dir,
+            false,
+            crate::types::config::ParallelMode::Enabled,
+        );
+
+        // Drive tool loop through: streaming -> tool_use -> approve -> execute
+        let tl = state.tool_state_mut().tool_loop_mut();
+        tl.start_streaming().unwrap();
+        tl.start_tool_use(0, "toolu_1".to_string(), "bash".to_string());
+        tl.append_tool_input(0, r#"{"command":"echo hello"}"#);
+        tl.complete_tool_use(0).unwrap();
+        tl.message_complete(crate::types::StopReason::ToolUse)
+            .unwrap();
+        tl.approve_all().unwrap();
+        tl.execute_pending(&executor, None).await.unwrap();
+
+        state
+    }
+
+    #[tokio::test]
+    async fn test_finish_tool_continuation_uses_build_request_options() {
+        let mut state = state_with_executed_tools().await;
+
+        // Configure state with a system prompt and high effort so
+        // build_request_options returns non-default values.
+        state
+            .model_config_mut()
+            .set_system_prompt(Some("You are a helpful assistant.".to_string()));
+        state
+            .model_config_mut()
+            .set_effort(crate::types::config::EffortLevel::High);
+
+        let provider = Arc::new(CapturingProvider::new());
+        let session_mgr = test_session_manager();
+
+        let mut ctx = AppContext::new(provider.clone(), &mut state, &session_mgr);
+        ctx.finish_tool_execution_and_continue()
+            .await
+            .expect("finish_tool_execution_and_continue should succeed");
+
+        // Allow the spawned task to complete
+        tokio::task::yield_now().await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let captured = provider.take_captured_options();
+
+        // Verify thinking config was passed (not None as with default)
+        assert!(
+            captured.thinking.is_some(),
+            "Tool continuation should pass thinking config from build_request_options, \
+             not RequestOptions::default()"
+        );
+        let thinking = captured.thinking.unwrap();
+        assert_eq!(thinking.config_type, "enabled");
+        assert_eq!(
+            thinking.budget_tokens, 16_000,
+            "High effort should produce 16k thinking budget"
+        );
+
+        // Verify system prompt was passed (not None as with default)
+        assert!(
+            captured.system.is_some(),
+            "Tool continuation should pass system prompt from build_request_options, \
+             not RequestOptions::default()"
+        );
+        let blocks = captured.system.unwrap();
+        assert_eq!(blocks.len(), 1);
+        assert!(
+            blocks[0].text.contains("You are a helpful assistant."),
+            "System prompt text should be passed through"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_finish_tool_continuation_passes_tools() {
+        let mut state = state_with_executed_tools().await;
+
+        let provider = Arc::new(CapturingProvider::new());
+        let session_mgr = test_session_manager();
+
+        let mut ctx = AppContext::new(provider.clone(), &mut state, &session_mgr);
+        ctx.finish_tool_execution_and_continue()
+            .await
+            .expect("finish_tool_execution_and_continue should succeed");
+
+        // The function should set up streaming and loading state
+        assert!(
+            ctx.state.is_loading(),
+            "Should be loading after continuation"
+        );
+        assert!(
+            ctx.state.has_streaming(),
+            "Should have streaming rx after continuation"
+        );
     }
 }

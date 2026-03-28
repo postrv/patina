@@ -10,7 +10,6 @@ use anyhow::Result;
 use tokio::sync::mpsc;
 use tracing::warn;
 
-use crate::api::provider::RequestOptions;
 use crate::api::{LlmProvider, StreamEvent, ToolChoice};
 use crate::types::{ApiMessageV2, Message, Role};
 
@@ -86,6 +85,7 @@ async fn setup_initial_stream(
     let (tx, rx) = mpsc::channel(STREAMING_CHANNEL_BUFFER);
     let api_messages = state.build_api_messages();
     let client_clone = Arc::clone(client);
+    let options = state.build_request_options(client.model());
 
     tokio::spawn(async move {
         if let Err(e) = client_clone
@@ -93,7 +93,7 @@ async fn setup_initial_stream(
                 &api_messages,
                 Some(&tools),
                 Some(&ToolChoice::Auto),
-                &RequestOptions::default(),
+                &options,
                 tx,
             )
             .await
@@ -141,6 +141,7 @@ async fn run_tool_continuation_cycle(
             .await;
         let client_clone = Arc::clone(client);
         let tools = state.all_tool_definitions();
+        let options = state.build_request_options(client.model());
 
         tokio::spawn(async move {
             if let Err(e) = client_clone
@@ -148,7 +149,7 @@ async fn run_tool_continuation_cycle(
                     &api_messages,
                     Some(&tools),
                     Some(&ToolChoice::Auto),
-                    &RequestOptions::default(),
+                    &options,
                     tx,
                 )
                 .await
