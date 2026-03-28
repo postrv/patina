@@ -295,11 +295,27 @@ async fn main() -> Result<()> {
     .await
 }
 
-/// Lists all available sessions and exits.
+/// Attempts to open a log file at the given path.
+///
+/// Returns `Ok(file)` on success, or `Err` if the file cannot be opened.
+/// This is extracted for testability of the fallback path.
+///
+/// # Errors
+///
+/// Returns an `std::io::Error` if the file cannot be created or opened.
+fn open_log_file(path: &std::path::Path) -> std::io::Result<std::fs::File> {
+    std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(path)
+}
+
 /// Initializes the tracing subscriber for logging.
 ///
 /// In TUI mode, logs go to a file (`$TMPDIR/patina.log`) to avoid corrupting
-/// the ratatui alternate screen. In print mode, logs go to stderr.
+/// the ratatui alternate screen. If the log file cannot be opened, falls back
+/// to stderr with a warning. In print mode, logs go to stderr.
 fn setup_logging(debug: bool, is_tui_mode: bool) {
     use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::util::SubscriberInitExt;
@@ -308,25 +324,39 @@ fn setup_logging(debug: bool, is_tui_mode: bool) {
 
     if is_tui_mode {
         let log_path = std::env::temp_dir().join("patina.log");
-        let file = std::fs::OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .open(&log_path)
-            .expect("Failed to open log file");
-
-        tracing_subscriber::registry()
-            .with(
-                tracing_subscriber::EnvFilter::try_from_default_env()
-                    .unwrap_or_else(|_| filter.into()),
-            )
-            .with(
-                tracing_subscriber::fmt::layer()
-                    .with_target(false)
-                    .with_ansi(false)
-                    .with_writer(std::sync::Mutex::new(file)),
-            )
-            .init();
+        match open_log_file(&log_path) {
+            Ok(file) => {
+                tracing_subscriber::registry()
+                    .with(
+                        tracing_subscriber::EnvFilter::try_from_default_env()
+                            .unwrap_or_else(|_| filter.into()),
+                    )
+                    .with(
+                        tracing_subscriber::fmt::layer()
+                            .with_target(false)
+                            .with_ansi(false)
+                            .with_writer(std::sync::Mutex::new(file)),
+                    )
+                    .init();
+            }
+            Err(e) => {
+                eprintln!(
+                    "Warning: Could not open log file {}: {e}. Falling back to stderr logging.",
+                    log_path.display()
+                );
+                tracing_subscriber::registry()
+                    .with(
+                        tracing_subscriber::EnvFilter::try_from_default_env()
+                            .unwrap_or_else(|_| filter.into()),
+                    )
+                    .with(
+                        tracing_subscriber::fmt::layer()
+                            .with_target(false)
+                            .with_writer(std::io::stderr),
+                    )
+                    .init();
+            }
+        }
     } else {
         tracing_subscriber::registry()
             .with(
@@ -820,5 +850,30 @@ mod tests {
         assert!(args.bare);
         assert!(args.print);
         assert_eq!(args.prompt, Some("hello".to_string()));
+    }
+
+    // =========================================================================
+    // Log file open fallback tests (E-1)
+    // =========================================================================
+
+    /// Test that `open_log_file` succeeds with a valid writable path.
+    #[test]
+    fn test_open_log_file_success() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("test.log");
+        let result = open_log_file(&path);
+        assert!(result.is_ok(), "Should succeed for a valid writable path");
+    }
+
+    /// Test that `open_log_file` returns an error for an invalid path
+    /// instead of panicking, verifying the fallback path is reachable.
+    #[test]
+    fn test_open_log_file_failure_returns_error() {
+        let path = std::path::Path::new("/nonexistent/deeply/nested/dir/patina.log");
+        let result = open_log_file(path);
+        assert!(
+            result.is_err(),
+            "Should return Err for a path in a nonexistent directory"
+        );
     }
 }

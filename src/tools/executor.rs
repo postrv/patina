@@ -854,7 +854,9 @@ impl ToolExecutor {
 
         // Perform mutation in a scoped block to release mutable borrow before serialization
         let result_msg = {
-            let cells = notebook["cells"].as_array_mut().unwrap();
+            let cells = notebook["cells"]
+                .as_array_mut()
+                .ok_or_else(|| anyhow::anyhow!("Notebook cells is not a mutable array"))?;
 
             if cell_index == -1 {
                 // Append new cell
@@ -1575,7 +1577,7 @@ impl ToolExecutor {
             .map(|v| v as usize)
             .unwrap_or(10);
 
-        let tool = web_search::WebSearchTool::new(web_search::WebSearchConfig::default());
+        let tool = web_search::WebSearchTool::new(web_search::WebSearchConfig::default())?;
 
         match tool.search(query, max_results).await {
             Ok(results) => {
@@ -3037,5 +3039,36 @@ mod tests {
         assert_eq!(updated["cells"][0]["cell_type"], "markdown");
         // outputs should be removed for markdown cells
         assert!(updated["cells"][0].get("outputs").is_none());
+    }
+
+    #[tokio::test]
+    async fn test_notebook_edit_non_array_cells_returns_error() {
+        let dir = TempDir::new().unwrap();
+        // Create a notebook where "cells" is a string instead of an array
+        let notebook = serde_json::json!({
+            "nbformat": 4,
+            "metadata": {},
+            "cells": "not_an_array"
+        });
+        let nb_path = dir.path().join("bad.ipynb");
+        std::fs::write(&nb_path, serde_json::to_string_pretty(&notebook).unwrap()).unwrap();
+
+        let executor = ToolExecutor::new(dir.path().to_path_buf());
+        let input = serde_json::json!({
+            "path": "bad.ipynb",
+            "cell_index": 0,
+            "new_source": "print('hi')"
+        });
+        let result = executor.notebook_edit(&input).await.unwrap();
+        // The guard at line 835 should catch this and return a ToolResult::Error
+        match &result {
+            ToolResult::Error(msg) => {
+                assert!(
+                    msg.contains("cells"),
+                    "Error message should mention cells: {msg}"
+                );
+            }
+            other => panic!("Expected ToolResult::Error for non-array cells, got: {other:?}"),
+        }
     }
 }

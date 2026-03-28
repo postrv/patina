@@ -19,7 +19,7 @@
 //! use patina::tools::web_search::{WebSearchTool, WebSearchConfig};
 //!
 //! # async fn example() -> anyhow::Result<()> {
-//! let tool = WebSearchTool::new(WebSearchConfig::default());
+//! let tool = WebSearchTool::new(WebSearchConfig::default())?;
 //! let results = tool.search("rust programming", 10).await?;
 //! for result in &results {
 //!     println!("{}: {}", result.title, result.url);
@@ -96,18 +96,18 @@ pub struct WebSearchTool {
 impl WebSearchTool {
     /// Creates a new web search tool with the given configuration.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if the HTTP client cannot be built (should not happen with default settings).
-    #[must_use]
-    pub fn new(config: WebSearchConfig) -> Self {
+    /// Returns an error if the HTTP client cannot be built (e.g., TLS backend
+    /// initialization failure).
+    pub fn new(config: WebSearchConfig) -> Result<Self> {
         let client = Client::builder()
             .timeout(config.timeout)
             .user_agent("Patina/0.3.0")
             .build()
-            .expect("Failed to build HTTP client");
+            .map_err(|e| anyhow::anyhow!("Failed to build HTTP client: {e}"))?;
 
-        Self { config, client }
+        Ok(Self { config, client })
     }
 
     /// Searches the web for the given query.
@@ -309,6 +309,24 @@ mod tests {
         assert!(!results.is_empty());
         assert_eq!(results[0].title, "Example Title");
         assert_eq!(results[0].url, "https://example.com");
+    }
+
+    #[test]
+    fn test_new_returns_result_ok_with_default_config() {
+        let result = WebSearchTool::new(WebSearchConfig::default());
+        assert!(
+            result.is_ok(),
+            "WebSearchTool::new should succeed with default config"
+        );
+    }
+
+    #[test]
+    fn test_new_returns_result_ok_with_testing_config() {
+        let result = WebSearchTool::new(WebSearchConfig::for_testing());
+        assert!(
+            result.is_ok(),
+            "WebSearchTool::new should succeed with testing config"
+        );
     }
 
     #[test]

@@ -112,7 +112,7 @@ fn test_push_user_message() {
 #[test]
 fn test_push_streaming() {
     let mut timeline = Timeline::new();
-    timeline.push_streaming();
+    timeline.push_streaming().unwrap();
 
     assert_eq!(timeline.len(), 1);
     assert!(timeline.is_streaming());
@@ -129,7 +129,7 @@ fn test_push_streaming() {
 #[test]
 fn test_streaming_to_message() {
     let mut timeline = Timeline::new();
-    timeline.push_streaming();
+    timeline.push_streaming().unwrap();
     timeline.append_to_streaming("Complete response.");
     timeline.finalize_streaming_as_message();
 
@@ -203,7 +203,7 @@ fn test_streaming_state_transitions() {
     assert!(!timeline.is_streaming());
 
     // Start streaming
-    timeline.push_streaming();
+    timeline.push_streaming().unwrap();
     assert!(timeline.is_streaming());
 
     // Append content
@@ -219,7 +219,7 @@ fn test_streaming_state_transitions() {
 #[test]
 fn test_double_streaming_error() {
     let mut timeline = Timeline::new();
-    timeline.push_streaming();
+    timeline.push_streaming().unwrap();
 
     // Second push should fail or be a no-op
     let result = timeline.try_push_streaming();
@@ -230,7 +230,7 @@ fn test_double_streaming_error() {
 #[test]
 fn test_finalize_streaming_as_tool_use() {
     let mut timeline = Timeline::new();
-    timeline.push_streaming();
+    timeline.push_streaming().unwrap();
     timeline.append_to_streaming("I'll run that command.");
 
     // Finalize for tool use - text should be preserved for later retrieval
@@ -243,7 +243,7 @@ fn test_finalize_streaming_as_tool_use() {
 #[test]
 fn test_streaming_text_mut() {
     let mut timeline = Timeline::new();
-    timeline.push_streaming();
+    timeline.push_streaming().unwrap();
 
     if let Some(text) = timeline.streaming_text_mut() {
         text.push_str("Mutated text");
