@@ -336,8 +336,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn resolve_bearer_token_env_var() {
-        // Set a test env var
+        // Set a test env var — must be serialized to avoid data races
         unsafe { std::env::set_var("PATINA_TEST_MCP_TOKEN", "env-token-value") };
         let token = resolve_bearer_token("$PATINA_TEST_MCP_TOKEN").unwrap();
         assert_eq!(token, "env-token-value");
@@ -345,8 +346,9 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn resolve_bearer_token_missing_env_var() {
-        // Make sure this var doesn't exist
+        // Make sure this var doesn't exist — must be serialized to avoid data races
         unsafe { std::env::remove_var("PATINA_NONEXISTENT_VAR_12345") };
         let result = resolve_bearer_token("$PATINA_NONEXISTENT_VAR_12345");
         assert!(result.is_err());

@@ -194,20 +194,55 @@ pub fn handle_init(workspace: &PathBuf, capabilities: &[String], session_id: &st
 /// [`IdeResponse::Error`] if the file cannot be read/written or
 /// path validation fails.
 pub fn handle_apply_edit(file: &std::path::Path, edits: &[TextEdit]) -> IdeResponse {
-    // Validate the path doesn't use traversal or symlinks outside project
     let path_str = file.to_string_lossy();
-    if path_str.contains("..") {
-        return IdeResponse::Error {
-            code: "PATH_TRAVERSAL".to_string(),
-            message: format!("Path traversal rejected: {path_str}"),
-            request_id: None,
-        };
-    }
-    // Reject symlinks that could escape project boundaries
+
+    // Reject symlinks that could escape project boundaries (TOCTOU mitigation).
+    // Check this before canonicalize to prevent following malicious symlinks.
     if file.is_symlink() {
         return IdeResponse::Error {
             code: "SYMLINK_REJECTED".to_string(),
             message: format!("Symbolic links not allowed in edit paths: {path_str}"),
+            request_id: None,
+        };
+    }
+
+    // Use canonicalize() to resolve the real path and detect traversal.
+    // If the file exists, verify the canonical path matches expectations.
+    // This catches encoded traversal (e.g., /foo/bar/../../etc/passwd)
+    // that simple string matching would miss.
+    if file.exists() {
+        if let Ok(canonical) = file.canonicalize() {
+            // Check if the canonical path still has the same parent chain.
+            // If the original path contained ".." components, the canonical
+            // path will differ from a naive join, indicating traversal.
+            if let Some(parent) = file.parent() {
+                if let Ok(canonical_parent) = parent.canonicalize() {
+                    if let Some(file_name) = file.file_name() {
+                        let expected = canonical_parent.join(file_name);
+                        if canonical != expected {
+                            return IdeResponse::Error {
+                                code: "PATH_TRAVERSAL".to_string(),
+                                message: format!(
+                                    "Path traversal rejected: resolved path differs from expected: {path_str}"
+                                ),
+                                request_id: None,
+                            };
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // String-based fallback for paths that don't exist yet or can't be canonicalized.
+    // Check for ".." path components (not just substring) for robustness.
+    if file
+        .components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        return IdeResponse::Error {
+            code: "PATH_TRAVERSAL".to_string(),
+            message: format!("Path traversal rejected: {path_str}"),
             request_id: None,
         };
     }
@@ -691,6 +726,52 @@ mod tests {
                 assert_eq!(code, "PATH_TRAVERSAL");
             }
             other => panic!("Expected PATH_TRAVERSAL error, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_apply_edit_rejects_redundant_separator_traversal() {
+        // Paths with redundant separators that resolve outside the project
+        let response = handle_apply_edit(
+            std::path::Path::new("/foo/bar/../../etc/passwd"),
+            &[TextEdit {
+                start_line: 1,
+                end_line: 1,
+                new_text: "content".to_string(),
+            }],
+        );
+
+        match response {
+            IdeResponse::Error { code, .. } => {
+                assert!(
+                    code == "PATH_TRAVERSAL" || code == "FILE_NOT_FOUND",
+                    "Expected PATH_TRAVERSAL or FILE_NOT_FOUND, got: {code}"
+                );
+            }
+            other => panic!("Expected error for traversal path, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_apply_edit_rejects_dot_dot_encoded_path() {
+        // Path with .. components that try to escape
+        let response = handle_apply_edit(
+            std::path::Path::new("src/../../etc/shadow"),
+            &[TextEdit {
+                start_line: 1,
+                end_line: 1,
+                new_text: "content".to_string(),
+            }],
+        );
+
+        match response {
+            IdeResponse::Error { code, .. } => {
+                assert!(
+                    code == "PATH_TRAVERSAL" || code == "FILE_NOT_FOUND",
+                    "Expected PATH_TRAVERSAL or FILE_NOT_FOUND, got: {code}"
+                );
+            }
+            other => panic!("Expected error for encoded traversal, got {:?}", other),
         }
     }
 

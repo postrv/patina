@@ -38,7 +38,11 @@ fn integrity_key_path() -> Option<PathBuf> {
 /// and written to disk.
 fn get_or_create_integrity_key() -> Vec<u8> {
     let Some(key_path) = integrity_key_path() else {
-        warn!("Cannot determine data directory for session key; using legacy key");
+        warn!(
+            "Cannot determine data directory for session key; \
+             falling back to legacy hardcoded HMAC key. \
+             Sessions signed with the legacy key have weaker integrity guarantees."
+        );
         return LEGACY_INTEGRITY_KEY.to_vec();
     };
 
@@ -65,7 +69,9 @@ fn get_or_create_integrity_key() -> Vec<u8> {
             warn!(
                 path = %parent.display(),
                 error = %e,
-                "Failed to create directory for session key; using legacy key"
+                "Failed to create directory for session key; \
+                 falling back to legacy hardcoded HMAC key. \
+                 Sessions signed with the legacy key have weaker integrity guarantees."
             );
             return LEGACY_INTEGRITY_KEY.to_vec();
         }
@@ -76,7 +82,9 @@ fn get_or_create_integrity_key() -> Vec<u8> {
         warn!(
             path = %key_path.display(),
             error = %e,
-            "Failed to write session key; using legacy key"
+            "Failed to write session key; \
+             falling back to legacy hardcoded HMAC key. \
+             Sessions signed with the legacy key have weaker integrity guarantees."
         );
         return LEGACY_INTEGRITY_KEY.to_vec();
     }
@@ -429,6 +437,48 @@ mod tests {
             result.is_ok(),
             "session signed with legacy key should still verify"
         );
+    }
+
+    #[test]
+    fn test_legacy_key_fallback_when_peruser_key_unavailable() {
+        // Simulate the scenario where the per-user key does not match
+        // by signing with the legacy key directly, then verifying.
+        // This exercises the legacy fallback path in SessionFile::verify().
+        let session = Session::new(PathBuf::from("/tmp/legacy-test"));
+        let session_json = serde_json::to_string(&session).expect("serialize");
+
+        // Sign with legacy key (simulating an old session file)
+        let legacy_checksum = compute_checksum_with_key(&session_json, LEGACY_INTEGRITY_KEY);
+        let session_file = SessionFile {
+            session,
+            checksum: legacy_checksum,
+        };
+
+        // Verify succeeds via legacy fallback — the warning would fire in production
+        let result = session_file.verify();
+        assert!(
+            result.is_ok(),
+            "Legacy key fallback should succeed for verification"
+        );
+    }
+
+    #[test]
+    fn test_legacy_key_differs_from_peruser_key() {
+        // The per-user CSPRNG key should differ from the legacy hardcoded key,
+        // confirming the per-user key is actually in use.
+        let data = "test-session-data";
+        let legacy = compute_checksum_with_key(data, LEGACY_INTEGRITY_KEY);
+        let current = compute_checksum(data);
+
+        // If the per-user key was properly generated, checksums should differ.
+        // (Only equal if the key file coincidentally matches the legacy key,
+        // which is astronomically unlikely.)
+        if *INTEGRITY_KEY != LEGACY_INTEGRITY_KEY.to_vec() {
+            assert_ne!(
+                legacy, current,
+                "Per-user key should produce different checksums than legacy key"
+            );
+        }
     }
 
     #[test]

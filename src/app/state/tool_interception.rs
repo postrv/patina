@@ -143,7 +143,18 @@ impl AppState {
             return;
         }
 
-        let task_id = self.background_tasks.spawn(command, &self.working_dir);
+        let task_id = match self.background_tasks.spawn(command, &self.working_dir) {
+            Ok(tid) => tid,
+            Err(msg) => {
+                let result = ToolResultBlock::error(id, msg);
+                let tx_clone = tx.clone();
+                let id_clone = id.to_string();
+                tokio::spawn(async move {
+                    let _ = tx_clone.send((id_clone, result)).await;
+                });
+                return;
+            }
+        };
         let result = ToolResultBlock::success(id, format!("Background task {task_id} started"));
         let tx_clone = tx.clone();
         let id_clone = id.to_string();

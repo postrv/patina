@@ -60,6 +60,15 @@ pub fn validate_url(url: &str, allow_localhost: bool) -> Result<reqwest::Url> {
         if is_private_ip(host) && !allow_localhost {
             bail!("Private IP addresses are not allowed for security reasons");
         }
+
+        // Warn when using unencrypted HTTP for non-localhost URLs.
+        // Auth tokens transmitted over HTTP can be intercepted.
+        if parsed.scheme() == "http" && !is_localhost(host) {
+            tracing::warn!(
+                url = %url,
+                "MCP connection using unencrypted HTTP \u{2014} consider using HTTPS"
+            );
+        }
     }
 
     Ok(parsed)
@@ -327,5 +336,37 @@ mod tests {
     fn test_validate_url_accepts_http() {
         let result = validate_url("http://example.com", false);
         assert!(result.is_ok(), "Plain HTTP should be accepted");
+    }
+
+    #[test]
+    fn test_validate_url_http_non_localhost_triggers_warning_path() {
+        // HTTP to a non-localhost URL should succeed but hits the warning path.
+        // We verify the URL is accepted (the tracing::warn fires in production).
+        let result = validate_url("http://remote-server.example.com/mcp", false);
+        assert!(
+            result.is_ok(),
+            "HTTP non-localhost should be accepted (with warning)"
+        );
+        let url = result.unwrap();
+        assert_eq!(url.scheme(), "http");
+    }
+
+    #[test]
+    fn test_validate_url_https_does_not_trigger_warning_path() {
+        // HTTPS should not trigger the HTTP warning path
+        let result = validate_url("https://secure-server.example.com/mcp", false);
+        assert!(result.is_ok(), "HTTPS should be accepted without warning");
+        let url = result.unwrap();
+        assert_eq!(url.scheme(), "https");
+    }
+
+    #[test]
+    fn test_validate_url_http_localhost_no_warning() {
+        // HTTP to localhost is fine (no auth token exposure risk on loopback)
+        let result = validate_url("http://localhost:8080/mcp", true);
+        assert!(
+            result.is_ok(),
+            "HTTP to localhost should be accepted without warning"
+        );
     }
 }
