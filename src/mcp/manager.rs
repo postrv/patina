@@ -33,8 +33,10 @@
 //! ```
 
 use crate::api::tools::ToolDefinition;
-use crate::mcp::config::McpServerEntry;
+use crate::mcp::auth::{auth_headers, resolve_bearer_token};
+use crate::mcp::config::{McpAuthConfig, McpServerEntry};
 use crate::mcp::connection::McpConnection;
+use crate::mcp::token_storage::McpTokenStore;
 use crate::tools::ToolResult;
 use anyhow::{anyhow, Result};
 use rmcp::model::{CallToolResult as SdkCallToolResult, Tool};
@@ -305,14 +307,38 @@ impl McpManager {
 }
 
 /// Starts a single stdio MCP server via `McpConnection`.
+///
+/// If the entry has an `auth` config, the resolved token is passed to the
+/// child process as the `MCP_AUTH_TOKEN` environment variable.
 async fn start_stdio_server(
     name: String,
     entry: McpServerEntry,
     timeout: Duration,
 ) -> ManagedServer {
-    match McpConnection::connect_stdio(&name, &entry.command, &entry.args, &entry.env, timeout)
-        .await
-    {
+    let mut env = entry.env.clone();
+
+    // Inject auth token as environment variable for stdio transport
+    if let Some(auth) = &entry.auth {
+        match resolve_auth_token(&name, auth).await {
+            Ok(token) => {
+                env.insert("MCP_AUTH_TOKEN".to_string(), token);
+            }
+            Err(e) => {
+                tracing::warn!(
+                    server = %name,
+                    error = %e,
+                    "Failed to resolve auth token for stdio server"
+                );
+                return ManagedServer {
+                    name,
+                    connection: None,
+                    status: ServerStatus::Failed(format!("Auth resolution failed: {e}")),
+                };
+            }
+        }
+    }
+
+    match McpConnection::connect_stdio(&name, &entry.command, &entry.args, &env, timeout).await {
         Ok(conn) => {
             let tool_count = conn.tools().len();
             tracing::info!(
@@ -344,6 +370,8 @@ async fn start_stdio_server(
 /// Starts a single HTTP/SSE MCP server via `McpConnection`.
 ///
 /// Routes to legacy SSE or streamable HTTP based on the entry's transport type.
+/// If the entry has an `auth` config, the resolved token is added as an
+/// `Authorization: Bearer <token>` header.
 async fn start_http_server(
     name: String,
     entry: McpServerEntry,
@@ -360,13 +388,42 @@ async fn start_http_server(
         }
     };
 
+    // Merge auth headers into the connection headers
+    let mut headers = entry.headers.clone().unwrap_or_default();
+    if let Some(auth) = &entry.auth {
+        match resolve_auth_token(&name, auth).await {
+            Ok(token) => {
+                for (k, v) in auth_headers(&token) {
+                    headers.insert(k, v);
+                }
+            }
+            Err(e) => {
+                tracing::warn!(
+                    server = %name,
+                    error = %e,
+                    "Failed to resolve auth token for HTTP server"
+                );
+                return ManagedServer {
+                    name,
+                    connection: None,
+                    status: ServerStatus::Failed(format!("Auth resolution failed: {e}")),
+                };
+            }
+        }
+    }
+    let headers_opt = if headers.is_empty() {
+        None
+    } else {
+        Some(headers)
+    };
+
     let is_legacy = entry.is_legacy_sse();
     let result = if is_legacy {
         tracing::debug!(server = %name, url = %url, "Connecting via legacy SSE transport");
-        McpConnection::connect_legacy_sse(&name, &url, &entry.headers, timeout).await
+        McpConnection::connect_legacy_sse(&name, &url, &headers_opt, timeout).await
     } else {
         tracing::debug!(server = %name, url = %url, "Connecting via streamable HTTP transport");
-        McpConnection::connect_http(&name, &url, &entry.headers, timeout).await
+        McpConnection::connect_http(&name, &url, &headers_opt, timeout).await
     };
 
     let transport_label = if is_legacy { "legacy SSE" } else { "HTTP" };
@@ -400,6 +457,41 @@ async fn start_http_server(
             }
         }
     }
+}
+
+/// Resolves an authentication token from an [`McpAuthConfig`].
+///
+/// For [`McpAuthConfig::Bearer`]: resolves literal or `$ENV_VAR` tokens.
+/// For [`McpAuthConfig::OAuth`]: loads a cached token from the token store,
+/// refreshing if expired.
+///
+/// # Errors
+///
+/// Returns an error if token resolution or refresh fails.
+async fn resolve_auth_token(server_name: &str, auth: &McpAuthConfig) -> Result<String> {
+    match auth {
+        McpAuthConfig::Bearer { token } => resolve_bearer_token(token),
+        McpAuthConfig::OAuth { .. } => {
+            let token_store_dir = token_store_dir()?;
+            let store = McpTokenStore::new(token_store_dir);
+            let client = crate::mcp::auth::McpOAuthClient::new(server_name, auth, store)?;
+            client.get_token().await
+        }
+    }
+}
+
+/// Returns the default directory for storing MCP OAuth tokens.
+///
+/// Uses `~/.local/share/patina/` on Unix, or the platform-equivalent data
+/// directory via the `directories` crate.
+///
+/// # Errors
+///
+/// Returns an error if the home/data directory cannot be determined.
+fn token_store_dir() -> Result<std::path::PathBuf> {
+    let base_dirs = directories::BaseDirs::new()
+        .ok_or_else(|| anyhow!("Cannot determine home directory for token storage"))?;
+    Ok(base_dirs.data_local_dir().join("patina"))
 }
 
 /// Converts an SDK `CallToolResult` to a `ToolResult`.
@@ -563,6 +655,7 @@ mod tests {
                 headers: None,
                 transport_type: None,
                 disabled: false,
+                auth: None,
             },
         );
 
@@ -587,6 +680,7 @@ mod tests {
                 headers: None,
                 transport_type: None,
                 disabled: true,
+                auth: None,
             },
         );
 
@@ -607,6 +701,7 @@ mod tests {
                 headers: None,
                 transport_type: None,
                 disabled: false,
+                auth: None,
             },
         );
 
@@ -630,6 +725,7 @@ mod tests {
                 headers: None,
                 transport_type: None,
                 disabled: false,
+                auth: None,
             },
         );
 
@@ -738,6 +834,7 @@ mod tests {
                 headers: None,
                 transport_type: None,
                 disabled: false,
+                auth: None,
             },
         );
         configs.insert(
@@ -750,6 +847,7 @@ mod tests {
                 headers: None,
                 transport_type: None,
                 disabled: false,
+                auth: None,
             },
         );
 

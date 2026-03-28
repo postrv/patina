@@ -11,12 +11,14 @@
 //! - `manager` - Multi-server management, tool namespacing, and routing
 //! - `security` - MCP command validation and blocklists
 
+pub mod auth;
 pub mod config;
 pub mod connection;
 pub mod handler;
 pub mod legacy_sse;
 pub mod manager;
 pub mod security;
+pub mod token_storage;
 pub mod trust;
 
 // Re-export key types for convenience

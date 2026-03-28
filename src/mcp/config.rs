@@ -40,9 +40,51 @@
 //! ```
 
 use anyhow::{Context, Result};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
+
+/// Authentication configuration for MCP servers.
+///
+/// Supports two modes:
+/// - **OAuth**: Full OAuth 2.0 flow with token refresh (requires `auth_url` and `token_url`
+///   for non-standard providers).
+/// - **Bearer**: Static bearer token, optionally resolved from an environment variable.
+///
+/// # Examples
+///
+/// ```
+/// use patina::mcp::config::McpAuthConfig;
+///
+/// let json = r#"{"type":"bearer","token":"$MCP_TOKEN"}"#;
+/// let config: McpAuthConfig = serde_json::from_str(json).unwrap();
+/// assert!(matches!(config, McpAuthConfig::Bearer { .. }));
+/// ```
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(tag = "type")]
+pub enum McpAuthConfig {
+    /// OAuth 2.0 authentication with automatic token refresh.
+    #[serde(rename = "oauth")]
+    OAuth {
+        /// OAuth client ID.
+        client_id: String,
+        /// Requested scopes for the OAuth token.
+        #[serde(default)]
+        scopes: Vec<String>,
+        /// Authorization endpoint URL. Required for non-standard OAuth servers.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        auth_url: Option<String>,
+        /// Token endpoint URL. Required for non-standard OAuth servers.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        token_url: Option<String>,
+    },
+    /// Static bearer token (supports `$ENV_VAR` references).
+    #[serde(rename = "bearer")]
+    Bearer {
+        /// Token value or environment variable reference (e.g., `"$MCP_TOKEN"`).
+        token: String,
+    },
+}
 
 /// Claude Code compatible MCP server entry.
 ///
@@ -89,6 +131,10 @@ pub struct McpServerEntry {
     /// Whether this server is disabled. Absent means enabled.
     #[serde(default)]
     pub disabled: bool,
+
+    /// Authentication configuration for this server.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth: Option<McpAuthConfig>,
 }
 
 impl McpServerEntry {
@@ -409,6 +455,7 @@ mod tests {
                 headers: None,
                 transport_type: None,
                 disabled: false,
+                auth: None,
             },
         );
 
@@ -423,6 +470,7 @@ mod tests {
                 headers: None,
                 transport_type: None,
                 disabled: false,
+                auth: None,
             },
         );
 
@@ -444,6 +492,7 @@ mod tests {
                 headers: None,
                 transport_type: None,
                 disabled: false,
+                auth: None,
             },
         );
 
@@ -458,6 +507,7 @@ mod tests {
                 headers: None,
                 transport_type: None,
                 disabled: false,
+                auth: None,
             },
         );
 
@@ -480,6 +530,7 @@ mod tests {
                 headers: None,
                 transport_type: None,
                 disabled: false,
+                auth: None,
             },
         );
 
@@ -501,6 +552,7 @@ mod tests {
                 headers: None,
                 transport_type: None,
                 disabled: false,
+                auth: None,
             },
         );
 
@@ -515,6 +567,7 @@ mod tests {
                 headers: None,
                 transport_type: None,
                 disabled: true,
+                auth: None,
             },
         );
 
@@ -632,5 +685,108 @@ mod tests {
             result.contains_key("test"),
             "Without trust store, config should load normally"
         );
+    }
+
+    // =========================================================================
+    // McpAuthConfig deserialization tests
+    // =========================================================================
+
+    #[test]
+    fn deserialize_auth_oauth_variant() {
+        let json = r#"{
+            "type": "oauth",
+            "client_id": "my-client",
+            "scopes": ["read", "write"],
+            "auth_url": "https://auth.example.com/authorize",
+            "token_url": "https://auth.example.com/token"
+        }"#;
+        let config: McpAuthConfig = serde_json::from_str(json).unwrap();
+        match config {
+            McpAuthConfig::OAuth {
+                client_id,
+                scopes,
+                auth_url,
+                token_url,
+            } => {
+                assert_eq!(client_id, "my-client");
+                assert_eq!(scopes, vec!["read", "write"]);
+                assert_eq!(
+                    auth_url.as_deref(),
+                    Some("https://auth.example.com/authorize")
+                );
+                assert_eq!(token_url.as_deref(), Some("https://auth.example.com/token"));
+            }
+            McpAuthConfig::Bearer { .. } => panic!("Expected OAuth variant"),
+        }
+    }
+
+    #[test]
+    fn deserialize_auth_bearer_variant() {
+        let json = r#"{"type": "bearer", "token": "$MCP_TOKEN"}"#;
+        let config: McpAuthConfig = serde_json::from_str(json).unwrap();
+        match config {
+            McpAuthConfig::Bearer { token } => {
+                assert_eq!(token, "$MCP_TOKEN");
+            }
+            McpAuthConfig::OAuth { .. } => panic!("Expected Bearer variant"),
+        }
+    }
+
+    #[test]
+    fn deserialize_auth_absent_in_server_entry() {
+        let json = r#"{"command":"npx","args":["server"]}"#;
+        let entry: McpServerEntry = serde_json::from_str(json).unwrap();
+        assert!(entry.auth.is_none());
+    }
+
+    #[test]
+    fn deserialize_auth_present_in_server_entry() {
+        let json = r#"{
+            "command": "npx",
+            "args": ["server"],
+            "auth": {
+                "type": "bearer",
+                "token": "test-bearer-123"
+            }
+        }"#;
+        let entry: McpServerEntry = serde_json::from_str(json).unwrap();
+        assert!(entry.auth.is_some());
+        match entry.auth.as_ref().unwrap() {
+            McpAuthConfig::Bearer { token } => assert_eq!(token, "test-bearer-123"),
+            _ => panic!("Expected Bearer variant"),
+        }
+    }
+
+    #[test]
+    fn deserialize_auth_oauth_minimal() {
+        let json = r#"{"type": "oauth", "client_id": "my-client"}"#;
+        let config: McpAuthConfig = serde_json::from_str(json).unwrap();
+        match config {
+            McpAuthConfig::OAuth {
+                client_id,
+                scopes,
+                auth_url,
+                token_url,
+            } => {
+                assert_eq!(client_id, "my-client");
+                assert!(scopes.is_empty());
+                assert!(auth_url.is_none());
+                assert!(token_url.is_none());
+            }
+            McpAuthConfig::Bearer { .. } => panic!("Expected OAuth variant"),
+        }
+    }
+
+    #[test]
+    fn serialize_auth_oauth_skips_none_urls() {
+        let config = McpAuthConfig::OAuth {
+            client_id: "my-client".to_string(),
+            scopes: vec![],
+            auth_url: None,
+            token_url: None,
+        };
+        let json = serde_json::to_string(&config).unwrap();
+        assert!(!json.contains("auth_url"));
+        assert!(!json.contains("token_url"));
     }
 }

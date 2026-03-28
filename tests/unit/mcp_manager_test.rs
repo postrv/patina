@@ -59,6 +59,7 @@ async fn test_manager_startup_skips_disabled() {
             headers: None,
             transport_type: None,
             disabled: true,
+            auth: None,
         },
     );
 
@@ -79,6 +80,7 @@ async fn test_manager_startup_invalid_command_marks_failed() {
             headers: None,
             transport_type: None,
             disabled: false,
+            auth: None,
         },
     );
 
@@ -103,6 +105,7 @@ async fn test_manager_sse_not_yet_supported() {
             headers: None,
             transport_type: None,
             disabled: false,
+            auth: None,
         },
     );
 
