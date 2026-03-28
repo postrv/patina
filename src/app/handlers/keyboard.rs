@@ -229,15 +229,24 @@ async fn handle_submit(ctx: &mut AppContext<'_>) -> Result<()> {
     if input.trim().starts_with('/') {
         handle_slash_command(ctx, &input);
     } else {
+        // Resolve @-mentions: read referenced files and prepend context
+        let (file_context, original_input) =
+            crate::app::completion::resolve_mentions(&input, &ctx.state.working_dir);
+        let final_input = if file_context.is_empty() {
+            original_input
+        } else {
+            format!("{file_context}{original_input}")
+        };
+
         // Fire UserPromptSubmit hook before sending to API
         let _ = ctx
             .state
             .tool_state()
             .tool_executor
             .hooks()
-            .fire_user_prompt_submit(&input)
+            .fire_user_prompt_submit(&final_input)
             .await;
-        ctx.state.submit_message(&ctx.client, input).await?;
+        ctx.state.submit_message(&ctx.client, final_input).await?;
         // SessionHandler observer saves when it sees the dirty flag.
         ctx.state.session_tracking_mut().mark_dirty();
     }

@@ -1057,6 +1057,8 @@ pub enum CompletionSource {
     McpTool(String),
     /// User-defined command (future).
     User,
+    /// File path from @-mention completion.
+    File,
 }
 
 impl CompletionSource {
@@ -1070,6 +1072,7 @@ impl CompletionSource {
             Self::Plugin(_) => "[P]",
             Self::McpTool(_) => "[M]",
             Self::User => "[U]",
+            Self::File => "[@]",
         }
     }
 }

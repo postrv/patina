@@ -21,6 +21,7 @@ pub mod memory;
 pub mod narsil;
 pub mod permissions;
 pub mod plugins;
+pub mod rules;
 pub mod session;
 pub mod shell;
 pub mod skills;

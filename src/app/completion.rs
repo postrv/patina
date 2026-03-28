@@ -191,6 +191,175 @@ pub fn collect_candidates(providers: &[&dyn CompletionProvider]) -> Vec<Completi
     providers.iter().flat_map(|p| p.candidates()).collect()
 }
 
+/// Distinguishes between slash-command and file-mention completion modes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompletionMode {
+    /// Slash command completion (triggered by `/` at start of input).
+    SlashCommand,
+    /// File mention completion (triggered by `@` at start of word).
+    FileMention,
+}
+
+/// Directories filtered out of file completion results.
+const IGNORED_DIRS: &[&str] = &[".git", "target", "node_modules"];
+
+/// Maximum number of file completion results returned.
+const MAX_FILE_RESULTS: usize = 20;
+
+/// Provides file path completion candidates for `@`-mention autocomplete.
+pub struct FileCompletionProvider {
+    working_dir: std::path::PathBuf,
+}
+
+impl FileCompletionProvider {
+    /// Creates a new file completion provider rooted at `working_dir`.
+    #[must_use]
+    pub fn new(working_dir: std::path::PathBuf) -> Self {
+        Self { working_dir }
+    }
+
+    /// Searches for files matching `partial_path` relative to the working directory.
+    #[must_use]
+    pub fn search(&self, partial_path: &str) -> Vec<CompletionEntry> {
+        let mut results = Vec::new();
+        let (dir_prefix, name_prefix) = if let Some(last_slash) = partial_path.rfind('/') {
+            (
+                partial_path[..=last_slash].to_string(),
+                partial_path[last_slash + 1..].to_string(),
+            )
+        } else {
+            (String::new(), partial_path.to_string())
+        };
+        let search_dir = if dir_prefix.is_empty() {
+            self.working_dir.clone()
+        } else {
+            self.working_dir.join(&dir_prefix)
+        };
+        let entries = match std::fs::read_dir(&search_dir) {
+            Ok(entries) => entries,
+            Err(_) => return results,
+        };
+        let name_prefix_lower = name_prefix.to_lowercase();
+        let mut matched: Vec<(String, bool)> = Vec::new();
+        for entry_result in entries {
+            let entry = match entry_result {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+            let file_name = entry.file_name().to_string_lossy().to_string();
+            let is_dir = entry.path().is_dir();
+            if is_dir && IGNORED_DIRS.contains(&file_name.as_str()) {
+                continue;
+            }
+            if file_name.starts_with('.') {
+                continue;
+            }
+            if file_name.to_lowercase().starts_with(&name_prefix_lower) {
+                let relative_path = if dir_prefix.is_empty() {
+                    file_name.clone()
+                } else {
+                    format!("{dir_prefix}{file_name}")
+                };
+                matched.push((relative_path, is_dir));
+            }
+        }
+        matched.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        for (path, is_dir) in matched.into_iter().take(MAX_FILE_RESULTS) {
+            let display_name = if is_dir {
+                format!("{path}/")
+            } else {
+                path.clone()
+            };
+            let description = if is_dir { "Directory" } else { "File" };
+            results.push(CompletionEntry::new(
+                display_name,
+                description,
+                CompletionSource::File,
+            ));
+        }
+        results
+    }
+}
+
+/// Detects whether the character at the given position triggers file-mention completion.
+#[must_use]
+pub fn is_file_mention_trigger(text: &str, cursor_pos: usize) -> bool {
+    if cursor_pos == 0 || cursor_pos > text.chars().count() {
+        return false;
+    }
+    let chars: Vec<char> = text.chars().collect();
+    if chars[cursor_pos - 1] != '@' {
+        return false;
+    }
+    cursor_pos == 1 || chars.get(cursor_pos - 2).is_none_or(|c| c.is_whitespace())
+}
+
+/// Extracts the partial path after the most recent `@` trigger.
+#[must_use]
+pub fn extract_mention_filter(text: &str, cursor_pos: usize) -> Option<String> {
+    let chars: Vec<char> = text.chars().collect();
+    if cursor_pos > chars.len() {
+        return None;
+    }
+    let mut at_pos = None;
+    for i in (0..cursor_pos).rev() {
+        if chars[i] == '@' {
+            if i == 0 || chars[i - 1].is_whitespace() {
+                at_pos = Some(i);
+                break;
+            }
+            return None;
+        }
+        if chars[i].is_whitespace() {
+            return None;
+        }
+    }
+    at_pos.map(|pos| chars[pos + 1..cursor_pos].iter().collect())
+}
+
+/// Resolves `@path` mentions in a user message by reading file contents.
+#[must_use]
+pub fn resolve_mentions(input: &str, working_dir: &std::path::Path) -> (String, String) {
+    let mut context = String::new();
+    let mention_paths = extract_at_paths(input);
+    for path_str in &mention_paths {
+        let full_path = working_dir.join(path_str);
+        match std::fs::read_to_string(&full_path) {
+            Ok(file_content) => {
+                context.push_str(&format!(
+                    "<file_context path=\"{path_str}\">\n{file_content}\n</file_context>\n\n"
+                ));
+            }
+            Err(e) => {
+                tracing::warn!("Failed to read mentioned file {}: {}", path_str, e);
+            }
+        }
+    }
+    (context, input.to_string())
+}
+
+fn extract_at_paths(text: &str) -> Vec<String> {
+    let mut paths = Vec::new();
+    let chars: Vec<char> = text.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '@' && (i == 0 || chars[i - 1].is_whitespace()) {
+            let start = i + 1;
+            let mut end = start;
+            while end < chars.len() && !chars[end].is_whitespace() {
+                end += 1;
+            }
+            if end > start {
+                paths.push(chars[start..end].iter().collect());
+            }
+            i = end;
+        } else {
+            i += 1;
+        }
+    }
+    paths
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -211,11 +380,13 @@ mod tests {
         let plugin = CompletionSource::Plugin("my-plugin".to_string());
         let mcp = CompletionSource::McpTool("server".to_string());
         let user = CompletionSource::User;
+        let file = CompletionSource::File;
 
         assert_eq!(builtin.indicator(), "");
         assert_eq!(plugin.indicator(), "[P]");
         assert_eq!(mcp.indicator(), "[M]");
         assert_eq!(user.indicator(), "[U]");
+        assert_eq!(file.indicator(), "[@]");
     }
 
     #[test]
@@ -466,5 +637,102 @@ mod tests {
         let mcp = McpToolProvider::new(vec![("tool1".to_string(), "srv".to_string())]);
         let all = collect_candidates(&[&builtin, &mcp]);
         assert_eq!(all.len(), 14); // 13 builtin + 1 mcp
+    }
+
+    #[test]
+    fn file_provider_search_finds_files() {
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(dir.path().join("main.rs"), "fn main() {}").unwrap();
+        std::fs::write(dir.path().join("lib.rs"), "").unwrap();
+        let provider = FileCompletionProvider::new(dir.path().to_path_buf());
+        let results = provider.search("");
+        assert!(results.len() >= 2);
+    }
+
+    #[test]
+    fn file_provider_filters_git_directory() {
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join(".git")).unwrap();
+        std::fs::create_dir_all(dir.path().join("target")).unwrap();
+        std::fs::write(dir.path().join("Cargo.toml"), "").unwrap();
+        let provider = FileCompletionProvider::new(dir.path().to_path_buf());
+        let results = provider.search("");
+        let names: Vec<&str> = results.iter().map(|e| e.name.as_str()).collect();
+        assert!(!names.contains(&".git/"));
+        assert!(!names.contains(&"target/"));
+        assert!(names.contains(&"Cargo.toml"));
+    }
+
+    #[test]
+    fn file_provider_handles_nested_paths() {
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("src/main.rs"), "").unwrap();
+        let provider = FileCompletionProvider::new(dir.path().to_path_buf());
+        let results = provider.search("src/");
+        assert!(results.iter().any(|e| e.name == "src/main.rs"));
+    }
+
+    #[test]
+    fn at_trigger_at_start() {
+        assert!(is_file_mention_trigger("@", 1));
+    }
+
+    #[test]
+    fn at_trigger_after_space() {
+        assert!(is_file_mention_trigger("hello @", 7));
+    }
+
+    #[test]
+    fn at_trigger_not_mid_word() {
+        assert!(!is_file_mention_trigger("hello@world", 6));
+    }
+
+    #[test]
+    fn completion_mode_variants() {
+        assert_ne!(CompletionMode::SlashCommand, CompletionMode::FileMention);
+    }
+
+    #[test]
+    fn extract_mention_filter_simple() {
+        assert_eq!(extract_mention_filter("@src", 4), Some("src".to_string()));
+    }
+
+    #[test]
+    fn extract_mention_filter_no_at() {
+        assert!(extract_mention_filter("no at", 5).is_none());
+    }
+
+    #[test]
+    fn resolve_mentions_parses_at_path() {
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(dir.path().join("test.txt"), "file content").unwrap();
+        let (ctx, text) = resolve_mentions("check @test.txt please", dir.path());
+        assert!(ctx.contains("file content"));
+        assert_eq!(text, "check @test.txt please");
+    }
+
+    #[test]
+    fn resolve_mentions_no_mentions() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let (ctx, _) = resolve_mentions("no mentions", dir.path());
+        assert!(ctx.is_empty());
+    }
+
+    #[test]
+    fn resolve_mentions_missing_file() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let (ctx, _) = resolve_mentions("@nonexistent.txt", dir.path());
+        assert!(ctx.is_empty());
+    }
+
+    #[test]
+    fn file_entry_has_file_source() {
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(dir.path().join("test.rs"), "").unwrap();
+        let provider = FileCompletionProvider::new(dir.path().to_path_buf());
+        let results = provider.search("test");
+        assert!(!results.is_empty());
+        assert_eq!(results[0].source, CompletionSource::File);
     }
 }

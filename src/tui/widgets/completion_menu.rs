@@ -40,13 +40,26 @@ const MAX_VISIBLE_ENTRIES: usize = 8;
 #[derive(Clone)]
 pub struct CompletionMenuWidget<'a> {
     state: &'a CompletionState,
+    title: &'a str,
 }
 
 impl<'a> CompletionMenuWidget<'a> {
-    /// Creates a new completion menu widget.
+    /// Creates a new completion menu widget with default "Commands" title.
     #[must_use]
     pub fn new(state: &'a CompletionState) -> Self {
-        Self { state }
+        Self {
+            state,
+            title: " Commands ",
+        }
+    }
+
+    /// Creates a new completion menu widget with a "Files" title.
+    #[must_use]
+    pub fn for_files(state: &'a CompletionState) -> Self {
+        Self {
+            state,
+            title: " Files ",
+        }
     }
 
     /// Calculates the popup area positioned above the input area.
@@ -77,7 +90,7 @@ impl Widget for CompletionMenuWidget<'_> {
 
         let block = Block::default()
             .borders(Borders::ALL)
-            .title(" Commands ")
+            .title(self.title)
             .title_alignment(Alignment::Left)
             .border_style(Style::default().fg(Color::Cyan))
             .style(Style::default().bg(Color::DarkGray));

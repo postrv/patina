@@ -6,6 +6,7 @@
 //! request through [`AppState::build_request_options`].
 
 use crate::context::ProjectContext;
+use crate::rules::RuleEngine;
 use std::fmt::Write as _;
 use std::path::Path;
 use tracing::debug;
@@ -55,6 +56,25 @@ pub fn build_system_prompt_with_skills(
             project_instructions
         ));
         debug!("Loaded project CLAUDE.md from {}", working_dir.display());
+    }
+
+    // Unconditional rules from .claude/rules/, .patina/rules/, ~/.claude/rules/
+    match RuleEngine::load_from_dirs(working_dir) {
+        Ok(rule_engine) => {
+            let unconditional = rule_engine.unconditional_rules();
+            if !unconditional.is_empty() {
+                let rules_text: Vec<&str> =
+                    unconditional.iter().map(|r| r.content.as_str()).collect();
+                parts.push(format!("# Project Rules\n\n{}", rules_text.join("\n\n")));
+                debug!(
+                    "Loaded {} unconditional rule(s) into system prompt",
+                    unconditional.len()
+                );
+            }
+        }
+        Err(e) => {
+            tracing::warn!("Failed to load rules: {}", e);
+        }
     }
 
     // User-global instructions from ~/.claude/CLAUDE.md
@@ -763,5 +783,44 @@ mod tests {
         let ctx = build_environment_context(dir.path());
         assert!(ctx.contains("Project structure:"));
         assert!(ctx.contains("src/"));
+    }
+
+    #[test]
+    fn test_system_prompt_includes_unconditional_rules() {
+        let dir = TempDir::new().unwrap();
+        let rules_dir = dir.path().join(".claude").join("rules");
+        fs::create_dir_all(&rules_dir).unwrap();
+        fs::write(
+            rules_dir.join("style.md"),
+            "Always use snake_case for variables.",
+        )
+        .unwrap();
+        let prompt = build_system_prompt(dir.path());
+        assert!(
+            prompt.contains("Project Rules"),
+            "System prompt should contain Project Rules header"
+        );
+        assert!(prompt.contains("Always use snake_case for variables."));
+    }
+
+    #[test]
+    fn test_system_prompt_excludes_path_scoped_rules() {
+        let dir = TempDir::new().unwrap();
+        let rules_dir = dir.path().join(".claude").join("rules");
+        fs::create_dir_all(&rules_dir).unwrap();
+        fs::write(
+            rules_dir.join("scoped.md"),
+            "---\npaths:\n  - \"src/api/**/*.rs\"\n---\nAPI-specific rule.",
+        )
+        .unwrap();
+        let prompt = build_system_prompt(dir.path());
+        assert!(!prompt.contains("API-specific rule."));
+    }
+
+    #[test]
+    fn test_system_prompt_no_rules_section_when_no_rules() {
+        let dir = TempDir::new().unwrap();
+        let prompt = build_system_prompt(dir.path());
+        assert!(!prompt.contains("Project Rules"));
     }
 }
