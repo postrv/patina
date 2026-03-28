@@ -16,6 +16,13 @@ impl AppState {
     ///
     /// The UI should display this as a modal prompt.
     pub fn set_pending_permission(&mut self, request: PermissionRequest) {
+        let tool_name = request.tool_name.clone();
+        if let Err(e) = self
+            .notification_manager
+            .notify("Patina", &format!("Permission needed: {tool_name}"))
+        {
+            tracing::debug!("Failed to send permission notification: {e}");
+        }
         self.tool_state.set_pending_permission(request);
         self.dirty.full = true;
     }

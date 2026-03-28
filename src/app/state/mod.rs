@@ -51,6 +51,7 @@ use crate::enterprise::cost::{CostConfig, CostTracker, UsageRecord};
 use crate::hooks::HookManager;
 use crate::keybindings::KeybindingManager;
 use crate::mcp::connection::McpConnection;
+use crate::terminal::notifications::NotificationManager;
 use crate::narsil::context::ContextSuggestion;
 use crate::permissions::{PermissionManager, PermissionRequest, PermissionResponse};
 use crate::plugins::PluginRegistry;
@@ -483,6 +484,7 @@ impl AppState {
             pending_question: None,
             background_tasks: BackgroundTaskRegistry::new(),
             keybinding_mgr: KeybindingManager::with_defaults(),
+            notification_manager: NotificationManager::detect(),
         }
     }
 
@@ -642,6 +644,12 @@ impl AppState {
         self.keybinding_mgr = manager;
     }
 
+
+    /// Returns a reference to the notification manager.
+    #[must_use]
+    pub fn notification_manager(&self) -> &NotificationManager {
+        &self.notification_manager
+    }
 
     /// Returns a reference to the tool execution state.
     #[must_use]

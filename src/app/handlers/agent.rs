@@ -85,6 +85,16 @@ impl EventHandler for AgentHandler {
                     _ => None,
                 };
                 if let Some(reason) = stop_reason {
+                    // Send desktop notification for agent completion/failure
+                    let notification_body = format!("Agent {agent_id}: {reason}");
+                    if let Err(e) = ctx
+                        .state
+                        .notification_manager()
+                        .notify("Patina", &notification_body)
+                    {
+                        tracing::debug!("Failed to send agent notification: {e}");
+                    }
+
                     let executor = std::sync::Arc::clone(&ctx.state.tool_state().tool_executor);
                     let agent_id = agent_id.clone();
                     let reason = reason.to_string();

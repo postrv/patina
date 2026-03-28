@@ -91,6 +91,13 @@ impl AppState {
         self.display.loading = false;
         self.streaming_rx = None;
         self.dirty.messages = true;
+
+        // Fire desktop notification when the full response cycle completes
+        if !self.tool_state.tool_loop_is_active() {
+            if let Err(e) = self.notification_manager.notify("Patina", "Response complete") {
+                tracing::debug!("Failed to send completion notification: {e}");
+            }
+        }
     }
 
     /// Handles a `MessageComplete` stream event by finalizing the streaming entry

@@ -24,6 +24,8 @@
 //! }
 //! ```
 
+pub mod notifications;
+
 use std::env;
 use std::fmt;
 use std::process::Command;
