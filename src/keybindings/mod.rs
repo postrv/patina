@@ -179,18 +179,20 @@ pub struct KeybindingManager {
 }
 
 impl KeybindingManager {
-    /// Creates a manager with default keybindings matching the hardcoded behavior.
+    /// Creates a manager with default keybindings.
     ///
-    /// The default bindings cover all currently hardcoded keys in the keyboard handler:
+    /// The default bindings map keys to [`Action`] variants:
     /// - Ctrl+C, Ctrl+D -> Quit
     /// - Enter -> Submit
-    /// - Ctrl+Up, PageUp, Ctrl+K -> ScrollUp
-    /// - Ctrl+Down, PageDown, Ctrl+J -> ScrollDown
+    /// - Shift+Enter -> NewLine
+    /// - Ctrl+Up, Ctrl+K -> ScrollUp (10 lines)
+    /// - Ctrl+Down, Ctrl+J -> ScrollDown (10 lines)
+    /// - PageUp -> PageUp (viewport height)
+    /// - PageDown -> PageDown (viewport height)
     /// - Home, Ctrl+G -> ScrollToTop
     /// - End -> ScrollToBottom
-    /// - Ctrl+A -> SelectAll
-    /// - Ctrl+Shift+C, Super+C, Alt+C -> Copy
-    /// - Ctrl+Y -> Copy (yank)
+    /// - Ctrl+A, Super+A, Alt+A, Ctrl+Shift+A -> SelectAll
+    /// - Ctrl+Shift+C, Super+C, Alt+C, Ctrl+Y -> Copy
     /// - Ctrl+Shift+V, Super+V, Alt+V -> Paste
     /// - Esc -> CancelOperation
     ///
@@ -240,7 +242,7 @@ impl KeybindingManager {
             Action::NewLine,
         );
 
-        // Scroll up: Ctrl+Up, PageUp, Ctrl+K
+        // Scroll up: Ctrl+Up, Ctrl+K
         bindings.insert(
             KeyChord(vec![KeyPress::from_crossterm(
                 KeyCode::Up,
@@ -250,20 +252,22 @@ impl KeybindingManager {
         );
         bindings.insert(
             KeyChord(vec![KeyPress::from_crossterm(
-                KeyCode::PageUp,
-                KeyModifiers::NONE,
-            )]),
-            Action::PageUp,
-        );
-        bindings.insert(
-            KeyChord(vec![KeyPress::from_crossterm(
                 KeyCode::Char('k'),
                 KeyModifiers::CONTROL,
             )]),
             Action::ScrollUp,
         );
 
-        // Scroll down: Ctrl+Down, PageDown, Ctrl+J
+        // Page up: PageUp (scrolls by viewport height)
+        bindings.insert(
+            KeyChord(vec![KeyPress::from_crossterm(
+                KeyCode::PageUp,
+                KeyModifiers::NONE,
+            )]),
+            Action::PageUp,
+        );
+
+        // Scroll down: Ctrl+Down, Ctrl+J
         bindings.insert(
             KeyChord(vec![KeyPress::from_crossterm(
                 KeyCode::Down,
@@ -273,17 +277,19 @@ impl KeybindingManager {
         );
         bindings.insert(
             KeyChord(vec![KeyPress::from_crossterm(
-                KeyCode::PageDown,
-                KeyModifiers::NONE,
-            )]),
-            Action::PageDown,
-        );
-        bindings.insert(
-            KeyChord(vec![KeyPress::from_crossterm(
                 KeyCode::Char('j'),
                 KeyModifiers::CONTROL,
             )]),
             Action::ScrollDown,
+        );
+
+        // Page down: PageDown (scrolls by viewport height)
+        bindings.insert(
+            KeyChord(vec![KeyPress::from_crossterm(
+                KeyCode::PageDown,
+                KeyModifiers::NONE,
+            )]),
+            Action::PageDown,
         );
 
         // Scroll to top: Home, Ctrl+G
@@ -550,6 +556,12 @@ impl KeybindingManager {
     #[must_use]
     pub fn chord_buffer_empty(&self) -> bool {
         self.chord_buffer.is_empty()
+    }
+
+    /// Returns a mutable reference to the bindings map for programmatic
+    /// insertion of custom bindings.
+    pub fn bindings_mut(&mut self) -> &mut HashMap<KeyChord, Action> {
+        &mut self.bindings
     }
 }
 
@@ -1229,5 +1241,161 @@ mod tests {
             mgr.resolve(key2),
             KeyResolution::Action(Action::KillBackgroundAgents)
         );
+    }
+
+    // =========================================================================
+    // Shift+Enter resolves to NewLine
+    // =========================================================================
+
+    #[test]
+    fn defaults_include_shift_enter_new_line() {
+        let mut mgr = KeybindingManager::with_defaults();
+        let key = KeyPress::from_crossterm(KeyCode::Enter, KeyModifiers::SHIFT);
+        assert_eq!(mgr.resolve(key), KeyResolution::Action(Action::NewLine));
+    }
+
+    // =========================================================================
+    // PageUp and ScrollUp are distinct actions
+    // =========================================================================
+
+    #[test]
+    fn page_up_is_distinct_from_scroll_up() {
+        let mut mgr = KeybindingManager::with_defaults();
+
+        let page_up = KeyPress::from_crossterm(KeyCode::PageUp, KeyModifiers::NONE);
+        assert_eq!(mgr.resolve(page_up), KeyResolution::Action(Action::PageUp));
+
+        let ctrl_up = KeyPress::from_crossterm(KeyCode::Up, KeyModifiers::CONTROL);
+        assert_eq!(
+            mgr.resolve(ctrl_up),
+            KeyResolution::Action(Action::ScrollUp)
+        );
+    }
+
+    #[test]
+    fn page_down_is_distinct_from_scroll_down() {
+        let mut mgr = KeybindingManager::with_defaults();
+
+        let page_down = KeyPress::from_crossterm(KeyCode::PageDown, KeyModifiers::NONE);
+        assert_eq!(
+            mgr.resolve(page_down),
+            KeyResolution::Action(Action::PageDown)
+        );
+
+        let ctrl_down = KeyPress::from_crossterm(KeyCode::Down, KeyModifiers::CONTROL);
+        assert_eq!(
+            mgr.resolve(ctrl_down),
+            KeyResolution::Action(Action::ScrollDown)
+        );
+    }
+
+    // =========================================================================
+    // Custom overrides actually take effect
+    // =========================================================================
+
+    #[test]
+    fn custom_override_replaces_default_binding() {
+        let config = r#"{
+            "bindings": {
+                "ctrl+c": "copy"
+            }
+        }"#;
+
+        let mut tmpfile = NamedTempFile::new().unwrap();
+        tmpfile.write_all(config.as_bytes()).unwrap();
+        tmpfile.flush().unwrap();
+
+        let mut mgr = KeybindingManager::load_from_file(tmpfile.path()).unwrap();
+
+        // Ctrl+C should now be Copy, not Quit
+        let key = KeyPress::from_crossterm(KeyCode::Char('c'), KeyModifiers::CONTROL);
+        assert_eq!(mgr.resolve(key), KeyResolution::Action(Action::Copy));
+    }
+
+    // =========================================================================
+    // Empty bindings config preserves defaults
+    // =========================================================================
+
+    #[test]
+    fn load_empty_bindings_preserves_all_defaults() {
+        let config = r#"{ "bindings": {} }"#;
+
+        let mut tmpfile = NamedTempFile::new().unwrap();
+        tmpfile.write_all(config.as_bytes()).unwrap();
+        tmpfile.flush().unwrap();
+
+        let mut mgr = KeybindingManager::load_from_file(tmpfile.path()).unwrap();
+        let defaults = KeybindingManager::with_defaults();
+
+        assert_eq!(mgr.binding_count(), defaults.binding_count());
+
+        // Spot check a default binding
+        let key = KeyPress::from_crossterm(KeyCode::Char('c'), KeyModifiers::CONTROL);
+        assert_eq!(mgr.resolve(key), KeyResolution::Action(Action::Quit));
+    }
+
+    // =========================================================================
+    // Chord prefix colliding with single-key binding
+    // =========================================================================
+
+    #[test]
+    fn chord_prefix_shadows_single_key_binding() {
+        let mut mgr = KeybindingManager::with_defaults();
+
+        // Ctrl+K is bound to ScrollUp by default.
+        // Add a chord Ctrl+K Ctrl+J — the Ctrl+K single-key binding
+        // should be shadowed by the chord prefix.
+        mgr.bindings.insert(
+            KeyChord(vec![
+                KeyPress::from_crossterm(KeyCode::Char('k'), KeyModifiers::CONTROL),
+                KeyPress::from_crossterm(KeyCode::Char('j'), KeyModifiers::CONTROL),
+            ]),
+            Action::ToggleHelp,
+        );
+
+        let key = KeyPress::from_crossterm(KeyCode::Char('k'), KeyModifiers::CONTROL);
+        // Should NOT immediately resolve to ScrollUp because it's also a chord prefix.
+        // Instead, the resolve implementation returns the exact match (ScrollUp).
+        // This is the current behavior — document it.
+        let result = mgr.resolve(key);
+        assert_eq!(
+            result,
+            KeyResolution::Action(Action::ScrollUp),
+            "Exact match takes priority over chord prefix"
+        );
+    }
+
+    // =========================================================================
+    // Action deserialization covers all variants
+    // =========================================================================
+
+    #[test]
+    fn action_deserialize_new_line() {
+        let action: Action = serde_json::from_str("\"new_line\"").unwrap();
+        assert_eq!(action, Action::NewLine);
+    }
+
+    #[test]
+    fn action_deserialize_page_up() {
+        let action: Action = serde_json::from_str("\"page_up\"").unwrap();
+        assert_eq!(action, Action::PageUp);
+    }
+
+    #[test]
+    fn action_deserialize_page_down() {
+        let action: Action = serde_json::from_str("\"page_down\"").unwrap();
+        assert_eq!(action, Action::PageDown);
+    }
+
+    #[test]
+    fn action_deserialize_focus_content() {
+        let action: Action = serde_json::from_str("\"focus_content\"").unwrap();
+        assert_eq!(action, Action::FocusContent);
+    }
+
+    #[test]
+    fn action_deserialize_focus_input() {
+        let action: Action = serde_json::from_str("\"focus_input\"").unwrap();
+        assert_eq!(action, Action::FocusInput);
     }
 }

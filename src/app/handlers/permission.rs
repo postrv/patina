@@ -18,7 +18,7 @@ use tracing::debug;
 use crate::app::context::AppContext;
 use crate::app::dispatch::{EventHandler, Handled};
 use crate::app::events::AppEvent;
-use crate::permissions::{PermissionRequest, PermissionResponse};
+use crate::permissions::PermissionResponse;
 use crate::tui::widgets::handle_permission_key;
 use crate::tui::widgets::permission_prompt::PermissionPromptState;
 
@@ -49,31 +49,38 @@ use crate::tui::widgets::permission_prompt::PermissionPromptState;
 ///     Box::new(stream_handler),
 /// ]);
 /// ```
-pub struct PermissionHandler;
+pub struct PermissionHandler {
+    /// Persistent prompt state that survives across keypresses so that
+    /// arrow-key navigation is not discarded.
+    prompt_state: Option<PermissionPromptState>,
+}
 
 impl PermissionHandler {
-    /// Maps a key event to a permission response using the prompt state machine.
-    ///
-    /// Returns `None` for navigation keys or unrecognized keys.
-    /// Returns `Some(response)` for keys that resolve the prompt.
-    fn map_key_to_response(
-        key: crossterm::event::KeyEvent,
-        request: &PermissionRequest,
-    ) -> Option<PermissionResponse> {
-        let mut prompt_state = PermissionPromptState::new(request.clone());
+    /// Creates a new `PermissionHandler`.
+    #[must_use]
+    pub fn new() -> Self {
+        Self { prompt_state: None }
+    }
 
-        let key_char = match key.code {
-            KeyCode::Char(c) => c,
-            KeyCode::Enter => '\r',
-            KeyCode::Esc => '\x1b',
-            KeyCode::Tab => '\t',
-            KeyCode::Backspace => '\x08',
-            KeyCode::Left => 'h',
-            KeyCode::Right => 'l',
-            _ => return None,
-        };
+    /// Converts a crossterm key event into the char representation expected
+    /// by [`handle_permission_key`].
+    fn key_to_char(key: crossterm::event::KeyEvent) -> Option<char> {
+        match key.code {
+            KeyCode::Char(c) => Some(c),
+            KeyCode::Enter => Some('\r'),
+            KeyCode::Esc => Some('\x1b'),
+            KeyCode::Tab => Some('\t'),
+            KeyCode::Backspace => Some('\x08'),
+            KeyCode::Left => Some('h'),
+            KeyCode::Right => Some('l'),
+            _ => None,
+        }
+    }
+}
 
-        handle_permission_key(&mut prompt_state, key_char)
+impl Default for PermissionHandler {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -87,18 +94,27 @@ impl EventHandler for PermissionHandler {
             match event {
                 AppEvent::Key(key) => {
                     if !ctx.state.tool_state().has_pending_permission() {
+                        // No permission pending — clear stale prompt state and pass through.
+                        self.prompt_state = None;
                         return Ok(Handled::IGNORED);
                     }
 
-                    // Map the key to a response (narrow path — pure function)
                     let request = match ctx.state.tool_state().pending_permission() {
                         Some(req) => req.clone(),
                         None => return Ok(Handled::IGNORED),
                     };
 
-                    if let Some(response) = Self::map_key_to_response(*key, &request) {
-                        ctx.state.clear_pending_permission();
-                        apply_permission_response(ctx, response).await?;
+                    // Lazily initialize prompt state for this permission request.
+                    let prompt = self
+                        .prompt_state
+                        .get_or_insert_with(|| PermissionPromptState::new(request));
+
+                    if let Some(key_char) = Self::key_to_char(*key) {
+                        if let Some(response) = handle_permission_key(prompt, key_char) {
+                            self.prompt_state = None;
+                            ctx.state.clear_pending_permission();
+                            apply_permission_response(ctx, response).await?;
+                        }
                     }
 
                     // All key events are consumed while the permission
@@ -107,6 +123,7 @@ impl EventHandler for PermissionHandler {
                 }
                 AppEvent::PermissionResponse(response) => {
                     let response = *response;
+                    self.prompt_state = None;
                     apply_permission_response(ctx, response).await?;
                     Ok(Handled::CONSUMED)
                 }
@@ -156,6 +173,7 @@ mod tests {
     use super::*;
     use crate::api::{AnthropicClient, LlmProvider};
     use crate::app::state::AppState;
+    use crate::permissions::PermissionRequest;
     use crate::session::SessionManager;
     use crate::types::config::ParallelMode;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -199,7 +217,7 @@ mod tests {
 
     #[test]
     fn name_returns_permission() {
-        let handler = PermissionHandler;
+        let handler = PermissionHandler::new();
         assert_eq!(handler.name(), "permission");
     }
 
@@ -209,7 +227,7 @@ mod tests {
 
     #[tokio::test]
     async fn handle_key_when_no_permission_pending_returns_ignored() {
-        let mut handler = PermissionHandler;
+        let mut handler = PermissionHandler::new();
 
         let client = test_client();
         let mut state = test_state();
@@ -231,7 +249,7 @@ mod tests {
 
     #[tokio::test]
     async fn handle_tick_returns_ignored() {
-        let mut handler = PermissionHandler;
+        let mut handler = PermissionHandler::new();
 
         let client = test_client();
         let mut state = test_state();
@@ -250,7 +268,7 @@ mod tests {
 
     #[tokio::test]
     async fn handle_quit_returns_ignored() {
-        let mut handler = PermissionHandler;
+        let mut handler = PermissionHandler::new();
 
         let client = test_client();
         let mut state = test_state();
@@ -269,7 +287,7 @@ mod tests {
 
     #[tokio::test]
     async fn handle_resize_returns_ignored() {
-        let mut handler = PermissionHandler;
+        let mut handler = PermissionHandler::new();
 
         let client = test_client();
         let mut state = test_state();
@@ -291,7 +309,7 @@ mod tests {
 
     #[tokio::test]
     async fn handle_api_chunk_returns_ignored() {
-        let mut handler = PermissionHandler;
+        let mut handler = PermissionHandler::new();
 
         let client = test_client();
         let mut state = test_state();
@@ -310,7 +328,7 @@ mod tests {
 
     #[tokio::test]
     async fn handle_tool_result_returns_ignored() {
-        let mut handler = PermissionHandler;
+        let mut handler = PermissionHandler::new();
 
         let client = test_client();
         let mut state = test_state();
@@ -340,7 +358,7 @@ mod tests {
 
     #[tokio::test]
     async fn handle_key_when_permission_pending_returns_consumed() {
-        let mut handler = PermissionHandler;
+        let mut handler = PermissionHandler::new();
 
         let client = test_client();
         let mut state = test_state();
@@ -362,7 +380,7 @@ mod tests {
 
     #[tokio::test]
     async fn handle_non_key_when_permission_pending_returns_ignored() {
-        let mut handler = PermissionHandler;
+        let mut handler = PermissionHandler::new();
 
         let client = test_client();
         let mut state = test_state();
@@ -387,7 +405,7 @@ mod tests {
 
     #[tokio::test]
     async fn handle_key_y_clears_pending_permission() {
-        let mut handler = PermissionHandler;
+        let mut handler = PermissionHandler::new();
 
         let client = test_client();
         let mut state = test_state();
@@ -407,7 +425,7 @@ mod tests {
 
     #[tokio::test]
     async fn handle_key_a_clears_pending_permission() {
-        let mut handler = PermissionHandler;
+        let mut handler = PermissionHandler::new();
 
         let client = test_client();
         let mut state = test_state();
@@ -427,7 +445,7 @@ mod tests {
 
     #[tokio::test]
     async fn handle_key_n_clears_pending_permission() {
-        let mut handler = PermissionHandler;
+        let mut handler = PermissionHandler::new();
 
         let client = test_client();
         let mut state = test_state();
@@ -447,7 +465,7 @@ mod tests {
 
     #[tokio::test]
     async fn handle_key_esc_clears_pending_permission() {
-        let mut handler = PermissionHandler;
+        let mut handler = PermissionHandler::new();
 
         let client = test_client();
         let mut state = test_state();
@@ -467,7 +485,7 @@ mod tests {
 
     #[tokio::test]
     async fn handle_key_enter_clears_pending_permission() {
-        let mut handler = PermissionHandler;
+        let mut handler = PermissionHandler::new();
 
         let client = test_client();
         let mut state = test_state();
@@ -487,7 +505,7 @@ mod tests {
 
     #[tokio::test]
     async fn handle_navigation_key_preserves_pending_permission() {
-        let mut handler = PermissionHandler;
+        let mut handler = PermissionHandler::new();
 
         let client = test_client();
         let mut state = test_state();
@@ -514,7 +532,7 @@ mod tests {
 
     #[tokio::test]
     async fn handle_unrecognized_key_preserves_pending_permission() {
-        let mut handler = PermissionHandler;
+        let mut handler = PermissionHandler::new();
 
         let client = test_client();
         let mut state = test_state();
@@ -545,7 +563,7 @@ mod tests {
 
     #[tokio::test]
     async fn handle_permission_response_allow_once_returns_consumed() {
-        let mut handler = PermissionHandler;
+        let mut handler = PermissionHandler::new();
 
         let client = test_client();
         let mut state = test_state();
@@ -566,7 +584,7 @@ mod tests {
 
     #[tokio::test]
     async fn handle_permission_response_deny_returns_consumed() {
-        let mut handler = PermissionHandler;
+        let mut handler = PermissionHandler::new();
 
         let client = test_client();
         let mut state = test_state();
@@ -587,7 +605,7 @@ mod tests {
 
     #[tokio::test]
     async fn handle_permission_response_clears_pending() {
-        let mut handler = PermissionHandler;
+        let mut handler = PermissionHandler::new();
 
         let client = test_client();
         let mut state = test_state();
@@ -607,7 +625,7 @@ mod tests {
 
     #[tokio::test]
     async fn handle_permission_response_without_pending_still_consumed() {
-        let mut handler = PermissionHandler;
+        let mut handler = PermissionHandler::new();
 
         let client = test_client();
         let mut state = test_state();
@@ -629,72 +647,78 @@ mod tests {
     }
 
     // =========================================================================
-    // Narrow tests — PermissionHandler::map_key_to_response
+    // Narrow tests — key_to_char mapping
     // =========================================================================
 
     #[test]
-    fn map_key_y_returns_allow_once() {
-        let request = test_permission_request();
+    fn key_to_char_maps_letter() {
         let key = KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE);
-        let response = PermissionHandler::map_key_to_response(key, &request);
-        assert_eq!(response, Some(PermissionResponse::AllowOnce));
+        assert_eq!(PermissionHandler::key_to_char(key), Some('y'));
     }
 
     #[test]
-    fn map_key_a_returns_allow_always() {
-        let request = test_permission_request();
-        let key = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE);
-        let response = PermissionHandler::map_key_to_response(key, &request);
-        assert_eq!(response, Some(PermissionResponse::AllowAlways));
-    }
-
-    #[test]
-    fn map_key_n_returns_deny() {
-        let request = test_permission_request();
-        let key = KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE);
-        let response = PermissionHandler::map_key_to_response(key, &request);
-        assert_eq!(response, Some(PermissionResponse::Deny));
-    }
-
-    #[test]
-    fn map_key_esc_returns_deny() {
-        let request = test_permission_request();
-        let key = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
-        let response = PermissionHandler::map_key_to_response(key, &request);
-        assert_eq!(response, Some(PermissionResponse::Deny));
-    }
-
-    #[test]
-    fn map_key_enter_returns_default_allow_once() {
-        let request = test_permission_request();
+    fn key_to_char_maps_enter() {
         let key = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
-        let response = PermissionHandler::map_key_to_response(key, &request);
-        // Default selection is AllowOnce
-        assert_eq!(response, Some(PermissionResponse::AllowOnce));
+        assert_eq!(PermissionHandler::key_to_char(key), Some('\r'));
     }
 
     #[test]
-    fn map_key_left_returns_none_navigation() {
-        let request = test_permission_request();
+    fn key_to_char_maps_esc() {
+        let key = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+        assert_eq!(PermissionHandler::key_to_char(key), Some('\x1b'));
+    }
+
+    #[test]
+    fn key_to_char_maps_left_to_h() {
         let key = KeyEvent::new(KeyCode::Left, KeyModifiers::NONE);
-        let response = PermissionHandler::map_key_to_response(key, &request);
-        assert_eq!(response, None);
+        assert_eq!(PermissionHandler::key_to_char(key), Some('h'));
     }
 
     #[test]
-    fn map_key_right_returns_none_navigation() {
-        let request = test_permission_request();
+    fn key_to_char_maps_right_to_l() {
         let key = KeyEvent::new(KeyCode::Right, KeyModifiers::NONE);
-        let response = PermissionHandler::map_key_to_response(key, &request);
-        assert_eq!(response, None);
+        assert_eq!(PermissionHandler::key_to_char(key), Some('l'));
     }
 
     #[test]
-    fn map_key_f1_returns_none_unrecognized() {
-        let request = test_permission_request();
+    fn key_to_char_returns_none_for_f1() {
         let key = KeyEvent::new(KeyCode::F(1), KeyModifiers::NONE);
-        let response = PermissionHandler::map_key_to_response(key, &request);
-        assert_eq!(response, None);
+        assert_eq!(PermissionHandler::key_to_char(key), None);
+    }
+
+    // =========================================================================
+    // Arrow navigation persists across keypresses (M-3 fix)
+    // =========================================================================
+
+    #[tokio::test]
+    async fn arrow_navigation_then_enter_confirms_navigated_selection() {
+        let mut handler = PermissionHandler::new();
+
+        let client = test_client();
+        let mut state = test_state();
+        let (session_mgr, _dir) = test_session_manager();
+
+        state.set_pending_permission(test_permission_request());
+
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
+
+        // Default selection is AllowOnce. Press Right to move to AllowAlways.
+        let right = AppEvent::Key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+        let result = handler.handle(&right, &mut ctx).await.unwrap();
+        assert_eq!(result, Handled::CONSUMED);
+        assert!(
+            ctx.state.tool_state().has_pending_permission(),
+            "Right arrow must not resolve the prompt"
+        );
+
+        // Now press Enter — should confirm AllowAlways (the navigated position),
+        // not AllowOnce (the default).
+        let enter = AppEvent::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let _result = handler.handle(&enter, &mut ctx).await.unwrap();
+        assert!(
+            !ctx.state.tool_state().has_pending_permission(),
+            "Enter after navigation must resolve the prompt"
+        );
     }
 
     // =========================================================================
@@ -715,7 +739,7 @@ mod tests {
     async fn permission_handler_works_in_dispatcher() {
         use crate::app::dispatch::EventDispatcher;
 
-        let handler = PermissionHandler;
+        let handler = PermissionHandler::new();
         let mut dispatcher = EventDispatcher::new(vec![Box::new(handler)]);
 
         let client = test_client();

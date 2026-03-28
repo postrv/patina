@@ -2,7 +2,8 @@
 //!
 //! [`KeyboardHandler`] processes all user input events: keyboard shortcuts,
 //! text entry, mouse interactions (click, drag, scroll), and terminal resizes.
-//! It translates raw crossterm events into application state mutations.
+//! It delegates key dispatch to [`KeybindingManager`] for configurable bindings
+//! and falls back to direct handling for text input and editing keys.
 //!
 //! This handler **must** run after `PermissionHandler` in the dispatch chain
 //! so that permission prompt key events are consumed before reaching normal
@@ -19,23 +20,21 @@ use crate::app::context::AppContext;
 use crate::app::dispatch::{EventHandler, Handled};
 use crate::app::events::AppEvent;
 use crate::app::state::UISelectionState;
+use crate::keybindings::{Action, KeyPress, KeyResolution};
 use crate::types::ui_state::{ContentPosition, FocusArea};
 use crate::types::{Message, Role};
 
 /// Handles keyboard, mouse, and resize events.
 ///
-/// `KeyboardHandler` is the primary user-input handler. It processes:
+/// `KeyboardHandler` delegates key dispatch to [`KeybindingManager`] for
+/// configurable bindings (including user overrides from `keybindings.json`)
+/// and falls back to direct handling for text input and editing keys.
 ///
-/// - **Exit**: Ctrl+C, Ctrl+D → signals quit via `AppEvent::Quit` return
-/// - **Submit**: Enter → sends input to API or executes slash commands
-/// - **Edit**: Backspace → deletes character, printable chars → inserts
-/// - **Scroll**: Ctrl+Up/Down, PageUp/Down, Ctrl+K/J, Home/End → viewport
-/// - **Select**: Cmd/Alt/Ctrl+A → select all content
-/// - **Copy**: Cmd/Alt/Ctrl+Shift+C, Ctrl+Y → copy selection to clipboard
-/// - **Paste**: Cmd/Alt/Ctrl+Shift+V → paste from clipboard
-/// - **Escape**: clears active selection
-/// - **Mouse**: click sets focus, drag extends selection, scroll moves viewport
-/// - **Resize**: marks the UI for a full redraw
+/// Key events flow through: `KeyPress` → `KeybindingManager::resolve()` →
+/// `Action` dispatch → state mutation. Unbound keys are handled as text input.
+///
+/// Mouse events handle click (focus), drag (selection), and scroll.
+/// Resize events mark the UI for a full redraw.
 ///
 /// # Examples
 ///
@@ -88,10 +87,12 @@ impl EventHandler for KeyboardHandler {
     }
 }
 
-/// Processes a single key event and mutates application state accordingly.
+/// Processes a single key event via the [`KeybindingManager`].
 ///
-/// Returns [`Handled::CONSUMED`] for recognized key combinations. Ctrl+C and
-/// Ctrl+D return a special quit signal that the event loop must detect.
+/// First attempts to resolve the key through the configurable keybinding
+/// system. If the key matches a binding, the corresponding [`Action`] is
+/// dispatched. If the key is a chord prefix, it returns `CONSUMED` and
+/// waits for the next key. Unbound keys fall through to text input handling.
 ///
 /// # Errors
 ///
@@ -103,114 +104,142 @@ async fn handle_key(
 ) -> Result<Handled> {
     debug!(?code, ?modifiers, "key event received");
 
-    match (code, modifiers) {
-        // Exit commands
-        (KeyCode::Char('c'), KeyModifiers::CONTROL)
-        | (KeyCode::Char('d'), KeyModifiers::CONTROL) => {
-            // Signal quit — the event loop detects this via `wants_quit`.
+    let keypress = KeyPress::from_crossterm(code, modifiers);
+    let resolution = ctx.state.keybindings_mut().resolve(keypress);
+
+    match resolution {
+        KeyResolution::Action(action) => dispatch_action(ctx, action).await,
+        KeyResolution::Partial => {
+            debug!("chord prefix matched, waiting for next key");
+            Ok(Handled::CONSUMED)
+        }
+        KeyResolution::Unbound => handle_unbound_key(ctx, code, modifiers),
+    }
+}
+
+/// Dispatches a resolved keybinding [`Action`] to the corresponding handler.
+///
+/// # Errors
+///
+/// Returns an error if submit or other async operations fail.
+async fn dispatch_action(ctx: &mut AppContext<'_>, action: Action) -> Result<Handled> {
+    debug!(?action, "dispatching keybinding action");
+    match action {
+        Action::Quit => {
             ctx.state.request_quit();
             Ok(Handled::CONSUMED)
         }
-
-        // Submit input
-        (KeyCode::Enter, KeyModifiers::NONE) if !ctx.state.input_state().text().is_empty() => {
-            handle_submit(ctx).await?;
+        Action::Submit => {
+            if !ctx.state.input_state().text().is_empty() {
+                handle_submit(ctx).await?;
+            }
             Ok(Handled::CONSUMED)
         }
-
-        // Delete character
-        (KeyCode::Backspace, _) => {
-            ctx.state.delete_char();
+        Action::NewLine => {
+            ctx.state.insert_char('\n');
             Ok(Handled::CONSUMED)
         }
-
-        // Scroll up: Ctrl+Up, PageUp, Ctrl+K (vim-style)
-        (KeyCode::Up, KeyModifiers::CONTROL)
-        | (KeyCode::PageUp, _)
-        | (KeyCode::Char('k'), KeyModifiers::CONTROL) => {
+        Action::ScrollUp => {
             debug!("scroll_up triggered");
             ctx.state.scroll_up(10);
             Ok(Handled::CONSUMED)
         }
-
-        // Scroll down: Ctrl+Down, PageDown, Ctrl+J (vim-style)
-        (KeyCode::Down, KeyModifiers::CONTROL)
-        | (KeyCode::PageDown, _)
-        | (KeyCode::Char('j'), KeyModifiers::CONTROL) => {
+        Action::ScrollDown => {
             debug!("scroll_down triggered");
             ctx.state.scroll_down(10);
             Ok(Handled::CONSUMED)
         }
-
-        // Scroll to top: Home, Ctrl+G
-        (KeyCode::Home, _) | (KeyCode::Char('g'), KeyModifiers::CONTROL) => {
+        Action::PageUp => {
+            debug!("page_up triggered");
+            let page = page_scroll_amount(ctx);
+            ctx.state.scroll_up(page);
+            Ok(Handled::CONSUMED)
+        }
+        Action::PageDown => {
+            debug!("page_down triggered");
+            let page = page_scroll_amount(ctx);
+            ctx.state.scroll_down(page);
+            Ok(Handled::CONSUMED)
+        }
+        Action::ScrollToTop => {
             debug!("scroll_to_top triggered");
             ctx.state.scroll_to_top();
             Ok(Handled::CONSUMED)
         }
-
-        // Scroll to bottom: End
-        (KeyCode::End, _) => {
+        Action::ScrollToBottom => {
             debug!("scroll_to_bottom triggered");
             let height = ctx.state.display().scroll_state().content_height();
             ctx.state.scroll_to_bottom(height);
             Ok(Handled::CONSUMED)
         }
-
-        // Select all: Cmd+A, Option+A, Ctrl+A, Ctrl+Shift+A
-        (KeyCode::Char('a') | KeyCode::Char('A'), modifiers)
-            if modifiers == KeyModifiers::SUPER
-                || modifiers == KeyModifiers::ALT
-                || modifiers == KeyModifiers::CONTROL
-                || modifiers.contains(KeyModifiers::CONTROL | KeyModifiers::SHIFT) =>
-        {
-            handle_select_all(ctx, modifiers);
+        Action::SelectAll => {
+            handle_select_all(ctx);
             Ok(Handled::CONSUMED)
         }
-
-        // Copy selection: Cmd+C, Option+C, Ctrl+Shift+C
-        (KeyCode::Char('c') | KeyCode::Char('C'), modifiers)
-            if modifiers == KeyModifiers::SUPER
-                || modifiers == KeyModifiers::ALT
-                || modifiers.contains(KeyModifiers::CONTROL | KeyModifiers::SHIFT) =>
-        {
-            debug!(modifier = ?modifiers, "copy triggered");
+        Action::Copy => {
+            debug!("copy triggered");
             handle_copy(ctx.state);
             Ok(Handled::CONSUMED)
         }
-
-        // Alternative copy: Ctrl+Y (yank)
-        (KeyCode::Char('y') | KeyCode::Char('Y'), KeyModifiers::CONTROL) => {
-            handle_copy(ctx.state);
-            Ok(Handled::CONSUMED)
-        }
-
-        // Paste: Cmd+V, Option+V, Ctrl+Shift+V
-        (KeyCode::Char('v') | KeyCode::Char('V'), modifiers)
-            if modifiers == KeyModifiers::SUPER
-                || modifiers == KeyModifiers::ALT
-                || modifiers.contains(KeyModifiers::CONTROL | KeyModifiers::SHIFT) =>
-        {
-            debug!(modifier = ?modifiers, "paste triggered");
+        Action::Paste => {
+            debug!("paste triggered");
             handle_paste(ctx.state);
             Ok(Handled::CONSUMED)
         }
-
-        // Clear selection: Escape (only when selection is active)
-        (KeyCode::Esc, KeyModifiers::NONE)
-            if ctx.state.ui_selection().selection().has_selection() =>
-        {
-            ctx.state.ui_selection_mut().selection_mut().clear();
+        Action::CancelOperation => {
+            if ctx.state.ui_selection().selection().has_selection() {
+                ctx.state.ui_selection_mut().selection_mut().clear();
+                ctx.state.mark_full_redraw();
+            }
+            Ok(Handled::CONSUMED)
+        }
+        Action::FocusContent => {
+            ctx.state
+                .ui_selection_mut()
+                .set_focus_area(FocusArea::Content);
             ctx.state.mark_full_redraw();
             Ok(Handled::CONSUMED)
         }
+        Action::FocusInput => {
+            ctx.state
+                .ui_selection_mut()
+                .set_focus_area(FocusArea::Input);
+            ctx.state.mark_full_redraw();
+            Ok(Handled::CONSUMED)
+        }
+        Action::ToggleHelp | Action::KillBackgroundAgents | Action::OpenEditor => {
+            debug!(?action, "action not yet implemented");
+            Ok(Handled::CONSUMED)
+        }
+        Action::Custom(ref name) => {
+            debug!(%name, "custom action triggered");
+            Ok(Handled::CONSUMED)
+        }
+    }
+}
 
-        // Text input (must come after special char bindings)
+/// Returns the scroll amount for page-up/page-down based on viewport height.
+fn page_scroll_amount(ctx: &AppContext<'_>) -> usize {
+    let height = ctx.state.display().terminal_height();
+    // Subtract header/footer chrome, minimum 10 lines
+    (height.saturating_sub(4) as usize).max(10)
+}
+
+/// Handles keys that did not match any keybinding (text input, backspace).
+fn handle_unbound_key(
+    ctx: &mut AppContext<'_>,
+    code: KeyCode,
+    modifiers: KeyModifiers,
+) -> Result<Handled> {
+    match (code, modifiers) {
+        (KeyCode::Backspace, _) => {
+            ctx.state.delete_char();
+            Ok(Handled::CONSUMED)
+        }
         (KeyCode::Char(c), KeyModifiers::NONE | KeyModifiers::SHIFT) => {
             ctx.state.insert_char(c);
             Ok(Handled::CONSUMED)
         }
-
         _ => {
             debug!(?code, ?modifiers, "unhandled key");
             Ok(Handled::CONSUMED)
@@ -445,23 +474,14 @@ fn build_mcp_server_info(
 }
 
 /// Selects all content and sets focus to the content area.
-fn handle_select_all(ctx: &mut AppContext<'_>, modifiers: KeyModifiers) {
+fn handle_select_all(ctx: &mut AppContext<'_>) {
     let line_count = ctx.state.ui_selection().rendered_line_count();
     let timeline_len = ctx.state.timeline().len();
-    let modifier_name = if modifiers == KeyModifiers::SUPER {
-        "Cmd+A"
-    } else if modifiers == KeyModifiers::ALT {
-        "Option+A"
-    } else {
-        "Ctrl+A"
-    };
     debug!(
         line_count,
         timeline_len,
-        modifier = modifier_name,
         focus_area = ?ctx.state.ui_selection().focus_area(),
-        "select_all triggered via {}",
-        modifier_name
+        "select_all triggered",
     );
     if line_count == 0 {
         debug!(
@@ -477,17 +497,7 @@ fn handle_select_all(ctx: &mut AppContext<'_>, modifiers: KeyModifiers) {
             .selection_mut()
             .select_all(line_count);
         ctx.state.mark_full_redraw();
-        let copy_hint = if modifiers == KeyModifiers::SUPER {
-            "Cmd+C"
-        } else if modifiers == KeyModifiers::ALT {
-            "Option+C"
-        } else {
-            "Ctrl+Y"
-        };
-        info!(
-            line_count,
-            "Selected all {} lines ({} to copy)", line_count, copy_hint
-        );
+        info!(line_count, "Selected all {} lines", line_count);
     }
 }
 
@@ -1504,6 +1514,173 @@ mod tests {
             result,
             Handled::CONSUMED,
             "Unrecognized keys should still be consumed (not passed to later handlers)"
+        );
+    }
+
+    // =========================================================================
+    // KeybindingManager wiring: custom bindings take effect through handler
+    // =========================================================================
+
+    #[tokio::test]
+    async fn custom_keybinding_override_takes_effect() {
+        let mut handler = KeyboardHandler;
+
+        let client = test_client();
+        let mut state = test_state();
+        let (session_mgr, _dir) = test_session_manager();
+
+        // Override Ctrl+D from Quit to ScrollDown via the keybinding manager
+        use crate::keybindings::{KeyChord, KeyPress};
+        let chord = KeyChord(vec![KeyPress::from_crossterm(
+            KeyCode::Char('d'),
+            KeyModifiers::CONTROL,
+        )]);
+        state
+            .keybindings_mut()
+            .bindings_mut()
+            .insert(chord, crate::keybindings::Action::ScrollDown);
+
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
+
+        let event = AppEvent::Key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL));
+        let _result = handler.handle(&event, &mut ctx).await.unwrap();
+
+        // Ctrl+D should NOT have triggered quit (it's now ScrollDown)
+        assert!(
+            !ctx.state.wants_quit(),
+            "Custom keybinding override must take effect — Ctrl+D should no longer quit"
+        );
+    }
+
+    // =========================================================================
+    // Shift+Enter inserts a newline
+    // =========================================================================
+
+    #[tokio::test]
+    async fn shift_enter_inserts_newline() {
+        let mut handler = KeyboardHandler;
+
+        let client = test_client();
+        let mut state = test_state();
+        let (session_mgr, _dir) = test_session_manager();
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
+
+        let event = AppEvent::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT));
+        let result = handler.handle(&event, &mut ctx).await.unwrap();
+
+        assert_eq!(result, Handled::CONSUMED);
+        assert_eq!(
+            ctx.state.input_state().text(),
+            "\n",
+            "Shift+Enter must insert a newline into the input buffer"
+        );
+    }
+
+    // =========================================================================
+    // PageUp/PageDown dispatch to distinct page-size scroll
+    // =========================================================================
+
+    #[tokio::test]
+    async fn page_up_dispatches_via_keybinding_manager() {
+        let mut handler = KeyboardHandler;
+
+        let client = test_client();
+        let mut state = test_state();
+        let (session_mgr, _dir) = test_session_manager();
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
+
+        let event = AppEvent::Key(KeyEvent::new(KeyCode::PageUp, KeyModifiers::NONE));
+        let result = handler.handle(&event, &mut ctx).await.unwrap();
+
+        assert_eq!(
+            result,
+            Handled::CONSUMED,
+            "PageUp must be dispatched through keybinding manager"
+        );
+    }
+
+    // =========================================================================
+    // Chord sequence resolves through keybinding manager
+    // =========================================================================
+
+    #[tokio::test]
+    async fn chord_sequence_resolves_through_handler() {
+        let mut handler = KeyboardHandler;
+
+        let client = test_client();
+        let mut state = test_state();
+        let (session_mgr, _dir) = test_session_manager();
+
+        // Add a chord: Ctrl+X Ctrl+Q -> Quit
+        use crate::keybindings::{KeyChord, KeyPress};
+        let chord = KeyChord(vec![
+            KeyPress::from_crossterm(KeyCode::Char('x'), KeyModifiers::CONTROL),
+            KeyPress::from_crossterm(KeyCode::Char('q'), KeyModifiers::CONTROL),
+        ]);
+        state
+            .keybindings_mut()
+            .bindings_mut()
+            .insert(chord, crate::keybindings::Action::Quit);
+
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
+
+        // First key: Ctrl+X — should return Partial (consumed, no action yet)
+        let event1 = AppEvent::Key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL));
+        let result1 = handler.handle(&event1, &mut ctx).await.unwrap();
+        assert_eq!(result1, Handled::CONSUMED);
+        assert!(
+            !ctx.state.wants_quit(),
+            "First chord key must not trigger action"
+        );
+
+        // Second key: Ctrl+Q — should complete the chord and trigger Quit
+        let event2 = AppEvent::Key(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL));
+        let _result2 = handler.handle(&event2, &mut ctx).await.unwrap();
+        assert!(
+            ctx.state.wants_quit(),
+            "Second chord key must complete the chord and trigger the action"
+        );
+    }
+
+    // =========================================================================
+    // FocusContent / FocusInput actions work
+    // =========================================================================
+
+    #[tokio::test]
+    async fn focus_content_action_changes_focus_area() {
+        let mut handler = KeyboardHandler;
+
+        let client = test_client();
+        let mut state = test_state();
+        let (session_mgr, _dir) = test_session_manager();
+
+        // Bind F5 to FocusContent
+        use crate::keybindings::{KeyChord, KeyPress};
+        let chord = KeyChord(vec![KeyPress::from_crossterm(
+            KeyCode::F(5),
+            KeyModifiers::NONE,
+        )]);
+        state
+            .keybindings_mut()
+            .bindings_mut()
+            .insert(chord, crate::keybindings::Action::FocusContent);
+
+        assert_eq!(
+            state.ui_selection().focus_area(),
+            FocusArea::Input,
+            "Default focus should be Input"
+        );
+
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
+
+        let event = AppEvent::Key(KeyEvent::new(KeyCode::F(5), KeyModifiers::NONE));
+        let result = handler.handle(&event, &mut ctx).await.unwrap();
+
+        assert_eq!(result, Handled::CONSUMED);
+        assert_eq!(
+            ctx.state.ui_selection().focus_area(),
+            FocusArea::Content,
+            "FocusContent action must change focus area to Content"
         );
     }
 }
