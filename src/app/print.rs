@@ -211,12 +211,28 @@ pub(crate) async fn run_print_mode(config: &Config, prompt: &str) -> Result<()> 
         state.refresh_build_context().await;
     }
 
-    // Add the user's prompt
-    let user_msg = ApiMessageV2::user(prompt);
+    // Build the API message content, optionally with CCG context (mirrors submit_message)
+    let api_content = if state.compression().auto_context_enabled() {
+        if let Some(context) = state.compression_mut().take_cached_ccg_context() {
+            tracing::info!(
+                context_len = context.len(),
+                "Injecting CCG context into user message (print mode)"
+            );
+            format!("<context>\n{}\n</context>\n\n{}", context, prompt)
+        } else {
+            prompt.to_string()
+        }
+    } else {
+        prompt.to_string()
+    };
+
+    // Timeline shows original user input (cleaner UI)
     state.add_message(Message {
         role: Role::User,
         content: prompt.to_string(),
     });
+    // API gets potentially context-augmented message
+    let user_msg = ApiMessageV2::user(&api_content);
     state.api_messages_mut().push(user_msg);
 
     // Stream the initial response

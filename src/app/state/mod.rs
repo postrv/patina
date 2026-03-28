@@ -1478,46 +1478,39 @@ mod tests {
     }
 
     #[test]
-    fn test_prepare_api_messages_injects_context_when_enabled() {
+    fn test_build_api_messages_never_injects_context() {
+        // build_api_messages() is a pure passthrough — context injection is
+        // the caller's responsibility (submit_message / print mode).
         let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
         state.compression_mut().set_auto_context_enabled(true);
         state.compression.cached_ccg_context =
             Some("## Project Structure\nRust CLI app".to_string());
 
-        // Push a user message
         state
             .api_messages_mut()
             .push(ApiMessageV2::user("What is this project?"));
 
-        // build_api_messages should inject the cached context as a system
-        // message at the beginning of the message list
         let messages = state.build_api_messages();
 
-        // Should have 2 messages: context system message + user message
-        assert_eq!(messages.len(), 2, "Expected context message + user message");
-
-        // First message should be the injected context
-        let context_msg = &messages[0];
-        assert_eq!(context_msg.role, crate::types::Role::User);
-        let context_text = context_msg.content.to_text();
-        assert!(
-            context_text.contains("<context>"),
-            "Context message should be wrapped in <context> tags"
+        // Only the user message — no injected context message
+        assert_eq!(
+            messages.len(),
+            1,
+            "build_api_messages must not inject context"
         );
-        assert!(
-            context_text.contains("Project Structure"),
-            "Context message should contain the cached CCG context"
-        );
+        assert_eq!(messages[0].content.to_text(), "What is this project?");
 
-        // Second message should be the original user message, unchanged
-        let user_msg = &messages[1];
-        assert_eq!(user_msg.content.to_text(), "What is this project?");
+        // Cached context should still be present (untouched)
+        assert!(
+            state.compression().has_cached_ccg_context(),
+            "build_api_messages should not consume the cached context"
+        );
     }
 
     #[test]
-    fn test_prepare_api_messages_skips_context_when_disabled() {
+    fn test_build_api_messages_passthrough_with_disabled_auto_context() {
         let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
-        // auto_context disabled (default)
+        // auto_context disabled (default), cached context exists
         state.compression.cached_ccg_context = Some("## Some Context".to_string());
 
         state.api_messages_mut().push(ApiMessageV2::user("Hello"));
@@ -1528,24 +1521,6 @@ mod tests {
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].content.to_text(), "Hello");
         assert!(!messages[0].content.to_text().contains("<context>"));
-    }
-
-    #[test]
-    fn test_prepare_api_messages_does_not_consume_cached_context() {
-        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
-        state.compression_mut().set_auto_context_enabled(true);
-        state.compression.cached_ccg_context = Some("## Context".to_string());
-
-        state.api_messages_mut().push(ApiMessageV2::user("Hello"));
-
-        // Call build_api_messages — it should read but NOT consume the cache
-        let _ = state.build_api_messages();
-
-        // Cache should still be present for future calls
-        assert!(
-            state.compression().has_cached_ccg_context(),
-            "build_api_messages should not consume the cached context"
-        );
     }
 
     #[test]
