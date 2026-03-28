@@ -426,6 +426,8 @@ impl AppState {
                 pending_plan: None,
                 pending_question: None,
                 background_tasks: BackgroundTaskRegistry::new(),
+                dirty_modal: false,
+                dirty_content: false,
             },
             timeline: Timeline::new(),
             ui_selection: UISelectionState {
@@ -890,6 +892,7 @@ impl AppState {
             || self.input_state.is_dirty()
             || self.worktree.is_dirty()
             || self.compression.is_render_dirty()
+            || self.tool_state.is_dirty()
     }
 
     /// Returns `true` when the only pending dirty state is the throbber animation.
@@ -906,6 +909,7 @@ impl AppState {
             && !self.continuous.is_dirty()
             && !self.worktree.is_dirty()
             && !self.compression.is_render_dirty()
+            && !self.tool_state.is_dirty()
     }
 
     pub fn mark_rendered(&mut self) {
@@ -916,6 +920,7 @@ impl AppState {
         self.input_state.mark_clean();
         self.worktree.mark_clean();
         self.compression.mark_render_clean();
+        self.tool_state.mark_clean();
     }
 
     pub fn mark_full_redraw(&mut self) {

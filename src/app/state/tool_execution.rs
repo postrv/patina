@@ -53,9 +53,41 @@ pub struct ToolExecutionState {
 
     /// Registry for background bash tasks (run_in_background).
     pub(crate) background_tasks: BackgroundTaskRegistry,
+
+    /// Modal dirty flag: set when permissions/plans/questions change (triggers full redraw).
+    pub(crate) dirty_modal: bool,
+
+    /// Content dirty flag: set when tool blocks/streaming/timeline change (triggers content redraw).
+    pub(crate) dirty_content: bool,
 }
 
 impl ToolExecutionState {
+    // ========================================================================
+    // Dirty Flag Tracking
+    // ========================================================================
+
+    /// Returns true if any dirty flag (modal or content) is set.
+    #[must_use]
+    pub fn is_dirty(&self) -> bool {
+        self.dirty_modal || self.dirty_content
+    }
+
+    /// Clears all dirty flags after rendering.
+    pub fn mark_clean(&mut self) {
+        self.dirty_modal = false;
+        self.dirty_content = false;
+    }
+
+    /// Marks modal state as changed (permissions, plans, questions).
+    pub fn mark_modal_dirty(&mut self) {
+        self.dirty_modal = true;
+    }
+
+    /// Marks content state as changed (tool blocks, streaming, timeline).
+    pub fn mark_content_dirty(&mut self) {
+        self.dirty_content = true;
+    }
+
     // ========================================================================
     // Tool Loop Accessors
     // ========================================================================
@@ -98,11 +130,13 @@ impl ToolExecutionState {
     /// The UI should display this as a modal prompt.
     pub fn set_pending_permission(&mut self, request: PermissionRequest) {
         self.pending_permission = Some(request);
+        self.dirty_modal = true;
     }
 
     /// Clears the pending permission request.
     pub fn clear_pending_permission(&mut self) {
         self.pending_permission = None;
+        self.dirty_modal = true;
     }
 
     /// Handles a permission response from the user.
@@ -113,6 +147,7 @@ impl ToolExecutionState {
         if let Some(request) = self.pending_permission.take() {
             let mut manager = self.permission_manager.lock().await;
             manager.handle_response(&request.tool_name, request.tool_input.as_deref(), response);
+            self.dirty_modal = true;
         }
     }
 
@@ -125,11 +160,13 @@ impl ToolExecutionState {
     /// Routes the event to the tool loop state machine.
     pub fn handle_tool_use_start(&mut self, id: String, name: String, index: usize) {
         self.tool_loop.start_tool_use(index, id, name);
+        self.dirty_content = true;
     }
 
     /// Handles a tool_use input delta.
     pub fn handle_tool_use_input_delta(&mut self, index: usize, partial_json: &str) {
         self.tool_loop.append_tool_input(index, partial_json);
+        self.dirty_content = true;
     }
 
     /// Handles tool_use completion.
@@ -204,6 +241,7 @@ impl ToolExecutionState {
     pub fn reset_tool_loop(&mut self) {
         self.tool_loop.reset();
         self.pending_permission = None;
+        self.dirty_modal = true;
     }
 
     /// Returns true if the tool loop is waiting for user action.
@@ -233,6 +271,7 @@ impl ToolExecutionState {
     pub fn start_tool_block(&mut self, tool_name: &str, tool_input: &str) -> usize {
         let block = ToolBlockState::new(tool_name, tool_input);
         self.tool_blocks.push(block);
+        self.dirty_content = true;
         self.tool_blocks.len() - 1
     }
 
@@ -244,6 +283,7 @@ impl ToolExecutionState {
             } else {
                 block.set_result(result);
             }
+            self.dirty_content = true;
         }
     }
 
@@ -257,7 +297,10 @@ impl ToolExecutionState {
     ///
     /// Call this when starting a new conversation turn.
     pub fn clear_tool_blocks(&mut self) {
-        self.tool_blocks.clear();
+        if !self.tool_blocks.is_empty() {
+            self.tool_blocks.clear();
+            self.dirty_content = true;
+        }
     }
 
     /// Returns true if there are any tool blocks to display.
@@ -346,6 +389,7 @@ impl ToolExecutionState {
         if let Err(e) = self.tool_loop.set_tool_result(tool_id, result) {
             tracing::error!("Failed to set tool result for {tool_id}: {e}");
         }
+        self.dirty_content = true;
     }
 
     /// Returns true if all pending tools have completed execution.
@@ -381,6 +425,8 @@ mod tests {
             pending_plan: None,
             pending_question: None,
             background_tasks: BackgroundTaskRegistry::new(),
+            dirty_modal: false,
+            dirty_content: false,
         }
     }
 
@@ -485,5 +531,49 @@ mod tests {
         };
         // This should not panic even though the tool was never added
         state.record_tool_result("nonexistent_tool", result);
+    }
+
+    #[test]
+    fn dirty_modal_on_set_permission() {
+        let mut state = new_tool_state();
+        assert!(!state.is_dirty());
+
+        let request =
+            PermissionRequest::new("bash", Some(r#"{"command":"ls"}"#), "test permission");
+        state.set_pending_permission(request);
+        assert!(state.dirty_modal);
+        assert!(state.is_dirty());
+    }
+
+    #[test]
+    fn dirty_content_on_start_tool_block() {
+        let mut state = new_tool_state();
+        assert!(!state.is_dirty());
+
+        state.start_tool_block("bash", "echo hello");
+        assert!(state.dirty_content);
+        assert!(state.is_dirty());
+    }
+
+    #[test]
+    fn mark_clean_clears_both_flags() {
+        let mut state = new_tool_state();
+        state.set_pending_permission(PermissionRequest::new("bash", None, "test"));
+        state.start_tool_block("bash", "echo hello");
+        assert!(state.dirty_modal);
+        assert!(state.dirty_content);
+
+        state.mark_clean();
+        assert!(!state.is_dirty());
+        assert!(!state.dirty_modal);
+        assert!(!state.dirty_content);
+    }
+
+    #[test]
+    fn dirty_modal_on_reset_tool_loop() {
+        let mut state = new_tool_state();
+        state.mark_clean();
+        state.reset_tool_loop();
+        assert!(state.dirty_modal);
     }
 }

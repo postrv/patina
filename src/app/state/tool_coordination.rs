@@ -24,13 +24,11 @@ impl AppState {
             tracing::debug!("Failed to send permission notification: {e}");
         }
         self.tool_state.set_pending_permission(request);
-        self.dirty.full = true;
     }
 
     /// Clears the pending permission request.
     pub fn clear_pending_permission(&mut self) {
         self.tool_state.clear_pending_permission();
-        self.dirty.full = true;
     }
 
     // --- Plan review state (delegates to tool_state) ---
@@ -58,7 +56,7 @@ impl AppState {
     /// The UI should display this as a modal plan review overlay.
     pub fn set_pending_plan(&mut self, plan: PlanState) {
         self.tool_state.pending_plan = Some(plan);
-        self.dirty.full = true;
+        self.tool_state.mark_modal_dirty();
     }
 
     /// Approves the pending plan, returning a success tool result block.
@@ -70,7 +68,7 @@ impl AppState {
     /// The tool result block to send back to the API, or `None` if no plan is pending.
     pub fn approve_plan(&mut self) -> Option<crate::types::ToolResultBlock> {
         let plan = self.tool_state.pending_plan.take()?;
-        self.dirty.full = true;
+        self.tool_state.mark_modal_dirty();
         Some(plan.approve())
     }
 
@@ -83,7 +81,7 @@ impl AppState {
     /// The tool result block to send back to the API, or `None` if no plan is pending.
     pub fn reject_plan(&mut self) -> Option<crate::types::ToolResultBlock> {
         let plan = self.tool_state.pending_plan.take()?;
-        self.dirty.full = true;
+        self.tool_state.mark_modal_dirty();
         Some(plan.reject())
     }
 
@@ -112,7 +110,7 @@ impl AppState {
     /// The UI should display this as a modal question prompt.
     pub fn set_pending_question(&mut self, question: QuestionState) {
         self.tool_state.pending_question = Some(question);
-        self.dirty.full = true;
+        self.tool_state.mark_modal_dirty();
     }
 
     /// Submits the pending question response, returning a success tool result block.
@@ -120,7 +118,7 @@ impl AppState {
     /// Clears the pending question state.
     pub fn submit_question(&mut self) -> Option<crate::types::ToolResultBlock> {
         let question = self.tool_state.pending_question.take()?;
-        self.dirty.full = true;
+        self.tool_state.mark_modal_dirty();
         Some(question.submit())
     }
 
@@ -129,7 +127,7 @@ impl AppState {
     /// Clears the pending question state.
     pub fn cancel_question(&mut self) -> Option<crate::types::ToolResultBlock> {
         let question = self.tool_state.pending_question.take()?;
-        self.dirty.full = true;
+        self.tool_state.mark_modal_dirty();
         Some(question.cancel())
     }
 
@@ -205,7 +203,6 @@ impl AppState {
     /// updates the permission manager accordingly.
     pub async fn handle_permission_response(&mut self, response: PermissionResponse) {
         self.tool_state.handle_permission_response(response).await;
-        self.dirty.full = true;
     }
 
     /// Handles a tool_use stream event.
@@ -213,14 +210,12 @@ impl AppState {
     /// Routes the event to the tool loop state machine.
     pub fn handle_tool_use_start(&mut self, id: String, name: String, index: usize) {
         self.tool_state.handle_tool_use_start(id, name, index);
-        self.dirty.messages = true;
     }
 
     /// Handles a tool_use input delta.
     pub fn handle_tool_use_input_delta(&mut self, index: usize, partial_json: &str) {
         self.tool_state
             .handle_tool_use_input_delta(index, partial_json);
-        self.dirty.messages = true;
     }
 
     /// Executes all pending tools that have been approved.
@@ -339,7 +334,6 @@ impl AppState {
     /// Resets the tool loop to idle state.
     pub fn reset_tool_loop(&mut self) {
         self.tool_state.reset_tool_loop();
-        self.dirty.full = true;
     }
 
     // ========================================================================
@@ -355,9 +349,7 @@ impl AppState {
     /// * `tool_name` - Name of the tool (e.g., "bash", "read")
     /// * `tool_input` - Input provided to the tool
     pub fn start_tool_block(&mut self, tool_name: &str, tool_input: &str) -> usize {
-        let index = self.tool_state.start_tool_block(tool_name, tool_input);
-        self.dirty.messages = true;
-        index
+        self.tool_state.start_tool_block(tool_name, tool_input)
     }
 
     /// Completes a tool block with its result.
@@ -369,7 +361,6 @@ impl AppState {
     /// * `is_error` - Whether the result is an error
     pub fn complete_tool_block(&mut self, index: usize, result: &str, is_error: bool) {
         self.tool_state.complete_tool_block(index, result, is_error);
-        self.dirty.messages = true;
     }
 
     /// Clears all tool blocks.
@@ -377,7 +368,6 @@ impl AppState {
     /// Call this when starting a new conversation turn.
     pub fn clear_tool_blocks(&mut self) {
         self.tool_state.clear_tool_blocks();
-        self.dirty.messages = true;
     }
 
     // ========================================================================
@@ -575,15 +565,13 @@ impl AppState {
     /// * `tool_id` - The ID of the tool that completed
     /// * `result` - The result of the tool execution
     pub fn record_tool_result(&mut self, tool_id: &str, result: crate::types::ToolResultBlock) {
-        // Delegate tool_state bookkeeping
+        // Delegate tool_state bookkeeping (sets dirty_content internally)
         let output = Some(result.content.clone());
         let is_error = result.is_error;
         self.tool_state.record_tool_result(tool_id, result);
 
         // Update timeline tool entry if it exists
         self.update_timeline_tool_by_id(tool_id, output, is_error);
-
-        self.dirty.messages = true;
     }
 
     /// Adds a tool to the timeline in executing state (no output yet).
