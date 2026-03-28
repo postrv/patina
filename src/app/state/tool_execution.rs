@@ -331,7 +331,9 @@ impl ToolExecutionState {
     /// responsible for updating timeline and dirty flags.
     pub fn record_tool_result(&mut self, tool_id: &str, result: crate::types::ToolResultBlock) {
         self.executing_tool_ids.remove(tool_id);
-        let _ = self.tool_loop.set_tool_result(tool_id, result);
+        if let Err(e) = self.tool_loop.set_tool_result(tool_id, result) {
+            tracing::error!("Failed to set tool result for {tool_id}: {e}");
+        }
     }
 
     /// Returns true if all pending tools have completed execution.
@@ -453,5 +455,20 @@ mod tests {
         state.record_tool_result("tool_1", result);
         assert!(!state.has_executing_tools());
         assert!(state.all_tools_complete());
+    }
+
+    #[test]
+    fn record_tool_result_for_unknown_tool_does_not_panic() {
+        let mut state = new_tool_state();
+
+        // Recording a result for a tool_id that was never registered should
+        // not panic; the error is logged at error level (S-10).
+        let result = crate::types::ToolResultBlock {
+            tool_use_id: "nonexistent_tool".to_string(),
+            content: "result".to_string(),
+            is_error: false,
+        };
+        // This should not panic even though the tool was never added
+        state.record_tool_result("nonexistent_tool", result);
     }
 }

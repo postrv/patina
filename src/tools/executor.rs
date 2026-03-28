@@ -909,7 +909,9 @@ impl ToolExecutor {
 
         // Create backup and write (mutable borrow on cells is now dropped)
         if full_path.exists() {
-            let _ = self.create_backup(&full_path).await;
+            if let Err(e) = self.create_backup(&full_path).await {
+                tracing::warn!("Failed to create backup for {}: {e}", full_path.display());
+            }
         }
         let pretty = serde_json::to_string_pretty(&notebook)
             .map_err(|e| anyhow::anyhow!("Failed to serialize notebook: {e}"))?;

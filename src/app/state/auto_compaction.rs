@@ -116,7 +116,9 @@ impl AppState {
         // Fire PreCompact hook (non-blocking)
         let executor = Arc::clone(&self.tool_state.tool_executor);
         tokio::spawn(async move {
-            let _ = executor.hooks().fire_pre_compact().await;
+            if let Err(e) = executor.hooks().fire_pre_compact().await {
+                tracing::debug!("Hook fire failed: {e}");
+            }
         });
 
         let config = CompactionConfig {
@@ -173,7 +175,9 @@ impl AppState {
                 // Fire PostCompact hook (non-blocking)
                 let executor = Arc::clone(&self.tool_state.tool_executor);
                 tokio::spawn(async move {
-                    let _ = executor.hooks().fire_post_compact().await;
+                    if let Err(e) = executor.hooks().fire_post_compact().await {
+                        tracing::debug!("Hook fire failed: {e}");
+                    }
                 });
 
                 // Reset circuit breaker on success

@@ -99,10 +99,13 @@ impl EventHandler for AgentHandler {
                     let agent_id = agent_id.clone();
                     let reason = reason.to_string();
                     tokio::spawn(async move {
-                        let _ = executor
+                        if let Err(e) = executor
                             .hooks()
                             .fire_subagent_stop(&agent_id, &reason)
-                            .await;
+                            .await
+                        {
+                            tracing::debug!("Hook fire failed: {e}");
+                        }
                     });
                 }
             }

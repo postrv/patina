@@ -366,10 +366,13 @@ impl HookedToolExecutor {
                     );
 
                     // Fire PermissionRequest hook
-                    let _ = self
+                    if let Err(e) = self
                         .hooks
                         .fire_permission_request(&tool_name, call.input.clone())
-                        .await;
+                        .await
+                    {
+                        tracing::debug!("Hook fire failed: {e}");
+                    }
 
                     let description = self.generate_description(&call);
                     let request =

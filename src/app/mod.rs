@@ -375,12 +375,15 @@ pub async fn run(config: Config) -> Result<()> {
 
     // Fire SessionStart hook (skipped in bare mode)
     if !config.is_bare() {
-        let _ = state
+        if let Err(e) = state
             .tool_state()
             .tool_executor
             .hooks()
             .fire_session_start()
-            .await;
+            .await
+        {
+            tracing::debug!("Hook fire failed: {e}");
+        }
     }
 
     // If there's an initial prompt, submit it immediately
@@ -391,12 +394,15 @@ pub async fn run(config: Config) -> Result<()> {
     let result = event_loop(&mut terminal, &mut client, &mut state, &session_manager).await;
 
     // Fire SessionEnd hook
-    let _ = state
+    if let Err(e) = state
         .tool_state()
         .tool_executor
         .hooks()
         .fire_session_end(None)
-        .await;
+        .await
+    {
+        tracing::debug!("Hook fire failed: {e}");
+    }
 
     // Shut down MCP servers before terminal cleanup
     if let Some(manager) = state.mcp_manager_mut() {
