@@ -181,24 +181,18 @@ impl AppState {
 
         self.input_state
             .set_completion(CompletionState::new(candidates));
-        self.dirty.input = true;
     }
 
     /// Dismisses the completion popup.
     pub fn dismiss_completion(&mut self) {
         self.input_state.dismiss_completion();
-        self.dirty.input = true;
     }
 
     /// Accepts the selected completion and replaces input with `/name `.
     ///
     /// Returns the accepted command name, or `None` if nothing was selected.
     pub fn accept_completion(&mut self) -> Option<String> {
-        let name = self.input_state.accept_completion();
-        if name.is_some() {
-            self.dirty.input = true;
-        }
-        name
+        self.input_state.accept_completion()
     }
 
     // ========================================================================

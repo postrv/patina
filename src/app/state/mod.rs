@@ -247,7 +247,6 @@ pub struct AppState {
 #[derive(Default)]
 struct DirtyFlags {
     messages: bool,
-    input: bool,
     full: bool,
     /// Throbber animation only -- avoids dirtying `messages` every 250ms.
     throbber: bool,
@@ -255,7 +254,7 @@ struct DirtyFlags {
 
 impl DirtyFlags {
     fn any(&self) -> bool {
-        self.messages || self.input || self.full || self.throbber
+        self.messages || self.full || self.throbber
     }
 
     fn clear(&mut self) {
@@ -752,7 +751,6 @@ impl AppState {
     /// Inserts a character at the current cursor position.
     pub fn insert_char(&mut self, c: char) {
         let needs_completion = self.input_state.insert_char(c);
-        self.dirty.input = true;
         if needs_completion {
             self.show_completion();
         }
@@ -761,37 +759,31 @@ impl AppState {
     /// Deletes the character before the cursor (backspace behavior).
     pub fn delete_char(&mut self) {
         self.input_state.delete_char();
-        self.dirty.input = true;
     }
 
     /// Takes and returns the current input, clearing the buffer and resetting cursor.
     pub fn take_input(&mut self) -> String {
-        self.dirty.input = true;
         self.input_state.take()
     }
 
     /// Moves the cursor left by one character.
     pub fn cursor_left(&mut self) {
         self.input_state.cursor_left();
-        self.dirty.input = true;
     }
 
     /// Moves the cursor right by one character.
     pub fn cursor_right(&mut self) {
         self.input_state.cursor_right();
-        self.dirty.input = true;
     }
 
     /// Moves the cursor to the beginning of the input.
     pub fn cursor_home(&mut self) {
         self.input_state.cursor_home();
-        self.dirty.input = true;
     }
 
     /// Moves the cursor to the end of the input.
     pub fn cursor_end(&mut self) {
         self.input_state.cursor_end();
-        self.dirty.input = true;
     }
 
     /// Scrolls up by the specified number of lines.
@@ -912,7 +904,12 @@ impl AppState {
     /// when only the throbber character has changed.
     #[must_use]
     pub fn is_throbber_only_dirty(&self) -> bool {
-        self.dirty.throbber && !self.dirty.messages && !self.dirty.input && !self.dirty.full
+        self.dirty.throbber
+            && !self.dirty.messages
+            && !self.dirty.full
+            && !self.input_state.is_dirty()
+            && !self.agent_panel.is_dirty()
+            && !self.continuous.is_dirty()
     }
 
     pub fn mark_rendered(&mut self) {
@@ -1578,11 +1575,18 @@ mod tests {
     }
 
     #[test]
-    fn test_completion_dirty_flag() {
+    fn test_completion_triggers_render_via_input_state() {
         let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
-        state.dirty.clear();
+        state.mark_rendered();
         state.show_completion();
-        assert!(state.dirty.input);
+        assert!(
+            state.input_state.is_dirty(),
+            "InputState self-tracks dirty on completion"
+        );
+        assert!(
+            state.needs_render(),
+            "needs_render detects InputState dirty"
+        );
     }
 
     #[test]
@@ -2119,6 +2123,55 @@ mod tests {
         assert!(
             !state.is_throbber_only_dirty(),
             "is_throbber_only_dirty must be false when messages also dirty"
+        );
+    }
+
+    #[test]
+    fn test_needs_render_from_input_state_self_tracking() {
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+        state.mark_rendered();
+
+        // InputState self-tracks dirty — no central dirty.input needed
+        state.insert_char('a');
+        assert!(
+            state.input_state.is_dirty(),
+            "InputState must self-track dirty on insert_char"
+        );
+        assert!(
+            state.needs_render(),
+            "needs_render must detect InputState dirty"
+        );
+    }
+
+    #[test]
+    fn test_throbber_only_dirty_not_triggered_by_input() {
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+        state.mark_rendered();
+
+        state.tick_throbber();
+        state.insert_char('x');
+
+        assert!(
+            !state.is_throbber_only_dirty(),
+            "is_throbber_only_dirty must be false when input is also dirty"
+        );
+    }
+
+    #[test]
+    fn test_throbber_only_dirty_not_triggered_by_agent_panel() {
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+        state.mark_rendered();
+
+        state.tick_throbber();
+        let progress = AgentProgress::IterationStarted {
+            iteration: 1,
+            max: 3,
+        };
+        state.update_agent_progress("a1", "Agent", &progress);
+
+        assert!(
+            !state.is_throbber_only_dirty(),
+            "is_throbber_only_dirty must be false when agent_panel is also dirty"
         );
     }
 }
