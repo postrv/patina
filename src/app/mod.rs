@@ -251,6 +251,29 @@ pub async fn run(config: Config) -> Result<()> {
     // Initialize compression orchestrator for CCG context management
     initialize_compression_orchestrator(&mut state, &config);
 
+    // Load custom keybindings from ~/.config/patina/keybindings.json if present
+    if let Some(base_dirs) = directories::BaseDirs::new() {
+        let keybindings_path = base_dirs.config_dir().join("patina/keybindings.json");
+        if keybindings_path.exists() {
+            match crate::keybindings::KeybindingManager::load_from_file(&keybindings_path) {
+                Ok(mgr) => {
+                    info!(
+                        "Loaded custom keybindings from {}",
+                        keybindings_path.display()
+                    );
+                    state.set_keybindings(mgr);
+                }
+                Err(e) => {
+                    warn!(
+                        "Failed to load keybindings from {}: {}",
+                        keybindings_path.display(),
+                        e
+                    );
+                }
+            }
+        }
+    }
+
     // Initialize MCP servers from .mcp.json / ~/.claude.json
     if let Some(manager) = initialize_mcp_servers(&config.working_dir).await {
         state.set_mcp_manager(manager);

@@ -49,6 +49,7 @@ use crate::context::compression::{CompactionMetrics, CompressionOrchestrator};
 use crate::enterprise::audit::{AuditConfig, AuditLogger};
 use crate::enterprise::cost::{CostConfig, CostTracker, UsageRecord};
 use crate::hooks::HookManager;
+use crate::keybindings::KeybindingManager;
 use crate::mcp::connection::McpConnection;
 use crate::narsil::context::ContextSuggestion;
 use crate::permissions::{PermissionManager, PermissionRequest, PermissionResponse};
@@ -247,6 +248,12 @@ pub struct AppState {
 
     /// Registry for background bash tasks (run_in_background).
     background_tasks: BackgroundTaskRegistry,
+
+    /// Keybinding manager for customizable key mappings.
+    keybinding_mgr: KeybindingManager,
+
+    /// Terminal notification manager for desktop notifications.
+    notification_manager: NotificationManager,
 }
 
 #[derive(Default)]
@@ -477,6 +484,8 @@ impl AppState {
             pending_plan: None,
             pending_question: None,
             background_tasks: BackgroundTaskRegistry::new(),
+            keybinding_mgr: KeybindingManager::with_defaults(),
+            notification_manager: NotificationManager::detect(),
         }
     }
 
@@ -616,6 +625,30 @@ impl AppState {
     /// Returns a mutable reference to the model configuration state.
     pub fn model_config_mut(&mut self) -> &mut ModelConfigState {
         &mut self.model_config
+    }
+
+    /// Returns a reference to the keybinding manager.
+    #[must_use]
+    pub fn keybindings(&self) -> &KeybindingManager {
+        &self.keybinding_mgr
+    }
+
+    /// Returns a mutable reference to the keybinding manager.
+    pub fn keybindings_mut(&mut self) -> &mut KeybindingManager {
+        &mut self.keybinding_mgr
+    }
+
+    /// Replaces the keybinding manager with a new one.
+    ///
+    /// Used when loading custom keybindings from a configuration file.
+    pub fn set_keybindings(&mut self, manager: KeybindingManager) {
+        self.keybinding_mgr = manager;
+    }
+
+    /// Returns a reference to the notification manager.
+    #[must_use]
+    pub fn notification_manager(&self) -> &NotificationManager {
+        &self.notification_manager
     }
 
     /// Returns a reference to the tool execution state.

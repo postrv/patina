@@ -15,6 +15,7 @@ pub mod enterprise;
 pub mod error;
 pub mod hooks;
 pub mod ide;
+pub mod keybindings;
 pub mod mcp;
 pub mod memory;
 pub mod narsil;
