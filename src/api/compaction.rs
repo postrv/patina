@@ -530,39 +530,6 @@ impl CompactionConfig {
     pub fn new() -> Self {
         Self::default()
     }
-
-    /// Sets the auto-compaction threshold.
-    ///
-    /// # Arguments
-    ///
-    /// * `threshold` - Fraction of context window at which to trigger compaction (0.0-1.0)
-    ///
-    /// # Panics
-    ///
-    /// Panics if threshold is not in the range 0.0 to 1.0.
-    #[must_use]
-    pub fn with_auto_compact_threshold(mut self, threshold: f32) -> Self {
-        assert!(
-            (0.0..=1.0).contains(&threshold),
-            "Auto-compact threshold must be between 0.0 and 1.0"
-        );
-        self.auto_compact_threshold = threshold;
-        self
-    }
-
-    /// Returns the token threshold at which compaction should trigger.
-    ///
-    /// # Arguments
-    ///
-    /// * `context_limit` - The maximum context window size in tokens
-    ///
-    /// # Returns
-    ///
-    /// The token count at which compaction should be triggered.
-    #[must_use]
-    pub fn compaction_threshold(&self, context_limit: usize) -> usize {
-        (context_limit as f64 * f64::from(self.auto_compact_threshold)) as usize
-    }
 }
 
 /// Style of summary generation.
@@ -793,6 +760,30 @@ fn fix_role_alternation(messages: &mut Vec<ApiMessageV2>) {
             messages.insert(i, placeholder);
         }
         i += 1;
+    }
+}
+
+#[cfg(test)]
+impl CompactionConfig {
+    /// Sets the auto-compaction threshold.
+    ///
+    /// # Panics
+    ///
+    /// Panics if threshold is not in the range 0.0 to 1.0.
+    #[must_use]
+    pub fn with_auto_compact_threshold(mut self, threshold: f32) -> Self {
+        assert!(
+            (0.0..=1.0).contains(&threshold),
+            "Auto-compact threshold must be between 0.0 and 1.0"
+        );
+        self.auto_compact_threshold = threshold;
+        self
+    }
+
+    /// Returns the token threshold at which compaction should trigger.
+    #[must_use]
+    pub fn compaction_threshold(&self, context_limit: usize) -> usize {
+        (context_limit as f64 * f64::from(self.auto_compact_threshold)) as usize
     }
 }
 

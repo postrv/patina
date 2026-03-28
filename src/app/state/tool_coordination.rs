@@ -141,11 +141,6 @@ impl AppState {
         &self.background_tasks
     }
 
-    /// Returns a mutable reference to the background task registry.
-    pub fn background_tasks_mut(&mut self) -> &mut BackgroundTaskRegistry {
-        &mut self.background_tasks
-    }
-
     // --- Completion state (delegates to InputState) ---
 
     /// Returns the active completion state, if any.
@@ -656,6 +651,14 @@ impl AppState {
             }
         }
         self.dirty.messages = true;
+    }
+}
+
+#[cfg(test)]
+impl AppState {
+    /// Returns a mutable reference to the background task registry.
+    pub fn background_tasks_mut(&mut self) -> &mut BackgroundTaskRegistry {
+        &mut self.background_tasks
     }
 }
 

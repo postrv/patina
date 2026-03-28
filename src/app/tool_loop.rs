@@ -397,16 +397,6 @@ impl ToolLoop {
         Ok(())
     }
 
-    /// Approves a specific tool call by ID.
-    pub fn approve_tool(&mut self, tool_id: &str) -> Result<(), ToolLoopError> {
-        if let Some(call) = self.pending_calls.get_mut(tool_id) {
-            call.approve();
-            Ok(())
-        } else {
-            Err(ToolLoopError::ToolNotFound(tool_id.to_string()))
-        }
-    }
-
     /// Denies all pending tool calls.
     ///
     /// Transitions from PendingApproval back to Idle.
@@ -1175,6 +1165,19 @@ impl ToolLoop {
         }
 
         Ok(needs_permission)
+    }
+}
+
+#[cfg(test)]
+impl ToolLoop {
+    /// Approves a specific tool call by ID.
+    pub fn approve_tool(&mut self, tool_id: &str) -> Result<(), ToolLoopError> {
+        if let Some(call) = self.pending_calls.get_mut(tool_id) {
+            call.approve();
+            Ok(())
+        } else {
+            Err(ToolLoopError::ToolNotFound(tool_id.to_string()))
+        }
     }
 }
 

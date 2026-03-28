@@ -172,7 +172,6 @@ impl PluginRegistry {
 
         let commands = self.load_commands(plugin_dir)?;
         let skills = self.load_skills(plugin_dir)?;
-        let agents = self.load_agents(plugin_dir)?;
         let hooks = self.load_hooks(plugin_dir)?;
 
         Ok(Plugin {
@@ -181,7 +180,7 @@ impl PluginRegistry {
             commands,
             skills,
             hooks,
-            agents,
+            agents: Vec::new(),
         })
     }
 
@@ -264,10 +263,6 @@ impl PluginRegistry {
         }
 
         Ok(skills)
-    }
-
-    fn load_agents(&self, _plugin_dir: &Path) -> Result<Vec<Agent>> {
-        Ok(Vec::new())
     }
 
     fn load_hooks(&self, plugin_dir: &Path) -> Result<HooksConfig> {

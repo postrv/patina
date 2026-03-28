@@ -110,7 +110,10 @@ impl WorktreePickerState {
     pub fn get_status(&self, name: &str) -> Option<&WorktreeStatus> {
         self.statuses.get(name)
     }
+}
 
+#[cfg(test)]
+impl WorktreePickerState {
     /// Sets the list of worktrees.
     pub fn set_worktrees(&mut self, worktrees: Vec<WorktreeInfo>) {
         self.worktrees = worktrees;

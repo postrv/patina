@@ -224,18 +224,6 @@ impl PermissionManager {
         })
     }
 
-    /// Returns the default permissions config path.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the config directory cannot be determined.
-    pub fn default_config_path() -> Result<PathBuf> {
-        let config_dir = directories::ProjectDirs::from("com", "patina", "patina")
-            .ok_or_else(|| anyhow::anyhow!("Could not determine config directory"))?;
-
-        Ok(config_dir.config_dir().join("permissions.toml"))
-    }
-
     /// Sets whether to skip all permission checks.
     ///
     /// When enabled, all tools are allowed without prompting.
@@ -327,21 +315,6 @@ impl PermissionManager {
         self.session_grants.push(grant);
     }
 
-    /// Adds a session grant with a time limit.
-    pub fn add_timed_session_grant(
-        &mut self,
-        tool_name: &str,
-        tool_input: Option<&str>,
-        duration: Duration,
-    ) {
-        let grant = SessionGrant::new(
-            tool_name.to_string(),
-            tool_input.map(String::from),
-            Some(duration),
-        );
-        self.session_grants.push(grant);
-    }
-
     /// Handles a user's response to a permission prompt.
     ///
     /// This method:
@@ -379,11 +352,6 @@ impl PermissionManager {
     /// Clears all session grants.
     pub fn clear_session_grants(&mut self) {
         self.session_grants.clear();
-    }
-
-    /// Clears expired session grants.
-    pub fn cleanup_expired_grants(&mut self) {
-        self.session_grants.retain(|g| !g.is_expired());
     }
 
     /// Returns all persistent rules.
@@ -439,6 +407,41 @@ impl PermissionRequest {
             tool_input: tool_input.map(String::from),
             description: description.to_string(),
         }
+    }
+}
+
+#[cfg(test)]
+impl PermissionManager {
+    /// Returns the default permissions config path.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the config directory cannot be determined.
+    pub fn default_config_path() -> Result<PathBuf> {
+        let config_dir = directories::ProjectDirs::from("com", "patina", "patina")
+            .ok_or_else(|| anyhow::anyhow!("Could not determine config directory"))?;
+
+        Ok(config_dir.config_dir().join("permissions.toml"))
+    }
+
+    /// Adds a session grant with a time limit.
+    pub fn add_timed_session_grant(
+        &mut self,
+        tool_name: &str,
+        tool_input: Option<&str>,
+        duration: Duration,
+    ) {
+        let grant = SessionGrant::new(
+            tool_name.to_string(),
+            tool_input.map(String::from),
+            Some(duration),
+        );
+        self.session_grants.push(grant);
+    }
+
+    /// Clears expired session grants.
+    pub fn cleanup_expired_grants(&mut self) {
+        self.session_grants.retain(|g| !g.is_expired());
     }
 }
 

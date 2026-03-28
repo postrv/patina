@@ -1,17 +1,13 @@
 /// Model configuration state extracted from AppState.
 ///
 /// Groups fields related to model selection, effort level, thinking budget,
-/// multi-model support, memory store, system prompt, and skill engine.
-use crate::api::multi_model::MultiModelClient;
+/// memory store, system prompt, and skill engine.
 use crate::skills::SkillEngine;
 use crate::types::config::EffortLevel;
 
 pub struct ModelConfigState {
     /// Model name for cost tracking and API requests.
     pub(crate) current_model: String,
-
-    /// Optional multi-model client for provider-aware model switching.
-    pub(crate) multi_model: Option<MultiModelClient>,
 
     /// Persistent memory store for cross-session context.
     pub(crate) memory_store: Option<crate::memory::store::MemoryStore>,
@@ -35,7 +31,6 @@ impl ModelConfigState {
     pub fn new() -> Self {
         Self {
             current_model: String::new(),
-            multi_model: None,
             memory_store: None,
             effort: EffortLevel::Auto,
             thinking_budget: None,
@@ -55,26 +50,10 @@ impl ModelConfigState {
         self.current_model = model;
     }
 
-    /// Returns the multi-model client, if configured.
-    #[must_use]
-    pub fn multi_model(&self) -> Option<&MultiModelClient> {
-        self.multi_model.as_ref()
-    }
-
-    /// Sets the multi-model client.
-    pub fn set_multi_model(&mut self, client: MultiModelClient) {
-        self.multi_model = Some(client);
-    }
-
     /// Returns the memory store, if set.
     #[must_use]
     pub fn memory_store(&self) -> Option<&crate::memory::store::MemoryStore> {
         self.memory_store.as_ref()
-    }
-
-    /// Returns a mutable reference to the memory store, if set.
-    pub fn memory_store_mut(&mut self) -> Option<&mut crate::memory::store::MemoryStore> {
-        self.memory_store.as_mut()
     }
 
     /// Sets the memory store.
@@ -134,6 +113,14 @@ impl Default for ModelConfigState {
 }
 
 #[cfg(test)]
+impl ModelConfigState {
+    /// Returns a mutable reference to the memory store, if set.
+    pub fn memory_store_mut(&mut self) -> Option<&mut crate::memory::store::MemoryStore> {
+        self.memory_store.as_mut()
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -141,7 +128,6 @@ mod tests {
     fn test_model_config_defaults() {
         let state = ModelConfigState::new();
         assert!(state.current_model().is_empty());
-        assert!(state.multi_model().is_none());
         assert!(state.memory_store().is_none());
         assert_eq!(state.effort(), EffortLevel::Auto);
         assert!(state.thinking_budget().is_none());

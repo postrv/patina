@@ -640,6 +640,7 @@ fn expand_tilde(path: &str) -> String {
 /// Checks if iTerm2 key bindings are configured.
 ///
 /// Returns the number of bindings that are properly configured.
+#[cfg(test)]
 #[must_use]
 pub fn check_iterm2_bindings() -> usize {
     if !is_macos() || !is_iterm2() {
