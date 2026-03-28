@@ -740,6 +740,7 @@ impl PerformanceConfig {
 ///     provider: ProviderConfig::default(),
 ///     performance: PerformanceConfig::default(),
 ///     update_check_enabled: true,
+///     bare_mode: false,
 /// };
 /// ```
 pub struct Config {
@@ -887,6 +888,15 @@ pub struct Config {
     ///
     /// Disable with `--no-update-check` CLI flag.
     pub update_check_enabled: bool,
+
+    /// Whether bare mode is enabled for faster startup.
+    ///
+    /// When true, skips hooks, plugins, skills, auto-memory, narsil, MCP,
+    /// and update checks during initialization. Still loads CLAUDE.md and
+    /// permissions for safety.
+    ///
+    /// Enable with `--bare` CLI flag. Combines with `--print` for maximum speed.
+    pub bare_mode: bool,
 }
 
 impl Config {
@@ -939,6 +949,7 @@ impl Config {
             provider: ProviderConfig::default(),
             performance: PerformanceConfig::default(),
             update_check_enabled: true,
+            bare_mode: false,
         }
     }
 
@@ -1270,6 +1281,30 @@ impl Config {
         self.provider = provider;
         self
     }
+
+    /// Returns whether bare mode is enabled.
+    ///
+    /// In bare mode, hooks, plugins, skills, auto-memory, narsil, MCP,
+    /// and update checks are skipped for faster startup. CLAUDE.md and
+    /// permissions are still loaded for safety.
+    #[must_use]
+    pub fn is_bare(&self) -> bool {
+        self.bare_mode
+    }
+
+    /// Enables or disables bare mode for faster startup.
+    ///
+    /// When enabled, skips hooks, plugins, skills, auto-memory, narsil,
+    /// MCP, and update checks. Combines with `--print` for maximum speed.
+    ///
+    /// # Arguments
+    ///
+    /// * `bare` - If true, enable bare mode
+    #[must_use]
+    pub fn with_bare_mode(mut self, bare: bool) -> Self {
+        self.bare_mode = bare;
+        self
+    }
 }
 
 #[cfg(test)]
@@ -1314,6 +1349,7 @@ mod tests {
             provider: ProviderConfig::default(),
             performance: PerformanceConfig::default(),
             update_check_enabled: true,
+            bare_mode: false,
         };
 
         assert_eq!(config.model(), "claude-opus-4-20250514");
@@ -1345,6 +1381,7 @@ mod tests {
             provider: ProviderConfig::default(),
             performance: PerformanceConfig::default(),
             update_check_enabled: true,
+            bare_mode: false,
         };
 
         assert_eq!(config.working_dir(), &path);
@@ -2138,5 +2175,80 @@ mod tests {
     fn test_effort_level_display() {
         assert_eq!(format!("{}", EffortLevel::High), "high");
         assert_eq!(format!("{}", EffortLevel::Auto), "auto");
+    }
+
+    // =========================================================================
+    // Bare mode tests (Phase 2E)
+    // =========================================================================
+
+    #[test]
+    fn test_config_default_bare_mode_is_false() {
+        let config = Config::new(
+            SecretString::new("test-key".into()),
+            "test-model",
+            PathBuf::from("/tmp"),
+        );
+
+        assert!(!config.is_bare());
+    }
+
+    #[test]
+    fn test_config_with_bare_mode_enabled() {
+        let config = Config::new(SecretString::new("key".into()), "model", PathBuf::from("."))
+            .with_bare_mode(true);
+
+        assert!(config.is_bare());
+    }
+
+    #[test]
+    fn test_config_with_bare_mode_disabled() {
+        let config = Config::new(SecretString::new("key".into()), "model", PathBuf::from("."))
+            .with_bare_mode(false);
+
+        assert!(!config.is_bare());
+    }
+
+    #[test]
+    fn test_config_bare_mode_with_print_mode() {
+        let config = Config::new(SecretString::new("key".into()), "model", PathBuf::from("."))
+            .with_bare_mode(true)
+            .with_print_mode(true)
+            .with_initial_prompt("hello");
+
+        assert!(config.is_bare());
+        assert!(config.print_mode());
+        assert_eq!(config.initial_prompt(), Some("hello"));
+    }
+
+    #[test]
+    fn test_config_bare_mode_field_accessible() {
+        let config = Config {
+            api_key: SecretString::new("key".into()),
+            model: "model".to_string(),
+            working_dir: PathBuf::from("."),
+            narsil_mode: NarsilMode::Auto,
+            parallel_mode: ParallelMode::Enabled,
+            resume_mode: ResumeMode::None,
+            skip_permissions: false,
+            initial_prompt: None,
+            print_mode: false,
+            vision_model: None,
+            oauth_client_id: None,
+            initial_images: Vec::new(),
+            plugins_enabled: true,
+            subagents_enabled: false,
+            ide_port: None,
+            auto_context_enabled: true,
+            effort: EffortLevel::Auto,
+            thinking_budget: None,
+            compression: CompressionConfig::default(),
+            provider: ProviderConfig::default(),
+            performance: PerformanceConfig::default(),
+            update_check_enabled: true,
+            bare_mode: true,
+        };
+
+        assert!(config.bare_mode);
+        assert!(config.is_bare());
     }
 }

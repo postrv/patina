@@ -183,24 +183,33 @@ async fn run_tool_continuation_cycle(
 pub(crate) async fn run_print_mode(config: &Config, prompt: &str) -> Result<()> {
     let client: Arc<dyn LlmProvider> =
         Arc::from(crate::api::provider_factory::create_provider(config)?);
+    // In bare mode, disable plugins and subagents for faster startup
+    let plugins_enabled = config.plugins_enabled && !config.is_bare();
+    let subagents_enabled = config.subagents_enabled && !config.is_bare();
     let mut state = AppState::with_performance_config(
         config.working_dir.clone(),
         config.skip_permissions,
         &config.performance,
-        config.plugins_enabled,
-        config.subagents_enabled,
+        plugins_enabled,
+        subagents_enabled,
     );
 
-    // Initialize compression orchestrator for CCG context management
-    initialize_compression_orchestrator(&mut state, config);
-
-    // Initialize MCP servers from .mcp.json / ~/.claude.json
-    if let Some(manager) = initialize_mcp_servers(&config.working_dir).await {
-        state.set_mcp_manager(manager);
+    // Initialize compression orchestrator for CCG context management (skipped in bare mode)
+    if !config.is_bare() {
+        initialize_compression_orchestrator(&mut state, config);
     }
 
-    // Refresh CCG context before the first API call (async, requires narsil MCP)
-    state.refresh_build_context().await;
+    // Initialize MCP servers from .mcp.json / ~/.claude.json (skipped in bare mode)
+    if !config.is_bare() {
+        if let Some(manager) = initialize_mcp_servers(&config.working_dir).await {
+            state.set_mcp_manager(manager);
+        }
+    }
+
+    // Refresh CCG context before the first API call (skipped in bare mode)
+    if !config.is_bare() {
+        state.refresh_build_context().await;
+    }
 
     // Add the user's prompt
     let user_msg = ApiMessageV2::user(prompt);

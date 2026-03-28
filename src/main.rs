@@ -144,6 +144,11 @@ struct Args {
     #[arg(long)]
     no_update_check: bool,
 
+    /// Bare mode: skip hooks, plugins, skills, auto-memory, narsil for faster startup.
+    /// Still loads CLAUDE.md and permissions for safety.
+    #[arg(long)]
+    bare: bool,
+
     /// LLM provider to use: "anthropic" (default), "openrouter", or "fallback".
     #[arg(long, value_name = "PROVIDER")]
     provider: Option<String>,
@@ -285,6 +290,7 @@ async fn main() -> Result<()> {
         provider: provider_config,
         performance: patina::types::config::PerformanceConfig::default(),
         update_check_enabled: !args.no_update_check,
+        bare_mode: args.bare,
     })
     .await
 }
@@ -787,5 +793,32 @@ mod tests {
             resolve_execution_mode(Some("hello".to_string()), false, None).unwrap();
         assert_eq!(prompt.as_deref(), Some("hello"));
         assert!(!print);
+    }
+
+    // =========================================================================
+    // Bare mode CLI tests (Phase 2E)
+    // =========================================================================
+
+    /// Test that the --bare flag is recognized by the CLI parser.
+    #[test]
+    fn test_cli_bare_flag_parsing() {
+        let args = Args::parse_from(["patina", "--bare"]);
+        assert!(args.bare);
+    }
+
+    /// Test that --bare defaults to false when not specified.
+    #[test]
+    fn test_cli_bare_flag_default_false() {
+        let args = Args::parse_from(["patina"]);
+        assert!(!args.bare);
+    }
+
+    /// Test that --bare and --print can be combined.
+    #[test]
+    fn test_cli_bare_with_print_flag() {
+        let args = Args::parse_from(["patina", "--bare", "--print", "hello"]);
+        assert!(args.bare);
+        assert!(args.print);
+        assert_eq!(args.prompt, Some("hello".to_string()));
     }
 }

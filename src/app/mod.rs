@@ -207,13 +207,16 @@ pub async fn run(config: Config) -> Result<()> {
     let session_manager = SessionManager::new(sessions_dir);
 
     // Check for session resume before initializing terminal
+    // In bare mode, disable plugins and subagents for faster startup
+    let plugins_enabled = config.plugins_enabled && !config.is_bare();
+    let subagents_enabled = config.subagents_enabled && !config.is_bare();
     let mut state = match &config.resume_mode {
         ResumeMode::None => AppState::with_performance_config(
             config.working_dir.clone(),
             config.skip_permissions,
             &config.performance,
-            config.plugins_enabled,
-            config.subagents_enabled,
+            plugins_enabled,
+            subagents_enabled,
         ),
         ResumeMode::Last | ResumeMode::SessionId(_) => {
             session_helpers::load_session_state(&config).await?
@@ -233,23 +236,27 @@ pub async fn run(config: Config) -> Result<()> {
     let prompt = system_prompt::build_system_prompt(&config.working_dir);
     state.model_config_mut().set_system_prompt(Some(prompt));
 
-    // Load persistent memory store
-    if let Some(project_dirs) = directories::ProjectDirs::from("com", "patina", "patina") {
-        let memory_dir = crate::memory::store::default_memory_dir(project_dirs.data_dir());
-        let mut store = crate::memory::store::MemoryStore::new(memory_dir);
-        if let Err(e) = store.load() {
-            tracing::warn!("Failed to load memory store: {}", e);
-        } else {
-            let count = store.list(None).len();
-            if count > 0 {
-                tracing::info!("Loaded {} memory entries", count);
+    // Load persistent memory store (skipped in bare mode)
+    if !config.is_bare() {
+        if let Some(project_dirs) = directories::ProjectDirs::from("com", "patina", "patina") {
+            let memory_dir = crate::memory::store::default_memory_dir(project_dirs.data_dir());
+            let mut store = crate::memory::store::MemoryStore::new(memory_dir);
+            if let Err(e) = store.load() {
+                tracing::warn!("Failed to load memory store: {}", e);
+            } else {
+                let count = store.list(None).len();
+                if count > 0 {
+                    tracing::info!("Loaded {} memory entries", count);
+                }
+                state.model_config_mut().set_memory_store(store);
             }
-            state.model_config_mut().set_memory_store(store);
         }
     }
 
-    // Initialize compression orchestrator for CCG context management
-    initialize_compression_orchestrator(&mut state, &config);
+    // Initialize compression orchestrator for CCG context management (skipped in bare mode)
+    if !config.is_bare() {
+        initialize_compression_orchestrator(&mut state, &config);
+    }
 
     // Load custom keybindings from ~/.config/patina/keybindings.json if present
     if let Some(base_dirs) = directories::BaseDirs::new() {
@@ -274,9 +281,11 @@ pub async fn run(config: Config) -> Result<()> {
         }
     }
 
-    // Initialize MCP servers from .mcp.json / ~/.claude.json
-    if let Some(manager) = initialize_mcp_servers(&config.working_dir).await {
-        state.set_mcp_manager(manager);
+    // Initialize MCP servers from .mcp.json / ~/.claude.json (skipped in bare mode)
+    if !config.is_bare() {
+        if let Some(manager) = initialize_mcp_servers(&config.working_dir).await {
+            state.set_mcp_manager(manager);
+        }
     }
 
     enable_raw_mode()?;
@@ -324,19 +333,21 @@ pub async fn run(config: Config) -> Result<()> {
     let mut client: std::sync::Arc<dyn LlmProvider> =
         std::sync::Arc::from(crate::api::provider_factory::create_provider(&config)?);
 
-    // Start IDE server if port is specified
-    if let Some(port) = config.ide_port {
-        let controller = IdeController::new(port);
-        tokio::spawn(async move {
-            if let Err(e) = controller.run().await {
-                warn!("IDE server error: {}", e);
-            }
-        });
-        info!("IDE server started on port {}", port);
+    // Start IDE server if port is specified (skipped in bare mode)
+    if !config.is_bare() {
+        if let Some(port) = config.ide_port {
+            let controller = IdeController::new(port);
+            tokio::spawn(async move {
+                if let Err(e) = controller.run().await {
+                    warn!("IDE server error: {}", e);
+                }
+            });
+            info!("IDE server started on port {}", port);
+        }
     }
 
-    // Start background update check if enabled
-    if config.update_check_enabled {
+    // Start background update check if enabled (skipped in bare mode)
+    if config.update_check_enabled && !config.is_bare() {
         let version = env!("CARGO_PKG_VERSION").to_string();
         tokio::spawn(async move {
             match crate::update::UpdateChecker::new(&version, crate::update::ReleaseChannel::Stable)
@@ -362,13 +373,15 @@ pub async fn run(config: Config) -> Result<()> {
         });
     }
 
-    // Fire SessionStart hook
-    let _ = state
-        .tool_state()
-        .tool_executor
-        .hooks()
-        .fire_session_start()
-        .await;
+    // Fire SessionStart hook (skipped in bare mode)
+    if !config.is_bare() {
+        let _ = state
+            .tool_state()
+            .tool_executor
+            .hooks()
+            .fire_session_start()
+            .await;
+    }
 
     // If there's an initial prompt, submit it immediately
     if let Some(ref prompt) = config.initial_prompt {
