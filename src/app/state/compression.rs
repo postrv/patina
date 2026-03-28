@@ -53,9 +53,28 @@ pub struct CompressionState {
     /// Consecutive compaction failure count for circuit breaker.
     /// After 3 failures, auto-compaction is skipped until reset.
     pub(crate) consecutive_compaction_failures: u8,
+
+    /// Whether any render-visible mutation has occurred since last `mark_render_clean()`.
+    pub(crate) render_dirty: bool,
 }
 
 impl CompressionState {
+    /// Returns whether any render-visible mutation has occurred since last `mark_render_clean()`.
+    #[must_use]
+    pub fn is_render_dirty(&self) -> bool {
+        self.render_dirty
+    }
+
+    /// Clears the render-dirty flag after rendering.
+    pub fn mark_render_clean(&mut self) {
+        self.render_dirty = false;
+    }
+
+    /// Marks render-visible state as changed.
+    pub fn mark_render_dirty(&mut self) {
+        self.render_dirty = true;
+    }
+
     /// Returns whether auto-context injection is enabled.
     #[must_use]
     pub fn auto_context_enabled(&self) -> bool {
@@ -210,12 +229,14 @@ impl CompressionState {
         };
         state.set_status(crate::tui::widgets::CompactionStatus::Compacting);
         self.compaction_state = Some(state);
+        self.render_dirty = true;
     }
 
     /// Updates the compaction progress (0.0 to 1.0).
     pub fn update_compaction_progress(&mut self, progress: f64) {
         if let Some(state) = &mut self.compaction_state {
             state.set_progress(progress);
+            self.render_dirty = true;
         }
     }
 
@@ -225,6 +246,7 @@ impl CompressionState {
             state.set_after_tokens(after_tokens);
             state.set_status(crate::tui::widgets::CompactionStatus::Complete);
             state.set_progress(1.0);
+            self.render_dirty = true;
         }
     }
 
@@ -232,12 +254,14 @@ impl CompressionState {
     pub fn fail_compaction(&mut self) {
         if let Some(state) = &mut self.compaction_state {
             state.set_status(crate::tui::widgets::CompactionStatus::Failed);
+            self.render_dirty = true;
         }
     }
 
     /// Clears the compaction state (closes the overlay).
     pub fn clear_compaction(&mut self) {
         self.compaction_state = None;
+        self.render_dirty = true;
     }
 
     /// Returns a reference to the compaction metrics.
@@ -259,6 +283,7 @@ impl CompressionState {
     pub fn request_compaction(&mut self, custom_instructions: Option<String>) {
         self.compaction_requested = true;
         self.compaction_custom_instructions = custom_instructions;
+        self.render_dirty = true;
     }
 
     /// Takes the compaction request, clearing the flag and returning any
@@ -334,6 +359,7 @@ mod tests {
             compaction_requested: false,
             compaction_custom_instructions: None,
             consecutive_compaction_failures: 0,
+            render_dirty: false,
         }
     }
 
@@ -562,5 +588,47 @@ mod tests {
         }
         assert!(state.is_compaction_circuit_open());
         assert_eq!(state.consecutive_compaction_failures, 255);
+    }
+
+    #[test]
+    fn test_render_dirty_on_start_compaction() {
+        let mut state = make_state();
+        assert!(!state.is_render_dirty());
+        state.start_compaction(8_000, 50_000, false);
+        assert!(state.is_render_dirty());
+    }
+
+    #[test]
+    fn test_render_dirty_on_request_compaction() {
+        let mut state = make_state();
+        state.request_compaction(None);
+        assert!(state.is_render_dirty());
+    }
+
+    #[test]
+    fn test_render_clean_after_mark() {
+        let mut state = make_state();
+        state.start_compaction(8_000, 50_000, false);
+        assert!(state.is_render_dirty());
+        state.mark_render_clean();
+        assert!(!state.is_render_dirty());
+    }
+
+    #[test]
+    fn test_render_dirty_through_compaction_lifecycle() {
+        let mut state = make_state();
+        state.start_compaction(8_000, 50_000, false);
+        state.mark_render_clean();
+
+        state.update_compaction_progress(0.5);
+        assert!(state.is_render_dirty());
+        state.mark_render_clean();
+
+        state.complete_compaction(10_000);
+        assert!(state.is_render_dirty());
+        state.mark_render_clean();
+
+        state.clear_compaction();
+        assert!(state.is_render_dirty());
     }
 }

@@ -449,6 +449,7 @@ impl AppState {
                 compaction_requested: false,
                 compaction_custom_instructions: None,
                 consecutive_compaction_failures: 0,
+                render_dirty: false,
             },
             plugin_registry,
             agent_panel: AgentPanelState::new(subagent_spawner),
@@ -888,6 +889,7 @@ impl AppState {
             || self.display.is_dirty()
             || self.input_state.is_dirty()
             || self.worktree.is_dirty()
+            || self.compression.is_render_dirty()
     }
 
     /// Returns `true` when the only pending dirty state is the throbber animation.
@@ -903,6 +905,7 @@ impl AppState {
             && !self.agent_panel.is_dirty()
             && !self.continuous.is_dirty()
             && !self.worktree.is_dirty()
+            && !self.compression.is_render_dirty()
     }
 
     pub fn mark_rendered(&mut self) {
@@ -912,6 +915,7 @@ impl AppState {
         self.display.mark_clean();
         self.input_state.mark_clean();
         self.worktree.mark_clean();
+        self.compression.mark_render_clean();
     }
 
     pub fn mark_full_redraw(&mut self) {
@@ -955,13 +959,13 @@ impl AppState {
     /// Adds token usage to the budget.
     pub fn add_token_usage(&mut self, tokens: usize) {
         self.compression.token_budget_mut().add_usage(tokens);
-        self.dirty.full = true;
+        self.compression.mark_render_dirty();
     }
 
     /// Resets the token budget for a new conversation.
     pub fn reset_token_budget(&mut self) {
         self.compression.token_budget_mut().reset();
-        self.dirty.full = true;
+        self.compression.mark_render_dirty();
     }
 
     // ========================================================================
@@ -972,31 +976,26 @@ impl AppState {
     pub fn start_compaction(&mut self, target_tokens: usize, before_tokens: usize, is_auto: bool) {
         self.compression
             .start_compaction(target_tokens, before_tokens, is_auto);
-        self.dirty.full = true;
     }
 
     /// Updates the compaction progress (0.0 to 1.0).
     pub fn update_compaction_progress(&mut self, progress: f64) {
         self.compression.update_compaction_progress(progress);
-        self.dirty.full = true;
     }
 
     /// Completes the compaction operation with the final token count.
     pub fn complete_compaction(&mut self, after_tokens: usize) {
         self.compression.complete_compaction(after_tokens);
-        self.dirty.full = true;
     }
 
     /// Marks the compaction operation as failed.
     pub fn fail_compaction(&mut self) {
         self.compression.fail_compaction();
-        self.dirty.full = true;
     }
 
     /// Clears the compaction state (closes the overlay).
     pub fn clear_compaction(&mut self) {
         self.compression.clear_compaction();
-        self.dirty.full = true;
     }
 
     /// Requests a manual compaction, to be executed on the next event loop tick.
@@ -1006,7 +1005,6 @@ impl AppState {
     /// Called by the `/compact` slash command handler.
     pub fn force_compact(&mut self, custom_instructions: Option<String>) {
         self.compression.request_compaction(custom_instructions);
-        self.dirty.full = true;
     }
 
     // ========================================================================
@@ -1984,9 +1982,10 @@ mod tests {
             "Compaction should be requested after force_compact"
         );
         assert!(
-            state.dirty.full,
-            "Dirty flag should be set by force_compact"
+            state.compression.is_render_dirty(),
+            "CompressionState self-tracks render-dirty"
         );
+        assert!(state.needs_render());
     }
 
     #[test]
@@ -2008,13 +2007,14 @@ mod tests {
         // Add a message so there are tokens to count
         state.api_messages.push(ApiMessageV2::user("Hello, world!"));
 
-        state.dirty.clear();
+        state.mark_rendered();
         state.sync_token_budget();
 
         assert!(
-            state.dirty.full,
-            "sync_token_budget should set the dirty flag via add_token_usage"
+            state.compression.is_render_dirty(),
+            "sync_token_budget should set render-dirty via add_token_usage"
         );
+        assert!(state.needs_render());
         assert!(
             state.compression().token_budget().used() > 0,
             "Token budget should reflect the conversation tokens"
