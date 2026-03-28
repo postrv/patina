@@ -33,31 +33,31 @@ impl AppState {
         self.dirty.full = true;
     }
 
-    // --- Plan review state ---
+    // --- Plan review state (delegates to tool_state) ---
 
     /// Returns the pending plan, if any.
     #[must_use]
     pub fn pending_plan(&self) -> Option<&PlanState> {
-        self.pending_plan.as_ref()
+        self.tool_state.pending_plan.as_ref()
     }
 
     /// Returns a mutable reference to the pending plan, if any.
     #[must_use]
     pub fn pending_plan_mut(&mut self) -> Option<&mut PlanState> {
-        self.pending_plan.as_mut()
+        self.tool_state.pending_plan.as_mut()
     }
 
     /// Returns true if there's a pending plan awaiting user review.
     #[must_use]
     pub fn has_pending_plan(&self) -> bool {
-        self.pending_plan.is_some()
+        self.tool_state.pending_plan.is_some()
     }
 
     /// Sets a pending plan for user review.
     ///
     /// The UI should display this as a modal plan review overlay.
     pub fn set_pending_plan(&mut self, plan: PlanState) {
-        self.pending_plan = Some(plan);
+        self.tool_state.pending_plan = Some(plan);
         self.dirty.full = true;
     }
 
@@ -69,7 +69,7 @@ impl AppState {
     ///
     /// The tool result block to send back to the API, or `None` if no plan is pending.
     pub fn approve_plan(&mut self) -> Option<crate::types::ToolResultBlock> {
-        let plan = self.pending_plan.take()?;
+        let plan = self.tool_state.pending_plan.take()?;
         self.dirty.full = true;
         Some(plan.approve())
     }
@@ -82,36 +82,36 @@ impl AppState {
     ///
     /// The tool result block to send back to the API, or `None` if no plan is pending.
     pub fn reject_plan(&mut self) -> Option<crate::types::ToolResultBlock> {
-        let plan = self.pending_plan.take()?;
+        let plan = self.tool_state.pending_plan.take()?;
         self.dirty.full = true;
         Some(plan.reject())
     }
 
-    // --- Question prompt state ---
+    // --- Question prompt state (delegates to tool_state) ---
 
     /// Returns the pending question, if any.
     #[must_use]
     pub fn pending_question(&self) -> Option<&QuestionState> {
-        self.pending_question.as_ref()
+        self.tool_state.pending_question.as_ref()
     }
 
     /// Returns a mutable reference to the pending question, if any.
     #[must_use]
     pub fn pending_question_mut(&mut self) -> Option<&mut QuestionState> {
-        self.pending_question.as_mut()
+        self.tool_state.pending_question.as_mut()
     }
 
     /// Returns true if there's a pending question awaiting user response.
     #[must_use]
     pub fn has_pending_question(&self) -> bool {
-        self.pending_question.is_some()
+        self.tool_state.pending_question.is_some()
     }
 
     /// Sets a pending question for user response.
     ///
     /// The UI should display this as a modal question prompt.
     pub fn set_pending_question(&mut self, question: QuestionState) {
-        self.pending_question = Some(question);
+        self.tool_state.pending_question = Some(question);
         self.dirty.full = true;
     }
 
@@ -119,7 +119,7 @@ impl AppState {
     ///
     /// Clears the pending question state.
     pub fn submit_question(&mut self) -> Option<crate::types::ToolResultBlock> {
-        let question = self.pending_question.take()?;
+        let question = self.tool_state.pending_question.take()?;
         self.dirty.full = true;
         Some(question.submit())
     }
@@ -128,17 +128,17 @@ impl AppState {
     ///
     /// Clears the pending question state.
     pub fn cancel_question(&mut self) -> Option<crate::types::ToolResultBlock> {
-        let question = self.pending_question.take()?;
+        let question = self.tool_state.pending_question.take()?;
         self.dirty.full = true;
         Some(question.cancel())
     }
 
-    // --- Background task state ---
+    // --- Background task state (delegates to tool_state) ---
 
     /// Returns a reference to the background task registry.
     #[must_use]
     pub fn background_tasks(&self) -> &BackgroundTaskRegistry {
-        &self.background_tasks
+        &self.tool_state.background_tasks
     }
 
     // --- Completion state (delegates to InputState) ---
@@ -658,7 +658,7 @@ impl AppState {
 impl AppState {
     /// Returns a mutable reference to the background task registry.
     pub fn background_tasks_mut(&mut self) -> &mut BackgroundTaskRegistry {
-        &mut self.background_tasks
+        &mut self.tool_state.background_tasks
     }
 }
 

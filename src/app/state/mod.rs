@@ -237,15 +237,6 @@ pub struct AppState {
     /// Buffer for accumulating thinking text from stream events.
     thinking_buffer: String,
 
-    /// Pending plan awaiting user review (plan tool intercept).
-    pending_plan: Option<PlanState>,
-
-    /// Pending question awaiting user response (ask_user tool intercept).
-    pending_question: Option<QuestionState>,
-
-    /// Registry for background bash tasks (run_in_background).
-    background_tasks: BackgroundTaskRegistry,
-
     /// Keybinding manager for customizable key mappings.
     keybinding_mgr: KeybindingManager,
 
@@ -433,6 +424,9 @@ impl AppState {
                 tool_blocks: Vec::new(),
                 tool_result_rx: None,
                 executing_tool_ids: std::collections::HashSet::new(),
+                pending_plan: None,
+                pending_question: None,
+                background_tasks: BackgroundTaskRegistry::new(),
             },
             timeline: Timeline::new(),
             ui_selection: UISelectionState {
@@ -477,9 +471,6 @@ impl AppState {
                 mc
             },
             thinking_buffer: String::new(),
-            pending_plan: None,
-            pending_question: None,
-            background_tasks: BackgroundTaskRegistry::new(),
             keybinding_mgr: KeybindingManager::with_defaults(),
             notification_manager: NotificationManager::detect(),
         }
@@ -1074,8 +1065,8 @@ impl AppState {
             continuous_last_duration_ms: self.continuous.last_duration_ms(),
             compaction_state: self.compression.compaction_state(),
             pending_permission: self.tool_state.pending_permission.as_ref(),
-            pending_plan: self.pending_plan.as_ref(),
-            pending_question: self.pending_question.as_ref(),
+            pending_plan: self.tool_state.pending_plan.as_ref(),
+            pending_question: self.tool_state.pending_question.as_ref(),
             throbber_only: self.is_throbber_only_dirty(),
         }
     }

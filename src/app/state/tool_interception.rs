@@ -143,7 +143,11 @@ impl AppState {
             return;
         }
 
-        let task_id = match self.background_tasks.spawn(command, &self.working_dir) {
+        let task_id = match self
+            .tool_state
+            .background_tasks
+            .spawn(command, &self.working_dir)
+        {
             Ok(tid) => tid,
             Err(msg) => {
                 let result = ToolResultBlock::error(id, msg);
@@ -180,6 +184,7 @@ impl AppState {
             .unwrap_or("")
             .to_string();
         let output_buf = self
+            .tool_state
             .background_tasks
             .tasks_ref()
             .get(&task_id_val)
@@ -225,7 +230,7 @@ impl AppState {
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
-        let result_msg = self.background_tasks.stop(&task_id_val);
+        let result_msg = self.tool_state.background_tasks.stop(&task_id_val);
         let result = match result_msg {
             Ok(msg) => ToolResultBlock::success(id, msg),
             Err(msg) => ToolResultBlock::error(id, msg),

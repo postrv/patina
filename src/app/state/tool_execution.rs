@@ -2,16 +2,19 @@ use crate::app::tool_loop::{ContinuationData, ToolLoop, ToolLoopState};
 use crate::permissions::{PermissionManager, PermissionRequest, PermissionResponse};
 use crate::tools::HookedToolExecutor;
 use crate::types::content::StopReason;
-use crate::types::ui_state::ToolBlockState;
+use crate::types::ui_state::{PlanState, QuestionState, ToolBlockState};
 use anyhow::Result;
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
 
+use super::background_tasks::BackgroundTaskRegistry;
+
 /// Tool execution state extracted from AppState.
 ///
 /// Groups all tool-related fields: the tool loop state machine, executor,
-/// permission management, UI tool blocks, async result channels, and
-/// in-flight tracking.
+/// permission management, UI tool blocks, async result channels,
+/// in-flight tracking, tool interception state (plan/question modals),
+/// and background task management.
 ///
 /// Methods on this struct operate exclusively on tool-related data, making
 /// `ToolExecutionState` independently testable. `AppState` retains thin
@@ -41,6 +44,15 @@ pub struct ToolExecutionState {
     /// Set of tool IDs currently being executed.
     /// Used to track which tools are in-flight for progress display.
     pub(crate) executing_tool_ids: std::collections::HashSet<String>,
+
+    /// Pending plan awaiting user review (plan tool intercept).
+    pub(crate) pending_plan: Option<PlanState>,
+
+    /// Pending question awaiting user response (ask_user tool intercept).
+    pub(crate) pending_question: Option<QuestionState>,
+
+    /// Registry for background bash tasks (run_in_background).
+    pub(crate) background_tasks: BackgroundTaskRegistry,
 }
 
 impl ToolExecutionState {
@@ -366,6 +378,9 @@ mod tests {
             tool_blocks: Vec::new(),
             tool_result_rx: None,
             executing_tool_ids: std::collections::HashSet::new(),
+            pending_plan: None,
+            pending_question: None,
+            background_tasks: BackgroundTaskRegistry::new(),
         }
     }
 
