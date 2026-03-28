@@ -34,6 +34,7 @@ use crossterm::event::{KeyCode, KeyModifiers};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::Path;
+use std::time::{Duration, Instant};
 
 /// A single key press with optional modifiers.
 ///
@@ -173,9 +174,14 @@ pub enum KeyResolution {
 /// let key = KeyPress::from_crossterm(KeyCode::Char('c'), KeyModifiers::CONTROL);
 /// assert_eq!(mgr.resolve(key), KeyResolution::Action(Action::Quit));
 /// ```
+/// Duration after which an incomplete chord is automatically discarded.
+const CHORD_TIMEOUT: Duration = Duration::from_secs(1);
+
 pub struct KeybindingManager {
     bindings: HashMap<KeyChord, Action>,
     chord_buffer: Vec<KeyPress>,
+    /// When the current chord sequence started. `None` when the buffer is empty.
+    chord_started: Option<Instant>,
 }
 
 impl KeybindingManager {
@@ -427,6 +433,7 @@ impl KeybindingManager {
         Self {
             bindings,
             chord_buffer: Vec::new(),
+            chord_started: None,
         }
     }
 
@@ -485,7 +492,20 @@ impl KeybindingManager {
     /// assert_eq!(mgr.resolve(key), KeyResolution::Action(Action::Quit));
     /// ```
     pub fn resolve(&mut self, key: KeyPress) -> KeyResolution {
+        // If the chord buffer is non-empty and the timeout has elapsed,
+        // discard the stale partial chord before processing the new key (V-5).
+        if !self.chord_buffer.is_empty() {
+            if let Some(started) = self.chord_started {
+                if started.elapsed() > CHORD_TIMEOUT {
+                    self.clear_chord();
+                }
+            }
+        }
+
         self.chord_buffer.push(key);
+        if self.chord_started.is_none() {
+            self.chord_started = Some(Instant::now());
+        }
 
         let current_chord = KeyChord(self.chord_buffer.clone());
 
@@ -526,6 +546,7 @@ impl KeybindingManager {
     /// ```
     pub fn clear_chord(&mut self) {
         self.chord_buffer.clear();
+        self.chord_started = None;
     }
 
     /// Returns the number of registered bindings.
@@ -562,6 +583,12 @@ impl KeybindingManager {
     /// insertion of custom bindings.
     pub fn bindings_mut(&mut self) -> &mut HashMap<KeyChord, Action> {
         &mut self.bindings
+    }
+
+    /// Sets the chord start time. Exposed for testing chord timeout behavior.
+    #[cfg(test)]
+    pub(crate) fn set_chord_started(&mut self, instant: Instant) {
+        self.chord_started = Some(instant);
     }
 }
 
@@ -612,6 +639,17 @@ pub fn parse_key_string(s: &str) -> Result<KeyPress> {
 
     let code = parse_key_code(key_name)?;
 
+    // When SHIFT is present and the key is a letter, store the uppercase
+    // version so that JSON overrides like "ctrl+shift+c" match the same
+    // representation that the terminal sends (Char('C') + CONTROL|SHIFT),
+    // rather than creating a second binding for Char('c') (V-3).
+    let code = match code {
+        KeyCode::Char(c) if modifiers.contains(KeyModifiers::SHIFT) && c.is_ascii_lowercase() => {
+            KeyCode::Char(c.to_ascii_uppercase())
+        }
+        other => other,
+    };
+
     Ok(KeyPress { code, modifiers })
 }
 
@@ -652,6 +690,7 @@ fn parse_key_code(name: &str) -> Result<KeyCode> {
         "backspace" => Ok(KeyCode::Backspace),
         "tab" => Ok(KeyCode::Tab),
         "space" | " " => Ok(KeyCode::Char(' ')),
+        "plus" => Ok(KeyCode::Char('+')),
         "up" => Ok(KeyCode::Up),
         "down" => Ok(KeyCode::Down),
         "left" => Ok(KeyCode::Left),
@@ -722,8 +761,9 @@ mod tests {
 
     #[test]
     fn parse_key_string_ctrl_shift_c() {
+        // V-3 fix: Shift+letter uppercases the char to match terminal representation
         let kp = parse_key_string("ctrl+shift+c").unwrap();
-        assert_eq!(kp.code, KeyCode::Char('c'));
+        assert_eq!(kp.code, KeyCode::Char('C'));
         assert_eq!(kp.modifiers, KeyModifiers::CONTROL | KeyModifiers::SHIFT);
     }
 
@@ -1397,5 +1437,178 @@ mod tests {
     fn action_deserialize_focus_input() {
         let action: Action = serde_json::from_str("\"focus_input\"").unwrap();
         assert_eq!(action, Action::FocusInput);
+    }
+
+    // =========================================================================
+    // V-3: Shift+letter JSON override matches terminal representation
+    // =========================================================================
+
+    #[test]
+    fn parse_key_string_ctrl_shift_c_uppercases_char() {
+        // JSON "ctrl+shift+c" should produce Char('C'), not Char('c'),
+        // matching what the terminal sends for Ctrl+Shift+C.
+        let kp = parse_key_string("ctrl+shift+c").unwrap();
+        assert_eq!(kp.code, KeyCode::Char('C'));
+        assert_eq!(kp.modifiers, KeyModifiers::CONTROL | KeyModifiers::SHIFT);
+    }
+
+    #[test]
+    fn shift_letter_json_override_replaces_default_binding() {
+        // The default Ctrl+Shift+C binding is Copy (with Char('C')).
+        // A JSON override for "ctrl+shift+c" -> "quit" must replace that
+        // binding, not create a second one with Char('c').
+        let config = r#"{
+            "bindings": {
+                "ctrl+shift+c": "quit"
+            }
+        }"#;
+
+        let mut tmpfile = NamedTempFile::new().unwrap();
+        tmpfile.write_all(config.as_bytes()).unwrap();
+        tmpfile.flush().unwrap();
+
+        let mut mgr = KeybindingManager::load_from_file(tmpfile.path()).unwrap();
+
+        // Resolve the key exactly as the terminal sends it.
+        let key = KeyPress::from_crossterm(
+            KeyCode::Char('C'),
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        );
+        assert_eq!(
+            mgr.resolve(key),
+            KeyResolution::Action(Action::Quit),
+            "JSON override for ctrl+shift+c must replace the default Copy binding"
+        );
+    }
+
+    // =========================================================================
+    // V-4: "plus" key name support
+    // =========================================================================
+
+    #[test]
+    fn parse_key_string_ctrl_plus() {
+        let kp = parse_key_string("ctrl+plus").unwrap();
+        assert_eq!(kp.code, KeyCode::Char('+'));
+        assert_eq!(kp.modifiers, KeyModifiers::CONTROL);
+    }
+
+    #[test]
+    fn parse_key_string_plain_plus() {
+        let kp = parse_key_string("plus").unwrap();
+        assert_eq!(kp.code, KeyCode::Char('+'));
+        assert_eq!(kp.modifiers, KeyModifiers::NONE);
+    }
+
+    #[test]
+    fn parse_key_string_shift_plus() {
+        let kp = parse_key_string("shift+plus").unwrap();
+        assert_eq!(kp.code, KeyCode::Char('+'));
+        assert_eq!(kp.modifiers, KeyModifiers::SHIFT);
+    }
+
+    // =========================================================================
+    // V-5: Chord timeout discards stale partial chords
+    // =========================================================================
+
+    #[test]
+    fn chord_timeout_discards_stale_partial_chord() {
+        let mut mgr = KeybindingManager::with_defaults();
+
+        // Add a chord binding: Ctrl+X Ctrl+K -> KillBackgroundAgents
+        mgr.bindings.insert(
+            KeyChord(vec![
+                KeyPress::from_crossterm(KeyCode::Char('x'), KeyModifiers::CONTROL),
+                KeyPress::from_crossterm(KeyCode::Char('k'), KeyModifiers::CONTROL),
+            ]),
+            Action::KillBackgroundAgents,
+        );
+        // Remove the single-key Ctrl+K -> ScrollUp binding so it doesn't conflict
+        mgr.bindings.remove(&KeyChord(vec![KeyPress::from_crossterm(
+            KeyCode::Char('k'),
+            KeyModifiers::CONTROL,
+        )]));
+
+        // Send first key of chord
+        let key1 = KeyPress::from_crossterm(KeyCode::Char('x'), KeyModifiers::CONTROL);
+        assert_eq!(mgr.resolve(key1), KeyResolution::Partial);
+
+        // Simulate timeout by backdating chord_started
+        mgr.set_chord_started(Instant::now() - Duration::from_secs(2));
+
+        // Send what would be the chord completion — but should be treated
+        // as a fresh key because the chord timed out.
+        let key2 = KeyPress::from_crossterm(KeyCode::Char('k'), KeyModifiers::CONTROL);
+        let result = mgr.resolve(key2);
+
+        // Ctrl+K alone is not bound (we removed it), so it should be Unbound
+        assert_eq!(
+            result,
+            KeyResolution::Unbound,
+            "After chord timeout, second key must be treated as fresh input, not chord completion"
+        );
+    }
+
+    #[test]
+    fn chord_within_timeout_completes_normally() {
+        let mut mgr = KeybindingManager::with_defaults();
+
+        // Add a chord binding: Ctrl+X Ctrl+K -> KillBackgroundAgents
+        mgr.bindings.insert(
+            KeyChord(vec![
+                KeyPress::from_crossterm(KeyCode::Char('x'), KeyModifiers::CONTROL),
+                KeyPress::from_crossterm(KeyCode::Char('k'), KeyModifiers::CONTROL),
+            ]),
+            Action::KillBackgroundAgents,
+        );
+        // Remove the single-key Ctrl+K binding
+        mgr.bindings.remove(&KeyChord(vec![KeyPress::from_crossterm(
+            KeyCode::Char('k'),
+            KeyModifiers::CONTROL,
+        )]));
+
+        // Send first key
+        let key1 = KeyPress::from_crossterm(KeyCode::Char('x'), KeyModifiers::CONTROL);
+        assert_eq!(mgr.resolve(key1), KeyResolution::Partial);
+
+        // Do NOT simulate timeout — chord_started is recent
+
+        // Send second key — should complete the chord
+        let key2 = KeyPress::from_crossterm(KeyCode::Char('k'), KeyModifiers::CONTROL);
+        assert_eq!(
+            mgr.resolve(key2),
+            KeyResolution::Action(Action::KillBackgroundAgents),
+            "Chord within timeout must complete normally"
+        );
+    }
+
+    #[test]
+    fn chord_timeout_resets_chord_started() {
+        let mut mgr = KeybindingManager::with_defaults();
+
+        // Add a chord binding
+        mgr.bindings.insert(
+            KeyChord(vec![
+                KeyPress::from_crossterm(KeyCode::Char('x'), KeyModifiers::CONTROL),
+                KeyPress::from_crossterm(KeyCode::Char('k'), KeyModifiers::CONTROL),
+            ]),
+            Action::KillBackgroundAgents,
+        );
+
+        // Send first key
+        let key1 = KeyPress::from_crossterm(KeyCode::Char('x'), KeyModifiers::CONTROL);
+        let _ = mgr.resolve(key1);
+        assert!(!mgr.chord_buffer_empty());
+
+        // Simulate timeout
+        mgr.set_chord_started(Instant::now() - Duration::from_secs(2));
+
+        // Send any key — timeout should clear the buffer first
+        let key2 = KeyPress::from_crossterm(KeyCode::Char('c'), KeyModifiers::CONTROL);
+        let result = mgr.resolve(key2);
+        assert_eq!(
+            result,
+            KeyResolution::Action(Action::Quit),
+            "After timeout, Ctrl+C should resolve to Quit (fresh input)"
+        );
     }
 }

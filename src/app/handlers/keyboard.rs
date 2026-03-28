@@ -207,8 +207,16 @@ async fn dispatch_action(ctx: &mut AppContext<'_>, action: Action) -> Result<Han
             ctx.state.mark_full_redraw();
             Ok(Handled::CONSUMED)
         }
-        Action::ToggleHelp | Action::KillBackgroundAgents | Action::OpenEditor => {
-            debug!(?action, "action not yet implemented");
+        Action::ToggleHelp => {
+            info!("Help toggle not yet available");
+            Ok(Handled::CONSUMED)
+        }
+        Action::KillBackgroundAgents => {
+            info!("Kill background agents not yet available");
+            Ok(Handled::CONSUMED)
+        }
+        Action::OpenEditor => {
+            info!("External editor not yet available");
             Ok(Handled::CONSUMED)
         }
         Action::Custom(ref name) => {
@@ -268,13 +276,16 @@ async fn handle_submit(ctx: &mut AppContext<'_>) -> Result<()> {
         };
 
         // Fire UserPromptSubmit hook before sending to API
-        let _ = ctx
+        if let Err(e) = ctx
             .state
             .tool_state()
             .tool_executor
             .hooks()
             .fire_user_prompt_submit(&final_input)
-            .await;
+            .await
+        {
+            tracing::debug!("hook fire failed: {e}");
+        }
         ctx.state.submit_message(&ctx.client, final_input).await?;
         // SessionHandler observer saves when it sees the dirty flag.
         ctx.state.session_tracking_mut().mark_dirty();
@@ -1681,6 +1692,104 @@ mod tests {
             ctx.state.ui_selection().focus_area(),
             FocusArea::Content,
             "FocusContent action must change focus area to Content"
+        );
+    }
+
+    // =========================================================================
+    // V-7: Stub actions (ToggleHelp, KillBackgroundAgents, OpenEditor)
+    //      consume events without panicking
+    // =========================================================================
+
+    #[tokio::test]
+    async fn toggle_help_action_returns_consumed() {
+        let mut handler = KeyboardHandler;
+
+        let client = test_client();
+        let mut state = test_state();
+        let (session_mgr, _dir) = test_session_manager();
+
+        // Bind F1 to ToggleHelp
+        use crate::keybindings::{KeyChord, KeyPress};
+        let chord = KeyChord(vec![KeyPress::from_crossterm(
+            KeyCode::F(1),
+            KeyModifiers::NONE,
+        )]);
+        state
+            .keybindings_mut()
+            .bindings_mut()
+            .insert(chord, crate::keybindings::Action::ToggleHelp);
+
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
+
+        let event = AppEvent::Key(KeyEvent::new(KeyCode::F(1), KeyModifiers::NONE));
+        let result = handler.handle(&event, &mut ctx).await.unwrap();
+
+        assert_eq!(
+            result,
+            Handled::CONSUMED,
+            "ToggleHelp must be consumed without panicking"
+        );
+    }
+
+    #[tokio::test]
+    async fn kill_background_agents_action_returns_consumed() {
+        let mut handler = KeyboardHandler;
+
+        let client = test_client();
+        let mut state = test_state();
+        let (session_mgr, _dir) = test_session_manager();
+
+        // Bind F2 to KillBackgroundAgents
+        use crate::keybindings::{KeyChord, KeyPress};
+        let chord = KeyChord(vec![KeyPress::from_crossterm(
+            KeyCode::F(2),
+            KeyModifiers::NONE,
+        )]);
+        state
+            .keybindings_mut()
+            .bindings_mut()
+            .insert(chord, crate::keybindings::Action::KillBackgroundAgents);
+
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
+
+        let event = AppEvent::Key(KeyEvent::new(KeyCode::F(2), KeyModifiers::NONE));
+        let result = handler.handle(&event, &mut ctx).await.unwrap();
+
+        assert_eq!(
+            result,
+            Handled::CONSUMED,
+            "KillBackgroundAgents must be consumed without panicking"
+        );
+    }
+
+    #[tokio::test]
+    async fn open_editor_action_returns_consumed() {
+        let mut handler = KeyboardHandler;
+
+        let client = test_client();
+        let mut state = test_state();
+        let (session_mgr, _dir) = test_session_manager();
+
+        // Bind F3 to OpenEditor
+        use crate::keybindings::{KeyChord, KeyPress};
+        let chord = KeyChord(vec![KeyPress::from_crossterm(
+            KeyCode::F(3),
+            KeyModifiers::NONE,
+        )]);
+        state
+            .keybindings_mut()
+            .bindings_mut()
+            .insert(chord, crate::keybindings::Action::OpenEditor);
+
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
+
+        let event = AppEvent::Key(KeyEvent::new(KeyCode::F(3), KeyModifiers::NONE));
+        let result = handler.handle(&event, &mut ctx).await.unwrap();
+
+        assert_eq!(
+            result,
+            Handled::CONSUMED,
+            "OpenEditor must be consumed without panicking"
         );
     }
 }

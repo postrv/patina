@@ -71,6 +71,10 @@ impl EventHandler for PlanHandler {
                 return Ok(Handled::IGNORED);
             }
 
+            // Clear chord buffer so stale chord state from before the
+            // modal appeared does not corrupt the next keypress (V-2).
+            ctx.state.keybindings_mut().clear_chord();
+
             // Try navigation first (narrow path — only touches PlanState)
             if let Some(plan) = ctx.state.pending_plan_mut() {
                 if let Some(handled) = Self::handle_navigation(key, plan) {

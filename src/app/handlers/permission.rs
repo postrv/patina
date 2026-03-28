@@ -104,7 +104,19 @@ impl EventHandler for PermissionHandler {
                         None => return Ok(Handled::IGNORED),
                     };
 
+                    // Clear chord buffer so stale chord state from before the
+                    // modal appeared does not corrupt the next keypress (V-2).
+                    ctx.state.keybindings_mut().clear_chord();
+
                     // Lazily initialize prompt state for this permission request.
+                    // If the pending request has changed (e.g., tool A resolved
+                    // programmatically and tool B became pending), reset the
+                    // prompt state so the user sees fresh defaults (V-1).
+                    if let Some(existing) = &self.prompt_state {
+                        if *existing.request() != request {
+                            self.prompt_state = None;
+                        }
+                    }
                     let prompt = self
                         .prompt_state
                         .get_or_insert_with(|| PermissionPromptState::new(request));
@@ -766,6 +778,108 @@ mod tests {
             result,
             Handled::IGNORED,
             "PermissionHandler should ignore Tick in dispatcher"
+        );
+    }
+
+    // =========================================================================
+    // V-1: Stale prompt state is reset when pending request changes
+    // =========================================================================
+
+    #[tokio::test]
+    async fn stale_prompt_state_reset_on_request_change() {
+        let mut handler = PermissionHandler::new();
+
+        let client = test_client();
+        let mut state = test_state();
+        let (session_mgr, _dir) = test_session_manager();
+
+        // Set pending permission for tool A
+        let request_a = PermissionRequest {
+            tool_name: "tool_a".to_string(),
+            tool_input: Some("input_a".to_string()),
+            description: "Run tool A".to_string(),
+        };
+        state.set_pending_permission(request_a);
+
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
+
+        // Navigate selection: Right arrow moves from AllowOnce to AllowAlways
+        let right = AppEvent::Key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+        let result = handler.handle(&right, &mut ctx).await.unwrap();
+        assert_eq!(result, Handled::CONSUMED);
+        assert!(ctx.state.tool_state().has_pending_permission());
+
+        // Verify handler has prompt state with navigated selection
+        assert!(handler.prompt_state.is_some());
+
+        // Now change the pending permission to tool B (simulating tool A being
+        // resolved programmatically and tool B becoming pending).
+        ctx.state.clear_pending_permission();
+        let request_b = PermissionRequest {
+            tool_name: "tool_b".to_string(),
+            tool_input: Some("input_b".to_string()),
+            description: "Run tool B".to_string(),
+        };
+        ctx.state.set_pending_permission(request_b);
+
+        // Press Enter — should confirm tool B with default selection (AllowOnce),
+        // NOT tool A's navigated selection (AllowAlways).
+        let enter = AppEvent::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let _result = handler.handle(&enter, &mut ctx).await.unwrap();
+
+        // The pending permission should be cleared (tool B was resolved)
+        assert!(
+            !ctx.state.tool_state().has_pending_permission(),
+            "Enter must resolve tool B's permission"
+        );
+    }
+
+    // =========================================================================
+    // V-2: Chord buffer cleared when permission modal activates
+    // =========================================================================
+
+    #[tokio::test]
+    async fn permission_handler_clears_chord_buffer() {
+        let mut handler = PermissionHandler::new();
+
+        let client = test_client();
+        let mut state = test_state();
+        let (session_mgr, _dir) = test_session_manager();
+
+        // Put chord buffer in Partial state by adding a chord binding and
+        // pressing the first key of that chord.
+        {
+            use crate::keybindings::{Action, KeyChord, KeyPress, KeyResolution};
+            use crossterm::event::{KeyCode as KC, KeyModifiers as KM};
+
+            let mgr = state.keybindings_mut();
+            mgr.bindings_mut().insert(
+                KeyChord(vec![
+                    KeyPress::from_crossterm(KC::Char('x'), KM::CONTROL),
+                    KeyPress::from_crossterm(KC::Char('k'), KM::CONTROL),
+                ]),
+                Action::KillBackgroundAgents,
+            );
+
+            let key1 = KeyPress::from_crossterm(KC::Char('x'), KM::CONTROL);
+            let result = mgr.resolve(key1);
+            assert_eq!(result, KeyResolution::Partial);
+            assert!(!mgr.chord_buffer_empty());
+        }
+
+        // Now activate permission prompt
+        state.set_pending_permission(test_permission_request());
+
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
+
+        // Send a key to the permission handler — it should clear the chord buffer
+        let key = AppEvent::Key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+        let _result = handler.handle(&key, &mut ctx).await.unwrap();
+
+        // Verify chord buffer was cleared
+        assert!(
+            ctx.state.keybindings_mut().chord_buffer_empty(),
+            "Permission handler must clear the chord buffer when consuming key events"
         );
     }
 }

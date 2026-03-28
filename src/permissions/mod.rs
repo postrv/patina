@@ -420,7 +420,7 @@ impl PermissionManager {
 }
 
 /// Information about a pending permission request.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PermissionRequest {
     /// The tool name requesting permission.
     pub tool_name: String,

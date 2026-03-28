@@ -84,6 +84,10 @@ impl EventHandler for QuestionHandler {
                 return Ok(Handled::IGNORED);
             }
 
+            // Clear chord buffer so stale chord state from before the
+            // modal appeared does not corrupt the next keypress (V-2).
+            ctx.state.keybindings_mut().clear_chord();
+
             // Try input/navigation first (narrow path — only touches QuestionState)
             if let Some(question) = ctx.state.pending_question_mut() {
                 if let Some(handled) = Self::handle_input(key, question) {
