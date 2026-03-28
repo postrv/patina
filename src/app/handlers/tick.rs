@@ -12,13 +12,17 @@ use anyhow::Result;
 use crate::app::context::AppContext;
 use crate::app::dispatch::{EventHandler, Handled};
 use crate::app::events::AppEvent;
-use crate::app::state::DisplayState;
 
 /// Handles periodic tick events for animation and background polling.
 ///
 /// On each [`AppEvent::Tick`]:
-/// 1. Advances the throbber animation frame
+/// 1. Advances the throbber animation frame via [`AppState::tick_throbber`]
 /// 2. Drains MCP events from all connected servers, logging them
+///
+/// The throbber tick sets `DirtyFlags::throbber` on `AppState` (not
+/// `DisplayState::dirty`), enabling the `is_throbber_only_dirty()`
+/// optimisation that skips the expensive full timeline rebuild when only
+/// the spinner character has changed.
 ///
 /// # Examples
 ///
@@ -31,15 +35,6 @@ use crate::app::state::DisplayState;
 /// ```
 pub struct TickHandler;
 
-impl TickHandler {
-    /// Advances the throbber animation.
-    ///
-    /// The display state tracks its own dirty flag.
-    fn handle_tick(display: &mut DisplayState) {
-        display.tick_throbber();
-    }
-}
-
 impl EventHandler for TickHandler {
     fn handle<'a>(
         &'a mut self,
@@ -48,7 +43,7 @@ impl EventHandler for TickHandler {
     ) -> Pin<Box<dyn Future<Output = Result<Handled>> + Send + 'a>> {
         Box::pin(async move {
             if matches!(event, AppEvent::Tick) {
-                Self::handle_tick(ctx.state.display_mut());
+                ctx.state.tick_throbber();
                 process_mcp_events(ctx);
                 Ok(Handled::CONSUMED)
             } else {
@@ -218,7 +213,7 @@ mod tests {
 
         assert!(
             ctx.needs_render(),
-            "tick_throbber() must mark the display dirty"
+            "tick_throbber() must trigger needs_render via dirty.throbber"
         );
     }
 
@@ -354,27 +349,39 @@ mod tests {
     }
 
     // =========================================================================
-    // Narrow tests: handle_tick with DisplayState only (no AppState)
+    // Throbber-only optimisation: tick sets dirty.throbber, NOT display.dirty
     // =========================================================================
 
-    #[test]
-    fn handle_tick_advances_throbber_on_display_state() {
-        let mut display = DisplayState::new();
-        assert_eq!(display.throbber_char(), '\u{280B}'); // ⠋
+    #[tokio::test]
+    async fn handle_tick_sets_throbber_dirty_not_display_dirty() {
+        let mut handler = TickHandler;
 
-        TickHandler::handle_tick(&mut display);
+        let client = test_client();
+        let mut state = test_state();
+        let (session_mgr, _dir) = test_session_manager();
 
-        assert_eq!(display.throbber_char(), '\u{2819}'); // ⠙
-    }
+        state.mark_rendered();
 
-    #[test]
-    fn handle_tick_sets_dirty_flag_on_display_state() {
-        let mut display = DisplayState::new();
-        display.mark_clean();
-        assert!(!display.is_dirty());
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
+        let event = AppEvent::Tick;
+        let _ = handler.handle(&event, &mut ctx).await.unwrap();
 
-        TickHandler::handle_tick(&mut display);
+        // The tick must NOT set display.dirty (that would defeat throbber_only).
+        assert!(
+            !ctx.state.display().is_dirty(),
+            "tick must not set display.dirty; throbber uses dirty.throbber instead"
+        );
 
-        assert!(display.is_dirty());
+        // But needs_render must still be true via dirty.throbber.
+        assert!(
+            ctx.needs_render(),
+            "needs_render must be true after tick via dirty.throbber"
+        );
+
+        // And is_throbber_only_dirty should be true.
+        assert!(
+            ctx.state.is_throbber_only_dirty(),
+            "tick with no other changes must report throbber_only_dirty"
+        );
     }
 }
