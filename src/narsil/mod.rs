@@ -20,6 +20,7 @@
 pub mod context;
 pub mod integration;
 pub mod security;
+pub mod system_prompt;
 
 // Re-export types used by external modules (app, context, tools).
 // Internal-only types remain accessible via their submodule paths.

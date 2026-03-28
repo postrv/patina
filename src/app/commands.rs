@@ -223,6 +223,8 @@ impl SlashCommandHandler {
         // Dispatch to the appropriate handler
         match command_name {
             "agent" => self.handle_agent(&args),
+            "analyze" => self.handle_analyze(&args),
+            "audit" => self.handle_audit(&args),
             "continuous" => self.handle_continuous(&args),
             "mcp" => self.handle_mcp(),
             "experiment" => self.handle_experiment(&args),
@@ -940,6 +942,12 @@ impl SlashCommandHandler {
   /agent <subcommand>       - Manage worktree agents
     Subcommands: new, list, status, merge, stop
 
+  /analyze [subcommand]     - Run narsil code analysis
+    Subcommands: full, complexity, architecture, dead-code
+
+  /audit [subcommand]       - Run narsil security audit
+    Subcommands: full, taint, deps
+
   /btw <question>           - Ask a side question without interrupting flow
 
   /bug <description>        - Report a bug (alias: /feedback)
@@ -996,6 +1004,35 @@ impl SlashCommandHandler {
   /help [command]           - Show help for a command
 
 Type /help <command> for detailed help on a specific command."#;
+                CommandResult::Executed(help_text.to_string())
+            }
+
+            Some("analyze") => {
+                let help_text = r#"/analyze - Run narsil code analysis
+
+Usage:
+  /analyze                Run full comprehensive analysis
+  /analyze full           Same as above
+  /analyze complexity     Identify the most complex functions
+  /analyze architecture   Analyze module structure and circular deps
+  /analyze dead-code      Find unused functions, types, and modules
+
+Directs the model to use narsil-mcp code intelligence tools
+for structural code analysis. Requires narsil-mcp to be connected."#;
+                CommandResult::Executed(help_text.to_string())
+            }
+
+            Some("audit") => {
+                let help_text = r#"/audit - Run narsil security audit
+
+Usage:
+  /audit                Run full security audit
+  /audit full           Same as above
+  /audit taint          Trace tainted data flows from inputs to sinks
+  /audit deps           Check dependencies for vulnerabilities and licenses
+
+Directs the model to use narsil-mcp security scanning tools.
+Requires narsil-mcp to be connected."#;
                 CommandResult::Executed(help_text.to_string())
             }
 
@@ -1605,6 +1642,82 @@ Include steps to reproduce and expected vs actual behavior."#;
     }
 
     /// Handles the `/doctor` command — troubleshoot the environment.
+    /// Handles the `/analyze` command.
+    ///
+    /// Returns a prompt directing the model to use narsil code intelligence
+    /// tools for structural analysis. The prompt text is injected as a user
+    /// message to guide the model.
+    fn handle_analyze(&self, args: &str) -> CommandResult {
+        let subcommand = args.split_whitespace().next().unwrap_or("full");
+        let prompt = match subcommand {
+            "full" | "" => {
+                "Run comprehensive analysis using narsil code intelligence tools: \
+                 get_metrics, get_function_hotspots, find_circular_imports, find_dead_code. \
+                 Summarize all findings in a concise report covering architecture metrics, \
+                 complexity hotspots, circular dependencies, and dead code."
+            }
+            "complexity" => {
+                "Run get_function_hotspots and get_complexity using narsil code intelligence tools. \
+                 Identify the top 10 most complex functions with their cyclomatic complexity scores. \
+                 Flag any functions above complexity threshold 15 as needing refactoring."
+            }
+            "architecture" => {
+                "Run get_import_graph and find_circular_imports using narsil code intelligence tools. \
+                 Summarize the module structure, key dependency relationships, and any circular \
+                 dependency cycles that should be broken."
+            }
+            "dead-code" => {
+                "Run find_dead_code and find_unused_exports using narsil code intelligence tools. \
+                 List all removable code including unused functions, types, and modules. \
+                 Prioritize by size (largest dead code first)."
+            }
+            other => {
+                return CommandResult::Error(format!(
+                    "Unknown /analyze subcommand: '{}'. \
+                     Valid subcommands: full, complexity, architecture, dead-code",
+                    other
+                ));
+            }
+        };
+        CommandResult::Executed(prompt.to_string())
+    }
+
+    /// Handles the `/audit` command.
+    ///
+    /// Returns a prompt directing the model to use narsil security scanning
+    /// tools for a security audit. The prompt text is injected as a user
+    /// message to guide the model.
+    fn handle_audit(&self, args: &str) -> CommandResult {
+        let subcommand = args.split_whitespace().next().unwrap_or("full");
+        let prompt = match subcommand {
+            "full" | "" => {
+                "Run a comprehensive security audit using narsil code intelligence tools: \
+                 scan_security, check_cwe_top25, find_injection_vulnerabilities. \
+                 Report all findings organized by severity (CRITICAL, HIGH, MEDIUM, LOW). \
+                 Include remediation suggestions for each finding."
+            }
+            "taint" => {
+                "Run trace_taint and get_taint_sources using narsil code intelligence tools. \
+                 Identify all tainted data flows from external inputs (user input, network, \
+                 file I/O) through the codebase. Flag any unsanitized flows reaching \
+                 sensitive sinks (exec, SQL, file write)."
+            }
+            "deps" => {
+                "Run check_dependencies and check_licenses using narsil code intelligence tools. \
+                 Report any dependencies with known vulnerabilities and their severity. \
+                 Also flag any license compatibility issues."
+            }
+            other => {
+                return CommandResult::Error(format!(
+                    "Unknown /audit subcommand: '{}'. \
+                     Valid subcommands: full, taint, deps",
+                    other
+                ));
+            }
+        };
+        CommandResult::Executed(prompt.to_string())
+    }
+
     fn handle_doctor(&self) -> CommandResult {
         let mut output = String::from("Environment Check:\n\n");
 
@@ -1666,6 +1779,8 @@ Include steps to reproduce and expected vs actual behavior."#;
     pub fn available_commands(&self) -> Vec<&'static str> {
         vec![
             "agent",
+            "analyze",
+            "audit",
             "btw",
             "bug",
             "clear",
@@ -3608,6 +3723,270 @@ mod tests {
                 assert!(output.contains("/doctor"), "Help should mention /doctor");
             }
             other => panic!("Expected help output: {:?}", other),
+        }
+    }
+
+    // =========================================================================
+    // Analyze command tests
+    // =========================================================================
+
+    #[test]
+    fn test_analyze_no_args_returns_full_analysis_prompt() {
+        let (handler, _temp) = create_handler_in_temp();
+        let result = handler.handle("/analyze");
+        match result {
+            CommandResult::Executed(output) => {
+                assert!(
+                    output.contains("get_metrics"),
+                    "Full analysis should mention get_metrics"
+                );
+                assert!(
+                    output.contains("get_function_hotspots"),
+                    "Full analysis should mention get_function_hotspots"
+                );
+                assert!(
+                    output.contains("find_circular_imports"),
+                    "Full analysis should mention find_circular_imports"
+                );
+                assert!(
+                    output.contains("find_dead_code"),
+                    "Full analysis should mention find_dead_code"
+                );
+            }
+            other => panic!("Expected executed result: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_analyze_full_returns_full_analysis_prompt() {
+        let (handler, _temp) = create_handler_in_temp();
+        let result = handler.handle("/analyze full");
+        match result {
+            CommandResult::Executed(output) => {
+                assert!(output.contains("comprehensive analysis"));
+            }
+            other => panic!("Expected executed result: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_analyze_complexity_returns_complexity_prompt() {
+        let (handler, _temp) = create_handler_in_temp();
+        let result = handler.handle("/analyze complexity");
+        match result {
+            CommandResult::Executed(output) => {
+                assert!(
+                    output.contains("get_function_hotspots"),
+                    "Complexity analysis should mention get_function_hotspots"
+                );
+                assert!(
+                    output.contains("get_complexity"),
+                    "Complexity analysis should mention get_complexity"
+                );
+                assert!(output.contains("top 10"), "Should mention top 10 functions");
+            }
+            other => panic!("Expected executed result: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_analyze_architecture_returns_architecture_prompt() {
+        let (handler, _temp) = create_handler_in_temp();
+        let result = handler.handle("/analyze architecture");
+        match result {
+            CommandResult::Executed(output) => {
+                assert!(
+                    output.contains("get_import_graph"),
+                    "Architecture analysis should mention get_import_graph"
+                );
+                assert!(
+                    output.contains("find_circular_imports"),
+                    "Architecture analysis should mention find_circular_imports"
+                );
+            }
+            other => panic!("Expected executed result: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_analyze_dead_code_returns_dead_code_prompt() {
+        let (handler, _temp) = create_handler_in_temp();
+        let result = handler.handle("/analyze dead-code");
+        match result {
+            CommandResult::Executed(output) => {
+                assert!(
+                    output.contains("find_dead_code"),
+                    "Dead code analysis should mention find_dead_code"
+                );
+                assert!(
+                    output.contains("find_unused_exports"),
+                    "Dead code analysis should mention find_unused_exports"
+                );
+            }
+            other => panic!("Expected executed result: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_analyze_unknown_subcommand() {
+        let (handler, _temp) = create_handler_in_temp();
+        let result = handler.handle("/analyze foobar");
+        match result {
+            CommandResult::Error(msg) => {
+                assert!(
+                    msg.contains("foobar"),
+                    "Error should mention the unknown subcommand"
+                );
+            }
+            other => panic!("Expected error: {:?}", other),
+        }
+    }
+
+    // =========================================================================
+    // Audit command tests
+    // =========================================================================
+
+    #[test]
+    fn test_audit_no_args_returns_full_audit_prompt() {
+        let (handler, _temp) = create_handler_in_temp();
+        let result = handler.handle("/audit");
+        match result {
+            CommandResult::Executed(output) => {
+                assert!(
+                    output.contains("scan_security"),
+                    "Full audit should mention scan_security"
+                );
+                assert!(
+                    output.contains("check_cwe_top25"),
+                    "Full audit should mention check_cwe_top25"
+                );
+                assert!(
+                    output.contains("find_injection_vulnerabilities"),
+                    "Full audit should mention find_injection_vulnerabilities"
+                );
+            }
+            other => panic!("Expected executed result: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_audit_taint_returns_taint_prompt() {
+        let (handler, _temp) = create_handler_in_temp();
+        let result = handler.handle("/audit taint");
+        match result {
+            CommandResult::Executed(output) => {
+                assert!(
+                    output.contains("trace_taint"),
+                    "Taint audit should mention trace_taint"
+                );
+                assert!(
+                    output.contains("get_taint_sources"),
+                    "Taint audit should mention get_taint_sources"
+                );
+            }
+            other => panic!("Expected executed result: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_audit_deps_returns_deps_prompt() {
+        let (handler, _temp) = create_handler_in_temp();
+        let result = handler.handle("/audit deps");
+        match result {
+            CommandResult::Executed(output) => {
+                assert!(
+                    output.contains("check_dependencies"),
+                    "Deps audit should mention check_dependencies"
+                );
+                assert!(
+                    output.contains("check_licenses"),
+                    "Deps audit should mention check_licenses"
+                );
+            }
+            other => panic!("Expected executed result: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_audit_unknown_subcommand() {
+        let (handler, _temp) = create_handler_in_temp();
+        let result = handler.handle("/audit foobar");
+        match result {
+            CommandResult::Error(msg) => {
+                assert!(
+                    msg.contains("foobar"),
+                    "Error should mention the unknown subcommand"
+                );
+            }
+            other => panic!("Expected error: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_help_includes_analyze_and_audit() {
+        let (handler, _temp) = create_handler_in_temp();
+        let result = handler.handle("/help");
+        match result {
+            CommandResult::Executed(output) => {
+                assert!(output.contains("/analyze"), "Help should mention /analyze");
+                assert!(output.contains("/audit"), "Help should mention /audit");
+            }
+            other => panic!("Expected help output: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_available_commands_includes_analyze_and_audit() {
+        let (handler, _temp) = create_handler_in_temp();
+        let commands = handler.available_commands();
+        assert!(
+            commands.contains(&"analyze"),
+            "Available commands should include 'analyze'"
+        );
+        assert!(
+            commands.contains(&"audit"),
+            "Available commands should include 'audit'"
+        );
+    }
+
+    #[test]
+    fn test_help_analyze_shows_detailed_help() {
+        let (handler, _temp) = create_handler_in_temp();
+        let result = handler.handle("/help analyze");
+        match result {
+            CommandResult::Executed(output) => {
+                assert!(
+                    output.contains("/analyze"),
+                    "Should describe analyze command"
+                );
+                assert!(
+                    output.contains("complexity"),
+                    "Should list complexity subcommand"
+                );
+                assert!(
+                    output.contains("architecture"),
+                    "Should list architecture subcommand"
+                );
+                assert!(
+                    output.contains("dead-code"),
+                    "Should list dead-code subcommand"
+                );
+            }
+            other => panic!("Expected analyze help: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_help_audit_shows_detailed_help() {
+        let (handler, _temp) = create_handler_in_temp();
+        let result = handler.handle("/help audit");
+        match result {
+            CommandResult::Executed(output) => {
+                assert!(output.contains("/audit"), "Should describe audit command");
+                assert!(output.contains("taint"), "Should list taint subcommand");
+                assert!(output.contains("deps"), "Should list deps subcommand");
+            }
+            other => panic!("Expected audit help: {:?}", other),
         }
     }
 }

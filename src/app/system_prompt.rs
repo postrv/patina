@@ -47,6 +47,9 @@ pub fn build_system_prompt_with_skills(
     // Tool guidance
     parts.push(TOOL_GUIDANCE.to_string());
 
+    // Narsil tool guidance (harmless if narsil is unavailable)
+    parts.push(NARSIL_TOOL_GUIDANCE.to_string());
+
     // Project instructions from CLAUDE.md, .claude/CLAUDE.md, .patina/CLAUDE.md
     if let Some(project_instructions) = load_project_instructions(working_dir) {
         parts.push(format!(
@@ -103,6 +106,12 @@ pub fn build_system_prompt_with_skills(
 
     // Environment context
     parts.push(build_environment_context(working_dir));
+
+    // Narsil code intelligence context (graceful: returns None if unavailable)
+    if let Some(narsil_ctx) = load_narsil_context(working_dir) {
+        parts.push(narsil_ctx);
+        debug!("Injected narsil code intelligence context into system prompt");
+    }
 
     parts.join("\n\n")
 }
@@ -340,6 +349,31 @@ fn build_tree_recursive(
     }
 }
 
+/// Loads cached narsil code intelligence context for the system prompt.
+///
+/// Attempts to read a cached narsil context from the platform cache directory.
+/// Returns `None` if no cache is available or the cache is stale (> 5 minutes).
+fn load_narsil_context(working_dir: &Path) -> Option<String> {
+    let cache_dir = dirs_for_narsil_cache()?;
+    crate::narsil::system_prompt::build_narsil_context_cached(working_dir, &cache_dir)
+}
+
+/// Returns the platform cache directory for narsil context.
+///
+/// Uses `$XDG_CACHE_HOME` if set, otherwise falls back to `~/.cache` on
+/// Linux/macOS or the platform equivalent.
+fn dirs_for_narsil_cache() -> Option<std::path::PathBuf> {
+    std::env::var("XDG_CACHE_HOME")
+        .ok()
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::var("HOME")
+                .ok()
+                .or_else(|| std::env::var("USERPROFILE").ok())
+                .map(|h| std::path::PathBuf::from(h).join(".cache"))
+        })
+}
+
 /// Builds environment context (current date, git branch, status, tree).
 fn build_environment_context(working_dir: &Path) -> String {
     let mut ctx = String::from("# Environment\n");
@@ -418,6 +452,26 @@ Use the appropriate tool for each task:
 Prefer dedicated tools over bash equivalents (e.g., use read_file instead of cat, \
 grep tool instead of grep command). Break complex tasks into smaller steps. \
 Read files before modifying them to understand existing code.";
+
+/// Guidance for narsil-mcp code intelligence tools.
+///
+/// Conditionally included in the system prompt to teach the model when and
+/// how to use structural code intelligence tools instead of text-based
+/// search.
+const NARSIL_TOOL_GUIDANCE: &str = "\
+# Code Intelligence Tools (narsil)
+
+When narsil-mcp code intelligence tools are available, prefer them for structural queries:
+
+- **Before refactoring**: Use `find_callers`/`get_callers` to understand impact before changing a function
+- **Security analysis**: Use `trace_taint`/`get_data_flow` to trace data flow for security review
+- **Code review**: Use `get_complexity`/`get_function_hotspots` to identify risky high-complexity code
+- **Architecture**: Use `find_circular_imports` to detect dependency cycles
+- **Understanding code**: Use `get_call_graph` for function relationship maps
+- **Finding usage**: Use `find_references`/`find_symbol_usages` before renaming or removing
+
+Prefer narsil structural tools over grep/glob for queries about callers, callees, \
+data flow, and dependencies. They understand the code graph, not just text patterns.";
 
 #[cfg(test)]
 mod tests {
@@ -822,5 +876,23 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let prompt = build_system_prompt(dir.path());
         assert!(!prompt.contains("Project Rules"));
+    }
+
+    #[test]
+    fn test_system_prompt_includes_narsil_tool_guidance() {
+        let dir = TempDir::new().unwrap();
+        let prompt = build_system_prompt(dir.path());
+        assert!(
+            prompt.contains("Code Intelligence Tools (narsil)"),
+            "System prompt should contain narsil tool guidance"
+        );
+        assert!(
+            prompt.contains("find_callers"),
+            "Narsil guidance should mention find_callers"
+        );
+        assert!(
+            prompt.contains("get_call_graph"),
+            "Narsil guidance should mention get_call_graph"
+        );
     }
 }
