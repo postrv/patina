@@ -881,11 +881,14 @@ impl AppState {
     /// Returns `true` when the only pending dirty state is the throbber animation.
     ///
     /// This allows the render path to skip the expensive full timeline rebuild
-    /// when only the throbber character has changed.
+    /// when only the throbber character has changed. The check must exclude
+    /// `display.is_dirty()` because a concurrent scroll or resize could set
+    /// that flag, requiring a full re-render.
     #[must_use]
     pub fn is_throbber_only_dirty(&self) -> bool {
         self.dirty.throbber
             && !self.dirty.full
+            && !self.view.display.is_dirty()
             && !self.view.input_state.is_dirty()
             && !self.conversation.is_dirty()
             && !self.agent_panel.is_dirty()
@@ -2186,6 +2189,40 @@ mod tests {
         assert!(
             !state.is_throbber_only_dirty(),
             "is_throbber_only_dirty must be false when agent_panel is also dirty"
+        );
+    }
+
+    #[test]
+    fn test_throbber_only_dirty_not_triggered_by_display_dirty() {
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+        state.mark_rendered();
+
+        state.tick_throbber();
+        // Simulate a scroll or resize setting display.dirty
+        state.view.display.mark_dirty();
+
+        assert!(
+            !state.is_throbber_only_dirty(),
+            "is_throbber_only_dirty must be false when display is also dirty"
+        );
+    }
+
+    #[test]
+    fn test_tick_throbber_does_not_set_display_dirty() {
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+        state.mark_rendered();
+
+        state.tick_throbber();
+
+        // AppState::tick_throbber must NOT set display.dirty — the throbber
+        // is tracked via dirty.throbber so is_throbber_only_dirty() works.
+        assert!(
+            !state.view.display.is_dirty(),
+            "AppState::tick_throbber must not set display.dirty"
+        );
+        assert!(
+            state.dirty.throbber,
+            "AppState::tick_throbber must set dirty.throbber"
         );
     }
 }
