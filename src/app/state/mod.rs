@@ -657,13 +657,11 @@ impl AppState {
     ) {
         self.agent_panel
             .update_progress(agent_id, agent_name, progress);
-        self.dirty.full = true;
     }
 
     /// Records a conflict report for display in the TUI.
     pub fn add_conflict_report(&mut self, report: ConflictReport) {
         self.agent_panel.add_conflict(report);
-        self.dirty.full = true;
     }
 
     // =========================================================================
@@ -679,19 +677,16 @@ impl AppState {
     /// Updates state for a new continuous iteration starting.
     pub fn update_continuous_iteration(&mut self, iteration: u32) {
         self.continuous.update_iteration(iteration);
-        self.dirty.full = true;
     }
 
     /// Records the completion of a continuous iteration.
     pub fn complete_continuous_iteration(&mut self, _iteration: u32, duration_ms: u64) {
         self.continuous.complete_iteration(duration_ms);
-        self.dirty.full = true;
     }
 
     /// Records that a quality gate check is starting.
     pub fn set_continuous_gate_checking(&mut self, gate: &str) {
         self.continuous.set_gate_checking(gate);
-        self.dirty.full = true;
     }
 
     /// Records the result of a quality gate check.
@@ -702,26 +697,22 @@ impl AppState {
         message: Option<&str>,
     ) {
         self.continuous.record_gate_result(gate, passed, message);
-        self.dirty.full = true;
     }
 
     /// Records that stagnation was detected.
     pub fn set_continuous_stagnation(&mut self, iterations_without_progress: u32, threshold: u32) {
         self.continuous
             .set_stagnation(iterations_without_progress, threshold);
-        self.dirty.full = true;
     }
 
     /// Records that human intervention is required.
     pub fn set_continuous_human_checkpoint(&mut self, reason: &str) {
         self.continuous.set_human_checkpoint(reason);
-        self.dirty.full = true;
     }
 
     /// Resets all continuous loop state to inactive.
     pub fn reset_continuous(&mut self) {
         self.continuous.reset();
-        self.dirty.full = true;
     }
 
     // =========================================================================
@@ -1622,7 +1613,14 @@ mod tests {
         };
         state.update_agent_progress("a1", "Agent", &progress);
         assert_eq!(state.agent_panel().entries().len(), 1);
-        assert!(state.dirty.full);
+        assert!(
+            state.agent_panel.is_dirty(),
+            "AgentPanelState self-tracks dirty"
+        );
+        assert!(
+            state.needs_render(),
+            "needs_render detects agent_panel dirty"
+        );
     }
 
     #[test]
@@ -1746,23 +1744,27 @@ mod tests {
     #[test]
     fn test_app_state_continuous_delegation() {
         let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
-        state.dirty.clear();
+        state.mark_rendered();
 
         state.update_continuous_iteration(1);
-        assert!(state.dirty.full);
+        assert!(
+            state.continuous.is_dirty(),
+            "ContinuousLoopState self-tracks dirty"
+        );
+        assert!(state.needs_render());
         assert_eq!(
             *state.continuous().status(),
             ContinuousLoopStatus::Running { iteration: 1 }
         );
 
-        state.dirty.clear();
+        state.mark_rendered();
         state.complete_continuous_iteration(1, 2000);
-        assert!(state.dirty.full);
+        assert!(state.continuous.is_dirty());
         assert_eq!(state.continuous().iterations_completed(), 1);
 
-        state.dirty.clear();
+        state.mark_rendered();
         state.reset_continuous();
-        assert!(state.dirty.full);
+        assert!(state.continuous.is_dirty());
         assert_eq!(*state.continuous().status(), ContinuousLoopStatus::Inactive);
     }
 
