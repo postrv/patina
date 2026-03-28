@@ -159,6 +159,16 @@ impl RuleEngine {
             };
 
             let path = entry.path();
+
+            // Reject symlinks to prevent reading files outside the rules directory
+            if std::fs::symlink_metadata(&path)
+                .map(|m| m.file_type().is_symlink())
+                .unwrap_or(false)
+            {
+                tracing::warn!("Symlink rejected in rules directory: {:?}", path);
+                continue;
+            }
+
             if !path.is_file() {
                 continue;
             }

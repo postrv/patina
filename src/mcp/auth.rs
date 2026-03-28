@@ -259,11 +259,17 @@ impl McpOAuthClient {
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
+            // Truncate error body to prevent leaking server-side secrets
+            let truncated = if body.len() > 200 {
+                format!("{}...[truncated]", &body[..200])
+            } else {
+                body
+            };
             return Err(anyhow!(
                 "OAuth token refresh failed for '{}': HTTP {} — {}",
                 self.server_name,
                 status,
-                body
+                truncated
             ));
         }
 

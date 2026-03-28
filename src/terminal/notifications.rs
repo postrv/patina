@@ -149,9 +149,14 @@ impl NotificationManager {
 
     /// Builds the escape sequence for the current protocol.
     ///
+    /// Sanitizes `title` and `body` to strip control characters (`\x00`–`\x1f`,
+    /// `\x7f`, `\x1b`) before interpolation, preventing escape sequence injection.
+    ///
     /// Returns an empty string for [`NotificationProtocol::None`].
     #[must_use]
     fn build_sequence(&self, title: &str, body: &str) -> String {
+        let title = sanitize_osc(title);
+        let body = sanitize_osc(body);
         match self.protocol {
             NotificationProtocol::Osc9 => format!("\x1b]9;{title}\x07"),
             NotificationProtocol::Osc777 => {
@@ -162,6 +167,14 @@ impl NotificationManager {
             NotificationProtocol::None => String::new(),
         }
     }
+}
+
+/// Strips control characters from a string for safe inclusion in OSC escape sequences.
+///
+/// Removes all C0 control chars (`\x00`–`\x1f`), DEL (`\x7f`), and ESC (`\x1b`)
+/// to prevent premature sequence termination or injection of arbitrary escape codes.
+fn sanitize_osc(s: &str) -> String {
+    s.chars().filter(|c| !c.is_ascii_control()).collect()
 }
 
 /// Detects the notification protocol for the current terminal.
@@ -466,5 +479,54 @@ mod tests {
         // In test environment, TERM_PROGRAM is unlikely to be "ghostty"
         // But this verifies the function doesn't panic
         let _ = is_ghostty();
+    }
+
+    // =========================================================================
+    // OSC sanitization tests
+    // =========================================================================
+
+    #[test]
+    fn test_sanitize_osc_strips_bel() {
+        assert_eq!(sanitize_osc("hello\x07world"), "helloworld");
+    }
+
+    #[test]
+    fn test_sanitize_osc_strips_escape() {
+        assert_eq!(sanitize_osc("hello\x1bworld"), "helloworld");
+    }
+
+    #[test]
+    fn test_sanitize_osc_strips_all_control_chars() {
+        let input = "a\x00b\x01c\x1bd\x07e\x0af";
+        let sanitized = sanitize_osc(input);
+        assert_eq!(sanitized, "abcdef");
+    }
+
+    #[test]
+    fn test_sanitize_osc_preserves_normal_text() {
+        let input = "Task complete: src/main.rs (3 files changed)";
+        assert_eq!(sanitize_osc(input), input);
+    }
+
+    #[test]
+    fn test_sanitize_osc_blocks_injection_attempt() {
+        // Attempt to inject a fake notification via BEL + new OSC sequence
+        let malicious = "evil\x07\x1b]777;notify;Spoofed;Fake\x07";
+        let sanitized = sanitize_osc(malicious);
+        assert!(!sanitized.contains('\x07'));
+        assert!(!sanitized.contains('\x1b'));
+        assert_eq!(sanitized, "evil]777;notify;Spoofed;Fake");
+    }
+
+    #[test]
+    fn test_build_sequence_sanitizes_input() {
+        let mgr = NotificationManager::with_protocol(NotificationProtocol::Osc777);
+        let seq = mgr.build_sequence("Title\x07inject", "Body\x1b[0m");
+        // Should not contain raw control chars from the input
+        assert!(!seq.contains("\x07inject"));
+        assert!(!seq.contains("\x1b[0m"));
+        // But should still have the protocol-level control chars
+        assert!(seq.starts_with("\x1b]777;"));
+        assert!(seq.ends_with("\x07"));
     }
 }

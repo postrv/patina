@@ -140,7 +140,10 @@ impl Checkpoint {
     /// The messages are serialized to JSON and then hashed. This produces a
     /// deterministic hash for the same sequence of messages.
     fn compute_hash(messages: &[Message]) -> String {
-        let json = serde_json::to_string(messages).unwrap_or_default();
+        let json = serde_json::to_string(messages).unwrap_or_else(|e| {
+            tracing::error!("Failed to serialize messages for checkpoint hash: {e}");
+            String::new()
+        });
         let mut hasher = Sha256::new();
         hasher.update(json.as_bytes());
         hex::encode(hasher.finalize())

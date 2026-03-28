@@ -247,8 +247,9 @@ impl<'a> RewindPickerWidget<'a> {
         }
 
         // Message preview
-        let preview = if entry.message_preview.len() > 40 {
-            format!("{}...", &entry.message_preview[..40])
+        let preview = if entry.message_preview.chars().count() > 40 {
+            let truncated: String = entry.message_preview.chars().take(40).collect();
+            format!("{truncated}...")
         } else {
             entry.message_preview.clone()
         };

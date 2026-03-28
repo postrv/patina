@@ -246,9 +246,11 @@ impl HookExecutor {
                 match hook {
                     HookAction::Command {
                         command,
-                        timeout_ms: _,
+                        timeout_ms,
                     } => {
-                        let result = self.run_hook_command(command, &context_json).await?;
+                        let result = self
+                            .run_hook_command(command, &context_json, *timeout_ms)
+                            .await?;
 
                         match result.exit_code {
                             0 => continue,
@@ -294,7 +296,12 @@ impl HookExecutor {
         })
     }
 
-    async fn run_hook_command(&self, command: &str, stdin_data: &str) -> Result<HookResult> {
+    async fn run_hook_command(
+        &self,
+        command: &str,
+        stdin_data: &str,
+        timeout_ms: Option<u64>,
+    ) -> Result<HookResult> {
         // Validate command is not empty or whitespace-only
         let trimmed = command.trim();
         if trimmed.is_empty() {
@@ -354,14 +361,35 @@ impl HookExecutor {
             drop(stdin);
         }
 
-        let output = child.wait_with_output().await?;
+        let timeout_duration = timeout_ms
+            .map(std::time::Duration::from_millis)
+            .unwrap_or(std::time::Duration::from_secs(30));
 
-        Ok(HookResult {
-            exit_code: output.status.code().unwrap_or(-1),
-            stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-            decision: HookDecision::Continue,
-        })
+        match tokio::time::timeout(timeout_duration, child.wait_with_output()).await {
+            Ok(Ok(output)) => Ok(HookResult {
+                exit_code: output.status.code().unwrap_or(-1),
+                stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+                stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+                decision: HookDecision::Continue,
+            }),
+            Ok(Err(e)) => Err(e.into()),
+            Err(_) => {
+                tracing::warn!(
+                    command = %trimmed,
+                    timeout_ms = timeout_duration.as_millis() as u64,
+                    "Hook command timed out"
+                );
+                Ok(HookResult {
+                    exit_code: -1,
+                    stdout: String::new(),
+                    stderr: format!(
+                        "Hook command timed out after {}ms",
+                        timeout_duration.as_millis()
+                    ),
+                    decision: HookDecision::Continue,
+                })
+            }
+        }
     }
 
     /// Evaluates a prompt-based hook by sending the prompt and context to the LLM provider.
@@ -460,10 +488,12 @@ impl HookExecutor {
 /// {"decision": "approve"|"deny"|"block", "reason": "..."}
 /// ```
 ///
-/// # Text Fallback
+/// # Text Fallback (Fail-Closed)
 ///
-/// If JSON parsing fails, the response is checked for the substrings
-/// "APPROVE", "DENY", or "BLOCK" (case-insensitive).
+/// If JSON parsing fails, only exact matches are accepted:
+/// - Trimmed text equals "APPROVE" (case-insensitive) → Allow
+/// - Trimmed text starts with "BLOCK" (case-insensitive) → Block
+/// - Everything else → Deny (fail-closed to prevent ambiguous responses from approving)
 #[must_use]
 fn parse_prompt_response(response: &str) -> HookDecision {
     // Try JSON parsing first
@@ -484,18 +514,19 @@ fn parse_prompt_response(response: &str) -> HookDecision {
         }
     }
 
-    // Fallback: text matching
-    let upper = response.to_uppercase();
-    if upper.contains("APPROVE") {
+    // Fallback: fail-closed — if JSON parsing fails, deny by default.
+    // Text matching is intentionally restrictive to prevent ambiguous responses
+    // (e.g., "I do not APPROVE" matching as Allow).
+    let trimmed = response.trim().to_uppercase();
+    if trimmed == "APPROVE" {
         HookDecision::Allow
-    } else if upper.contains("BLOCK") {
+    } else if trimmed.starts_with("BLOCK") {
         HookDecision::Block {
             reason: response.to_string(),
         }
-    } else if upper.contains("DENY") {
-        HookDecision::Deny
     } else {
-        HookDecision::Continue
+        // Default to Deny for any ambiguous or unrecognized response (fail-closed)
+        HookDecision::Deny
     }
 }
 
@@ -997,7 +1028,10 @@ mod tests {
     async fn test_hook_blocks_backslash_escaped_rm() {
         let executor = HookExecutor::new();
         // r\m -rf / should normalize to rm -rf / and be blocked
-        let result = executor.run_hook_command("r\\m -rf /", "").await.unwrap();
+        let result = executor
+            .run_hook_command("r\\m -rf /", "", None)
+            .await
+            .unwrap();
         assert_eq!(result.exit_code, 2, "Escaped rm -rf should be blocked");
         assert!(
             result.stdout.contains("blocked by security policy"),
@@ -1011,7 +1045,7 @@ mod tests {
     async fn test_hook_blocks_backslash_escaped_sudo() {
         let executor = HookExecutor::new();
         let result = executor
-            .run_hook_command("su\\do whoami", "")
+            .run_hook_command("su\\do whoami", "", None)
             .await
             .unwrap();
         assert_eq!(result.exit_code, 2, "Escaped sudo should be blocked");
@@ -1026,7 +1060,10 @@ mod tests {
     #[tokio::test]
     async fn test_hook_allows_safe_command() {
         let executor = HookExecutor::new();
-        let result = executor.run_hook_command("echo hello", "").await.unwrap();
+        let result = executor
+            .run_hook_command("echo hello", "", None)
+            .await
+            .unwrap();
         // Safe commands should either succeed (exit 0) or fail for other reasons,
         // but NOT be blocked (exit 2) by security policy
         assert_ne!(result.exit_code, 2, "Safe command should not be blocked");
@@ -1372,17 +1409,34 @@ hooks = [{ type = "prompt", prompt = "Is this tool safe?" }]
     }
 
     #[test]
-    fn test_parse_prompt_response_text_approve() {
-        let response = "I think we should APPROVE this action.";
-        let decision = parse_prompt_response(response);
+    fn test_parse_prompt_response_text_exact_approve() {
+        // Only exact "APPROVE" (trimmed, case-insensitive) is accepted
+        let decision = parse_prompt_response("APPROVE");
         assert!(
             matches!(decision, HookDecision::Allow),
             "Expected Allow, got {decision:?}"
+        );
+        let decision_lower = parse_prompt_response("  approve  ");
+        assert!(
+            matches!(decision_lower, HookDecision::Allow),
+            "Expected Allow for trimmed lowercase, got {decision_lower:?}"
+        );
+    }
+
+    #[test]
+    fn test_parse_prompt_response_text_ambiguous_approve_denied() {
+        // Ambiguous text containing "APPROVE" is fail-closed → Deny
+        let response = "I think we should APPROVE this action.";
+        let decision = parse_prompt_response(response);
+        assert!(
+            matches!(decision, HookDecision::Deny),
+            "Expected Deny for ambiguous APPROVE text (fail-closed), got {decision:?}"
         );
     }
 
     #[test]
     fn test_parse_prompt_response_text_deny() {
+        // Any non-APPROVE, non-BLOCK text defaults to Deny (fail-closed)
         let response = "I DENY this request.";
         let decision = parse_prompt_response(response);
         assert!(
@@ -1393,7 +1447,8 @@ hooks = [{ type = "prompt", prompt = "Is this tool safe?" }]
 
     #[test]
     fn test_parse_prompt_response_text_block() {
-        let response = "We should BLOCK this operation.";
+        // Text starting with "BLOCK" (trimmed) triggers Block
+        let response = "BLOCK: This operation is dangerous.";
         let decision = parse_prompt_response(response);
         assert!(
             matches!(decision, HookDecision::Block { .. }),
@@ -1402,12 +1457,13 @@ hooks = [{ type = "prompt", prompt = "Is this tool safe?" }]
     }
 
     #[test]
-    fn test_parse_prompt_response_unknown_falls_through() {
+    fn test_parse_prompt_response_unknown_defaults_to_deny() {
+        // Unknown text defaults to Deny (fail-closed), not Continue
         let response = "I'm not sure what to do.";
         let decision = parse_prompt_response(response);
         assert!(
-            matches!(decision, HookDecision::Continue),
-            "Expected Continue for ambiguous response, got {decision:?}"
+            matches!(decision, HookDecision::Deny),
+            "Expected Deny for ambiguous response (fail-closed), got {decision:?}"
         );
     }
 
@@ -1528,8 +1584,27 @@ hooks = [{ type = "prompt", prompt = "Is this tool safe?" }]
     }
 
     #[tokio::test]
-    async fn test_run_prompt_hook_text_approve() {
+    async fn test_run_prompt_hook_text_approve_exact() {
         let mut executor = HookExecutor::new();
+        // Only exact "APPROVE" text (not embedded in a sentence) triggers Allow
+        let provider = Arc::new(MockHookProvider::new("APPROVE"));
+        executor.set_provider(provider);
+
+        let result = executor
+            .run_prompt_hook("Is this safe?", "{}", None)
+            .await
+            .unwrap();
+        assert!(
+            matches!(result.decision, HookDecision::Allow),
+            "Expected Allow, got {:?}",
+            result.decision
+        );
+    }
+
+    #[tokio::test]
+    async fn test_run_prompt_hook_ambiguous_text_denied() {
+        let mut executor = HookExecutor::new();
+        // Ambiguous text containing APPROVE is fail-closed → Deny
         let provider = Arc::new(MockHookProvider::new(
             "I think we should APPROVE this action because it is safe.",
         ));
@@ -1540,8 +1615,8 @@ hooks = [{ type = "prompt", prompt = "Is this tool safe?" }]
             .await
             .unwrap();
         assert!(
-            matches!(result.decision, HookDecision::Allow),
-            "Expected Allow, got {:?}",
+            matches!(result.decision, HookDecision::Deny),
+            "Expected Deny for ambiguous text (fail-closed), got {:?}",
             result.decision
         );
     }

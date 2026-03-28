@@ -233,7 +233,18 @@ impl FileCompletionProvider {
         let search_dir = if dir_prefix.is_empty() {
             self.working_dir.clone()
         } else {
-            self.working_dir.join(&dir_prefix)
+            let candidate = self.working_dir.join(&dir_prefix);
+            // Validate that the search directory stays within working_dir
+            if let (Ok(canonical), Ok(canonical_wd)) =
+                (candidate.canonicalize(), self.working_dir.canonicalize())
+            {
+                if !canonical.starts_with(&canonical_wd) {
+                    return results;
+                }
+            } else {
+                return results;
+            }
+            candidate
         };
         let entries = match std::fs::read_dir(&search_dir) {
             Ok(entries) => entries,
@@ -318,11 +329,20 @@ pub fn extract_mention_filter(text: &str, cursor_pos: usize) -> Option<String> {
 }
 
 /// Resolves `@path` mentions in a user message by reading file contents.
+///
+/// Validates each path to prevent traversal outside `working_dir`:
+/// - Rejects absolute paths
+/// - Rejects symlinks
+/// - Canonicalizes and verifies the result stays within the working directory
 #[must_use]
 pub fn resolve_mentions(input: &str, working_dir: &std::path::Path) -> (String, String) {
     let mut context = String::new();
     let mention_paths = extract_at_paths(input);
     for path_str in &mention_paths {
+        if !validate_mention_path(path_str, working_dir) {
+            tracing::warn!("Blocked @-mention path traversal attempt: {}", path_str);
+            continue;
+        }
         let full_path = working_dir.join(path_str);
         match std::fs::read_to_string(&full_path) {
             Ok(file_content) => {
@@ -336,6 +356,42 @@ pub fn resolve_mentions(input: &str, working_dir: &std::path::Path) -> (String, 
         }
     }
     (context, input.to_string())
+}
+
+/// Validates that a mention path does not escape the working directory.
+///
+/// Returns `false` for absolute paths, symlinks, or paths that resolve
+/// outside the working directory via `..` traversal.
+fn validate_mention_path(path_str: &str, working_dir: &std::path::Path) -> bool {
+    let path = std::path::Path::new(path_str);
+
+    // Reject absolute paths
+    if path.is_absolute() {
+        return false;
+    }
+
+    let full_path = working_dir.join(path_str);
+
+    // Reject symlinks (check before canonicalize to avoid TOCTOU)
+    if full_path
+        .symlink_metadata()
+        .map(|m| m.file_type().is_symlink())
+        .unwrap_or(false)
+    {
+        return false;
+    }
+
+    // Canonicalize and verify the path stays within working_dir
+    let canonical = match full_path.canonicalize() {
+        Ok(p) => p,
+        Err(_) => return false, // File doesn't exist or unreadable
+    };
+    let canonical_wd = match working_dir.canonicalize() {
+        Ok(p) => p,
+        Err(_) => return false,
+    };
+
+    canonical.starts_with(&canonical_wd)
 }
 
 fn extract_at_paths(text: &str) -> Vec<String> {
@@ -734,5 +790,71 @@ mod tests {
         let results = provider.search("test");
         assert!(!results.is_empty());
         assert_eq!(results[0].source, CompletionSource::File);
+    }
+
+    // --- Path traversal security tests ---
+
+    #[test]
+    fn validate_mention_path_blocks_absolute() {
+        let dir = tempfile::TempDir::new().unwrap();
+        assert!(!validate_mention_path("/etc/passwd", dir.path()));
+    }
+
+    #[test]
+    fn validate_mention_path_blocks_parent_traversal() {
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(dir.path().join("safe.txt"), "safe").unwrap();
+        // Create a file outside working dir
+        assert!(!validate_mention_path("../../etc/passwd", dir.path()));
+        assert!(!validate_mention_path("../something", dir.path()));
+    }
+
+    #[test]
+    fn validate_mention_path_allows_valid_relative() {
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(dir.path().join("safe.txt"), "safe content").unwrap();
+        assert!(validate_mention_path("safe.txt", dir.path()));
+    }
+
+    #[test]
+    fn validate_mention_path_blocks_nonexistent() {
+        let dir = tempfile::TempDir::new().unwrap();
+        assert!(!validate_mention_path("no_such_file.txt", dir.path()));
+    }
+
+    #[test]
+    fn resolve_mentions_blocks_traversal() {
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(dir.path().join("safe.txt"), "safe").unwrap();
+        let (ctx, _) = resolve_mentions("@../../etc/passwd @safe.txt", dir.path());
+        // Should include safe.txt but not the traversal path
+        assert!(ctx.contains("safe.txt"));
+        assert!(!ctx.contains("passwd"));
+    }
+
+    #[test]
+    fn file_completion_blocks_parent_traversal() {
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(dir.path().join("ok.rs"), "").unwrap();
+        let provider = FileCompletionProvider::new(dir.path().to_path_buf());
+        let results = provider.search("../");
+        assert!(
+            results.is_empty(),
+            "Should block parent directory traversal"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn validate_mention_path_blocks_symlinks() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let target = dir.path().join("target.txt");
+        std::fs::write(&target, "target content").unwrap();
+        let link = dir.path().join("link.txt");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        assert!(
+            !validate_mention_path("link.txt", dir.path()),
+            "Symlinks should be rejected"
+        );
     }
 }

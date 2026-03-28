@@ -65,8 +65,8 @@ pub fn build_narsil_context_cached(_working_dir: &Path, cache_dir: &Path) -> Opt
 /// Writes narsil context to the cache file.
 ///
 /// Creates intermediate directories if they do not exist. The content is
-/// written atomically (via a full overwrite) to the cache path at
-/// `<cache_dir>/patina/narsil-context.cache`.
+/// written atomically via write-to-temp-then-rename to prevent partial reads.
+/// File permissions are set to `0o600` on Unix.
 ///
 /// # Arguments
 ///
@@ -82,7 +82,16 @@ pub fn update_narsil_cache(cache_dir: &Path, content: &str) -> anyhow::Result<()
     if let Some(parent) = cache_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    std::fs::write(&cache_path, content)?;
+    // Atomic write: write to temp file then rename
+    let tmp_path = cache_path.with_extension("tmp");
+    std::fs::write(&tmp_path, content)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let perms = std::fs::Permissions::from_mode(0o600);
+        std::fs::set_permissions(&tmp_path, perms)?;
+    }
+    std::fs::rename(&tmp_path, &cache_path)?;
     Ok(())
 }
 

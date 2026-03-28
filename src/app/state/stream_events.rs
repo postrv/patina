@@ -139,14 +139,16 @@ impl AppState {
             let hooks_clone_session = hooks.session_id().to_string();
             let reason_owned = reason_str.to_string();
             let executor = Arc::clone(&self.tool_state.tool_executor);
-            tokio::spawn(async move {
-                let _ = executor.hooks().fire_stop(&reason_owned).await;
-                tracing::debug!(
-                    session_id = %hooks_clone_session,
-                    stop_reason = %reason_owned,
-                    "Stop hook fired"
-                );
-            });
+            if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                handle.spawn(async move {
+                    let _ = executor.hooks().fire_stop(&reason_owned).await;
+                    tracing::debug!(
+                        session_id = %hooks_clone_session,
+                        stop_reason = %reason_owned,
+                        "Stop hook fired"
+                    );
+                });
+            }
         }
         self.tool_state.handle_message_complete(stop_reason)?;
         self.display.loading = false;
@@ -205,9 +207,11 @@ impl AppState {
         // Fire StopFailure hook in a background task
         let executor = Arc::clone(&self.tool_state.tool_executor);
         let error_clone = error.clone();
-        tokio::spawn(async move {
-            let _ = executor.hooks().fire_stop_failure(&error_clone).await;
-        });
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(async move {
+                let _ = executor.hooks().fire_stop_failure(&error_clone).await;
+            });
+        }
 
         self.display.loading = false;
         self.streaming_rx = None;
