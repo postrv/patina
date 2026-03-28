@@ -243,7 +243,7 @@ pub fn is_dangerous_pattern(command: &str) -> bool {
 /// # Examples
 ///
 /// ```
-/// use patina::tools::security::{validate_command, ToolExecutionPolicy};
+/// use patina::tools::{validate_command, ToolExecutionPolicy};
 ///
 /// let policy = ToolExecutionPolicy::default();
 /// assert!(validate_command("echo hello", &policy).is_ok());
