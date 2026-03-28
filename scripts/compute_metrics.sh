@@ -31,8 +31,10 @@ count_loc() {
 count_tests() {
     # Count test functions from cargo test --list output
     # Each test ends with ": test" in the listing
+    # Note: grep -c outputs "0" on no match but exits 1; use || true
+    # to avoid triggering pipefail, without adding a duplicate "0".
     cargo test -- --list 2>/dev/null | \
-        grep -c ': test$' || echo "0"
+        grep -c ': test$' || true
 }
 
 # Function to extract version from Cargo.toml
@@ -46,7 +48,7 @@ get_version() {
 # Function to count doc tests
 count_doc_tests() {
     cargo test --doc -- --list 2>/dev/null | \
-        grep -c ': test$' || echo "0"
+        grep -c ': test$' || true
 }
 
 # Compute all metrics
