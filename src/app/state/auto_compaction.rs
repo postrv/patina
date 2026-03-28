@@ -345,6 +345,6 @@ impl AppState {
         self.session.set_checkpoints(session.checkpoints().to_vec());
 
         // Mark for full redraw
-        self.dirty.full = true;
+        self.conversation.dirty = true;
     }
 }

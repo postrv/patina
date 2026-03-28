@@ -398,7 +398,7 @@ impl AppState {
             tracing::warn!("set_streaming called but timeline already streaming");
         }
 
-        self.dirty.full = true;
+        self.conversation.dirty = true;
     }
 
     /// Appends text to the current streaming response.
@@ -407,7 +407,7 @@ impl AppState {
     pub fn append_streaming_text(&mut self, text: &str) {
         // Update timeline streaming entry
         self.conversation.timeline.append_to_streaming(text);
-        self.dirty.full = true;
+        self.conversation.dirty = true;
     }
 
     /// Finalizes streaming as a complete assistant message.
@@ -417,7 +417,7 @@ impl AppState {
         // Finalize timeline streaming entry
         self.conversation.timeline.finalize_streaming_as_message();
         self.view.display.loading = false;
-        self.dirty.full = true;
+        self.conversation.dirty = true;
     }
 
     /// Adds a tool block with result to both legacy tool_blocks and timeline.
@@ -454,7 +454,7 @@ impl AppState {
                 is_error,
             );
 
-        self.dirty.full = true;
+        self.conversation.dirty = true;
     }
 
     /// Clears conversation history while preserving configuration.
@@ -473,7 +473,7 @@ impl AppState {
         self.view.display.scroll = crate::tui::scroll::ScrollState::new();
         self.view.display.loading = false;
         self.conversation.streaming_rx = None;
-        self.dirty.full = true;
+        self.conversation.dirty = true;
         self.session.mark_dirty();
     }
 
@@ -590,7 +590,7 @@ impl AppState {
                 tool_name, input, None, // No output yet - executing
                 false,
             );
-        self.dirty.full = true;
+        self.conversation.dirty = true;
     }
 
     /// Updates a tool in the timeline with its result.
@@ -612,7 +612,7 @@ impl AppState {
         self.conversation
             .timeline
             .update_tool_result(tool_name, output, is_error);
-        self.dirty.full = true;
+        self.conversation.dirty = true;
     }
 
     /// Updates a tool in the timeline by its ID.
@@ -638,7 +638,7 @@ impl AppState {
                 break;
             }
         }
-        self.dirty.full = true;
+        self.conversation.dirty = true;
     }
 }
 

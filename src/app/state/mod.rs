@@ -871,6 +871,7 @@ impl AppState {
     pub fn needs_render(&self) -> bool {
         self.dirty.any()
             || self.view.needs_render()
+            || self.conversation.is_dirty()
             || self.agent_panel.is_dirty()
             || self.continuous.is_dirty()
             || self.compression.is_render_dirty()
@@ -886,6 +887,7 @@ impl AppState {
         self.dirty.throbber
             && !self.dirty.full
             && !self.view.input_state.is_dirty()
+            && !self.conversation.is_dirty()
             && !self.agent_panel.is_dirty()
             && !self.continuous.is_dirty()
             && !self.view.worktree.is_dirty()
@@ -896,6 +898,7 @@ impl AppState {
     pub fn mark_rendered(&mut self) {
         self.dirty.clear();
         self.view.mark_rendered();
+        self.conversation.mark_clean();
         self.agent_panel.mark_clean();
         self.continuous.mark_clean();
         self.compression.mark_render_clean();
