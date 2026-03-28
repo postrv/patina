@@ -37,29 +37,13 @@ impl AppState {
     ///
     /// This updates the unified timeline and sets the dirty flag so the UI
     /// will re-render. Note: This only adds to the display timeline, not
-    /// the API messages. Use `add_api_message` to add to the API conversation.
+    /// the API messages.
     pub fn add_message(&mut self, message: Message) {
         // Add to unified timeline based on role
         match message.role {
             Role::User => self.timeline.push_user_message(&message.content),
             Role::Assistant => self.timeline.push_assistant_message(&message.content),
         }
-        self.dirty.messages = true;
-    }
-
-    /// Adds a full API message with content blocks.
-    ///
-    /// This adds to both the API message history (with full content blocks)
-    /// and the display timeline (as text summary).
-    pub fn add_api_message(&mut self, message: ApiMessageV2) {
-        // Add to display timeline as text summary
-        let legacy = message.to_legacy();
-        match legacy.role {
-            Role::User => self.timeline.push_user_message(&legacy.content),
-            Role::Assistant => self.timeline.push_assistant_message(&legacy.content),
-        }
-        // Add to API messages with full content blocks
-        self.api_messages.push(message);
         self.dirty.messages = true;
     }
 
@@ -391,6 +375,20 @@ impl AppState {
         if self.timeline.try_push_streaming().is_ok() && !response.is_empty() {
             self.timeline.append_to_streaming(&response);
         }
+        self.dirty.messages = true;
+    }
+}
+
+#[cfg(test)]
+impl AppState {
+    /// Adds a full API message with content blocks (test-only).
+    pub fn add_api_message(&mut self, message: ApiMessageV2) {
+        let legacy = message.to_legacy();
+        match legacy.role {
+            Role::User => self.timeline.push_user_message(&legacy.content),
+            Role::Assistant => self.timeline.push_assistant_message(&legacy.content),
+        }
+        self.api_messages.push(message);
         self.dirty.messages = true;
     }
 }

@@ -24,12 +24,6 @@ impl AppState {
         self.mcp_manager.as_mut().and_then(std::sync::Arc::get_mut)
     }
 
-    /// Returns `true` if an MCP manager is configured.
-    #[must_use]
-    pub fn has_mcp_manager(&self) -> bool {
-        self.mcp_manager.is_some()
-    }
-
     /// Returns all tool definitions: built-in defaults plus MCP server tools.
     ///
     /// This is the unified tool list sent to the Anthropic API.
@@ -40,5 +34,14 @@ impl AppState {
             tools.extend(manager.tool_definitions());
         }
         tools
+    }
+}
+
+#[cfg(test)]
+impl AppState {
+    /// Returns `true` if an MCP manager is configured.
+    #[must_use]
+    pub fn has_mcp_manager(&self) -> bool {
+        self.mcp_manager.is_some()
     }
 }

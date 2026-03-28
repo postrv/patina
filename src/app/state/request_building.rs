@@ -9,17 +9,6 @@ impl AppState {
         &self.cost_tracker
     }
 
-    /// Returns a reference to the audit logger.
-    #[must_use]
-    pub fn audit_logger(&self) -> &AuditLogger {
-        &self.audit_logger
-    }
-
-    /// Returns a mutable reference to the audit logger.
-    pub fn audit_logger_mut(&mut self) -> &mut AuditLogger {
-        &mut self.audit_logger
-    }
-
     /// Returns a formatted cost summary for display.
     #[must_use]
     pub fn cost_summary(&self) -> String {

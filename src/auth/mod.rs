@@ -309,11 +309,6 @@ impl AuthManager {
         self.api_key = Some(key);
     }
 
-    /// Forces use of API key even if OAuth is available.
-    pub fn set_force_api_key(&mut self, force: bool) {
-        self.force_api_key = force;
-    }
-
     /// Gets the current authentication method.
     ///
     /// This will:
@@ -523,6 +518,14 @@ impl AuthManager {
         // Clear the refresher state
         self.refresher = None;
         self.refresh_handle = None;
+    }
+}
+
+#[cfg(test)]
+impl AuthManager {
+    /// Forces use of API key even if OAuth is available.
+    pub fn set_force_api_key(&mut self, force: bool) {
+        self.force_api_key = force;
     }
 }
 

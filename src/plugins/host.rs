@@ -215,11 +215,6 @@ impl PluginHost {
         &self.context
     }
 
-    /// Returns a mutable reference to the plugin context.
-    pub fn context_mut(&mut self) -> &mut PluginContext {
-        &mut self.context
-    }
-
     /// Registers a plugin with the host.
     ///
     /// # Errors
@@ -267,6 +262,14 @@ impl PluginHost {
     #[must_use]
     pub fn list_plugins(&self) -> Vec<String> {
         self.plugins.keys().cloned().collect()
+    }
+}
+
+#[cfg(test)]
+impl PluginHost {
+    /// Returns a mutable reference to the plugin context.
+    pub fn context_mut(&mut self) -> &mut PluginContext {
+        &mut self.context
     }
 }
 

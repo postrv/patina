@@ -46,7 +46,6 @@ use crate::api::{LlmProvider, StreamEvent, SystemBlock, ThinkingConfig, TokenBud
 use crate::app::tool_loop::ToolLoop;
 use crate::app::STREAMING_CHANNEL_BUFFER;
 use crate::context::compression::{CompactionMetrics, CompressionOrchestrator};
-use crate::enterprise::audit::{AuditConfig, AuditLogger};
 use crate::enterprise::cost::{CostConfig, CostTracker, UsageRecord};
 use crate::hooks::HookManager;
 use crate::keybindings::KeybindingManager;
@@ -231,9 +230,6 @@ pub struct AppState {
 
     /// Cost tracker for session usage accounting.
     cost_tracker: CostTracker,
-
-    /// Audit logger for enterprise compliance tracking.
-    audit_logger: AuditLogger,
 
     /// Model selection, effort, and thinking configuration.
     model_config: ModelConfigState,
@@ -473,7 +469,6 @@ impl AppState {
             },
             mcp_manager: None,
             cost_tracker: CostTracker::new(CostConfig::default()),
-            audit_logger: AuditLogger::new(AuditConfig::default()),
             model_config: {
                 let mut mc = ModelConfigState::new();
                 if let Some(engine) = skill_engine {
@@ -679,11 +674,6 @@ impl AppState {
     pub fn add_conflict_report(&mut self, report: ConflictReport) {
         self.agent_panel.add_conflict(report);
         self.dirty.full = true;
-    }
-
-    /// Takes all pending conflict reports, leaving the internal list empty.
-    pub fn take_conflict_reports(&mut self) -> Vec<ConflictReport> {
-        self.agent_panel.take_conflicts()
     }
 
     // =========================================================================
@@ -1108,6 +1098,14 @@ impl AppState {
         self.display
             .scroll
             .set_content_height(feedback.content_height);
+    }
+}
+
+#[cfg(test)]
+impl AppState {
+    /// Takes all pending conflict reports, leaving the internal list empty.
+    pub fn take_conflict_reports(&mut self) -> Vec<ConflictReport> {
+        self.agent_panel.take_conflicts()
     }
 }
 

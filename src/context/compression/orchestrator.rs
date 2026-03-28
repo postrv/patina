@@ -109,12 +109,6 @@ impl BuildContextResult {
         &self.result
     }
 
-    /// Consumes self and returns the inner compression result.
-    #[must_use]
-    pub fn into_result(self) -> CompressionResult {
-        self.result
-    }
-
     /// Returns the tokens used by the manifest layer.
     #[must_use]
     pub fn manifest_tokens(&self) -> usize {
@@ -1504,6 +1498,15 @@ impl CompressionOrchestrator {
                 self.create_degraded_result(CompressionLevel::SymbolDetail)
             }
         }
+    }
+}
+
+#[cfg(test)]
+impl BuildContextResult {
+    /// Consumes self and returns the inner compression result.
+    #[must_use]
+    pub fn into_result(self) -> CompressionResult {
+        self.result
     }
 }
 

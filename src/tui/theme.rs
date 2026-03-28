@@ -231,14 +231,6 @@ impl PatinaTheme {
         Style::default().fg(Self::VERDIGRIS).bg(Self::BG_CODE)
     }
 
-    /// Style for inline code.
-    #[must_use]
-    pub fn code_inline() -> Style {
-        Style::default()
-            .fg(Self::VERDIGRIS_BRIGHT)
-            .bg(Self::BG_CODE)
-    }
-
     /// Style for tool execution headers.
     #[must_use]
     pub fn tool_header() -> Style {
@@ -338,6 +330,17 @@ impl PatinaTheme {
         Style::default()
             .fg(Self::BRONZE_MUTED)
             .bg(Self::DIFF_HUNK_BG)
+    }
+}
+
+#[cfg(test)]
+impl PatinaTheme {
+    /// Style for inline code.
+    #[must_use]
+    pub fn code_inline() -> Style {
+        Style::default()
+            .fg(Self::VERDIGRIS_BRIGHT)
+            .bg(Self::BG_CODE)
     }
 }
 
