@@ -227,6 +227,9 @@ pub struct AppState {
 
     /// Terminal notification manager for desktop notifications.
     notification_manager: NotificationManager,
+
+    /// Shared cron store for periodic schedule checking from the event loop.
+    cron_store: Option<std::sync::Arc<crate::tools::cron::CronStore>>,
 }
 
 #[derive(Default)]
@@ -370,11 +373,22 @@ impl AppState {
             crate::plugins::bridge_plugin_hooks(&plugin.hooks, &mut hook_manager);
         }
 
+        // Create stores for tool_search, tasks, and cron
+        let tool_search_registry = Arc::new(crate::tools::ToolSearchRegistry::new());
+        let task_store = Arc::new(crate::tools::TaskStore::new());
+        let cron_path = directories::BaseDirs::new()
+            .map(|dirs| dirs.config_dir().join("patina/cron_schedules.json"))
+            .unwrap_or_else(|| working_dir.join(".patina/cron_schedules.json"));
+        let cron_store = Arc::new(crate::tools::cron::CronStore::new(cron_path));
+
         // Create tool executor with hook, permission, and parallel configuration
         let tool_executor = Arc::new(
             HookedToolExecutor::new(working_dir.clone(), hook_manager)
                 .with_permissions(Arc::clone(&permission_manager))
-                .with_parallel_config(parallel_config),
+                .with_parallel_config(parallel_config)
+                .with_tool_search_registry(tool_search_registry)
+                .with_task_store(task_store)
+                .with_cron_store(Arc::clone(&cron_store)),
         );
 
         // Load skills from standard directories
@@ -459,6 +473,7 @@ impl AppState {
             },
             keybinding_mgr: KeybindingManager::with_defaults(),
             notification_manager: NotificationManager::detect(),
+            cron_store: Some(cron_store),
         }
     }
 
@@ -622,6 +637,12 @@ impl AppState {
     #[must_use]
     pub fn notification_manager(&self) -> &NotificationManager {
         &self.notification_manager
+    }
+
+    /// Returns a reference to the cron store, if configured.
+    #[must_use]
+    pub fn cron_store(&self) -> Option<&crate::tools::cron::CronStore> {
+        self.cron_store.as_deref()
     }
 
     /// Returns a reference to the tool execution state.

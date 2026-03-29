@@ -18,6 +18,7 @@
 //! assert!(tools.iter().any(|t| t.name == "bash"));
 //! ```
 
+use crate::tools::tasks;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -86,7 +87,8 @@ pub enum ToolChoice {
 ///
 /// Includes: bash, read_file, write_file, edit, multi_edit, list_files, glob, grep,
 /// web_fetch, web_search, analyze_image, lsp, todo_write, plan, ask_user,
-/// task_output, task_stop, send_message, notebook_edit
+/// task_output, task_stop, send_message, notebook_edit, tool_search,
+/// task_create, task_get, task_list, task_update, cron_create, cron_list, cron_delete
 #[must_use]
 pub fn default_tools() -> Vec<ToolDefinition> {
     vec![
@@ -109,6 +111,14 @@ pub fn default_tools() -> Vec<ToolDefinition> {
         task_stop_tool(),
         send_message_tool(),
         notebook_edit_tool(),
+        tool_search_tool(),
+        tasks::task_create_tool(),
+        tasks::task_get_tool(),
+        tasks::task_list_tool(),
+        tasks::task_update_tool(),
+        cron_create_tool(),
+        cron_list_tool(),
+        cron_delete_tool(),
     ]
 }
 
@@ -729,6 +739,106 @@ pub fn notebook_edit_tool() -> ToolDefinition {
     )
 }
 
+/// Creates the tool_search tool definition.
+///
+/// Searches for deferred tool schemas so the LLM can discover and invoke them.
+#[must_use]
+pub fn tool_search_tool() -> ToolDefinition {
+    ToolDefinition::new(
+        "tool_search",
+        "Fetches full schema definitions for deferred tools so they can be called. \
+         Deferred tools appear by name in system messages. Until fetched, only the name \
+         is known - there is no parameter schema, so the tool cannot be invoked. This \
+         tool takes a query, matches it against the deferred tool list, and returns the \
+         matched tools' complete JSONSchema definitions.\n\n\
+         Query forms:\n\
+         - \"select:Read,Edit,Grep\" - fetch exact tools by name\n\
+         - \"notebook jupyter\" - keyword search, up to max_results best matches\n\
+         - \"+slack send\" - require \"slack\" in the name, rank by remaining terms",
+        json!({
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Query to find deferred tools. Use \"select:<tool_name>\" \
+                        for direct selection, or keywords to search."
+                },
+                "max_results": {
+                    "type": "integer",
+                    "description": "Maximum number of results to return (default: 5)",
+                    "default": 5
+                }
+            },
+            "required": ["query"]
+        }),
+    )
+}
+
+/// Creates the cron_create tool definition.
+///
+/// Creates a new recurring schedule with an interval expression and prompt.
+#[must_use]
+pub fn cron_create_tool() -> ToolDefinition {
+    ToolDefinition::new(
+        "cron_create",
+        "Create a new recurring schedule. The schedule will fire at the given interval \
+         and submit the prompt for execution. Supported expressions: \"30s\" (seconds), \
+         \"5m\" (minutes), \"1h\" (hours), \"hourly\", \"daily\".",
+        json!({
+            "type": "object",
+            "properties": {
+                "expression": {
+                    "type": "string",
+                    "description": "Interval expression, e.g. \"5m\", \"1h\", \"daily\""
+                },
+                "prompt": {
+                    "type": "string",
+                    "description": "The prompt to execute when the schedule fires"
+                }
+            },
+            "required": ["expression", "prompt"]
+        }),
+    )
+}
+
+/// Creates the cron_list tool definition.
+///
+/// Lists all cron schedules (both enabled and disabled).
+#[must_use]
+pub fn cron_list_tool() -> ToolDefinition {
+    ToolDefinition::new(
+        "cron_list",
+        "List all cron schedules with their ID, expression, prompt, enabled status, \
+         and next run time.",
+        json!({
+            "type": "object",
+            "properties": {},
+            "required": []
+        }),
+    )
+}
+
+/// Creates the cron_delete tool definition.
+///
+/// Deletes a cron schedule by its ID.
+#[must_use]
+pub fn cron_delete_tool() -> ToolDefinition {
+    ToolDefinition::new(
+        "cron_delete",
+        "Delete a cron schedule by its unique ID. The schedule will no longer fire.",
+        json!({
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string",
+                    "description": "The UUID of the schedule to delete"
+                }
+            },
+            "required": ["id"]
+        }),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -780,7 +890,7 @@ mod tests {
     fn test_default_tools_contains_all_tools() {
         let tools = default_tools();
 
-        assert_eq!(tools.len(), 19, "should have 19 default tools");
+        assert_eq!(tools.len(), 27, "should have 27 default tools");
 
         let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         assert!(names.contains(&"bash"), "should contain bash");
@@ -811,6 +921,14 @@ mod tests {
             names.contains(&"notebook_edit"),
             "should contain notebook_edit"
         );
+        assert!(names.contains(&"tool_search"), "should contain tool_search");
+        assert!(names.contains(&"task_create"), "should contain task_create");
+        assert!(names.contains(&"task_get"), "should contain task_get");
+        assert!(names.contains(&"task_list"), "should contain task_list");
+        assert!(names.contains(&"task_update"), "should contain task_update");
+        assert!(names.contains(&"cron_create"), "should contain cron_create");
+        assert!(names.contains(&"cron_list"), "should contain cron_list");
+        assert!(names.contains(&"cron_delete"), "should contain cron_delete");
     }
 
     #[test]
