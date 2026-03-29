@@ -7,12 +7,14 @@
 //! - Glob pattern matching for file discovery
 //! - Grep content search with regex support
 //! - Web content fetching with HTML to markdown conversion
+//! - External editor integration (`$EDITOR` / `$VISUAL`)
 //! - Hook integration via `HookedToolExecutor`
 //! - Parallel tool execution for performance optimization
 
 pub mod ask_user;
 pub mod cron;
 mod executor;
+pub mod external_editor;
 mod hooked;
 pub mod lsp;
 pub mod parallel;
@@ -52,3 +54,6 @@ pub use tasks::{
     task_create_tool, task_get_tool, task_list_tool, task_update_tool, Task, TaskStatus, TaskStore,
     TaskUpdate,
 };
+
+// Re-export external editor type
+pub use external_editor::ExternalEditor;
