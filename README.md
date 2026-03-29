@@ -262,7 +262,7 @@ All commands support tab completion -- start typing `/` and press Tab to see opt
 
 ## MCP Support
 
-Patina implements the [Model Context Protocol](https://spec.modelcontextprotocol.io/) for connecting external tool servers, built on the [rmcp SDK](https://github.com/anthropics/rust-sdk) for full spec compliance.
+Patina implements the [Model Context Protocol](https://spec.modelcontextprotocol.io/) for connecting external tool servers, built on the [rmcp SDK](https://github.com/4t145/rmcp) for full spec compliance.
 
 ### Transports
 
@@ -498,7 +498,7 @@ tail -f /tmp/patina.log
 | ratatui 0.30 | Terminal UI |
 | crossterm 0.28 | Terminal events |
 | reqwest 0.12 | HTTP client (rustls) |
-| rmcp 0.16 | MCP SDK (stdio, HTTP, SSE transports) |
+| rmcp 1.2 | MCP SDK (stdio, HTTP, SSE transports) |
 | secrecy 0.10 | Secret storage |
 | serde 1.0 | Serialization |
 | clap 4.5 | CLI parsing |
