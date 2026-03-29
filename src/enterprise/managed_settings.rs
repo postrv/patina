@@ -344,9 +344,7 @@ pub fn merge_all_managed_settings(
     base: ManagedSettings,
     overlays: Vec<ManagedSettings>,
 ) -> ManagedSettings {
-    overlays
-        .into_iter()
-        .fold(base, merge_managed_settings)
+    overlays.into_iter().fold(base, merge_managed_settings)
 }
 
 /// Checks whether a plugin is allowed by managed settings.

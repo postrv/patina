@@ -9,7 +9,7 @@
 //! ```
 //! use patina::tui::search::SearchState;
 //!
-//! let entries = vec!["Hello world", "hello rust", "goodbye"];
+//! let entries = vec!["hello world", "hello rust", "goodbye"];
 //! let mut state = SearchState::new();
 //! state.set_query("hello", &entries);
 //! assert_eq!(state.match_count(), 2);

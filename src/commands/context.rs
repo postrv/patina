@@ -171,7 +171,7 @@ pub fn analyze_context(input: &ContextAnalysisInput) -> ContextBreakdown {
 ///     system_prompt_tokens: 100,
 ///     claude_md_tokens: 100,
 ///     tool_definitions_tokens: 100,
-///     conversation_tokens: 160_100,
+///     conversation_tokens: 162_100,
 ///     memory_tokens: 100,
 ///     max_tokens: 200_000,
 /// };
