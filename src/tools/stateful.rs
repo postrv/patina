@@ -14,6 +14,9 @@ use tracing::{debug, warn};
 use super::executor::{ToolCall, ToolExecutor, ToolResult};
 use super::security::{normalize_command, ToolExecutionPolicy};
 use crate::shell::ShellConfig;
+use crate::tools::cron::CronStore;
+use crate::tools::tasks::TaskStore;
+use crate::tools::tool_search::ToolSearchRegistry;
 
 /// Shell state that persists across command executions.
 ///
@@ -222,6 +225,30 @@ impl StatefulToolExecutor {
     #[must_use]
     pub fn with_policy(mut self, policy: ToolExecutionPolicy) -> Self {
         self.inner = self.inner.with_policy(policy);
+        self
+    }
+
+    /// Sets the tool search registry for deferred tool discovery.
+    #[must_use]
+    pub fn with_tool_search_registry(
+        mut self,
+        registry: std::sync::Arc<ToolSearchRegistry>,
+    ) -> Self {
+        self.inner = self.inner.with_tool_search_registry(registry);
+        self
+    }
+
+    /// Sets the task store for LLM-callable task CRUD operations.
+    #[must_use]
+    pub fn with_task_store(mut self, store: std::sync::Arc<TaskStore>) -> Self {
+        self.inner = self.inner.with_task_store(store);
+        self
+    }
+
+    /// Sets the cron store for LLM-callable schedule CRUD operations.
+    #[must_use]
+    pub fn with_cron_store(mut self, store: std::sync::Arc<CronStore>) -> Self {
+        self.inner = self.inner.with_cron_store(store);
         self
     }
 

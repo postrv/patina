@@ -18,3 +18,4 @@ mod hooks_test;
 mod permission_test;
 mod search_test;
 mod security_test;
+mod wired_tools_test;

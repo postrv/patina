@@ -278,6 +278,7 @@ async fn event_loop(
 ) -> Result<()> {
     let mut events = EventStream::new();
     let mut tick_interval = interval(Duration::from_millis(250));
+    let mut last_cron_check = std::time::Instant::now();
     let mut dispatcher = create_dispatcher();
 
     // Cache initial terminal height in state for handler access.
@@ -296,6 +297,12 @@ async fn event_loop(
                 state.apply_render_feedback(&fb);
             }
             state.mark_rendered();
+        }
+
+        // Check for due cron schedules every 60 seconds
+        if last_cron_check.elapsed() >= Duration::from_secs(60) {
+            check_cron_schedules(state);
+            last_cron_check = std::time::Instant::now();
         }
 
         let mut ctx =
@@ -319,4 +326,30 @@ async fn event_loop(
     session_helpers::auto_save_session(state, session_manager).await;
 
     Ok(())
+}
+
+/// Checks for due cron schedules and logs their prompts.
+///
+/// Called periodically from the event loop. Due schedules are logged and
+/// their prompts can be picked up by the conversation engine.
+fn check_cron_schedules(state: &AppState) {
+    let cron_store = state.cron_store();
+    let Some(store) = cron_store else {
+        return;
+    };
+    match store.check_due() {
+        Ok(due) => {
+            for schedule in &due {
+                info!(
+                    id = %schedule.id,
+                    expression = %schedule.expression,
+                    "Cron schedule fired: {}",
+                    schedule.prompt,
+                );
+            }
+        }
+        Err(e) => {
+            warn!("Failed to check cron schedules: {e}");
+        }
+    }
 }

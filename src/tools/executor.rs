@@ -17,6 +17,9 @@ use super::security::ToolExecutionPolicy;
 use super::{vision, web_fetch, web_search};
 use crate::agents::AgentRegistry;
 use crate::permissions::PermissionRequest;
+use crate::tools::cron::CronStore;
+use crate::tools::tasks::TaskStore;
+use crate::tools::tool_search::ToolSearchRegistry;
 use std::sync::Arc;
 
 /// Tool executor with security policy enforcement.
@@ -24,6 +27,9 @@ pub struct ToolExecutor {
     working_dir: PathBuf,
     pub(crate) policy: ToolExecutionPolicy,
     agent_registry: Option<Arc<AgentRegistry>>,
+    tool_search_registry: Option<Arc<ToolSearchRegistry>>,
+    task_store: Option<Arc<TaskStore>>,
+    cron_store: Option<Arc<CronStore>>,
 }
 
 #[derive(Debug)]
@@ -121,6 +127,9 @@ impl ToolExecutor {
             working_dir,
             policy: ToolExecutionPolicy::default(),
             agent_registry: None,
+            tool_search_registry: None,
+            task_store: None,
+            cron_store: None,
         }
     }
 
@@ -135,6 +144,35 @@ impl ToolExecutor {
     #[must_use]
     pub fn with_agent_registry(mut self, registry: Arc<AgentRegistry>) -> Self {
         self.agent_registry = Some(registry);
+        self
+    }
+
+    /// Sets the tool search registry for deferred tool discovery.
+    ///
+    /// When set, the `tool_search` tool can look up deferred tool schemas.
+    #[must_use]
+    pub fn with_tool_search_registry(mut self, registry: Arc<ToolSearchRegistry>) -> Self {
+        self.tool_search_registry = Some(registry);
+        self
+    }
+
+    /// Sets the task store for LLM-callable task CRUD operations.
+    ///
+    /// When set, the `task_create`, `task_get`, `task_list`, and `task_update`
+    /// tools become available.
+    #[must_use]
+    pub fn with_task_store(mut self, store: Arc<TaskStore>) -> Self {
+        self.task_store = Some(store);
+        self
+    }
+
+    /// Sets the cron store for LLM-callable schedule CRUD operations.
+    ///
+    /// When set, the `cron_create`, `cron_list`, and `cron_delete` tools
+    /// become available.
+    #[must_use]
+    pub fn with_cron_store(mut self, store: Arc<CronStore>) -> Self {
+        self.cron_store = Some(store);
         self
     }
 
@@ -370,6 +408,14 @@ impl ToolExecutor {
             "todo_write" => self.execute_todo_write(&call.input).await,
             "send_message" => self.send_message(&call.input).await,
             "notebook_edit" => self.notebook_edit(&call.input).await,
+            "tool_search" => self.execute_tool_search(&call.input),
+            "task_create" => self.execute_task_create(&call.input),
+            "task_get" => self.execute_task_get(&call.input),
+            "task_list" => self.execute_task_list(),
+            "task_update" => self.execute_task_update(&call.input),
+            "cron_create" => self.execute_cron_create(&call.input),
+            "cron_list" => self.execute_cron_list(),
+            "cron_delete" => self.execute_cron_delete(&call.input),
             _ => Ok(ToolResult::Error(format!("Unknown tool: {}", call.name))),
         }
     }
@@ -772,6 +818,210 @@ impl ToolExecutor {
             Err(e) => Ok(ToolResult::Error(format!(
                 "Failed to send message to agent '{to}': {e}"
             ))),
+        }
+    }
+
+    /// Executes a `tool_search` call against the deferred tool registry.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Ok(ToolResult::Error)` if the registry is not configured.
+    fn execute_tool_search(&self, input: &serde_json::Value) -> Result<ToolResult> {
+        let registry = match &self.tool_search_registry {
+            Some(r) => r,
+            None => {
+                return Ok(ToolResult::Error(
+                    "Tool search is not available: no registry configured".to_string(),
+                ));
+            }
+        };
+
+        match registry.execute(input) {
+            Ok(output) => Ok(ToolResult::Success(output)),
+            Err(e) => Ok(ToolResult::Error(format!("Tool search failed: {e}"))),
+        }
+    }
+
+    /// Executes a `task_create` call against the task store.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Ok(ToolResult::Error)` if the store is not configured.
+    fn execute_task_create(&self, input: &serde_json::Value) -> Result<ToolResult> {
+        let store = match &self.task_store {
+            Some(s) => s,
+            None => {
+                return Ok(ToolResult::Error(
+                    "Task management is not available: no task store configured".to_string(),
+                ));
+            }
+        };
+
+        match store.execute_task_create(input) {
+            Ok(output) => Ok(ToolResult::Success(output)),
+            Err(e) => Ok(ToolResult::Error(format!("Task create failed: {e}"))),
+        }
+    }
+
+    /// Executes a `task_get` call against the task store.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Ok(ToolResult::Error)` if the store is not configured.
+    fn execute_task_get(&self, input: &serde_json::Value) -> Result<ToolResult> {
+        let store = match &self.task_store {
+            Some(s) => s,
+            None => {
+                return Ok(ToolResult::Error(
+                    "Task management is not available: no task store configured".to_string(),
+                ));
+            }
+        };
+
+        match store.execute_task_get(input) {
+            Ok(output) => Ok(ToolResult::Success(output)),
+            Err(e) => Ok(ToolResult::Error(format!("Task get failed: {e}"))),
+        }
+    }
+
+    /// Executes a `task_list` call against the task store.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Ok(ToolResult::Error)` if the store is not configured.
+    fn execute_task_list(&self) -> Result<ToolResult> {
+        let store = match &self.task_store {
+            Some(s) => s,
+            None => {
+                return Ok(ToolResult::Error(
+                    "Task management is not available: no task store configured".to_string(),
+                ));
+            }
+        };
+
+        match store.execute_task_list() {
+            Ok(output) => Ok(ToolResult::Success(output)),
+            Err(e) => Ok(ToolResult::Error(format!("Task list failed: {e}"))),
+        }
+    }
+
+    /// Executes a `task_update` call against the task store.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Ok(ToolResult::Error)` if the store is not configured.
+    fn execute_task_update(&self, input: &serde_json::Value) -> Result<ToolResult> {
+        let store = match &self.task_store {
+            Some(s) => s,
+            None => {
+                return Ok(ToolResult::Error(
+                    "Task management is not available: no task store configured".to_string(),
+                ));
+            }
+        };
+
+        match store.execute_task_update(input) {
+            Ok(output) => Ok(ToolResult::Success(output)),
+            Err(e) => Ok(ToolResult::Error(format!("Task update failed: {e}"))),
+        }
+    }
+
+    /// Executes a `cron_create` call against the cron store.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Ok(ToolResult::Error)` if the store is not configured.
+    fn execute_cron_create(&self, input: &serde_json::Value) -> Result<ToolResult> {
+        let store = match &self.cron_store {
+            Some(s) => s,
+            None => {
+                return Ok(ToolResult::Error(
+                    "Cron scheduling is not available: no cron store configured".to_string(),
+                ));
+            }
+        };
+
+        let expression = match input.get("expression").and_then(|v| v.as_str()) {
+            Some(e) => e,
+            None => {
+                return Ok(ToolResult::Error(
+                    "Missing required field: expression".to_string(),
+                ));
+            }
+        };
+        let prompt = match input.get("prompt").and_then(|v| v.as_str()) {
+            Some(p) => p,
+            None => {
+                return Ok(ToolResult::Error(
+                    "Missing required field: prompt".to_string(),
+                ));
+            }
+        };
+
+        match store.create(expression, prompt) {
+            Ok(schedule) => match serde_json::to_string_pretty(&schedule) {
+                Ok(output) => Ok(ToolResult::Success(output)),
+                Err(e) => Ok(ToolResult::Error(format!(
+                    "Failed to serialize schedule: {e}"
+                ))),
+            },
+            Err(e) => Ok(ToolResult::Error(format!("Cron create failed: {e}"))),
+        }
+    }
+
+    /// Executes a `cron_list` call against the cron store.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Ok(ToolResult::Error)` if the store is not configured.
+    fn execute_cron_list(&self) -> Result<ToolResult> {
+        let store = match &self.cron_store {
+            Some(s) => s,
+            None => {
+                return Ok(ToolResult::Error(
+                    "Cron scheduling is not available: no cron store configured".to_string(),
+                ));
+            }
+        };
+
+        match store.list() {
+            Ok(schedules) => match serde_json::to_string_pretty(&schedules) {
+                Ok(output) => Ok(ToolResult::Success(output)),
+                Err(e) => Ok(ToolResult::Error(format!(
+                    "Failed to serialize schedules: {e}"
+                ))),
+            },
+            Err(e) => Ok(ToolResult::Error(format!("Cron list failed: {e}"))),
+        }
+    }
+
+    /// Executes a `cron_delete` call against the cron store.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Ok(ToolResult::Error)` if the store is not configured.
+    fn execute_cron_delete(&self, input: &serde_json::Value) -> Result<ToolResult> {
+        let store = match &self.cron_store {
+            Some(s) => s,
+            None => {
+                return Ok(ToolResult::Error(
+                    "Cron scheduling is not available: no cron store configured".to_string(),
+                ));
+            }
+        };
+
+        let id = match input.get("id").and_then(|v| v.as_str()) {
+            Some(i) => i,
+            None => {
+                return Ok(ToolResult::Error("Missing required field: id".to_string()));
+            }
+        };
+
+        match store.delete(id) {
+            Ok(()) => Ok(ToolResult::Success(format!(
+                "Schedule '{id}' deleted successfully"
+            ))),
+            Err(e) => Ok(ToolResult::Error(format!("Cron delete failed: {e}"))),
         }
     }
 

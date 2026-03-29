@@ -20,6 +20,9 @@ use super::parallel::{ParallelConfig, ParallelExecutor};
 use super::security::ToolExecutionPolicy;
 use super::stateful::{ShellState, StatefulToolExecutor};
 use super::{ToolCall, ToolResult};
+use crate::tools::cron::CronStore;
+use crate::tools::tasks::TaskStore;
+use crate::tools::tool_search::ToolSearchRegistry;
 
 /// Tool executor with hook and permission integration.
 ///
@@ -176,6 +179,27 @@ impl HookedToolExecutor {
     #[must_use]
     pub fn parallel_config(&self) -> &ParallelConfig {
         self.parallel.config()
+    }
+
+    /// Sets the tool search registry for deferred tool discovery.
+    #[must_use]
+    pub fn with_tool_search_registry(mut self, registry: Arc<ToolSearchRegistry>) -> Self {
+        self.inner = self.inner.with_tool_search_registry(registry);
+        self
+    }
+
+    /// Sets the task store for LLM-callable task CRUD operations.
+    #[must_use]
+    pub fn with_task_store(mut self, store: Arc<TaskStore>) -> Self {
+        self.inner = self.inner.with_task_store(store);
+        self
+    }
+
+    /// Sets the cron store for LLM-callable schedule CRUD operations.
+    #[must_use]
+    pub fn with_cron_store(mut self, store: Arc<CronStore>) -> Self {
+        self.inner = self.inner.with_cron_store(store);
+        self
     }
 
     /// Grants permission for a specific tool execution.
