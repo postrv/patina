@@ -739,6 +739,11 @@ impl AppState {
         self.view.input_state.delete_char();
     }
 
+    /// Deletes the character at the cursor position (forward-delete behavior).
+    pub fn delete_char_forward(&mut self) {
+        self.view.input_state.delete_char_forward();
+    }
+
     /// Takes and returns the current input, clearing the buffer and resetting cursor.
     pub fn take_input(&mut self) -> String {
         self.view.input_state.take()

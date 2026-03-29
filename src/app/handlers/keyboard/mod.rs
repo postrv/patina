@@ -30,6 +30,7 @@ use crate::app::context::AppContext;
 use crate::app::dispatch::{EventHandler, Handled};
 use crate::app::events::AppEvent;
 use crate::keybindings::{Action, KeyPress, KeyResolution};
+use crate::types::message::{Message, Role};
 use crate::types::ui_state::FocusArea;
 
 /// Handles keyboard, mouse, and resize events.
@@ -176,14 +177,24 @@ async fn dispatch_action(ctx: &mut AppContext<'_>, action: Action) -> Result<Han
             Ok(Handled::CONSUMED)
         }
         Action::ScrollToTop => {
-            debug!("scroll_to_top triggered");
-            ctx.state.scroll_to_top();
+            if ctx.state.ui_selection().focus_area() == FocusArea::Input {
+                debug!("cursor_home triggered (input focused)");
+                ctx.state.cursor_home();
+            } else {
+                debug!("scroll_to_top triggered");
+                ctx.state.scroll_to_top();
+            }
             Ok(Handled::CONSUMED)
         }
         Action::ScrollToBottom => {
-            debug!("scroll_to_bottom triggered");
-            let height = ctx.state.display().scroll_state().content_height();
-            ctx.state.scroll_to_bottom(height);
+            if ctx.state.ui_selection().focus_area() == FocusArea::Input {
+                debug!("cursor_end triggered (input focused)");
+                ctx.state.cursor_end();
+            } else {
+                debug!("scroll_to_bottom triggered");
+                let height = ctx.state.display().scroll_state().content_height();
+                ctx.state.scroll_to_bottom(height);
+            }
             Ok(Handled::CONSUMED)
         }
         Action::SelectAll => {
@@ -223,14 +234,29 @@ async fn dispatch_action(ctx: &mut AppContext<'_>, action: Action) -> Result<Han
         }
         Action::ToggleHelp => {
             info!("Help toggle not yet available");
+            ctx.state.add_message(Message {
+                role: Role::Assistant,
+                content: "Help panel not yet available. Type /help for command list.".to_string(),
+            });
+            ctx.state.mark_full_redraw();
             Ok(Handled::CONSUMED)
         }
         Action::KillBackgroundAgents => {
             info!("Kill background agents not yet available");
+            ctx.state.add_message(Message {
+                role: Role::Assistant,
+                content: "Background agent management not yet available.".to_string(),
+            });
+            ctx.state.mark_full_redraw();
             Ok(Handled::CONSUMED)
         }
         Action::OpenEditor => {
             info!("External editor not yet available");
+            ctx.state.add_message(Message {
+                role: Role::Assistant,
+                content: "External editor not yet available.".to_string(),
+            });
+            ctx.state.mark_full_redraw();
             Ok(Handled::CONSUMED)
         }
         Action::Custom(ref name) => {
@@ -256,6 +282,26 @@ fn handle_unbound_key(
     match (code, modifiers) {
         (KeyCode::Backspace, _) => {
             ctx.state.delete_char();
+            Ok(Handled::CONSUMED)
+        }
+        (KeyCode::Left, _) => {
+            ctx.state.cursor_left();
+            Ok(Handled::CONSUMED)
+        }
+        (KeyCode::Right, _) => {
+            ctx.state.cursor_right();
+            Ok(Handled::CONSUMED)
+        }
+        (KeyCode::Home, _) => {
+            ctx.state.cursor_home();
+            Ok(Handled::CONSUMED)
+        }
+        (KeyCode::End, _) => {
+            ctx.state.cursor_end();
+            Ok(Handled::CONSUMED)
+        }
+        (KeyCode::Delete, _) => {
+            ctx.state.delete_char_forward();
             Ok(Handled::CONSUMED)
         }
         (KeyCode::Char(c), KeyModifiers::NONE | KeyModifiers::SHIFT) => {
@@ -560,6 +606,149 @@ mod tests {
             ctx.state.input_state().text(),
             "a",
             "Backspace must delete the last character"
+        );
+    }
+
+    // =========================================================================
+    // Arrow keys, Home, End, Delete (input cursor movement)
+    // =========================================================================
+
+    #[tokio::test]
+    async fn handle_left_arrow_moves_cursor_left() {
+        let mut handler = KeyboardHandler;
+
+        let client = test_client();
+        let mut state = test_state();
+        let (session_mgr, _dir) = test_session_manager();
+
+        state.insert_char('a');
+        state.insert_char('b');
+        assert_eq!(state.input_state().cursor_position(), 2);
+
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
+
+        let event = AppEvent::Key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE));
+        let result = handler.handle(&event, &mut ctx).await.unwrap();
+
+        assert_eq!(result, Handled::CONSUMED);
+        assert_eq!(
+            ctx.state.input_state().cursor_position(),
+            1,
+            "Left arrow must move cursor left by one"
+        );
+    }
+
+    #[tokio::test]
+    async fn handle_right_arrow_moves_cursor_right() {
+        let mut handler = KeyboardHandler;
+
+        let client = test_client();
+        let mut state = test_state();
+        let (session_mgr, _dir) = test_session_manager();
+
+        state.insert_char('a');
+        state.insert_char('b');
+        state.cursor_left();
+        state.cursor_left();
+        assert_eq!(state.input_state().cursor_position(), 0);
+
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
+
+        let event = AppEvent::Key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE));
+        let result = handler.handle(&event, &mut ctx).await.unwrap();
+
+        assert_eq!(result, Handled::CONSUMED);
+        assert_eq!(
+            ctx.state.input_state().cursor_position(),
+            1,
+            "Right arrow must move cursor right by one"
+        );
+    }
+
+    #[tokio::test]
+    async fn handle_home_moves_cursor_to_start_when_input_focused() {
+        let mut handler = KeyboardHandler;
+
+        let client = test_client();
+        let mut state = test_state();
+        let (session_mgr, _dir) = test_session_manager();
+
+        state.insert_char('a');
+        state.insert_char('b');
+        state.insert_char('c');
+        assert_eq!(state.input_state().cursor_position(), 3);
+
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
+        // Default focus is Input
+
+        let event = AppEvent::Key(KeyEvent::new(KeyCode::Home, KeyModifiers::NONE));
+        let result = handler.handle(&event, &mut ctx).await.unwrap();
+
+        assert_eq!(result, Handled::CONSUMED);
+        assert_eq!(
+            ctx.state.input_state().cursor_position(),
+            0,
+            "Home must move cursor to start when input is focused"
+        );
+    }
+
+    #[tokio::test]
+    async fn handle_end_moves_cursor_to_end_when_input_focused() {
+        let mut handler = KeyboardHandler;
+
+        let client = test_client();
+        let mut state = test_state();
+        let (session_mgr, _dir) = test_session_manager();
+
+        state.insert_char('a');
+        state.insert_char('b');
+        state.insert_char('c');
+        state.cursor_home();
+        assert_eq!(state.input_state().cursor_position(), 0);
+
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
+        // Default focus is Input
+
+        let event = AppEvent::Key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
+        let result = handler.handle(&event, &mut ctx).await.unwrap();
+
+        assert_eq!(result, Handled::CONSUMED);
+        assert_eq!(
+            ctx.state.input_state().cursor_position(),
+            3,
+            "End must move cursor to end when input is focused"
+        );
+    }
+
+    #[tokio::test]
+    async fn handle_delete_removes_char_at_cursor() {
+        let mut handler = KeyboardHandler;
+
+        let client = test_client();
+        let mut state = test_state();
+        let (session_mgr, _dir) = test_session_manager();
+
+        state.insert_char('a');
+        state.insert_char('b');
+        state.insert_char('c');
+        state.cursor_home();
+        assert_eq!(state.input_state().cursor_position(), 0);
+
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
+
+        let event = AppEvent::Key(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE));
+        let result = handler.handle(&event, &mut ctx).await.unwrap();
+
+        assert_eq!(result, Handled::CONSUMED);
+        assert_eq!(
+            ctx.state.input_state().text(),
+            "bc",
+            "Delete must remove the character at the cursor position"
+        );
+        assert_eq!(
+            ctx.state.input_state().cursor_position(),
+            0,
+            "Delete must not move the cursor position"
         );
     }
 
