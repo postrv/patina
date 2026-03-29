@@ -60,7 +60,7 @@ A high-performance terminal client for the Claude API, written in Rust. Designed
 | **Stagnation Detection** | Multi-factor scoring detects stuck agents and triggers recovery |
 | **Quality Gates** | Automated clippy, test, and format checks with timeout enforcement |
 
-### Built-in Tools (27)
+### Built-in Tools (25)
 
 | Tool | Description |
 |------|-------------|
@@ -89,8 +89,6 @@ A high-performance terminal client for the Claude API, written in Rust. Designed
 | `cron_delete` | Delete a cron schedule by ID |
 | `task_output` | Get output from a background bash task |
 | `task_stop` | Stop a running background bash task |
-| `external_editor` | Open content in `$VISUAL`/`$EDITOR` for editing |
-| `notebook_edit` | Edit Jupyter notebook cells (planned) |
 
 ### Extensibility
 
@@ -487,7 +485,7 @@ tail -f /tmp/patina.log
 | LOC (src) | ~139,000 |
 | LOC (total) | ~171,000 |
 | Dependencies | 534 |
-| Built-in tools | 27 |
+| Built-in tools | 25 |
 | Slash commands | 32 |
 | Hook events | 13 |
 | Event handlers | 9 + 1 observer |
