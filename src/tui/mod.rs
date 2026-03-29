@@ -2,6 +2,7 @@
 
 pub mod clipboard;
 pub mod scroll;
+pub mod search;
 pub mod selection;
 pub mod status_bar;
 pub mod theme;
