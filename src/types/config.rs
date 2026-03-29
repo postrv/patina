@@ -257,6 +257,12 @@ pub enum ProviderKind {
     /// Use OpenRouter (OpenAI-compatible API with message format translation).
     OpenRouter,
 
+    /// Use AWS Bedrock (Anthropic models via AWS infrastructure).
+    Bedrock,
+
+    /// Use Google Vertex AI (Anthropic models via Google Cloud).
+    Vertex,
+
     /// Use a fallback chain that tries multiple providers in order.
     Fallback,
 }
@@ -277,6 +283,8 @@ impl ProviderKind {
         match self {
             Self::Anthropic => "anthropic",
             Self::OpenRouter => "openrouter",
+            Self::Bedrock => "bedrock",
+            Self::Vertex => "vertex",
             Self::Fallback => "fallback",
         }
     }
@@ -325,6 +333,32 @@ pub struct ProviderConfig {
     /// App name sent as `X-Title` to OpenRouter for analytics.
     pub app_name: Option<String>,
 
+    /// AWS region for Bedrock (e.g., "us-east-1").
+    ///
+    /// Required when `kind` is [`ProviderKind::Bedrock`].
+    pub bedrock_region: Option<String>,
+
+    /// Bedrock model identifier (e.g., "claude-sonnet-4-20250514").
+    ///
+    /// The provider translates this to the Bedrock model ID format
+    /// (e.g., "anthropic.claude-sonnet-4-20250514-v1:0").
+    pub bedrock_model: Option<String>,
+
+    /// Google Cloud project ID for Vertex AI.
+    ///
+    /// Required when `kind` is [`ProviderKind::Vertex`].
+    pub vertex_project: Option<String>,
+
+    /// Google Cloud region for Vertex AI (e.g., "us-east5").
+    ///
+    /// Required when `kind` is [`ProviderKind::Vertex`].
+    pub vertex_region: Option<String>,
+
+    /// Vertex AI model identifier (e.g., "claude-sonnet-4@20250514").
+    ///
+    /// Used to construct the Vertex AI endpoint.
+    pub vertex_model: Option<String>,
+
     /// Ordered list of provider configs for fallback chains.
     ///
     /// Only used when `kind` is [`ProviderKind::Fallback`]. Providers are
@@ -349,6 +383,11 @@ impl std::fmt::Debug for ProviderConfig {
             .field("openrouter_model", &self.openrouter_model)
             .field("site_url", &self.site_url)
             .field("app_name", &self.app_name)
+            .field("bedrock_region", &self.bedrock_region)
+            .field("bedrock_model", &self.bedrock_model)
+            .field("vertex_project", &self.vertex_project)
+            .field("vertex_region", &self.vertex_region)
+            .field("vertex_model", &self.vertex_model)
             .field("fallback_chain", &self.fallback_chain)
             .finish()
     }
@@ -375,6 +414,11 @@ impl ProviderConfig {
             openrouter_model: None,
             site_url: None,
             app_name: None,
+            bedrock_region: None,
+            bedrock_model: None,
+            vertex_project: None,
+            vertex_region: None,
+            vertex_model: None,
             fallback_chain: Vec::new(),
         }
     }
@@ -406,6 +450,11 @@ impl ProviderConfig {
             openrouter_model: Some(model.into()),
             site_url: None,
             app_name: None,
+            bedrock_region: None,
+            bedrock_model: None,
+            vertex_project: None,
+            vertex_region: None,
+            vertex_model: None,
             fallback_chain: Vec::new(),
         }
     }
@@ -433,6 +482,75 @@ impl ProviderConfig {
     /// ]);
     /// assert_eq!(config.kind, ProviderKind::Fallback);
     /// ```
+    /// Creates a provider config for AWS Bedrock.
+    ///
+    /// # Arguments
+    ///
+    /// * `region` - The AWS region (e.g., "us-east-1")
+    /// * `model` - The Anthropic model identifier (e.g., "claude-sonnet-4-20250514")
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use patina::types::config::{ProviderConfig, ProviderKind};
+    ///
+    /// let config = ProviderConfig::bedrock("us-east-1", "claude-sonnet-4-20250514");
+    /// assert_eq!(config.kind, ProviderKind::Bedrock);
+    /// ```
+    #[must_use]
+    pub fn bedrock(region: impl Into<String>, model: impl Into<String>) -> Self {
+        Self {
+            kind: ProviderKind::Bedrock,
+            openrouter_api_key: None,
+            openrouter_model: None,
+            site_url: None,
+            app_name: None,
+            bedrock_region: Some(region.into()),
+            bedrock_model: Some(model.into()),
+            vertex_project: None,
+            vertex_region: None,
+            vertex_model: None,
+            fallback_chain: Vec::new(),
+        }
+    }
+
+    /// Creates a provider config for Google Vertex AI.
+    ///
+    /// # Arguments
+    ///
+    /// * `project` - The Google Cloud project ID
+    /// * `region` - The Google Cloud region (e.g., "us-east5")
+    /// * `model` - The Vertex AI model identifier (e.g., "claude-sonnet-4@20250514")
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use patina::types::config::{ProviderConfig, ProviderKind};
+    ///
+    /// let config = ProviderConfig::vertex("my-project", "us-east5", "claude-sonnet-4@20250514");
+    /// assert_eq!(config.kind, ProviderKind::Vertex);
+    /// ```
+    #[must_use]
+    pub fn vertex(
+        project: impl Into<String>,
+        region: impl Into<String>,
+        model: impl Into<String>,
+    ) -> Self {
+        Self {
+            kind: ProviderKind::Vertex,
+            openrouter_api_key: None,
+            openrouter_model: None,
+            site_url: None,
+            app_name: None,
+            bedrock_region: None,
+            bedrock_model: None,
+            vertex_project: Some(project.into()),
+            vertex_region: Some(region.into()),
+            vertex_model: Some(model.into()),
+            fallback_chain: Vec::new(),
+        }
+    }
+
     #[must_use]
     pub fn fallback(chain: Vec<ProviderConfig>) -> Self {
         Self {
@@ -441,6 +559,11 @@ impl ProviderConfig {
             openrouter_model: None,
             site_url: None,
             app_name: None,
+            bedrock_region: None,
+            bedrock_model: None,
+            vertex_project: None,
+            vertex_region: None,
+            vertex_model: None,
             fallback_chain: chain,
         }
     }
@@ -493,6 +616,41 @@ impl ProviderConfig {
                 if self.openrouter_model.is_none() {
                     return Err("OpenRouter provider requires a model identifier \
                          (e.g., 'anthropic/claude-sonnet-4')."
+                        .to_string());
+                }
+                Ok(())
+            }
+            ProviderKind::Bedrock => {
+                if self.bedrock_region.is_none() {
+                    return Err("Bedrock provider requires an AWS region. Set AWS_REGION \
+                         environment variable or configure bedrock_region in config."
+                        .to_string());
+                }
+                if self.bedrock_model.is_none() {
+                    return Err("Bedrock provider requires a model identifier \
+                         (e.g., 'claude-sonnet-4-20250514')."
+                        .to_string());
+                }
+                Ok(())
+            }
+            ProviderKind::Vertex => {
+                if self.vertex_project.is_none() {
+                    return Err(
+                        "Vertex AI provider requires a Google Cloud project ID. Set \
+                         GOOGLE_CLOUD_PROJECT environment variable or configure \
+                         vertex_project in config."
+                            .to_string(),
+                    );
+                }
+                if self.vertex_region.is_none() {
+                    return Err("Vertex AI provider requires a Google Cloud region. Set \
+                         CLOUD_ML_REGION environment variable or configure \
+                         vertex_region in config."
+                        .to_string());
+                }
+                if self.vertex_model.is_none() {
+                    return Err("Vertex AI provider requires a model identifier \
+                         (e.g., 'claude-sonnet-4@20250514')."
                         .to_string());
                 }
                 Ok(())
@@ -1877,6 +2035,11 @@ mod tests {
             openrouter_model: Some("model".to_string()),
             site_url: None,
             app_name: None,
+            bedrock_region: None,
+            bedrock_model: None,
+            vertex_project: None,
+            vertex_region: None,
+            vertex_model: None,
             fallback_chain: Vec::new(),
         };
         assert!(config.validate().is_err());
@@ -1891,6 +2054,11 @@ mod tests {
             openrouter_model: None,
             site_url: None,
             app_name: None,
+            bedrock_region: None,
+            bedrock_model: None,
+            vertex_project: None,
+            vertex_region: None,
+            vertex_model: None,
             fallback_chain: Vec::new(),
         };
         assert!(config.validate().is_err());
@@ -1957,6 +2125,11 @@ mod tests {
                 openrouter_model: None,
                 site_url: None,
                 app_name: None,
+                bedrock_region: None,
+                bedrock_model: None,
+                vertex_project: None,
+                vertex_region: None,
+                vertex_model: None,
                 fallback_chain: Vec::new(),
             },
         ]);
