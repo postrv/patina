@@ -60,6 +60,7 @@ use crate::plugins::PluginRegistry;
 use crate::session::Session;
 use crate::terminal::notifications::NotificationManager;
 use crate::tools::HookedToolExecutor;
+use crate::tui::search::SearchState;
 use crate::types::config::ParallelMode;
 use crate::types::content::{StopReason, ToolResultBlock, ToolUseBlock};
 use crate::types::render_view::RenderFeedback;
@@ -399,6 +400,7 @@ impl AppState {
                 },
                 worktree: WorktreeStatus::new(),
                 input_state: InputState::new(),
+                search_state: SearchState::new(),
             },
             working_dir,
             dirty: DirtyFlags {
@@ -714,6 +716,21 @@ impl AppState {
     #[must_use]
     pub fn compression(&self) -> &CompressionState {
         &self.compression
+    }
+
+    // =========================================================================
+    // Search state methods (delegates to ViewState.search_state)
+    // =========================================================================
+
+    /// Returns a reference to the transcript search state.
+    #[must_use]
+    pub fn search_state(&self) -> &SearchState {
+        &self.view.search_state
+    }
+
+    /// Returns a mutable reference to the transcript search state.
+    pub fn search_state_mut(&mut self) -> &mut SearchState {
+        &mut self.view.search_state
     }
 
     // =========================================================================
@@ -1042,6 +1059,7 @@ impl AppState {
             pending_permission: self.tool_state.pending_permission.as_ref(),
             pending_plan: self.tool_state.pending_plan.as_ref(),
             pending_question: self.tool_state.pending_question.as_ref(),
+            search_state: &self.view.search_state,
             throbber_only: self.is_throbber_only_dirty(),
         }
     }

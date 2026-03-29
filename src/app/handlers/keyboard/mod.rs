@@ -103,7 +103,12 @@ impl EventHandler for KeyboardHandler {
 
 /// Processes a single key event via the [`KeybindingManager`].
 ///
-/// First attempts to resolve the key through the configurable keybinding
+/// When the transcript search bar is active, most keys are routed to the
+/// search input instead of the normal keybinding system. Escape closes
+/// search, Enter / Shift+Enter navigate matches. All other keys are
+/// appended to / deleted from the search query.
+///
+/// Outside search mode, keys are resolved through the configurable keybinding
 /// system. If the key matches a binding, the corresponding [`Action`] is
 /// dispatched. If the key is a chord prefix, it returns `CONSUMED` and
 /// waits for the next key. Unbound keys fall through to text input handling.
@@ -118,6 +123,11 @@ async fn handle_key(
 ) -> Result<Handled> {
     debug!(?code, ?modifiers, "key event received");
 
+    // When the search bar is active, intercept keys for search navigation.
+    if ctx.state.search_state().is_active() {
+        return handle_search_key(ctx, code, modifiers);
+    }
+
     let keypress = KeyPress::from_crossterm(code, modifiers);
     let resolution = ctx.state.keybindings_mut().resolve(keypress);
 
@@ -129,6 +139,135 @@ async fn handle_key(
         }
         KeyResolution::Unbound => handle_unbound_key(ctx, code, modifiers),
     }
+}
+
+/// Handles key events while the transcript search bar is active.
+///
+/// - `Escape` closes the search bar and clears the query.
+/// - `Enter` navigates to the next match.
+/// - `Shift+Enter` navigates to the previous match.
+/// - `Backspace` deletes the last character of the query.
+/// - Printable characters are appended to the search query.
+fn handle_search_key(
+    ctx: &mut AppContext<'_>,
+    code: KeyCode,
+    modifiers: KeyModifiers,
+) -> Result<Handled> {
+    match (code, modifiers) {
+        (KeyCode::Esc, _) => {
+            debug!("search: closing search bar");
+            ctx.state.search_state_mut().clear();
+            ctx.state.search_state_mut().set_active(false);
+            ctx.state.mark_full_redraw();
+        }
+        (KeyCode::Enter, KeyModifiers::NONE) => {
+            debug!("search: next match");
+            ctx.state.search_state_mut().next_match();
+            ctx.state.mark_full_redraw();
+        }
+        (KeyCode::Enter, m) if m.contains(KeyModifiers::SHIFT) => {
+            debug!("search: previous match");
+            ctx.state.search_state_mut().prev_match();
+            ctx.state.mark_full_redraw();
+        }
+        (KeyCode::Backspace, _) => {
+            let query = ctx.state.search_state().query().to_string();
+            if !query.is_empty() {
+                let new_query: String = query.chars().take(query.chars().count() - 1).collect();
+                let entries = collect_search_entries(ctx);
+                ctx.state.search_state_mut().set_query(&new_query, &entries);
+                ctx.state.mark_full_redraw();
+            }
+        }
+        (KeyCode::Char(c), KeyModifiers::NONE | KeyModifiers::SHIFT) => {
+            let mut query = ctx.state.search_state().query().to_string();
+            query.push(c);
+            let entries = collect_search_entries(ctx);
+            ctx.state.search_state_mut().set_query(&query, &entries);
+            ctx.state.mark_full_redraw();
+        }
+        _ => {
+            debug!(?code, ?modifiers, "unhandled search key");
+        }
+    }
+    Ok(Handled::CONSUMED)
+}
+
+/// Collects searchable text from the conversation timeline.
+///
+/// Returns a `Vec<String>` where each element is the text content of a
+/// conversation entry. Tool execution entries are represented as
+/// `"[tool_name] input"` for searchability.
+fn collect_search_entries(ctx: &AppContext<'_>) -> Vec<String> {
+    use crate::types::ConversationEntry;
+    ctx.state
+        .conversation
+        .timeline()
+        .entries()
+        .iter()
+        .map(|entry| match entry {
+            ConversationEntry::UserMessage(text) | ConversationEntry::AssistantMessage(text) => {
+                text.clone()
+            }
+            ConversationEntry::Streaming { text, .. } => text.clone(),
+            ConversationEntry::ToolExecution {
+                name,
+                input,
+                output,
+                ..
+            } => {
+                let mut s = format!("[{name}] {input}");
+                if let Some(out) = output {
+                    s.push('\n');
+                    s.push_str(out);
+                }
+                s
+            }
+            ConversationEntry::ImageDisplay { alt_text, .. } => {
+                alt_text.clone().unwrap_or_default()
+            }
+        })
+        .collect()
+}
+
+/// Opens the user's external editor with the current input buffer contents.
+///
+/// Suspends the TUI (disables raw mode, leaves alternate screen) so the
+/// editor owns the terminal. On success the edited content replaces the
+/// input buffer; on failure a warning is logged.
+fn open_external_editor(ctx: &mut AppContext<'_>) {
+    use crate::tools::external_editor::ExternalEditor;
+    use crossterm::event::{DisableMouseCapture, EnableMouseCapture};
+    use crossterm::execute;
+    use crossterm::terminal::{
+        disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+    };
+
+    let current_input = ctx.state.input_state().text().to_string();
+
+    // Suspend TUI so the editor gets a clean terminal.
+    let mut stdout = std::io::stdout();
+    let _ = disable_raw_mode();
+    let _ = execute!(stdout, LeaveAlternateScreen, DisableMouseCapture);
+
+    let editor = ExternalEditor::new();
+    let result = editor.open_with_content(&current_input);
+
+    // Restore TUI.
+    let _ = enable_raw_mode();
+    let _ = execute!(stdout, EnterAlternateScreen, EnableMouseCapture);
+
+    match result {
+        Ok(new_content) => {
+            let trimmed = new_content.trim_end().to_string();
+            ctx.state.input_state_mut().set_text(trimmed);
+            info!("External editor returned successfully");
+        }
+        Err(e) => {
+            info!("External editor error: {e}");
+        }
+    }
+    ctx.state.mark_full_redraw();
 }
 
 /// Dispatches a resolved keybinding [`Action`] to the corresponding handler.
@@ -201,7 +340,11 @@ async fn dispatch_action(ctx: &mut AppContext<'_>, action: Action) -> Result<Han
             Ok(Handled::CONSUMED)
         }
         Action::CancelOperation => {
-            if ctx.state.ui_selection().selection().has_selection() {
+            if ctx.state.search_state().is_active() {
+                ctx.state.search_state_mut().clear();
+                ctx.state.search_state_mut().set_active(false);
+                ctx.state.mark_full_redraw();
+            } else if ctx.state.ui_selection().selection().has_selection() {
                 ctx.state.ui_selection_mut().selection_mut().clear();
                 ctx.state.mark_full_redraw();
             }
@@ -230,7 +373,28 @@ async fn dispatch_action(ctx: &mut AppContext<'_>, action: Action) -> Result<Han
             Ok(Handled::CONSUMED)
         }
         Action::OpenEditor => {
-            info!("External editor not yet available");
+            open_external_editor(ctx);
+            Ok(Handled::CONSUMED)
+        }
+        Action::Search => {
+            debug!("search: activating search bar");
+            ctx.state.search_state_mut().set_active(true);
+            ctx.state.search_state_mut().clear();
+            ctx.state.mark_full_redraw();
+            Ok(Handled::CONSUMED)
+        }
+        Action::SearchNext => {
+            if ctx.state.search_state().is_active() {
+                ctx.state.search_state_mut().next_match();
+                ctx.state.mark_full_redraw();
+            }
+            Ok(Handled::CONSUMED)
+        }
+        Action::SearchPrev => {
+            if ctx.state.search_state().is_active() {
+                ctx.state.search_state_mut().prev_match();
+                ctx.state.mark_full_redraw();
+            }
             Ok(Handled::CONSUMED)
         }
         Action::Custom(ref name) => {
@@ -1437,5 +1601,249 @@ mod tests {
             Handled::CONSUMED,
             "OpenEditor must be consumed without panicking"
         );
+    }
+
+    // =========================================================================
+    // Transcript search (Ctrl+F) wiring tests
+    // =========================================================================
+
+    #[tokio::test]
+    async fn ctrl_f_activates_search_mode() {
+        let mut handler = KeyboardHandler;
+
+        let client = test_client();
+        let mut state = test_state();
+        let (session_mgr, _dir) = test_session_manager();
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
+
+        assert!(!ctx.state.search_state().is_active());
+
+        let event = AppEvent::Key(KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL));
+        let result = handler.handle(&event, &mut ctx).await.unwrap();
+
+        assert_eq!(result, Handled::CONSUMED);
+        assert!(
+            ctx.state.search_state().is_active(),
+            "Ctrl+F must activate search mode"
+        );
+    }
+
+    #[tokio::test]
+    async fn search_mode_typing_updates_query() {
+        let mut handler = KeyboardHandler;
+
+        let client = test_client();
+        let mut state = test_state();
+        let (session_mgr, _dir) = test_session_manager();
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
+
+        // Activate search
+        ctx.state.search_state_mut().set_active(true);
+
+        // Type characters
+        let event_h = AppEvent::Key(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE));
+        let _ = handler.handle(&event_h, &mut ctx).await.unwrap();
+        let event_i = AppEvent::Key(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+        let _ = handler.handle(&event_i, &mut ctx).await.unwrap();
+
+        assert_eq!(ctx.state.search_state().query(), "hi");
+    }
+
+    #[tokio::test]
+    async fn search_mode_backspace_removes_last_char() {
+        let mut handler = KeyboardHandler;
+
+        let client = test_client();
+        let mut state = test_state();
+        let (session_mgr, _dir) = test_session_manager();
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
+
+        // Activate search and set a query
+        ctx.state.search_state_mut().set_active(true);
+        let entries: Vec<String> = Vec::new();
+        ctx.state.search_state_mut().set_query("hello", &entries);
+
+        let event = AppEvent::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+        let _ = handler.handle(&event, &mut ctx).await.unwrap();
+
+        assert_eq!(ctx.state.search_state().query(), "hell");
+    }
+
+    #[tokio::test]
+    async fn search_mode_enter_navigates_next_match() {
+        let mut handler = KeyboardHandler;
+
+        let client = test_client();
+        let mut state = test_state();
+        let (session_mgr, _dir) = test_session_manager();
+
+        // Add conversation entries to search through
+        state
+            .conversation
+            .timeline_mut()
+            .push_user_message("hello world");
+        state
+            .conversation
+            .timeline_mut()
+            .push_user_message("hello rust");
+
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
+
+        // Activate search and type query
+        ctx.state.search_state_mut().set_active(true);
+        let entries = collect_search_entries(&ctx);
+        ctx.state.search_state_mut().set_query("hello", &entries);
+
+        assert_eq!(ctx.state.search_state().match_count(), 2);
+        assert_eq!(ctx.state.search_state().current_position(), Some((1, 2)));
+
+        // Press Enter to go to next match
+        let event = AppEvent::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        let _ = handler.handle(&event, &mut ctx).await.unwrap();
+
+        assert_eq!(ctx.state.search_state().current_position(), Some((2, 2)));
+    }
+
+    #[tokio::test]
+    async fn search_mode_shift_enter_navigates_prev_match() {
+        let mut handler = KeyboardHandler;
+
+        let client = test_client();
+        let mut state = test_state();
+        let (session_mgr, _dir) = test_session_manager();
+
+        state
+            .conversation
+            .timeline_mut()
+            .push_user_message("hello world");
+        state
+            .conversation
+            .timeline_mut()
+            .push_user_message("hello rust");
+
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
+
+        ctx.state.search_state_mut().set_active(true);
+        let entries = collect_search_entries(&ctx);
+        ctx.state.search_state_mut().set_query("hello", &entries);
+
+        // Press Shift+Enter to go to previous match (wraps to last)
+        let event = AppEvent::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT));
+        let _ = handler.handle(&event, &mut ctx).await.unwrap();
+
+        assert_eq!(ctx.state.search_state().current_position(), Some((2, 2)));
+    }
+
+    #[tokio::test]
+    async fn search_mode_escape_deactivates() {
+        let mut handler = KeyboardHandler;
+
+        let client = test_client();
+        let mut state = test_state();
+        let (session_mgr, _dir) = test_session_manager();
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
+
+        // Activate search with a query
+        ctx.state.search_state_mut().set_active(true);
+        let entries: Vec<String> = Vec::new();
+        ctx.state.search_state_mut().set_query("test", &entries);
+
+        let event = AppEvent::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        let _ = handler.handle(&event, &mut ctx).await.unwrap();
+
+        assert!(
+            !ctx.state.search_state().is_active(),
+            "Escape must deactivate search mode"
+        );
+        assert!(
+            ctx.state.search_state().query().is_empty(),
+            "Escape must clear the query"
+        );
+    }
+
+    #[tokio::test]
+    async fn search_mode_does_not_insert_into_input() {
+        let mut handler = KeyboardHandler;
+
+        let client = test_client();
+        let mut state = test_state();
+        let (session_mgr, _dir) = test_session_manager();
+        let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
+
+        ctx.state.search_state_mut().set_active(true);
+
+        // Type a character while search is active
+        let event = AppEvent::Key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+        let _ = handler.handle(&event, &mut ctx).await.unwrap();
+
+        assert!(
+            ctx.state.input_state().text().is_empty(),
+            "Characters typed during search must NOT go to the input buffer"
+        );
+        assert_eq!(
+            ctx.state.search_state().query(),
+            "x",
+            "Characters typed during search must go to the search query"
+        );
+    }
+
+    // =========================================================================
+    // External editor (Ctrl+X Ctrl+E) chord binding test
+    // =========================================================================
+
+    #[tokio::test]
+    async fn ctrl_x_ctrl_e_chord_resolves_to_open_editor() {
+        let mut handler = KeyboardHandler;
+
+        let client = test_client();
+        let mut state = test_state();
+        let (session_mgr, _dir) = test_session_manager();
+
+        // Send Ctrl+X (should be partial chord)
+        {
+            let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
+            let event = AppEvent::Key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL));
+            let result = handler.handle(&event, &mut ctx).await.unwrap();
+            assert_eq!(
+                result,
+                Handled::CONSUMED,
+                "Ctrl+X should be consumed as chord prefix"
+            );
+        }
+
+        // Send Ctrl+E (should complete the chord -> OpenEditor)
+        {
+            let mut ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
+            let event = AppEvent::Key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL));
+            let result = handler.handle(&event, &mut ctx).await.unwrap();
+            assert_eq!(
+                result,
+                Handled::CONSUMED,
+                "Ctrl+E after Ctrl+X should be consumed as OpenEditor action"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn collect_search_entries_includes_all_types() {
+        let client = test_client();
+        let mut state = test_state();
+        let (session_mgr, _dir) = test_session_manager();
+
+        state
+            .conversation
+            .timeline_mut()
+            .push_user_message("user msg");
+        state
+            .conversation
+            .timeline_mut()
+            .push_assistant_message("assistant msg");
+
+        let ctx = AppContext::new(Arc::clone(&client), &mut state, &session_mgr);
+        let entries = collect_search_entries(&ctx);
+
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0], "user msg");
+        assert_eq!(entries[1], "assistant msg");
     }
 }

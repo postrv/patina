@@ -461,24 +461,44 @@ fn render_tool_execution(
 /// Layout metrics that must be written back to application state.
 #[must_use]
 pub fn render(frame: &mut Frame, view: &RenderView) -> RenderFeedback {
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Min(3),    // Messages
-            Constraint::Length(1), // Status bar
-            Constraint::Length(3), // Input
-        ])
-        .split(frame.area());
+    let search_active = view.search_state.is_active();
+    let chunks = if search_active {
+        Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Min(3),    // Messages
+                Constraint::Length(1), // Status bar
+                Constraint::Length(1), // Search bar
+                Constraint::Length(3), // Input
+            ])
+            .split(frame.area())
+    } else {
+        Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Min(3),    // Messages
+                Constraint::Length(1), // Status bar
+                Constraint::Length(3), // Input
+            ])
+            .split(frame.area())
+    };
 
     let feedback = render_messages(frame, chunks[0], view);
 
     render_status_bar(frame, chunks[1], view, &feedback);
-    render_input(frame, chunks[2], view);
+
+    if search_active {
+        render_search_bar(frame, chunks[2], view);
+        render_input(frame, chunks[3], view);
+    } else {
+        render_input(frame, chunks[2], view);
+    }
 
     // Render completion popup above the input area if active
+    let input_area = if search_active { chunks[3] } else { chunks[2] };
     if let Some(completion) = view.completion {
         if !completion.filtered().is_empty() {
-            render_completion_popup(frame, chunks[2], completion);
+            render_completion_popup(frame, input_area, completion);
         }
     }
 
@@ -876,6 +896,39 @@ fn render_status_bar(frame: &mut Frame, area: Rect, view: &RenderView, feedback:
     let line = Line::from(spans);
     let status_bar = Paragraph::new(line).style(PatinaTheme::status_bar());
     frame.render_widget(status_bar, area);
+}
+
+/// Renders the transcript search bar when search is active.
+///
+/// Shows the current query, match position indicator, and any regex error.
+fn render_search_bar(frame: &mut Frame, area: Rect, view: &RenderView) {
+    let search = view.search_state;
+    let query = search.query();
+
+    let label = Span::styled(
+        " Search: ",
+        Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::BOLD),
+    );
+    let query_span = Span::raw(query);
+
+    let status_span = if let Some(err) = search.regex_error() {
+        Span::styled(format!("  [{err}]"), Style::default().fg(Color::Red))
+    } else if let Some((cur, total)) = search.current_position() {
+        Span::styled(
+            format!("  [{cur}/{total}]"),
+            Style::default().fg(Color::Cyan),
+        )
+    } else if !query.is_empty() {
+        Span::styled("  [0/0]".to_string(), Style::default().fg(Color::DarkGray))
+    } else {
+        Span::raw("")
+    };
+
+    let line = Line::from(vec![label, query_span, status_span]);
+    let bar = Paragraph::new(line).style(Style::default().bg(Color::DarkGray).fg(Color::White));
+    frame.render_widget(bar, area);
 }
 
 fn render_input(frame: &mut Frame, area: Rect, view: &RenderView) {

@@ -140,6 +140,12 @@ pub enum Action {
     KillBackgroundAgents,
     /// Open an external editor.
     OpenEditor,
+    /// Open the transcript search bar.
+    Search,
+    /// Navigate to the next search match.
+    SearchNext,
+    /// Navigate to the previous search match.
+    SearchPrev,
     /// A user-defined custom action.
     Custom(String),
 }
@@ -428,6 +434,24 @@ impl KeybindingManager {
                 KeyModifiers::NONE,
             )]),
             Action::CancelOperation,
+        );
+
+        // Search: Ctrl+F
+        bindings.insert(
+            KeyChord(vec![KeyPress::from_crossterm(
+                KeyCode::Char('f'),
+                KeyModifiers::CONTROL,
+            )]),
+            Action::Search,
+        );
+
+        // External editor: Ctrl+X Ctrl+E (chord)
+        bindings.insert(
+            KeyChord(vec![
+                KeyPress::from_crossterm(KeyCode::Char('x'), KeyModifiers::CONTROL),
+                KeyPress::from_crossterm(KeyCode::Char('e'), KeyModifiers::CONTROL),
+            ]),
+            Action::OpenEditor,
         );
 
         Self {
@@ -1610,5 +1634,60 @@ mod tests {
             KeyResolution::Action(Action::Quit),
             "After timeout, Ctrl+C should resolve to Quit (fresh input)"
         );
+    }
+
+    // =========================================================================
+    // Default binding: Ctrl+F -> Search
+    // =========================================================================
+
+    #[test]
+    fn defaults_include_ctrl_f_search() {
+        let mut mgr = KeybindingManager::with_defaults();
+        let key = KeyPress::from_crossterm(KeyCode::Char('f'), KeyModifiers::CONTROL);
+        assert_eq!(mgr.resolve(key), KeyResolution::Action(Action::Search));
+    }
+
+    // =========================================================================
+    // Default binding: Ctrl+X Ctrl+E -> OpenEditor (chord)
+    // =========================================================================
+
+    #[test]
+    fn defaults_include_ctrl_x_ctrl_e_open_editor() {
+        let mut mgr = KeybindingManager::with_defaults();
+        let key1 = KeyPress::from_crossterm(KeyCode::Char('x'), KeyModifiers::CONTROL);
+        assert_eq!(
+            mgr.resolve(key1),
+            KeyResolution::Partial,
+            "Ctrl+X should be partial for Ctrl+X Ctrl+E chord"
+        );
+
+        let key2 = KeyPress::from_crossterm(KeyCode::Char('e'), KeyModifiers::CONTROL);
+        assert_eq!(
+            mgr.resolve(key2),
+            KeyResolution::Action(Action::OpenEditor),
+            "Ctrl+X Ctrl+E should resolve to OpenEditor"
+        );
+    }
+
+    // =========================================================================
+    // Action deserialization: search, search_next, search_prev
+    // =========================================================================
+
+    #[test]
+    fn action_deserialize_search() {
+        let action: Action = serde_json::from_str("\"search\"").unwrap();
+        assert_eq!(action, Action::Search);
+    }
+
+    #[test]
+    fn action_deserialize_search_next() {
+        let action: Action = serde_json::from_str("\"search_next\"").unwrap();
+        assert_eq!(action, Action::SearchNext);
+    }
+
+    #[test]
+    fn action_deserialize_search_prev() {
+        let action: Action = serde_json::from_str("\"search_prev\"").unwrap();
+        assert_eq!(action, Action::SearchPrev);
     }
 }

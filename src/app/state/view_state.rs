@@ -2,6 +2,7 @@ use super::display::DisplayState;
 use super::input::InputState;
 use super::ui_selection::UISelectionState;
 use super::worktree::WorktreeStatus;
+use crate::tui::search::SearchState;
 
 /// Presentation-layer state extracted from AppState.
 ///
@@ -20,6 +21,8 @@ pub struct ViewState {
     pub(crate) worktree: WorktreeStatus,
     /// Input buffer state (text, cursor, completion).
     pub(crate) input_state: InputState,
+    /// Transcript search state (Ctrl+F).
+    pub(crate) search_state: SearchState,
 }
 
 impl ViewState {
@@ -95,6 +98,21 @@ impl ViewState {
     pub fn input_state_mut(&mut self) -> &mut InputState {
         &mut self.input_state
     }
+
+    // ========================================================================
+    // Search State Accessors
+    // ========================================================================
+
+    /// Returns a reference to the search state.
+    #[must_use]
+    pub fn search_state(&self) -> &SearchState {
+        &self.search_state
+    }
+
+    /// Returns a mutable reference to the search state.
+    pub fn search_state_mut(&mut self) -> &mut SearchState {
+        &mut self.search_state
+    }
 }
 
 #[cfg(test)]
@@ -113,6 +131,7 @@ mod tests {
             },
             worktree: WorktreeStatus::new(),
             input_state: InputState::new(),
+            search_state: SearchState::new(),
         }
     }
 
@@ -163,5 +182,22 @@ mod tests {
 
         vs.ui_selection_mut().set_focus_area(FocusArea::Input);
         assert_eq!(vs.ui_selection().focus_area(), FocusArea::Input);
+    }
+
+    #[test]
+    fn test_view_state_search_state_accessor() {
+        let mut vs = make_view_state();
+        assert!(!vs.search_state().is_active());
+        vs.search_state_mut().set_active(true);
+        assert!(vs.search_state().is_active());
+    }
+
+    #[test]
+    fn test_view_state_search_state_query() {
+        let mut vs = make_view_state();
+        let entries = vec!["hello world"];
+        vs.search_state_mut().set_query("hello", &entries);
+        assert_eq!(vs.search_state().query(), "hello");
+        assert_eq!(vs.search_state().match_count(), 1);
     }
 }
