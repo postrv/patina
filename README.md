@@ -19,8 +19,8 @@ A high-performance terminal client for the Claude API, written in Rust. Designed
 - **Full MCP support** - Connect any MCP server via stdio, streamable HTTP, or legacy SSE transports
 - **Autonomous agent orchestration** - Spawn parallel sub-agents in isolated git worktrees
 - **Continuous coding loop** - Run tasks autonomously with stagnation detection and quality gates
-- **4,000+ tests** with 85%+ code coverage
-- **Zero unsafe code** - Pure safe Rust (~102,000 LOC)
+- **5,000+ tests** with 85%+ code coverage
+- **Zero unsafe code** - Pure safe Rust (~139,000 LOC)
 - **Cross-platform** - Linux, macOS, Windows
 - **Security-first** - Defense-in-depth with command filtering, path validation, and session integrity
 
@@ -32,7 +32,7 @@ A high-performance terminal client for the Claude API, written in Rust. Designed
 |---------|-------------|
 | **Streaming TUI** | Real-time response streaming with syntax highlighting |
 | **Agentic Tool Loop** | Claude can autonomously execute tools and continue conversations |
-| **Multi-Provider LLM** | Anthropic, OpenRouter, and any OpenAI-compatible API |
+| **Multi-Provider LLM** | Anthropic, OpenRouter, AWS Bedrock, Google Vertex AI, and any OpenAI-compatible API |
 | **Provider Failover** | Automatic fallback between providers on failure |
 | **Parallel Execution** | Concurrent tool execution with safety classification (5x+ speedup) |
 | **Session Resume** | Save and restore conversations with full context |
@@ -41,7 +41,14 @@ A high-performance terminal client for the Claude API, written in Rust. Designed
 | **MCP Support** | Full Model Context Protocol with stdio, HTTP, and legacy SSE transports |
 | **Plan Mode** | Interactive plan review with approve/reject before multi-step execution |
 | **Background Execution** | Run long-running bash commands in background with task management |
-| **Slash Command Completion** | Tab-completion popup for slash commands |
+| **Effort Levels** | Configurable effort (auto/low/medium/high) controlling token budget and thinking depth |
+| **Transcript Search** | Regex-powered search across conversation history with Ctrl+F |
+| **External Editor** | Edit input in `$VISUAL`/`$EDITOR` with Ctrl+X Ctrl+E |
+| **Sandbox Mode** | Configurable filesystem isolation with allow/deny lists |
+| **Enterprise Settings** | Managed settings for organization policy enforcement |
+| **Diagnostics** | `/doctor` command with 10 environment checks and fix suggestions |
+| **Export** | Export conversations as Markdown, JSON, or plain text with filtering options |
+| **Slash Command Completion** | Tab-completion popup for 32 slash commands |
 
 ### Autonomous Agents
 
@@ -53,13 +60,13 @@ A high-performance terminal client for the Claude API, written in Rust. Designed
 | **Stagnation Detection** | Multi-factor scoring detects stuck agents and triggers recovery |
 | **Quality Gates** | Automated clippy, test, and format checks with timeout enforcement |
 
-### Built-in Tools (16)
+### Built-in Tools (27)
 
 | Tool | Description |
 |------|-------------|
 | `bash` | Execute shell commands with timeout, security filtering, and background execution |
 | `read_file` | Read file contents with optional line-range selection (offset/limit) |
-| `write_file` | Write files with path validation |
+| `write_file` | Write files with path validation and sandbox enforcement |
 | `edit` | Search-and-replace editing with optional `replace_all` mode |
 | `list_files` | List files and directories at a given path |
 | `glob` | File discovery with glob pattern matching |
@@ -71,8 +78,19 @@ A high-performance terminal client for the Claude API, written in Rust. Designed
 | `todo_write` | Persistent task tracking with add/complete/remove/list operations |
 | `plan` | Present a structured plan for user review before execution |
 | `ask_user` | Ask the user a question with structured choices or free-text input |
+| `send_message` | Send messages between agents via the inter-agent message router |
+| `tool_search` | Discover deferred tool schemas by keyword or exact name |
+| `task_create` | Create a new task with description, status, and dependency tracking |
+| `task_get` | Retrieve a task by ID with full details |
+| `task_list` | List all tasks with optional status filtering |
+| `task_update` | Update task status, description, or dependencies |
+| `cron_create` | Create a scheduled prompt with interval (e.g., "5m", "1h", "daily") |
+| `cron_list` | List all cron schedules with status and next run time |
+| `cron_delete` | Delete a cron schedule by ID |
 | `task_output` | Get output from a background bash task |
 | `task_stop` | Stop a running background bash task |
+| `external_editor` | Open content in `$VISUAL`/`$EDITOR` for editing |
+| `notebook_edit` | Edit Jupyter notebook cells (planned) |
 
 ### Extensibility
 
@@ -81,8 +99,8 @@ A high-performance terminal client for the Claude API, written in Rust. Designed
 | **MCP Servers** | Connect any MCP-compatible tool server (narsil, JetBrains, etc.) |
 | **Plugin System** | TOML-based plugins with auto-discovery |
 | **Skills Engine** | Context-aware suggestions via SKILL.md files |
-| **Hooks** | 11 lifecycle events (PreToolUse, PostToolUse, SessionStart, etc.) |
-| **Slash Commands** | 15 built-in commands including `/model`, `/compact`, `/clear`, `/agent`, `/continuous` |
+| **Hooks** | 13 lifecycle events (PreToolUse, PostToolUse, SessionStart, Notification, etc.) |
+| **Slash Commands** | 32 built-in commands including `/model`, `/compact`, `/export`, `/doctor`, `/agent`, `/continuous` |
 
 ### Developer Experience
 
@@ -126,6 +144,12 @@ patina --list-sessions
 
 # Use OpenRouter instead of Anthropic
 patina --provider openrouter --model anthropic/claude-sonnet-4
+
+# Use AWS Bedrock
+patina --provider bedrock --model claude-sonnet-4-20250514
+
+# Use Google Vertex AI
+patina --provider vertex --model claude-sonnet-4-20250514
 ```
 
 ## Command Line Options
@@ -136,8 +160,10 @@ patina --provider openrouter --model anthropic/claude-sonnet-4
 | `-p, --print` | Print mode (non-interactive) | `false` |
 | `--api-key` | API key (or `ANTHROPIC_API_KEY` env) | - |
 | `-m, --model` | Model to use | `claude-sonnet-4-20250514` |
-| `--provider` | LLM provider (`anthropic`, `openrouter`) | `anthropic` |
+| `--provider` | LLM provider (`anthropic`, `openrouter`, `bedrock`, `vertex`) | `anthropic` |
 | `--fallback-provider` | Fallback provider on failure | - |
+| `--effort` | Effort level (`auto`, `low`, `medium`, `high`) | `auto` |
+| `--bare` | Fast startup mode (skip plugins, context loading) | `false` |
 | `-C, --directory` | Working directory | `.` |
 | `-c, --continue` | Resume most recent session | - |
 | `-r, --resume` | Resume specific session by ID | - |
@@ -154,7 +180,12 @@ patina --provider openrouter --model anthropic/claude-sonnet-4
 |-----|--------|
 | `Enter` | Send message |
 | `Ctrl+C` / `Ctrl+D` | Quit |
+| `Left` / `Right` | Move cursor in input |
+| `Home` / `End` | Jump to start/end of input |
+| `Delete` | Delete character forward |
 | `PageUp` / `PageDown` | Scroll conversation |
+| `Ctrl+F` | Search transcript (regex) |
+| `Ctrl+X Ctrl+E` | Open input in external editor |
 | `Ctrl+A` | Select all (universal) |
 | `Ctrl+Y` | Copy selection (universal) |
 | `Ctrl+Shift+V` | Paste (universal) |
@@ -193,7 +224,7 @@ patina --provider openrouter --model anthropic/claude-sonnet-4
 | `Up` / `Down` | Navigate options |
 | `Tab` | Toggle between options and free-text |
 
-## Slash Commands (15)
+## Slash Commands (32)
 
 | Command | Description |
 |---------|-------------|
@@ -201,19 +232,35 @@ patina --provider openrouter --model anthropic/claude-sonnet-4
 | `/model <name>` | Switch model mid-conversation (aliases: sonnet, opus, haiku) |
 | `/compact [instructions]` | Trigger context compaction with optional custom instructions |
 | `/clear` | Clear conversation history, preserving configuration |
-| `/context` | Show context window usage and token counts |
+| `/context` | Show context window usage with token breakdown and warnings |
 | `/cost` | Show session cost and token usage |
-| `/export` | Export conversation as markdown or JSON |
+| `/effort [level]` | Get or set effort level (auto/low/medium/high) |
+| `/export [format] [path]` | Export conversation as Markdown, JSON, or plain text |
+| `/doctor` | Run 10 diagnostic checks with fix suggestions |
+| `/plan [subcommand]` | Show, accept, or reject pending execution plans |
 | `/memory` | Manage persistent memory (list, add, remove, search) |
 | `/mcp` | Show MCP server status and connected tools |
 | `/continuous` | Start autonomous coding loop with quality gates |
 | `/agent <subcommand>` | Manage sub-agents (spawn, list, merge, stop) |
 | `/worktree <subcommand>` | Manage git worktrees (new, list, switch, remove, status) |
+| `/experiment <subcommand>` | Manage experiments (start, list, accept, reject, pause) |
+| `/analyze` | Run narsil-powered code analysis |
+| `/audit` | Run narsil-powered security audit |
 | `/plugins` | List loaded plugins with their capabilities |
 | `/terminal-setup` | Configure terminal key bindings |
-| `/fork` | Fork session into a new branch |
+| `/fork` / `/branch` | Fork session into a new branch |
+| `/rewind` | Rewind to a previous checkpoint |
+| `/rename <name>` | Rename current session |
+| `/color <color>` | Set prompt color |
+| `/btw <question>` | Ask a side question without breaking context |
+| `/copy [index]` | Copy message to clipboard |
+| `/config` / `/settings` | Show configuration |
+| `/permissions` | Show permission rules |
+| `/sandbox` | Show sandbox configuration |
+| `/status` | Show session status |
+| `/bug` / `/feedback` | Report a bug or provide feedback |
 
-Slash commands support tab completion -- start typing `/` and press Tab to see available options.
+All commands support tab completion -- start typing `/` and press Tab to see options.
 
 ## MCP Support
 
@@ -263,7 +310,9 @@ Global servers can be configured in `~/.claude.json` under `"mcpServers"`.
 - **Namespaced tools**: Each server's tools are prefixed with `servername__` to avoid collisions
 - **Parallel startup**: All servers connect concurrently
 - **Auto-discovery**: Tools from connected servers are automatically available to Claude
+- **OAuth & Bearer auth**: Bearer token from environment variables, OAuth with token refresh and caching
 - **Security**: Command validation and interpreter path requirements for stdio servers
+- **Trust management**: Content-hash verification for project-level MCP configs
 - **Graceful degradation**: Failed servers don't block startup; other servers continue normally
 
 ## Security
@@ -274,10 +323,14 @@ Patina implements defense-in-depth security controls:
 |---------|----------------|
 | **Command Filtering** | 28+ dangerous patterns blocked (rm -rf, sudo, etc.) |
 | **Path Validation** | Canonicalization + symlink protection |
+| **Sandbox Policy** | Configurable filesystem allow/deny lists with deny-wins precedence |
 | **Permission System** | Explicit approval required for tool execution |
-| **API Key Protection** | SecretString with `[REDACTED]` in logs |
+| **API Key Protection** | SecretString with `[REDACTED]` in logs and debug output |
+| **OAuth Token Protection** | SecretString for MCP bearer and OAuth tokens |
 | **MCP Validation** | Pre-spawn command validation for stdio servers |
-| **Session Integrity** | HMAC-SHA256 checksum verification |
+| **Session Integrity** | HMAC-SHA256 checksum verification (RFC 2104 compliant) |
+| **Seatbelt Sandbox** | macOS Seatbelt + Linux Landlock OS-level sandboxing |
+| **Enterprise Policy** | Managed settings for organization-wide policy enforcement |
 
 See [SECURITY.md](SECURITY.md) for security policy and reporting vulnerabilities.
 
@@ -383,9 +436,9 @@ src/
 │       ├── continuous# Autonomous loop control
 │       ├── tick      # UI refresh, throbber animation
 │       └── session   # Session persistence (observer)
-├── api/              # LLM providers (Anthropic, OpenRouter, fallback)
-├── tui/              # Terminal UI (ratatui), image display
-├── tools/            # Tool execution, security, parallel execution
+├── api/              # LLM providers (Anthropic, OpenRouter, Bedrock, Vertex, fallback)
+├── tui/              # Terminal UI (ratatui), image display, transcript search
+├── tools/            # Tool execution, security, parallel execution, sandbox
 ├── mcp/              # MCP client (rmcp SDK): config, connection, manager
 ├── hooks/            # Lifecycle events
 ├── skills/           # Context-aware suggestions
@@ -397,7 +450,7 @@ src/
 ├── worktree/         # Git worktree management
 ├── permissions/      # Permission management
 ├── auth/             # Authentication (API key, optional OAuth)
-├── enterprise/       # Audit logging, cost tracking
+├── enterprise/       # Audit logging, cost tracking, managed settings
 ├── update/           # Auto-update checking
 └── types/            # Core types
 ```
@@ -428,14 +481,15 @@ tail -f /tmp/patina.log
 | Version | 1.0.0 |
 | MSRV | Rust 1.85 |
 | Edition | 2021 |
-| Tests | 4,000+ |
+| Tests | 5,200+ |
 | Coverage | 85%+ |
 | Unsafe | 0 blocks |
-| LOC (src) | ~102,000 |
-| LOC (total) | ~134,000 |
-| Dependencies | 528 |
-| Built-in tools | 16 |
-| Slash commands | 15 |
+| LOC (src) | ~139,000 |
+| LOC (total) | ~171,000 |
+| Dependencies | 534 |
+| Built-in tools | 27 |
+| Slash commands | 32 |
+| Hook events | 13 |
 | Event handlers | 9 + 1 observer |
 
 ### Key Dependencies
@@ -459,13 +513,14 @@ Patina can be used as a Rust library for building custom AI-powered tools.
 
 | Module | Description |
 |--------|-------------|
-| `patina::api` | Multi-provider LLM client with streaming support |
-| `patina::tools` | Tool execution framework with security policies |
-| `patina::mcp` | MCP client: config loading, connection management, tool routing |
+| `patina::api` | Multi-provider LLM client (Anthropic, OpenRouter, Bedrock, Vertex) |
+| `patina::tools` | Tool execution framework with security policies and sandbox |
+| `patina::mcp` | MCP client: config, connection management, OAuth, tool routing |
 | `patina::context` | Context management, compression, and token budgeting |
 | `patina::continuous` | Continuous autonomous coding infrastructure |
-| `patina::agents` | Worktree-based agent orchestration |
+| `patina::agents` | Worktree-based agent orchestration with inter-agent messaging |
 | `patina::worktree` | Git worktree management and experiments |
+| `patina::enterprise` | Managed settings, audit logging, cost tracking |
 | `patina::narsil` | Code intelligence integration |
 
 ### Example: Custom Tool Loop
@@ -527,4 +582,4 @@ Copyright (c) 2026 Laurence Avent
 
 **Laurence Avent** ([@postrv](https://github.com/postrv))
 
-<!-- METRICS:tests=4084,loc=102459,tools=16,commands=15,handlers=9,deps=528 -->
+<!-- metrics: tests 5178, loc 138974, tools 27, commands 32 -->
