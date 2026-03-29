@@ -10,6 +10,7 @@
 //! - Hook integration via `HookedToolExecutor`
 //! - Parallel tool execution for performance optimization
 
+pub mod ask_user;
 mod executor;
 mod hooked;
 pub mod lsp;
