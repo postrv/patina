@@ -3,6 +3,7 @@
 pub mod agent;
 pub mod continuous;
 pub mod experiment;
+pub mod export;
 pub mod worktree;
 
 use serde::Deserialize;
