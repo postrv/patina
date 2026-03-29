@@ -463,7 +463,7 @@ impl AnthropicClient {
     ) -> Result<()> {
         let request = ApiRequestV2 {
             model: &self.model,
-            max_tokens: 8192,
+            max_tokens: options.max_tokens.unwrap_or(8192),
             stream: true,
             messages,
             system: options.system.as_deref(),

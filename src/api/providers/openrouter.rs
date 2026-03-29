@@ -256,7 +256,7 @@ impl LlmProvider for OpenRouterProvider {
                 stream: true,
                 tools: openai_tools,
                 tool_choice: openai_tool_choice,
-                max_tokens: Some(8192),
+                max_tokens: Some(options.max_tokens.unwrap_or(8192)),
             };
 
             let url = format!("{}/chat/completions", self.base_url);

@@ -45,6 +45,11 @@ pub struct RequestOptions {
     pub thinking: Option<ThinkingConfig>,
     /// System message blocks with optional cache control.
     pub system: Option<Vec<SystemBlock>>,
+    /// Optional max_tokens override from effort level.
+    ///
+    /// When `Some`, overrides the provider's default `max_tokens` value.
+    /// When `None`, the provider uses its built-in default (8192).
+    pub max_tokens: Option<u32>,
 }
 
 /// Trait abstracting over LLM API providers.
@@ -374,6 +379,7 @@ mod tests {
                 budget_tokens: 10_000,
             }),
             system: None,
+            max_tokens: None,
         };
         assert!(opts.thinking.is_some());
         assert_eq!(opts.thinking.unwrap().budget_tokens, 10_000);
@@ -390,6 +396,7 @@ mod tests {
                     cache_type: "ephemeral".to_string(),
                 }),
             }]),
+            max_tokens: None,
         };
         assert!(opts.system.is_some());
         let blocks = opts.system.unwrap();

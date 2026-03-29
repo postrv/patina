@@ -149,6 +149,13 @@ struct Args {
     #[arg(long)]
     bare: bool,
 
+    /// Reasoning effort level: auto, low, medium, high.
+    ///
+    /// Controls how much thinking the model applies per turn.
+    /// Low = fast/cheap, High = thorough/expensive.
+    #[arg(long, value_name = "LEVEL", default_value = "auto")]
+    effort: String,
+
     /// LLM provider to use: "anthropic" (default), "openrouter", or "fallback".
     #[arg(long, value_name = "PROVIDER")]
     provider: Option<String>,
@@ -264,6 +271,10 @@ async fn main() -> Result<()> {
     let resume_mode = resolve_resume_mode(args.continue_session, args.resume.as_deref());
     let provider_config = build_provider_config(&args)?;
     let api_key = resolve_api_key(args.api_key)?;
+    let effort_level: patina::types::config::EffortLevel = args
+        .effort
+        .parse()
+        .map_err(|e: String| anyhow::anyhow!(e))?;
     let (initial_prompt, print_mode) =
         resolve_execution_mode(args.prompt, args.print, piped_input)?;
 
@@ -284,7 +295,7 @@ async fn main() -> Result<()> {
         subagents_enabled: args.enable_subagents,
         ide_port: args.ide_port,
         auto_context_enabled: !args.no_auto_context,
-        effort: patina::types::config::EffortLevel::Auto,
+        effort: effort_level,
         thinking_budget: None,
         compression: CompressionConfig::default(),
         provider: provider_config,
