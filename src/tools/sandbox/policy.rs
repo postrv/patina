@@ -862,6 +862,140 @@ mod tests {
     // Edge case tests
     // =========================================================================
 
+    // =========================================================================
+    // Symlink traversal tests
+    // =========================================================================
+
+    #[test]
+    fn test_symlink_traversal_via_normalize_path() {
+        // Symlink-like traversal: a path that resolves outside the allowed dir
+        // via parent directory components (simulates what a symlink resolve might do)
+        let config = SandboxConfig {
+            enabled: true,
+            allow_read: vec![PathBuf::from("/home/user/project")],
+            ..SandboxConfig::default()
+        };
+        let policy = SandboxPolicy::new(config);
+
+        // Simulate a symlink at /home/user/project/link -> /etc/secret
+        // by testing the traversal pattern that would result
+        assert!(policy
+            .check_read(Path::new("/home/user/project/subdir/../../etc/passwd"))
+            .is_err());
+    }
+
+    #[test]
+    fn test_symlink_traversal_deep_nesting() {
+        let config = SandboxConfig {
+            enabled: true,
+            allow_read: vec![PathBuf::from("/safe")],
+            ..SandboxConfig::default()
+        };
+        let policy = SandboxPolicy::new(config);
+
+        // Deep traversal attempt
+        assert!(policy
+            .check_read(Path::new("/safe/a/b/c/../../../../etc/passwd"))
+            .is_err());
+    }
+
+    #[test]
+    fn test_normalize_path_strips_all_parent_refs_at_root() {
+        // Two parent refs from /a pops both /a and /, leaving a relative "b".
+        // This is the lexical normalization behavior -- the sandbox will then
+        // reject the resulting relative path because it won't match any
+        // absolute allow-list entry.
+        let result = normalize_path(Path::new("/a/../../b"));
+        assert_eq!(result, PathBuf::from("b"));
+    }
+
+    // =========================================================================
+    // Relative path and empty path tests
+    // =========================================================================
+
+    #[test]
+    fn test_check_read_empty_path() {
+        let config = SandboxConfig {
+            enabled: true,
+            allow_read: vec![PathBuf::from("/home/user")],
+            ..SandboxConfig::default()
+        };
+        let policy = SandboxPolicy::new(config);
+
+        // Empty path should be denied (it doesn't match any allowed path)
+        assert!(policy.check_read(Path::new("")).is_err());
+    }
+
+    #[test]
+    fn test_check_read_relative_path() {
+        let config = SandboxConfig {
+            enabled: true,
+            allow_read: vec![PathBuf::from("/home/user")],
+            ..SandboxConfig::default()
+        };
+        let policy = SandboxPolicy::new(config);
+
+        // Relative paths should not match absolute allow paths
+        assert!(policy.check_read(Path::new("relative/path")).is_err());
+    }
+
+    #[test]
+    fn test_check_read_dot_relative_path() {
+        let config = SandboxConfig {
+            enabled: true,
+            allow_read: vec![PathBuf::from("/home/user")],
+            ..SandboxConfig::default()
+        };
+        let policy = SandboxPolicy::new(config);
+
+        // Dot-relative paths should be denied against absolute allows
+        assert!(policy.check_read(Path::new("./relative")).is_err());
+    }
+
+    #[test]
+    fn test_normalize_path_empty() {
+        let result = normalize_path(Path::new(""));
+        assert_eq!(result, PathBuf::from(""));
+    }
+
+    #[test]
+    fn test_normalize_path_relative() {
+        let result = normalize_path(Path::new("a/b/c"));
+        assert_eq!(result, PathBuf::from("a/b/c"));
+    }
+
+    #[test]
+    fn test_normalize_path_dot_relative() {
+        let result = normalize_path(Path::new("./a/./b"));
+        assert_eq!(result, PathBuf::from("a/b"));
+    }
+
+    #[test]
+    fn test_check_write_empty_path() {
+        let config = SandboxConfig {
+            enabled: true,
+            allow_write: vec![PathBuf::from("/tmp")],
+            ..SandboxConfig::default()
+        };
+        let policy = SandboxPolicy::new(config);
+        assert!(policy.check_write(Path::new("")).is_err());
+    }
+
+    #[test]
+    fn test_check_write_relative_path() {
+        let config = SandboxConfig {
+            enabled: true,
+            allow_write: vec![PathBuf::from("/tmp")],
+            ..SandboxConfig::default()
+        };
+        let policy = SandboxPolicy::new(config);
+        assert!(policy.check_write(Path::new("relative/file.txt")).is_err());
+    }
+
+    // =========================================================================
+    // Edge case tests (original)
+    // =========================================================================
+
     #[test]
     fn test_multiple_allow_read_paths() {
         let config = SandboxConfig {

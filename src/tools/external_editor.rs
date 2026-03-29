@@ -296,6 +296,7 @@ mod tests {
     // =========================================================================
 
     #[test]
+    #[serial_test::serial]
     fn detect_editor_from_visual_env_var() {
         // Save originals
         let orig_visual = env::var("VISUAL").ok();
@@ -322,6 +323,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn detect_editor_from_editor_env_var() {
         let orig_visual = env::var("VISUAL").ok();
         let orig_editor = env::var("EDITOR").ok();
@@ -346,6 +348,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn detect_editor_fallback_to_vi() {
         let orig_visual = env::var("VISUAL").ok();
         let orig_editor = env::var("EDITOR").ok();
@@ -367,6 +370,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn detect_editor_ignores_empty_visual() {
         let orig_visual = env::var("VISUAL").ok();
         let orig_editor = env::var("EDITOR").ok();

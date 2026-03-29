@@ -700,4 +700,64 @@ mod tests {
         state.set_query("a", &entries);
         assert_eq!(state.current_position(), Some((1, 3)));
     }
+
+    // =========================================================================
+    // Unicode byte-offset correctness tests
+    // =========================================================================
+
+    #[test]
+    fn test_unicode_byte_offsets_emoji() {
+        // Each emoji is 4 bytes in UTF-8
+        let entries = vec!["hello\u{1F600}world"];
+        let matches = search_entries(&entries, "world").unwrap();
+        assert_eq!(matches.len(), 1);
+        let m = &matches[0];
+        // "hello" = 5 bytes, emoji = 4 bytes, so "world" starts at byte 9
+        assert_eq!(m.byte_start, 9);
+        assert_eq!(m.byte_end, 14);
+        // Verify slicing with these offsets does not panic
+        let text = entries[0];
+        assert_eq!(&text[m.byte_start..m.byte_end], "world");
+    }
+
+    #[test]
+    fn test_unicode_byte_offsets_cjk() {
+        // CJK characters are 3 bytes each in UTF-8
+        let entries = vec!["\u{4F60}\u{597D}world"];
+        let matches = search_entries(&entries, "world").unwrap();
+        assert_eq!(matches.len(), 1);
+        let m = &matches[0];
+        // Two CJK chars = 6 bytes, so "world" starts at byte 6
+        assert_eq!(m.byte_start, 6);
+        assert_eq!(m.byte_end, 11);
+        let text = entries[0];
+        assert_eq!(&text[m.byte_start..m.byte_end], "world");
+    }
+
+    #[test]
+    fn test_unicode_byte_offsets_match_multibyte_pattern() {
+        // Search for the CJK characters themselves
+        let entries = vec!["abc\u{4F60}\u{597D}def"];
+        let matches = search_entries(&entries, "\u{4F60}\u{597D}").unwrap();
+        assert_eq!(matches.len(), 1);
+        let m = &matches[0];
+        assert_eq!(m.byte_start, 3);
+        assert_eq!(m.byte_end, 9); // 2 CJK chars = 6 bytes
+        let text = entries[0];
+        assert_eq!(&text[m.byte_start..m.byte_end], "\u{4F60}\u{597D}");
+    }
+
+    #[test]
+    fn test_unicode_byte_offsets_multiline_with_emoji() {
+        let entries = vec!["\u{1F600}\u{1F600}\nhello"];
+        let matches = search_entries(&entries, "hello").unwrap();
+        assert_eq!(matches.len(), 1);
+        let m = &matches[0];
+        // Two emoji = 8 bytes, newline = 1 byte, so "hello" at byte 9
+        assert_eq!(m.byte_start, 9);
+        assert_eq!(m.byte_end, 14);
+        assert_eq!(m.line_offset, 1);
+        let text = entries[0];
+        assert_eq!(&text[m.byte_start..m.byte_end], "hello");
+    }
 }
