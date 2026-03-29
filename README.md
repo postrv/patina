@@ -262,7 +262,7 @@ All commands support tab completion -- start typing `/` and press Tab to see opt
 
 ## MCP Support
 
-Patina implements the [Model Context Protocol](https://spec.modelcontextprotocol.io/) for connecting external tool servers, built on the [rmcp SDK](https://github.com/4t145/rmcp) for full spec compliance.
+Patina implements the [Model Context Protocol](https://spec.modelcontextprotocol.io/) for connecting external tool servers, built on the [rmcp SDK](https://github.com/modelcontextprotocol/rust-sdk) for full spec compliance.
 
 ### Transports
 
