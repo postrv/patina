@@ -87,6 +87,8 @@ pub enum CommandAction {
     },
     /// Show the rewind picker to select a checkpoint.
     ShowRewindPicker,
+    /// Set the reasoning effort level.
+    SetEffort(crate::types::config::EffortLevel),
 }
 
 /// Result of handling a slash command.
@@ -127,6 +129,8 @@ pub struct SlashCommandHandler {
     context_limit: usize,
     /// Current session ID (for /fork).
     session_id: Option<String>,
+    /// Current effort level for /effort display.
+    effort: crate::types::config::EffortLevel,
 }
 
 impl SlashCommandHandler {
@@ -141,7 +145,15 @@ impl SlashCommandHandler {
             messages: Vec::new(),
             context_limit: 200_000,
             session_id: None,
+            effort: crate::types::config::EffortLevel::Auto,
         }
+    }
+
+    /// Sets the current effort level for display by the `/effort` command.
+    #[must_use]
+    pub fn with_effort(mut self, effort: crate::types::config::EffortLevel) -> Self {
+        self.effort = effort;
+        self
     }
 
     /// Adds plugin information to the handler.
@@ -251,6 +263,7 @@ impl SlashCommandHandler {
             "btw" => self.handle_btw(&args),
             "color" => self.handle_color(&args),
             "doctor" => self.handle_doctor(),
+            "effort" => self.handle_effort(&args),
             _ => CommandResult::UnknownCommand(command_name.to_string()),
         }
     }
@@ -973,6 +986,8 @@ impl SlashCommandHandler {
 
   /doctor                   - Troubleshoot environment
 
+  /effort [level]           - Show/set reasoning effort (auto/low/medium/high)
+
   /experiment <subcommand>  - Manage isolated experiments
     Subcommands: start, list, accept, reject, pause, resume, status
 
@@ -1049,6 +1064,21 @@ Displays:
   - Per-model breakdown (input/output tokens and cost)
   - Budget status (if limits configured)
   - Cache hit rate (if prompt caching active)"#;
+                CommandResult::Executed(help_text.to_string())
+            }
+
+            Some("effort") => {
+                let help_text = r#"/effort - Show or set reasoning effort level
+
+Usage:
+  /effort              Show current effort level and options
+  /effort auto         Model default (max_tokens: 8192)
+  /effort low          Fast/cheap (max_tokens: 1024, no thinking)
+  /effort medium       Balanced (max_tokens: 4096, thinking: 5k)
+  /effort high         Thorough (max_tokens: 16384, thinking: 16k)
+
+Controls max_tokens and extended thinking budget per turn.
+Higher effort produces more thorough responses but costs more."#;
                 CommandResult::Executed(help_text.to_string())
             }
 
@@ -1776,6 +1806,32 @@ Include steps to reproduce and expected vs actual behavior."#;
         CommandResult::Executed(output)
     }
 
+    /// Handles the `/effort` command -- show or set the reasoning effort level.
+    fn handle_effort(&self, args: &str) -> CommandResult {
+        if args.is_empty() {
+            return CommandResult::Executed(format!(
+                "Effort: {} {}\n\n\
+                 Usage: /effort <auto|low|medium|high>\n\n\
+                 Levels:\n\
+                 \x20 auto   {} - Model default (max_tokens: 8192)\n\
+                 \x20 low    {} - Fast/cheap (max_tokens: 1024, no thinking)\n\
+                 \x20 medium {} - Balanced (max_tokens: 4096, thinking: 5k)\n\
+                 \x20 high   {} - Thorough (max_tokens: 16384, thinking: 16k)",
+                self.effort.symbol(),
+                self.effort.label(),
+                crate::types::config::EffortLevel::Auto.symbol(),
+                crate::types::config::EffortLevel::Low.symbol(),
+                crate::types::config::EffortLevel::Medium.symbol(),
+                crate::types::config::EffortLevel::High.symbol(),
+            ));
+        }
+
+        match args.trim().parse::<crate::types::config::EffortLevel>() {
+            Ok(level) => CommandResult::Action(CommandAction::SetEffort(level)),
+            Err(e) => CommandResult::Error(e),
+        }
+    }
+
     /// Returns available command names for tab completion.
     #[must_use]
     pub fn available_commands(&self) -> Vec<&'static str> {
@@ -1794,6 +1850,7 @@ Include steps to reproduce and expected vs actual behavior."#;
             "copy",
             "cost",
             "doctor",
+            "effort",
             "experiment",
             "export",
             "feedback",
@@ -3989,6 +4046,141 @@ mod tests {
                 assert!(output.contains("deps"), "Should list deps subcommand");
             }
             other => panic!("Expected audit help: {:?}", other),
+        }
+    }
+
+    // =========================================================================
+    // /effort command tests
+    // =========================================================================
+
+    #[test]
+    fn test_effort_no_args_shows_current_level() {
+        let (handler, _temp) = create_handler_in_temp();
+        let result = handler.handle("/effort");
+        match result {
+            CommandResult::Executed(output) => {
+                assert!(output.contains("Effort:"), "Should show current effort");
+                assert!(output.contains("auto"), "Default should be auto");
+                assert!(output.contains("Usage:"), "Should show usage info");
+            }
+            other => panic!("Expected effort display: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_effort_set_high() {
+        let (handler, _temp) = create_handler_in_temp();
+        let result = handler.handle("/effort high");
+        assert_eq!(
+            result,
+            CommandResult::Action(CommandAction::SetEffort(
+                crate::types::config::EffortLevel::High
+            ))
+        );
+    }
+
+    #[test]
+    fn test_effort_set_low() {
+        let (handler, _temp) = create_handler_in_temp();
+        let result = handler.handle("/effort low");
+        assert_eq!(
+            result,
+            CommandResult::Action(CommandAction::SetEffort(
+                crate::types::config::EffortLevel::Low
+            ))
+        );
+    }
+
+    #[test]
+    fn test_effort_set_medium() {
+        let (handler, _temp) = create_handler_in_temp();
+        let result = handler.handle("/effort medium");
+        assert_eq!(
+            result,
+            CommandResult::Action(CommandAction::SetEffort(
+                crate::types::config::EffortLevel::Medium
+            ))
+        );
+    }
+
+    #[test]
+    fn test_effort_set_auto() {
+        let (handler, _temp) = create_handler_in_temp();
+        let result = handler.handle("/effort auto");
+        assert_eq!(
+            result,
+            CommandResult::Action(CommandAction::SetEffort(
+                crate::types::config::EffortLevel::Auto
+            ))
+        );
+    }
+
+    #[test]
+    fn test_effort_invalid_value() {
+        let (handler, _temp) = create_handler_in_temp();
+        let result = handler.handle("/effort invalid");
+        match result {
+            CommandResult::Error(msg) => {
+                assert!(msg.contains("Unknown effort level"));
+            }
+            other => panic!("Expected error for invalid effort: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_effort_with_custom_level_displays_correctly() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let handler = SlashCommandHandler::new(temp_dir.path().to_path_buf())
+            .with_effort(crate::types::config::EffortLevel::High);
+        let result = handler.handle("/effort");
+        match result {
+            CommandResult::Executed(output) => {
+                assert!(
+                    output.contains("high"),
+                    "Should show current effort as high"
+                );
+            }
+            other => panic!("Expected effort display: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_effort_in_available_commands() {
+        let (handler, _temp) = create_handler_in_temp();
+        let commands = handler.available_commands();
+        assert!(
+            commands.contains(&"effort"),
+            "effort should be in available commands"
+        );
+    }
+
+    #[test]
+    fn test_help_effort_shows_detailed_help() {
+        let (handler, _temp) = create_handler_in_temp();
+        let result = handler.handle("/help effort");
+        match result {
+            CommandResult::Executed(output) => {
+                assert!(output.contains("/effort"), "Should describe effort command");
+                assert!(output.contains("low"), "Should list low option");
+                assert!(output.contains("medium"), "Should list medium option");
+                assert!(output.contains("high"), "Should list high option");
+            }
+            other => panic!("Expected effort help: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_help_lists_effort_command() {
+        let (handler, _temp) = create_handler_in_temp();
+        let result = handler.handle("/help");
+        match result {
+            CommandResult::Executed(output) => {
+                assert!(
+                    output.contains("/effort"),
+                    "Help should list /effort command"
+                );
+            }
+            other => panic!("Expected help output: {:?}", other),
         }
     }
 }

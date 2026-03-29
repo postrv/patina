@@ -4,6 +4,7 @@
 //! and configure the application.
 
 use secrecy::SecretString;
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -85,11 +86,15 @@ pub enum NarsilMode {
 
 /// Controls how much reasoning effort the model applies.
 ///
-/// Maps to the extended thinking `budget_tokens` parameter:
-/// - `Low`: Thinking disabled (fastest, cheapest)
-/// - `Medium`: 5,000 token thinking budget
-/// - `High`: 16,000 token thinking budget
-/// - `Auto`: Selects based on model defaults
+/// Maps to the extended thinking `budget_tokens` parameter and controls
+/// the `max_tokens` limit on API responses:
+///
+/// | Level  | `max_tokens` | Thinking Budget |
+/// |--------|-------------|-----------------|
+/// | `Low`  | 1,024       | None (disabled) |
+/// | `Medium` | 4,096     | 5,000 tokens    |
+/// | `High` | 16,384      | 16,000 tokens   |
+/// | `Auto` | 8,192       | None (model default) |
 ///
 /// # Examples
 ///
@@ -99,13 +104,19 @@ pub enum NarsilMode {
 /// let effort = EffortLevel::High;
 /// assert_eq!(effort.thinking_budget(), Some(16_000));
 /// assert_eq!(effort.indicator(), "●");
+/// assert_eq!(effort.max_tokens(), 16_384);
+///
+/// // Parse from string
+/// let parsed: EffortLevel = "high".parse().unwrap();
+/// assert_eq!(parsed, EffortLevel::High);
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum EffortLevel {
     /// Auto-select effort based on model defaults.
     #[default]
     Auto,
-    /// Low effort: no thinking, fast responses.
+    /// Low effort: no thinking, fast responses, minimal token budget.
     Low,
     /// Medium effort: moderate thinking budget (5,000 tokens).
     Medium,
@@ -118,12 +129,41 @@ impl EffortLevel {
     ///
     /// Returns `None` for `Auto` (handled dynamically) and `Low` (disabled).
     /// Returns `Some(budget)` for `Medium` and `High`.
+    ///
+    /// This is an alias for [`budget_tokens`](Self::budget_tokens).
     #[must_use]
     pub fn thinking_budget(&self) -> Option<u32> {
+        self.budget_tokens()
+    }
+
+    /// Returns the thinking budget for this effort level.
+    ///
+    /// - `Auto`: `None` (uses model default)
+    /// - `Low`: `None` (thinking disabled)
+    /// - `Medium`: `Some(5_000)`
+    /// - `High`: `Some(16_000)`
+    #[must_use]
+    pub fn budget_tokens(&self) -> Option<u32> {
         match self {
             Self::Auto | Self::Low => None,
             Self::Medium => Some(5_000),
             Self::High => Some(16_000),
+        }
+    }
+
+    /// Returns the `max_tokens` limit for API responses at this effort level.
+    ///
+    /// - `Low`: 1,024 (concise answers)
+    /// - `Medium`: 4,096 (moderate detail)
+    /// - `High`: 16,384 (comprehensive responses)
+    /// - `Auto`: 8,192 (balanced default)
+    #[must_use]
+    pub fn max_tokens(&self) -> u32 {
+        match self {
+            Self::Low => 1_024,
+            Self::Medium => 4_096,
+            Self::High => 16_384,
+            Self::Auto => 8_192,
         }
     }
 
@@ -135,6 +175,17 @@ impl EffortLevel {
     /// - High: `●`
     #[must_use]
     pub fn indicator(&self) -> &'static str {
+        self.symbol()
+    }
+
+    /// Returns a Unicode symbol representing the effort level.
+    ///
+    /// - Auto: `◉`
+    /// - Low: `○`
+    /// - Medium: `◐`
+    /// - High: `●`
+    #[must_use]
+    pub fn symbol(&self) -> &'static str {
         match self {
             Self::Auto => "◉",
             Self::Low => "○",
@@ -158,6 +209,30 @@ impl EffortLevel {
 impl std::fmt::Display for EffortLevel {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.label())
+    }
+}
+
+impl std::str::FromStr for EffortLevel {
+    type Err = String;
+
+    /// Parses an effort level from a string.
+    ///
+    /// Accepts "auto", "low", "medium", "high" (case-insensitive).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error string if the input is not a recognized effort level.
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim().to_lowercase().as_str() {
+            "auto" => Ok(Self::Auto),
+            "low" => Ok(Self::Low),
+            "medium" | "med" => Ok(Self::Medium),
+            "high" => Ok(Self::High),
+            other => Err(format!(
+                "Unknown effort level '{}'. Valid values: auto, low, medium, high",
+                other
+            )),
+        }
     }
 }
 
@@ -2175,6 +2250,132 @@ mod tests {
     fn test_effort_level_display() {
         assert_eq!(format!("{}", EffortLevel::High), "high");
         assert_eq!(format!("{}", EffortLevel::Auto), "auto");
+        assert_eq!(format!("{}", EffortLevel::Low), "low");
+        assert_eq!(format!("{}", EffortLevel::Medium), "medium");
+    }
+
+    #[test]
+    fn test_effort_level_symbol() {
+        assert_eq!(EffortLevel::Auto.symbol(), "◉");
+        assert_eq!(EffortLevel::Low.symbol(), "○");
+        assert_eq!(EffortLevel::Medium.symbol(), "◐");
+        assert_eq!(EffortLevel::High.symbol(), "●");
+    }
+
+    #[test]
+    fn test_effort_level_symbol_matches_indicator() {
+        for level in [
+            EffortLevel::Auto,
+            EffortLevel::Low,
+            EffortLevel::Medium,
+            EffortLevel::High,
+        ] {
+            assert_eq!(level.symbol(), level.indicator());
+        }
+    }
+
+    #[test]
+    fn test_effort_level_max_tokens() {
+        assert_eq!(EffortLevel::Low.max_tokens(), 1_024);
+        assert_eq!(EffortLevel::Medium.max_tokens(), 4_096);
+        assert_eq!(EffortLevel::High.max_tokens(), 16_384);
+        assert_eq!(EffortLevel::Auto.max_tokens(), 8_192);
+    }
+
+    #[test]
+    fn test_effort_level_budget_tokens() {
+        assert_eq!(EffortLevel::Auto.budget_tokens(), None);
+        assert_eq!(EffortLevel::Low.budget_tokens(), None);
+        assert_eq!(EffortLevel::Medium.budget_tokens(), Some(5_000));
+        assert_eq!(EffortLevel::High.budget_tokens(), Some(16_000));
+    }
+
+    #[test]
+    fn test_effort_level_budget_tokens_matches_thinking_budget() {
+        for level in [
+            EffortLevel::Auto,
+            EffortLevel::Low,
+            EffortLevel::Medium,
+            EffortLevel::High,
+        ] {
+            assert_eq!(level.budget_tokens(), level.thinking_budget());
+        }
+    }
+
+    #[test]
+    fn test_effort_level_from_str() {
+        assert_eq!("auto".parse::<EffortLevel>(), Ok(EffortLevel::Auto));
+        assert_eq!("low".parse::<EffortLevel>(), Ok(EffortLevel::Low));
+        assert_eq!("medium".parse::<EffortLevel>(), Ok(EffortLevel::Medium));
+        assert_eq!("med".parse::<EffortLevel>(), Ok(EffortLevel::Medium));
+        assert_eq!("high".parse::<EffortLevel>(), Ok(EffortLevel::High));
+    }
+
+    #[test]
+    fn test_effort_level_from_str_case_insensitive() {
+        assert_eq!("HIGH".parse::<EffortLevel>(), Ok(EffortLevel::High));
+        assert_eq!("Low".parse::<EffortLevel>(), Ok(EffortLevel::Low));
+        assert_eq!("MEDIUM".parse::<EffortLevel>(), Ok(EffortLevel::Medium));
+        assert_eq!("Auto".parse::<EffortLevel>(), Ok(EffortLevel::Auto));
+    }
+
+    #[test]
+    fn test_effort_level_from_str_with_whitespace() {
+        assert_eq!("  high  ".parse::<EffortLevel>(), Ok(EffortLevel::High));
+        assert_eq!(" low ".parse::<EffortLevel>(), Ok(EffortLevel::Low));
+    }
+
+    #[test]
+    fn test_effort_level_from_str_invalid() {
+        assert!("invalid".parse::<EffortLevel>().is_err());
+        assert!("".parse::<EffortLevel>().is_err());
+        assert!("ultra".parse::<EffortLevel>().is_err());
+    }
+
+    #[test]
+    fn test_effort_level_from_str_error_message() {
+        let err = "invalid".parse::<EffortLevel>().unwrap_err();
+        assert!(err.contains("Unknown effort level"));
+        assert!(err.contains("invalid"));
+    }
+
+    #[test]
+    fn test_effort_level_serde_roundtrip() {
+        for level in [
+            EffortLevel::Auto,
+            EffortLevel::Low,
+            EffortLevel::Medium,
+            EffortLevel::High,
+        ] {
+            let json = serde_json::to_string(&level).unwrap();
+            let deserialized: EffortLevel = serde_json::from_str(&json).unwrap();
+            assert_eq!(level, deserialized);
+        }
+    }
+
+    #[test]
+    fn test_effort_level_serde_json_values() {
+        assert_eq!(
+            serde_json::to_string(&EffortLevel::Auto).unwrap(),
+            "\"auto\""
+        );
+        assert_eq!(serde_json::to_string(&EffortLevel::Low).unwrap(), "\"low\"");
+        assert_eq!(
+            serde_json::to_string(&EffortLevel::Medium).unwrap(),
+            "\"medium\""
+        );
+        assert_eq!(
+            serde_json::to_string(&EffortLevel::High).unwrap(),
+            "\"high\""
+        );
+    }
+
+    #[test]
+    fn test_effort_level_deserialize_from_string() {
+        let high: EffortLevel = serde_json::from_str("\"high\"").unwrap();
+        assert_eq!(high, EffortLevel::High);
+        let low: EffortLevel = serde_json::from_str("\"low\"").unwrap();
+        assert_eq!(low, EffortLevel::Low);
     }
 
     // =========================================================================

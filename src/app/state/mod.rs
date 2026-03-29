@@ -1956,6 +1956,52 @@ mod tests {
     }
 
     #[test]
+    fn test_build_request_options_max_tokens_auto_is_none() {
+        let state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+        let opts = state.build_request_options("claude-sonnet-4-20250514");
+        assert!(
+            opts.max_tokens.is_none(),
+            "Auto effort should not override max_tokens"
+        );
+    }
+
+    #[test]
+    fn test_build_request_options_max_tokens_high() {
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+        state.model_config_mut().set_effort(EffortLevel::High);
+        let opts = state.build_request_options("claude-sonnet-4-20250514");
+        assert_eq!(
+            opts.max_tokens,
+            Some(16_384),
+            "High effort should set max_tokens to 16384"
+        );
+    }
+
+    #[test]
+    fn test_build_request_options_max_tokens_low() {
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+        state.model_config_mut().set_effort(EffortLevel::Low);
+        let opts = state.build_request_options("claude-sonnet-4-20250514");
+        assert_eq!(
+            opts.max_tokens,
+            Some(1_024),
+            "Low effort should set max_tokens to 1024"
+        );
+    }
+
+    #[test]
+    fn test_build_request_options_max_tokens_medium() {
+        let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
+        state.model_config_mut().set_effort(EffortLevel::Medium);
+        let opts = state.build_request_options("claude-sonnet-4-20250514");
+        assert_eq!(
+            opts.max_tokens,
+            Some(4_096),
+            "Medium effort should set max_tokens to 4096"
+        );
+    }
+
+    #[test]
     fn test_force_compact_sets_request_flag() {
         let mut state = AppState::new(PathBuf::from("/test"), false, ParallelMode::Enabled);
         state.dirty.clear();

@@ -27,6 +27,7 @@ pub mod ui_state;
 
 // Re-export common types for convenience
 pub use config::Config;
+pub use config::EffortLevel;
 pub use content::{ContentBlock, StopReason, ToolResultBlock, ToolUseBlock};
 pub use image::{
     contains_images, select_model_for_content, ImageContent, ImageError, ImageSource, MediaType,

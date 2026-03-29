@@ -113,6 +113,16 @@ impl AppState {
             }])
         };
 
-        RequestOptions { thinking, system }
+        // Determine max_tokens from effort level (None = use provider default)
+        let max_tokens = match self.model_config.effort {
+            crate::types::config::EffortLevel::Auto => None,
+            other => Some(other.max_tokens()),
+        };
+
+        RequestOptions {
+            thinking,
+            system,
+            max_tokens,
+        }
     }
 }
