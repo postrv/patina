@@ -1,6 +1,7 @@
 //! Slash commands - user-triggered workflows
 
 pub mod agent;
+pub mod context;
 pub mod continuous;
 pub mod doctor;
 pub mod experiment;
