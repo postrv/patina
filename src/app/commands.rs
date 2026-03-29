@@ -87,6 +87,10 @@ pub enum CommandAction {
     },
     /// Show the rewind picker to select a checkpoint.
     ShowRewindPicker,
+    /// Accept the currently pending plan.
+    PlanAccept,
+    /// Reject the currently pending plan.
+    PlanReject,
 }
 
 /// Result of handling a slash command.
@@ -127,6 +131,20 @@ pub struct SlashCommandHandler {
     context_limit: usize,
     /// Current session ID (for /fork).
     session_id: Option<String>,
+    /// Summary of the pending plan for `/plan` command display.
+    plan_summary: Option<PlanSummary>,
+}
+
+/// Summary information about a pending plan, used by the `/plan` command.
+///
+/// This is a lightweight snapshot so `SlashCommandHandler` does not need
+/// a full reference to `PlanState`.
+#[derive(Debug, Clone)]
+pub struct PlanSummary {
+    /// The plan title.
+    pub title: String,
+    /// Human-readable descriptions of each step.
+    pub steps: Vec<String>,
 }
 
 impl SlashCommandHandler {
@@ -141,6 +159,7 @@ impl SlashCommandHandler {
             messages: Vec::new(),
             context_limit: 200_000,
             session_id: None,
+            plan_summary: None,
         }
     }
 
@@ -176,6 +195,13 @@ impl SlashCommandHandler {
     #[must_use]
     pub fn with_session_id(mut self, session_id: Option<String>) -> Self {
         self.session_id = session_id;
+        self
+    }
+
+    /// Sets the plan summary for the `/plan` command.
+    #[must_use]
+    pub fn with_plan_summary(mut self, summary: Option<PlanSummary>) -> Self {
+        self.plan_summary = summary;
         self
     }
 
@@ -236,6 +262,7 @@ impl SlashCommandHandler {
             "rewind" => self.handle_rewind(),
             "help" => self.handle_help(if args.is_empty() { None } else { Some(&args) }),
             "memory" => self.handle_memory(&args),
+            "plan" => self.handle_plan(&args),
             "plugins" => self.handle_plugins(),
             "terminal-setup" => self.handle_terminal_setup(),
             "compact" => self.handle_compact(&args),
@@ -934,6 +961,51 @@ impl SlashCommandHandler {
         }
     }
 
+    /// Handles the `/plan` command.
+    ///
+    /// Subcommands:
+    /// - (none) / `show` -- display the currently pending plan
+    /// - `accept`        -- approve the pending plan
+    /// - `reject`        -- reject and discard the pending plan
+    fn handle_plan(&self, args: &str) -> CommandResult {
+        let sub = args.split_whitespace().next().unwrap_or("");
+        match sub {
+            "" | "show" => match &self.plan_summary {
+                Some(summary) => {
+                    let mut output = format!("Pending Plan: {}\n\nSteps:", summary.title);
+                    for (i, step) in summary.steps.iter().enumerate() {
+                        output.push_str(&format!("\n  {:>2}. {step}", i + 1));
+                    }
+                    output.push_str(
+                        "\n\nUse /plan accept or /plan reject, \
+                         or press Enter/Esc in the plan review modal.",
+                    );
+                    CommandResult::Executed(output)
+                }
+                None => CommandResult::Executed("No plan is currently pending.".to_string()),
+            },
+            "accept" | "approve" => {
+                if self.plan_summary.is_none() {
+                    return CommandResult::Error(
+                        "No plan is currently pending to accept.".to_string(),
+                    );
+                }
+                CommandResult::Action(CommandAction::PlanAccept)
+            }
+            "reject" | "discard" => {
+                if self.plan_summary.is_none() {
+                    return CommandResult::Error(
+                        "No plan is currently pending to reject.".to_string(),
+                    );
+                }
+                CommandResult::Action(CommandAction::PlanReject)
+            }
+            other => CommandResult::Error(format!(
+                "Unknown plan subcommand: '{other}'. Use: show, accept, reject"
+            )),
+        }
+    }
+
     /// Handles the `/help` command.
     fn handle_help(&self, command: Option<&str>) -> CommandResult {
         match command {
@@ -989,6 +1061,9 @@ impl SlashCommandHandler {
 
   /permissions [subcommand] - View/manage tool permissions
     Subcommands: add, remove, reset
+
+  /plan [subcommand]        - View/manage pending plan
+    Subcommands: show, accept, reject
 
   /plugins                  - List loaded plugins
 
@@ -1127,6 +1202,27 @@ Examples:
   /experiment list
   /experiment accept risky-refactor
   /experiment reject risky-refactor"#;
+                CommandResult::Executed(help_text.to_string())
+            }
+
+            Some("plan") => {
+                let help_text = r#"/plan - View and manage pending plans
+
+Subcommands:
+  (none)     Show the currently pending plan (alias: show)
+  show       Show the currently pending plan
+  accept     Approve the pending plan and proceed with execution
+  reject     Reject and discard the pending plan
+
+Plans are proposed by the model when it wants to outline a series
+of tool calls before executing them. You can review, accept, or
+reject plans via the interactive modal (Enter/Esc) or this command.
+
+Examples:
+  /plan
+  /plan show
+  /plan accept
+  /plan reject"#;
                 CommandResult::Executed(help_text.to_string())
             }
 
@@ -3989,6 +4085,184 @@ mod tests {
                 assert!(output.contains("deps"), "Should list deps subcommand");
             }
             other => panic!("Expected audit help: {:?}", other),
+        }
+    }
+
+    // =========================================================================
+    // /plan command tests
+    // =========================================================================
+
+    fn sample_plan_summary() -> PlanSummary {
+        PlanSummary {
+            title: "Refactor Auth".to_string(),
+            steps: vec![
+                "Read auth module".to_string(),
+                "Edit handler".to_string(),
+                "Run tests".to_string(),
+            ],
+        }
+    }
+
+    fn create_handler_with_plan() -> (SlashCommandHandler, TempDir) {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let handler = SlashCommandHandler::new(temp_dir.path().to_path_buf())
+            .with_plan_summary(Some(sample_plan_summary()));
+        (handler, temp_dir)
+    }
+
+    #[test]
+    fn test_plan_show_no_plan_pending() {
+        let (handler, _temp) = create_handler_in_temp();
+        let result = handler.handle("/plan");
+        match result {
+            CommandResult::Executed(output) => {
+                assert!(
+                    output.contains("No plan"),
+                    "Should indicate no plan: {output}"
+                );
+            }
+            other => panic!("Expected Executed, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_plan_show_with_pending_plan() {
+        let (handler, _temp) = create_handler_with_plan();
+        let result = handler.handle("/plan");
+        match result {
+            CommandResult::Executed(output) => {
+                assert!(
+                    output.contains("Refactor Auth"),
+                    "Should show plan title: {output}"
+                );
+                assert!(
+                    output.contains("Read auth module"),
+                    "Should show step 1: {output}"
+                );
+                assert!(
+                    output.contains("Edit handler"),
+                    "Should show step 2: {output}"
+                );
+                assert!(output.contains("Run tests"), "Should show step 3: {output}");
+            }
+            other => panic!("Expected Executed, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_plan_show_subcommand() {
+        let (handler, _temp) = create_handler_with_plan();
+        let result = handler.handle("/plan show");
+        match result {
+            CommandResult::Executed(output) => {
+                assert!(
+                    output.contains("Refactor Auth"),
+                    "Should show plan title: {output}"
+                );
+            }
+            other => panic!("Expected Executed, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_plan_accept_with_pending_plan() {
+        let (handler, _temp) = create_handler_with_plan();
+        let result = handler.handle("/plan accept");
+        assert_eq!(result, CommandResult::Action(CommandAction::PlanAccept));
+    }
+
+    #[test]
+    fn test_plan_accept_no_plan_pending() {
+        let (handler, _temp) = create_handler_in_temp();
+        let result = handler.handle("/plan accept");
+        match result {
+            CommandResult::Error(msg) => {
+                assert!(
+                    msg.contains("No plan"),
+                    "Should report no plan pending: {msg}"
+                );
+            }
+            other => panic!("Expected Error, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_plan_reject_with_pending_plan() {
+        let (handler, _temp) = create_handler_with_plan();
+        let result = handler.handle("/plan reject");
+        assert_eq!(result, CommandResult::Action(CommandAction::PlanReject));
+    }
+
+    #[test]
+    fn test_plan_reject_no_plan_pending() {
+        let (handler, _temp) = create_handler_in_temp();
+        let result = handler.handle("/plan reject");
+        match result {
+            CommandResult::Error(msg) => {
+                assert!(
+                    msg.contains("No plan"),
+                    "Should report no plan pending: {msg}"
+                );
+            }
+            other => panic!("Expected Error, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_plan_approve_alias() {
+        let (handler, _temp) = create_handler_with_plan();
+        let result = handler.handle("/plan approve");
+        assert_eq!(result, CommandResult::Action(CommandAction::PlanAccept));
+    }
+
+    #[test]
+    fn test_plan_discard_alias() {
+        let (handler, _temp) = create_handler_with_plan();
+        let result = handler.handle("/plan discard");
+        assert_eq!(result, CommandResult::Action(CommandAction::PlanReject));
+    }
+
+    #[test]
+    fn test_plan_unknown_subcommand() {
+        let (handler, _temp) = create_handler_in_temp();
+        let result = handler.handle("/plan foobar");
+        match result {
+            CommandResult::Error(msg) => {
+                assert!(
+                    msg.contains("foobar"),
+                    "Should mention the unknown subcommand: {msg}"
+                );
+            }
+            other => panic!("Expected Error, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_help_plan_shows_detailed_help() {
+        let (handler, _temp) = create_handler_in_temp();
+        let result = handler.handle("/help plan");
+        match result {
+            CommandResult::Executed(output) => {
+                assert!(output.contains("/plan"), "Should describe plan command");
+                assert!(output.contains("accept"), "Should list accept subcommand");
+                assert!(output.contains("reject"), "Should list reject subcommand");
+            }
+            other => panic!("Expected plan help: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_help_listing_includes_plan() {
+        let (handler, _temp) = create_handler_in_temp();
+        let result = handler.handle("/help");
+        match result {
+            CommandResult::Executed(output) => {
+                assert!(
+                    output.contains("/plan"),
+                    "Help listing should include /plan command"
+                );
+            }
+            other => panic!("Expected Executed, got: {:?}", other),
         }
     }
 }

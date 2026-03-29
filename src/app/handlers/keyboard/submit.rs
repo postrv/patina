@@ -54,11 +54,19 @@ fn handle_slash_command(ctx: &mut AppContext<'_>, input: &str) {
     let mcp_info = build_mcp_server_info(ctx.state);
     let cost_summary = ctx.state.cost_summary();
     let session_id = ctx.state.session_tracking().id().map(String::from);
+    let plan_summary = ctx
+        .state
+        .pending_plan()
+        .map(|p| crate::app::commands::PlanSummary {
+            title: p.title.clone(),
+            steps: p.steps.iter().map(|s| s.description.clone()).collect(),
+        });
     let mut handler = SlashCommandHandler::new(ctx.state.working_dir.clone())
         .with_plugins(plugin_info)
         .with_mcp_info(mcp_info)
         .with_cost_summary(cost_summary)
-        .with_session_id(session_id);
+        .with_session_id(session_id)
+        .with_plan_summary(plan_summary);
 
     // Only clone messages for commands that actually need them (/context, /export)
     let cmd = input.split_whitespace().next().unwrap_or("");
@@ -196,6 +204,24 @@ fn handle_command_action(
         }
         CommandAction::ShowRewindPicker => {
             "Rewind picker requested. Use /rewind in TUI mode to select a checkpoint.".to_string()
+        }
+        CommandAction::PlanAccept => {
+            if let Some(result) = ctx.state.approve_plan() {
+                let tool_id = result.tool_use_id.clone();
+                ctx.state.record_tool_result(&tool_id, result);
+                "Plan accepted. Proceeding with execution.".to_string()
+            } else {
+                "No plan is currently pending.".to_string()
+            }
+        }
+        CommandAction::PlanReject => {
+            if let Some(result) = ctx.state.reject_plan() {
+                let tool_id = result.tool_use_id.clone();
+                ctx.state.record_tool_result(&tool_id, result);
+                "Plan rejected.".to_string()
+            } else {
+                "No plan is currently pending.".to_string()
+            }
         }
     };
 

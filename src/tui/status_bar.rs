@@ -274,6 +274,32 @@ pub fn update_spans(version: Option<&str>) -> Vec<Span<'static>> {
     ]
 }
 
+/// Produces a plan-pending indicator span when a plan review modal is active.
+///
+/// Returns an empty vec when no plan is pending.
+///
+/// # Examples
+///
+/// ```rust,ignore
+/// let spans = plan_spans(true);
+/// assert_eq!(spans.len(), 2);
+/// ```
+#[must_use]
+pub fn plan_spans(has_plan: bool) -> Vec<Span<'static>> {
+    if !has_plan {
+        return Vec::new();
+    }
+    vec![
+        Span::raw(" "),
+        Span::styled(
+            "[PLAN]".to_string(),
+            Style::default()
+                .fg(PatinaTheme::WARNING)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ]
+}
+
 /// Collects all status bar spans from a [`RenderView`] by delegating to pure sub-functions.
 ///
 /// The `feedback` parameter provides freshly-computed viewport and content
@@ -292,6 +318,7 @@ pub fn build_status_bar_spans(view: &RenderView, feedback: &RenderFeedback) -> V
     spans.extend(modified_spans(view.worktree_modified));
     spans.extend(upstream_spans(view.worktree_ahead, view.worktree_behind));
     spans.extend(focus_spans(view.focus_area));
+    spans.extend(plan_spans(view.pending_plan.is_some()));
 
     let selection = view
         .selection
@@ -486,6 +513,28 @@ mod tests {
         assert_eq!(spans.len(), 2);
         assert_eq!(spans[1].content, "UPD:2.0.0");
         assert_eq!(spans[1].style.fg, Some(PatinaTheme::WARNING));
+    }
+
+    // =========================================================================
+    // C2: cost_spans tests
+    // =========================================================================
+
+    // =========================================================================
+    // plan_spans tests
+    // =========================================================================
+
+    #[test]
+    fn plan_spans_active_returns_indicator() {
+        let spans = plan_spans(true);
+        assert_eq!(spans.len(), 2);
+        assert_eq!(spans[1].content, "[PLAN]");
+        assert_eq!(spans[1].style.fg, Some(PatinaTheme::WARNING));
+    }
+
+    #[test]
+    fn plan_spans_inactive_returns_empty() {
+        let spans = plan_spans(false);
+        assert!(spans.is_empty());
     }
 
     // =========================================================================
