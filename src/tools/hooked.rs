@@ -139,6 +139,32 @@ impl HookedToolExecutor {
         self
     }
 
+    /// Sets the agent registry for inter-agent messaging.
+    ///
+    /// When set, the `send_message` tool can route messages between agents
+    /// instead of returning "not available".
+    #[must_use]
+    pub fn with_agent_registry(
+        mut self,
+        registry: std::sync::Arc<crate::agents::AgentRegistry>,
+    ) -> Self {
+        self.inner = self.inner.with_agent_registry(registry);
+        self
+    }
+
+    /// Sets the application-level sandbox policy for access control.
+    ///
+    /// When set, file read/write and command execution operations are checked
+    /// against the policy's allowlists and denylists before proceeding.
+    #[must_use]
+    pub fn with_sandbox_policy(
+        mut self,
+        policy: std::sync::Arc<super::sandbox::policy::SandboxPolicy>,
+    ) -> Self {
+        self.inner = self.inner.with_sandbox_policy(policy);
+        self
+    }
+
     /// Configures the permission manager for this executor.
     ///
     /// When configured, tools will be checked against permission rules
