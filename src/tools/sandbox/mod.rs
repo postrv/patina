@@ -24,8 +24,10 @@ pub mod config;
 pub mod linux;
 pub mod macos;
 pub mod noop;
+pub mod policy;
 
 pub use config::SandboxConfig;
+pub use policy::SandboxPolicy;
 
 use anyhow::Result;
 

@@ -39,3 +39,7 @@ pub use security::{
 
 // Re-export parallel execution types for convenience
 pub use parallel::{ParallelConfig, ParallelExecutor};
+
+// Re-export sandbox types
+pub use sandbox::config::SandboxConfig;
+pub use sandbox::policy::SandboxPolicy;

@@ -138,7 +138,11 @@ mod tests {
         let config = SandboxConfig {
             enabled: true,
             allow_read: vec![],
+            deny_read: vec![],
             allow_write: vec![],
+            deny_write: vec![],
+            allow_execute: vec![],
+            deny_execute: vec![],
             allow_network: false,
         };
         let profile = MacOsSandbox::generate_profile(&config);
