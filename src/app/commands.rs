@@ -839,42 +839,79 @@ impl SlashCommandHandler {
                 "Context analysis: No messages in session yet.".to_string(),
             );
         }
-        let analysis = crate::app::context_analysis::ContextAnalysis::analyze(
-            &self.messages,
-            self.context_limit,
-        );
-        CommandResult::Executed(analysis.format())
+
+        // Estimate token counts per category from messages
+        let mut conversation_tokens = 0usize;
+        for msg in &self.messages {
+            conversation_tokens += crate::api::tokens::estimate_tokens(&msg.content) + 4;
+            // +4 for role overhead
+        }
+
+        let input = crate::commands::context::ContextAnalysisInput {
+            system_prompt_tokens: 0,
+            claude_md_tokens: 0,
+            tool_definitions_tokens: 0,
+            conversation_tokens,
+            memory_tokens: 0,
+            max_tokens: self.context_limit,
+        };
+
+        let breakdown = crate::commands::context::analyze_context(&input);
+        let warnings = crate::commands::context::detect_warnings(&breakdown);
+        let report = crate::commands::context::format_report(&breakdown, &warnings);
+
+        CommandResult::Executed(report)
     }
 
     /// Handles the `/export` command.
     ///
-    /// Exports the conversation in markdown (default) or JSON format.
+    /// Exports the conversation using the dedicated export module which supports
+    /// markdown, JSON, and plain text formats, optional file output, and
+    /// `--no-tools` / `--no-thinking` / `--no-timestamps` flags.
     fn handle_export(&self, args: &str) -> CommandResult {
-        let format = args.trim();
         if self.messages.is_empty() {
             return CommandResult::Executed("No messages to export.".to_string());
         }
-        match format {
-            "" | "markdown" | "md" => {
-                let mut output = String::from("# Conversation Export\n\n");
-                for msg in &self.messages {
-                    let role = match msg.role {
-                        crate::types::Role::User => "**User**",
-                        crate::types::Role::Assistant => "**Assistant**",
-                    };
-                    output.push_str(&format!("## {}\n\n{}\n\n---\n\n", role, msg.content));
+
+        let options = match crate::commands::export::parse_export_args(args) {
+            Ok(opts) => opts,
+            Err(e) => return CommandResult::Error(e.to_string()),
+        };
+
+        // Convert Messages to ConversationEntries for the export module
+        let entries: Vec<crate::types::ConversationEntry> = self
+            .messages
+            .iter()
+            .map(|msg| match msg.role {
+                crate::types::Role::User => {
+                    crate::types::ConversationEntry::UserMessage(msg.content.clone())
                 }
-                CommandResult::Executed(output)
+                crate::types::Role::Assistant => {
+                    crate::types::ConversationEntry::AssistantMessage(msg.content.clone())
+                }
+            })
+            .collect();
+
+        let content = match crate::commands::export::export_conversation(&entries, &options) {
+            Ok(c) => c,
+            Err(e) => return CommandResult::Error(e.to_string()),
+        };
+
+        // If a path was specified, write to file and return success message
+        if let Some(ref path) = options.output_path {
+            match crate::commands::export::write_export(&content, path) {
+                Ok(()) => {
+                    return CommandResult::Executed(format!(
+                        "Exported conversation ({} format) to {}",
+                        options.format,
+                        path.display()
+                    ));
+                }
+                Err(e) => return CommandResult::Error(e.to_string()),
             }
-            "json" => match serde_json::to_string_pretty(&self.messages) {
-                Ok(json) => CommandResult::Executed(json),
-                Err(e) => CommandResult::Error(format!("Failed to serialize: {e}")),
-            },
-            _ => CommandResult::Error(format!(
-                "Unknown export format: '{}'. Use 'markdown' or 'json'.",
-                format
-            )),
         }
+
+        CommandResult::Executed(content)
     }
 
     /// Handles the `/fork` (or `/branch`) command.
@@ -1848,59 +1885,9 @@ Include steps to reproduce and expected vs actual behavior."#;
     }
 
     fn handle_doctor(&self) -> CommandResult {
-        let mut output = String::from("Environment Check:\n\n");
-
-        // Check git
-        let git_ok = std::process::Command::new("git")
-            .arg("--version")
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false);
-        output.push_str(&format!(
-            "  git:    {}\n",
-            if git_ok { "OK" } else { "NOT FOUND" }
-        ));
-
-        // Check gh CLI
-        let gh_ok = std::process::Command::new("gh")
-            .arg("--version")
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false);
-        output.push_str(&format!(
-            "  gh CLI: {}\n",
-            if gh_ok { "OK" } else { "NOT FOUND" }
-        ));
-
-        // Check working directory
-        let wd_exists = self.working_dir.exists();
-        output.push_str(&format!(
-            "  workdir: {}\n",
-            if wd_exists { "OK" } else { "MISSING" }
-        ));
-
-        // Check .claude/CLAUDE.md
-        let claude_md = self.working_dir.join(".claude").join("CLAUDE.md");
-        output.push_str(&format!(
-            "  CLAUDE.md: {}\n",
-            if claude_md.exists() {
-                "found"
-            } else {
-                "not found"
-            }
-        ));
-
-        // MCP servers
-        output.push_str(&format!(
-            "  MCP servers: {} configured\n",
-            self.mcp_servers.len()
-        ));
-
-        // Plugins
-        output.push_str(&format!("  Plugins: {} loaded\n", self.plugins.len()));
-
-        output.push_str("\n  Run /status for full system status.");
-        CommandResult::Executed(output)
+        let checks = crate::commands::doctor::run_all_checks_in(&self.working_dir);
+        let report = crate::commands::doctor::format_report(&checks);
+        CommandResult::Executed(report)
     }
 
     /// Handles the `/effort` command -- show or set the reasoning effort level.
@@ -3232,14 +3219,54 @@ mod tests {
     // =========================================================================
 
     #[test]
-    fn test_handle_context() {
+    fn test_handle_context_no_messages() {
         let (handler, _temp) = create_handler_in_temp();
         let result = handler.handle("/context");
         match result {
             CommandResult::Executed(output) => {
                 assert!(
                     output.contains("Context analysis"),
-                    "Should show context info: {}",
+                    "Should show empty context message: {}",
+                    output
+                );
+            }
+            other => panic!("Expected executed result: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_handle_context_with_messages() {
+        use crate::types::{Message, Role};
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let handler = SlashCommandHandler::new(temp_dir.path().to_path_buf()).with_messages(
+            vec![
+                Message {
+                    role: Role::User,
+                    content: "Hello".to_string(),
+                },
+                Message {
+                    role: Role::Assistant,
+                    content: "Hi there".to_string(),
+                },
+            ],
+            200_000,
+        );
+        let result = handler.handle("/context");
+        match result {
+            CommandResult::Executed(output) => {
+                assert!(
+                    output.contains("Context Usage:"),
+                    "Should show context usage header: {}",
+                    output
+                );
+                assert!(
+                    output.contains("200,000"),
+                    "Should show max tokens: {}",
+                    output
+                );
+                assert!(
+                    output.contains("Conversation:"),
+                    "Should show conversation breakdown: {}",
                     output
                 );
             }
@@ -3303,9 +3330,58 @@ mod tests {
         let result = handler.handle("/export markdown");
         match result {
             CommandResult::Executed(output) => {
-                assert!(output.contains("**User**"), "Should contain user role");
+                assert!(
+                    output.contains("# Conversation Export"),
+                    "Should contain export header: {}",
+                    output
+                );
+                assert!(
+                    output.contains("## User"),
+                    "Should contain user heading: {}",
+                    output
+                );
                 assert!(output.contains("Hello"), "Should contain message");
+                assert!(
+                    output.contains("## Assistant"),
+                    "Should contain assistant heading: {}",
+                    output
+                );
                 assert!(output.contains("Hi there"), "Should contain response");
+            }
+            other => panic!("Expected executed result: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_handle_export_plain_text_with_messages() {
+        use crate::types::{Message, Role};
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let handler = SlashCommandHandler::new(temp_dir.path().to_path_buf()).with_messages(
+            vec![
+                Message {
+                    role: Role::User,
+                    content: "Hello".to_string(),
+                },
+                Message {
+                    role: Role::Assistant,
+                    content: "Hi there".to_string(),
+                },
+            ],
+            200_000,
+        );
+        let result = handler.handle("/export text");
+        match result {
+            CommandResult::Executed(output) => {
+                assert!(
+                    output.contains("User: Hello"),
+                    "Should contain user text: {}",
+                    output
+                );
+                assert!(
+                    output.contains("Assistant: Hi there"),
+                    "Should contain assistant text: {}",
+                    output
+                );
             }
             other => panic!("Expected executed result: {:?}", other),
         }
@@ -3865,8 +3941,17 @@ mod tests {
         let result = handler.handle("/doctor");
         match result {
             CommandResult::Executed(output) => {
-                assert!(output.contains("Environment Check"));
-                assert!(output.contains("git"));
+                assert!(
+                    output.contains("Patina Doctor"),
+                    "Should contain doctor report header: {}",
+                    output
+                );
+                assert!(output.contains("Git"), "Should check git: {}", output);
+                assert!(
+                    output.contains("passed"),
+                    "Should contain summary line: {}",
+                    output
+                );
             }
             other => panic!("Expected executed, got: {:?}", other),
         }
