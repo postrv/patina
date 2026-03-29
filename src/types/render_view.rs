@@ -10,6 +10,7 @@
 
 use crate::api::tokens::TokenBudget;
 use crate::permissions::PermissionRequest;
+use crate::tui::search::SearchState;
 use crate::types::ui_state::{
     CompactionProgressState, CompletionState, ContinuousLoopStatus, FocusArea, GateResult,
     PlanState, QuestionState, ScrollState, SelectionState,
@@ -108,6 +109,10 @@ pub struct RenderView<'a> {
     /// Pending question for user response.
     pub pending_question: Option<&'a QuestionState>,
 
+    // -- Search --
+    /// Transcript search state for rendering the search bar.
+    pub search_state: &'a SearchState,
+
     // -- Dirty flags --
     /// When `true`, only the throbber character changed since last render.
     /// The render path may skip the full timeline rebuild.
@@ -147,6 +152,9 @@ mod tests {
         token_budget: &'a TokenBudget,
         continuous_status: &'a ContinuousLoopStatus,
     ) -> RenderView<'a> {
+        static EMPTY_SEARCH: std::sync::LazyLock<SearchState> =
+            std::sync::LazyLock::new(SearchState::new);
+
         RenderView {
             timeline,
             throbber_char: ' ',
@@ -173,6 +181,7 @@ mod tests {
             pending_permission: None,
             pending_plan: None,
             pending_question: None,
+            search_state: &EMPTY_SEARCH,
             throbber_only: false,
         }
     }
