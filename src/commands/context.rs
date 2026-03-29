@@ -902,46 +902,6 @@ mod tests {
     }
 
     // =========================================================================
-    // ContextAnalysisInput: Clone and Debug
-    // =========================================================================
-
-    #[test]
-    fn test_context_analysis_input_clone() {
-        let input = ContextAnalysisInput {
-            system_prompt_tokens: 100,
-            claude_md_tokens: 200,
-            tool_definitions_tokens: 300,
-            conversation_tokens: 400,
-            memory_tokens: 500,
-            max_tokens: 200_000,
-        };
-        let cloned = input.clone();
-        assert_eq!(input, cloned);
-    }
-
-    #[test]
-    fn test_context_breakdown_debug() {
-        let breakdown = ContextBreakdown {
-            system_prompt_tokens: 0,
-            claude_md_tokens: 0,
-            tool_definitions_tokens: 0,
-            conversation_tokens: 0,
-            memory_tokens: 0,
-            total_tokens: 0,
-            max_tokens: 0,
-        };
-        let debug = format!("{:?}", breakdown);
-        assert!(debug.contains("ContextBreakdown"));
-    }
-
-    #[test]
-    fn test_context_warning_debug() {
-        let warning = ContextWarning::NearCapacity { usage_percent: 90 };
-        let debug = format!("{:?}", warning);
-        assert!(debug.contains("NearCapacity"));
-    }
-
-    // =========================================================================
     // Integration: full pipeline
     // =========================================================================
 

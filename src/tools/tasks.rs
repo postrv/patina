@@ -184,7 +184,7 @@ impl TaskStore {
             created_at: now.clone(),
             updated_at: now,
         };
-        let mut inner = self.inner.lock().expect("task store lock poisoned");
+        let mut inner = crate::util::safe_lock(&self.inner);
         inner.tasks.push(task.clone());
         task
     }
@@ -227,7 +227,7 @@ impl TaskStore {
             created_at: now.clone(),
             updated_at: now,
         };
-        let mut inner = self.inner.lock().expect("task store lock poisoned");
+        let mut inner = crate::util::safe_lock(&self.inner);
         inner.tasks.push(task.clone());
         task
     }
@@ -246,7 +246,7 @@ impl TaskStore {
     /// ```
     #[must_use]
     pub fn get(&self, id: &str) -> Option<Task> {
-        let inner = self.inner.lock().expect("task store lock poisoned");
+        let inner = crate::util::safe_lock(&self.inner);
         inner.tasks.iter().find(|t| t.id == id).cloned()
     }
 
@@ -270,7 +270,7 @@ impl TaskStore {
     /// ```
     #[must_use]
     pub fn list(&self) -> Vec<Task> {
-        let inner = self.inner.lock().expect("task store lock poisoned");
+        let inner = crate::util::safe_lock(&self.inner);
         inner
             .tasks
             .iter()
@@ -308,7 +308,7 @@ impl TaskStore {
     /// ```
     #[must_use]
     pub fn is_blocked(&self, id: &str) -> bool {
-        let inner = self.inner.lock().expect("task store lock poisoned");
+        let inner = crate::util::safe_lock(&self.inner);
         let Some(task) = inner.tasks.iter().find(|t| t.id == id) else {
             return false;
         };
@@ -353,7 +353,7 @@ impl TaskStore {
     /// assert_eq!(updated.status, TaskStatus::InProgress);
     /// ```
     pub fn update(&self, id: &str, updates: TaskUpdate) -> anyhow::Result<()> {
-        let mut inner = self.inner.lock().expect("task store lock poisoned");
+        let mut inner = crate::util::safe_lock(&self.inner);
         let task = inner
             .tasks
             .iter_mut()
@@ -1527,5 +1527,136 @@ mod tests {
         let task: Task = serde_json::from_str(&result).unwrap();
         assert_eq!(task.blocks, vec!["3"]);
         assert_eq!(task.blocked_by, vec!["1"]);
+    }
+
+    // =========================================================================
+    // Dependency cycle and edge case tests
+    // =========================================================================
+
+    #[test]
+    fn test_dependency_cycle_does_not_infinite_loop() {
+        let store = TaskStore::new();
+        let a = store.create("Task A", "Desc");
+        let b = store.create("Task B", "Desc");
+
+        // A blocked_by B, B blocked_by A => circular dependency
+        store
+            .update(
+                &a.id,
+                TaskUpdate {
+                    add_blocked_by: Some(vec![b.id.clone()]),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        store
+            .update(
+                &b.id,
+                TaskUpdate {
+                    add_blocked_by: Some(vec![a.id.clone()]),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+        // Both should be blocked (each depends on a non-completed task)
+        // and this must return without infinite loop
+        assert!(store.is_blocked(&a.id));
+        assert!(store.is_blocked(&b.id));
+    }
+
+    #[test]
+    fn test_deleted_blocker_still_blocks() {
+        let store = TaskStore::new();
+        let blocker = store.create("Blocker", "Blocks");
+        let blocked = store.create("Blocked", "Waits");
+
+        store
+            .update(
+                &blocked.id,
+                TaskUpdate {
+                    add_blocked_by: Some(vec![blocker.id.clone()]),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+        // Delete the blocker (soft delete) -- status is Deleted, not Completed
+        store
+            .update(
+                &blocker.id,
+                TaskUpdate {
+                    status: Some(TaskStatus::Deleted),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+        // Blocked task is still blocked because blocker is Deleted, not Completed
+        assert!(store.is_blocked(&blocked.id));
+    }
+
+    #[test]
+    fn test_blocked_by_nonexistent_task_id_not_blocked() {
+        let store = TaskStore::new();
+        let task = store.create("Task", "Desc");
+
+        store
+            .update(
+                &task.id,
+                TaskUpdate {
+                    add_blocked_by: Some(vec!["999".to_string()]),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+        // Nonexistent blocker ID: is_some_and returns false, so not blocked
+        assert!(!store.is_blocked(&task.id));
+    }
+
+    #[test]
+    fn test_duplicate_add_blocked_by_entries() {
+        let store = TaskStore::new();
+        let blocker = store.create("Blocker", "Desc");
+        let blocked = store.create("Blocked", "Desc");
+
+        // Add the same blocker twice
+        store
+            .update(
+                &blocked.id,
+                TaskUpdate {
+                    add_blocked_by: Some(vec![blocker.id.clone()]),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        store
+            .update(
+                &blocked.id,
+                TaskUpdate {
+                    add_blocked_by: Some(vec![blocker.id.clone()]),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+        let task = store.get(&blocked.id).unwrap();
+        assert_eq!(task.blocked_by.len(), 2, "duplicates are appended");
+
+        // Still reports as blocked correctly
+        assert!(store.is_blocked(&blocked.id));
+
+        // Complete the blocker -- should unblock despite duplicates
+        store
+            .update(
+                &blocker.id,
+                TaskUpdate {
+                    status: Some(TaskStatus::Completed),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert!(!store.is_blocked(&blocked.id));
     }
 }
