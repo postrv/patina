@@ -11,15 +11,16 @@
 //!
 //! ```no_run
 //! use patina::mcp::token_storage::{McpTokenStore, McpOAuthToken};
+//! use secrecy::SecretString;
 //! use std::time::{SystemTime, Duration};
 //!
 //! # fn example() -> anyhow::Result<()> {
 //! let store = McpTokenStore::new("/tmp/patina-tokens".into());
-//! let token = McpOAuthToken {
-//!     access_token: "example-access-value".to_string(),
-//!     refresh_token: Some("example-refresh-value".to_string()),
-//!     expires_at: SystemTime::now() + Duration::from_secs(3600),
-//! };
+//! let token = McpOAuthToken::new(
+//!     SecretString::from("example-access-value".to_owned()),
+//!     Some(SecretString::from("example-refresh-value".to_owned())),
+//!     SystemTime::now() + Duration::from_secs(3600),
+//! );
 //! store.store_token("my-server", &token)?;
 //! let loaded = store.load_token("my-server")?;
 //! assert!(loaded.is_some());
@@ -28,7 +29,9 @@
 //! ```
 
 use anyhow::{anyhow, Context, Result};
+use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
+use std::fmt;
 use std::path::PathBuf;
 use std::time::SystemTime;
 
@@ -46,26 +49,66 @@ pub struct McpTokenStore {
 ///
 /// ```
 /// use patina::mcp::token_storage::McpOAuthToken;
+/// use secrecy::SecretString;
 /// use std::time::{SystemTime, Duration};
 ///
-/// let token = McpOAuthToken {
-///     access_token: "example-value".to_string(),
-///     refresh_token: None,
-///     expires_at: SystemTime::now() + Duration::from_secs(3600),
-/// };
+/// let token = McpOAuthToken::new(
+///     SecretString::from("example-value".to_owned()),
+///     None,
+///     SystemTime::now() + Duration::from_secs(3600),
+/// );
 /// assert!(!McpOAuthToken::is_token_expired(&token));
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct McpOAuthToken {
-    /// The OAuth access token.
-    pub access_token: String,
-    /// Optional refresh token for obtaining new access tokens.
-    pub refresh_token: Option<String>,
-    /// When this token expires.
+    /// The OAuth access credential (held as `SecretString` in memory).
+    #[serde(
+        serialize_with = "secret_string_ser",
+        deserialize_with = "secret_string_de"
+    )]
+    pub access_token: SecretString,
+    /// Optional refresh credential for obtaining new access credentials.
+    #[serde(
+        serialize_with = "option_secret_string_ser",
+        deserialize_with = "option_secret_string_de"
+    )]
+    pub refresh_token: Option<SecretString>,
+    /// When this credential expires.
     pub expires_at: SystemTime,
 }
 
+impl fmt::Debug for McpOAuthToken {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("McpOAuthToken")
+            .field("access_token", &"[REDACTED]")
+            .field(
+                "refresh_token",
+                if self.refresh_token.is_some() {
+                    &"Some([REDACTED])"
+                } else {
+                    &"None"
+                },
+            )
+            .field("expires_at", &self.expires_at)
+            .finish()
+    }
+}
+
 impl McpOAuthToken {
+    /// Creates a new `McpOAuthToken`.
+    #[must_use]
+    pub fn new(
+        access_token: SecretString,
+        refresh_token: Option<SecretString>,
+        expires_at: SystemTime,
+    ) -> Self {
+        Self {
+            access_token,
+            refresh_token,
+            expires_at,
+        }
+    }
+
     /// Returns `true` if the token has expired.
     ///
     /// A token is considered expired if its `expires_at` time is at or before
@@ -75,13 +118,14 @@ impl McpOAuthToken {
     ///
     /// ```
     /// use patina::mcp::token_storage::McpOAuthToken;
+    /// use secrecy::SecretString;
     /// use std::time::{SystemTime, Duration};
     ///
-    /// let expired = McpOAuthToken {
-    ///     access_token: "example-expired".to_string(),
-    ///     refresh_token: None,
-    ///     expires_at: SystemTime::UNIX_EPOCH,
-    /// };
+    /// let expired = McpOAuthToken::new(
+    ///     SecretString::from("example-expired".to_owned()),
+    ///     None,
+    ///     SystemTime::UNIX_EPOCH,
+    /// );
     /// assert!(McpOAuthToken::is_token_expired(&expired));
     /// ```
     #[must_use]
@@ -236,6 +280,41 @@ pub fn sanitize_server_name(name: &str) -> String {
         .collect()
 }
 
+/// Serializes a `SecretString` as a plain `String` for on-disk storage.
+fn secret_string_ser<S: serde::Serializer>(
+    value: &SecretString,
+    serializer: S,
+) -> std::result::Result<S::Ok, S::Error> {
+    serializer.serialize_str(value.expose_secret())
+}
+
+/// Deserializes a `String` into a `SecretString`.
+fn secret_string_de<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<SecretString, D::Error> {
+    let s = String::deserialize(deserializer)?;
+    Ok(SecretString::from(s))
+}
+
+/// Serializes an `Option<SecretString>` as an `Option<String>`.
+fn option_secret_string_ser<S: serde::Serializer>(
+    value: &Option<SecretString>,
+    serializer: S,
+) -> std::result::Result<S::Ok, S::Error> {
+    match value {
+        Some(s) => serializer.serialize_some(s.expose_secret()),
+        None => serializer.serialize_none(),
+    }
+}
+
+/// Deserializes an `Option<String>` into an `Option<SecretString>`.
+fn option_secret_string_de<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<Option<SecretString>, D::Error> {
+    let opt: Option<String> = Option::deserialize(deserializer)?;
+    Ok(opt.map(SecretString::from))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -246,19 +325,25 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let store = McpTokenStore::new(dir.path().to_path_buf());
 
-        let token = McpOAuthToken {
-            access_token: "test-access-123".to_string(),
-            refresh_token: Some("test-refresh-456".to_string()),
-            expires_at: SystemTime::now() + Duration::from_secs(3600),
-        };
+        let token = McpOAuthToken::new(
+            SecretString::from("test-access-123".to_owned()),
+            Some(SecretString::from("test-refresh-456".to_owned())),
+            SystemTime::now() + Duration::from_secs(3600),
+        );
 
         store.store_token("my-server", &token).unwrap();
 
         let loaded = store.load_token("my-server").unwrap();
         assert!(loaded.is_some());
         let loaded = loaded.unwrap();
-        assert_eq!(loaded.access_token, "test-access-123");
-        assert_eq!(loaded.refresh_token.as_deref(), Some("test-refresh-456"));
+        assert_eq!(loaded.access_token.expose_secret(), "test-access-123");
+        assert_eq!(
+            loaded
+                .refresh_token
+                .as_ref()
+                .map(|s| s.expose_secret().to_owned()),
+            Some("test-refresh-456".to_owned())
+        );
     }
 
     #[test]
@@ -275,11 +360,11 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let store = McpTokenStore::new(dir.path().to_path_buf());
 
-        let token = McpOAuthToken {
-            access_token: "test-access-val".to_string(),
-            refresh_token: None,
-            expires_at: SystemTime::now() + Duration::from_secs(3600),
-        };
+        let token = McpOAuthToken::new(
+            SecretString::from("test-access-val".to_owned()),
+            None,
+            SystemTime::now() + Duration::from_secs(3600),
+        );
 
         store.store_token("server-a", &token).unwrap();
         assert!(store.load_token("server-a").unwrap().is_some());
@@ -299,21 +384,21 @@ mod tests {
 
     #[test]
     fn is_token_expired_with_expired_token() {
-        let token = McpOAuthToken {
-            access_token: "test-old-value".to_string(),
-            refresh_token: None,
-            expires_at: SystemTime::UNIX_EPOCH,
-        };
+        let token = McpOAuthToken::new(
+            SecretString::from("test-old-value".to_owned()),
+            None,
+            SystemTime::UNIX_EPOCH,
+        );
         assert!(McpOAuthToken::is_token_expired(&token));
     }
 
     #[test]
     fn is_token_expired_with_valid_token() {
-        let token = McpOAuthToken {
-            access_token: "test-fresh-value".to_string(),
-            refresh_token: None,
-            expires_at: SystemTime::now() + Duration::from_secs(3600),
-        };
+        let token = McpOAuthToken::new(
+            SecretString::from("test-fresh-value".to_owned()),
+            None,
+            SystemTime::now() + Duration::from_secs(3600),
+        );
         assert!(!McpOAuthToken::is_token_expired(&token));
     }
 
@@ -331,11 +416,11 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let store = McpTokenStore::new(dir.path().to_path_buf());
 
-        let token = McpOAuthToken {
-            access_token: "test-x".to_string(),
-            refresh_token: None,
-            expires_at: SystemTime::now() + Duration::from_secs(3600),
-        };
+        let token = McpOAuthToken::new(
+            SecretString::from("test-x".to_owned()),
+            None,
+            SystemTime::now() + Duration::from_secs(3600),
+        );
 
         // A name with only invalid characters
         let result = store.store_token("../../..", &token);
@@ -350,11 +435,11 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let store = McpTokenStore::new(dir.path().to_path_buf());
 
-        let token = McpOAuthToken {
-            access_token: "test-perms-value".to_string(),
-            refresh_token: None,
-            expires_at: SystemTime::now() + Duration::from_secs(3600),
-        };
+        let token = McpOAuthToken::new(
+            SecretString::from("test-perms-value".to_owned()),
+            None,
+            SystemTime::now() + Duration::from_secs(3600),
+        );
 
         store.store_token("perm-test", &token).unwrap();
 
