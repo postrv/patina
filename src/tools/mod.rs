@@ -11,6 +11,7 @@
 //! - Parallel tool execution for performance optimization
 
 pub mod ask_user;
+pub mod cron;
 mod executor;
 mod hooked;
 pub mod lsp;
