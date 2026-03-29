@@ -13,6 +13,7 @@ use tokio::process::Command;
 use tracing::{debug, warn};
 use walkdir::WalkDir;
 
+use super::sandbox::policy::SandboxPolicy;
 use super::security::ToolExecutionPolicy;
 use super::{vision, web_fetch, web_search};
 use crate::agents::AgentRegistry;
@@ -24,6 +25,7 @@ pub struct ToolExecutor {
     working_dir: PathBuf,
     pub(crate) policy: ToolExecutionPolicy,
     agent_registry: Option<Arc<AgentRegistry>>,
+    sandbox_policy: Option<Arc<SandboxPolicy>>,
 }
 
 #[derive(Debug)]
@@ -121,6 +123,7 @@ impl ToolExecutor {
             working_dir,
             policy: ToolExecutionPolicy::default(),
             agent_registry: None,
+            sandbox_policy: None,
         }
     }
 
@@ -135,6 +138,17 @@ impl ToolExecutor {
     #[must_use]
     pub fn with_agent_registry(mut self, registry: Arc<AgentRegistry>) -> Self {
         self.agent_registry = Some(registry);
+        self
+    }
+
+    /// Sets the application-level sandbox policy for access control.
+    ///
+    /// When set, file read/write and command execution operations are checked
+    /// against the policy's allowlists and denylists. This provides defense
+    /// in depth beyond the working-directory-based `validate_path()` checks.
+    #[must_use]
+    pub fn with_sandbox_policy(mut self, policy: Arc<SandboxPolicy>) -> Self {
+        self.sandbox_policy = Some(policy);
         self
     }
 
@@ -312,6 +326,48 @@ impl ToolExecutor {
         self.validate_write_path(path).map_err(ToolResult::Error)
     }
 
+    /// Checks the sandbox policy for read access to the given path.
+    ///
+    /// Returns `Ok(())` if no sandbox policy is configured or the path is allowed.
+    /// Returns `Err(ToolResult::Error)` if the path is denied.
+    fn check_sandbox_read(&self, path: &Path) -> std::result::Result<(), ToolResult> {
+        if let Some(ref policy) = self.sandbox_policy {
+            policy.check_read(path).map_err(|e| {
+                warn!(path = %path.display(), "Sandbox policy denied read access");
+                ToolResult::Error(e.to_string())
+            })?;
+        }
+        Ok(())
+    }
+
+    /// Checks the sandbox policy for write access to the given path.
+    ///
+    /// Returns `Ok(())` if no sandbox policy is configured or the path is allowed.
+    /// Returns `Err(ToolResult::Error)` if the path is denied.
+    fn check_sandbox_write(&self, path: &Path) -> std::result::Result<(), ToolResult> {
+        if let Some(ref policy) = self.sandbox_policy {
+            policy.check_write(path).map_err(|e| {
+                warn!(path = %path.display(), "Sandbox policy denied write access");
+                ToolResult::Error(e.to_string())
+            })?;
+        }
+        Ok(())
+    }
+
+    /// Checks the sandbox policy for command execution.
+    ///
+    /// Returns `Ok(())` if no sandbox policy is configured or the command is allowed.
+    /// Returns `Err(ToolResult::Error)` if the command is denied.
+    fn check_sandbox_execute(&self, command: &str) -> std::result::Result<(), ToolResult> {
+        if let Some(ref policy) = self.sandbox_policy {
+            policy.check_execute(command).map_err(|e| {
+                warn!(command = %command, "Sandbox policy denied command execution");
+                ToolResult::Error(e.to_string())
+            })?;
+        }
+        Ok(())
+    }
+
     /// Validates a bash command against dangerous patterns and allowlist policy.
     ///
     /// Delegates to the standalone [`validate_command`](super::security::validate_command)
@@ -391,6 +447,11 @@ impl ToolExecutor {
             debug!(description = %desc, command = %command, "Bash command with description");
         }
 
+        // Check sandbox policy for command execution
+        if let Err(tool_err) = self.check_sandbox_execute(command) {
+            return Ok(tool_err);
+        }
+
         if let Err(tool_err) = self.validate_bash_command(command) {
             return Ok(tool_err);
         }
@@ -431,6 +492,11 @@ impl ToolExecutor {
             Ok(p) => p,
             Err(e) => return Ok(e),
         };
+
+        // Check sandbox policy for read access
+        if let Err(e) = self.check_sandbox_read(&full_path) {
+            return Ok(e);
+        }
 
         // Handle special file formats
         if full_path
@@ -579,6 +645,11 @@ impl ToolExecutor {
             Err(e) => return Ok(e),
         };
 
+        // Check sandbox policy for write access
+        if let Err(e) = self.check_sandbox_write(&full_path) {
+            return Ok(e);
+        }
+
         // Create backup if file exists
         if full_path.exists() {
             if let Err(e) = self.create_backup(&full_path).await {
@@ -637,6 +708,11 @@ impl ToolExecutor {
             Ok(p) => p,
             Err(e) => return Ok(e),
         };
+
+        // Check sandbox policy for write access (edit is a write operation)
+        if let Err(e) = self.check_sandbox_write(&full_path) {
+            return Ok(e);
+        }
 
         // Read file content
         let content = match tokio::fs::read_to_string(&full_path).await {
@@ -1002,6 +1078,11 @@ impl ToolExecutor {
             Err(e) => return Ok(ToolResult::Error(e)),
         };
 
+        // Check sandbox policy for read access
+        if let Err(e) = self.check_sandbox_read(&full_path) {
+            return Ok(e);
+        }
+
         // Open directory, handling errors gracefully
         let mut dir = match tokio::fs::read_dir(&full_path).await {
             Ok(d) => d,
@@ -1071,6 +1152,11 @@ impl ToolExecutor {
             return Ok(ToolResult::Error(
                 "Invalid pattern: path traversal not allowed".to_string(),
             ));
+        }
+
+        // Check sandbox policy for read access on working directory
+        if let Err(e) = self.check_sandbox_read(&self.working_dir) {
+            return Ok(e);
         }
 
         // Load gitignore patterns if requested
@@ -1489,6 +1575,11 @@ impl ToolExecutor {
             Ok(p) => p,
             Err(tool_err) => return Ok(tool_err),
         };
+
+        // Check sandbox policy for read access on the search root
+        if let Err(e) = self.check_sandbox_read(&params.search_root) {
+            return Ok(e);
+        }
 
         let all_files = Self::walk_relative_files(&params.search_root, &self.working_dir);
 

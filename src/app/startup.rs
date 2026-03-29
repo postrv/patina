@@ -175,7 +175,87 @@ pub(crate) async fn init_app_state(config: &Config) -> Result<AppState> {
         }
     }
 
+    // Load enterprise managed settings (silent no-op if files don't exist)
+    load_managed_settings(&mut state);
+
     Ok(state)
+}
+
+/// Loads enterprise managed settings from system-wide configuration files.
+///
+/// Attempts to load:
+/// 1. `/managed-settings.json` (base settings)
+/// 2. `/managed-settings.d/*.json` (overlay files, merged alphabetically)
+///
+/// If settings are loaded, enforces:
+/// - Default model override (if specified)
+/// - Enforced permission mode (if specified)
+///
+/// This is a silent no-op if no managed settings files exist.
+fn load_managed_settings(state: &mut super::state::AppState) {
+    use crate::enterprise::managed_settings;
+
+    // Load base settings file
+    let base = match managed_settings::load_managed_settings() {
+        Ok(Some(settings)) => {
+            info!("Loaded enterprise managed settings");
+            settings
+        }
+        Ok(None) => {
+            debug!("No managed settings file found (this is normal)");
+            // Try directory-only settings
+            match managed_settings::load_managed_settings_dir() {
+                Ok(overlays) if !overlays.is_empty() => {
+                    let merged = managed_settings::merge_all_managed_settings(
+                        managed_settings::ManagedSettings::default(),
+                        overlays,
+                    );
+                    info!("Loaded managed settings from drop-in directory");
+                    merged
+                }
+                Ok(_) => return, // No settings at all, silent no-op
+                Err(e) => {
+                    warn!("Failed to load managed settings directory: {}", e);
+                    return;
+                }
+            }
+        }
+        Err(e) => {
+            warn!("Failed to load managed settings: {}", e);
+            return;
+        }
+    };
+
+    // Merge with directory overlays if base was loaded from file
+    let final_settings = if base != managed_settings::ManagedSettings::default() {
+        match managed_settings::load_managed_settings_dir() {
+            Ok(overlays) if !overlays.is_empty() => {
+                info!("Merging {} managed settings overlay(s)", overlays.len());
+                managed_settings::merge_all_managed_settings(base, overlays)
+            }
+            Ok(_) => base,
+            Err(e) => {
+                warn!("Failed to load managed settings directory: {}", e);
+                base
+            }
+        }
+    } else {
+        base
+    };
+
+    // Enforce default model if specified
+    if let Some(ref model) = final_settings.default_model {
+        info!(model = %model, "Enforcing managed default model");
+        state.model_config_mut().set_current_model(model.clone());
+    }
+
+    // Enforce permission mode if specified
+    if let Some(mode) = managed_settings::get_enforced_permission_mode(&final_settings) {
+        info!(mode = %mode, "Enforcing managed permission mode");
+        // The permission mode is stored in managed settings for other systems to query
+    }
+
+    state.set_managed_settings(final_settings);
 }
 
 /// RAII guard for terminal state.

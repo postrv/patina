@@ -117,3 +117,9 @@ mod keyring_storage_test;
 
 #[path = "unit/app_test.rs"]
 mod app_test;
+
+#[path = "unit/wiring_tests.rs"]
+mod wiring_tests;
+
+#[path = "unit/managed_settings_test.rs"]
+mod managed_settings_test;

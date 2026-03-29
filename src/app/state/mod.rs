@@ -42,7 +42,7 @@ pub use ui_selection::UISelectionState;
 pub use view_state::ViewState;
 pub use worktree::WorktreeStatus;
 
-use crate::agents::{AgentProgress, ConflictReport, SubagentSpawner};
+use crate::agents::{AgentProgress, AgentRegistry, ConflictReport, SubagentSpawner};
 use crate::api::provider::RequestOptions;
 use crate::api::tokens::{model_context_limit, ModelCapabilities};
 use crate::api::tools::default_tools;
@@ -51,6 +51,7 @@ use crate::app::tool_loop::ToolLoop;
 use crate::app::STREAMING_CHANNEL_BUFFER;
 use crate::context::compression::{CompactionMetrics, CompressionOrchestrator};
 use crate::enterprise::cost::{CostConfig, CostTracker, UsageRecord};
+use crate::enterprise::managed_settings::ManagedSettings;
 use crate::hooks::HookManager;
 use crate::keybindings::KeybindingManager;
 use crate::mcp::connection::McpConnection;
@@ -227,6 +228,13 @@ pub struct AppState {
 
     /// Terminal notification manager for desktop notifications.
     notification_manager: NotificationManager,
+
+    /// Enterprise managed settings for organization policy enforcement.
+    ///
+    /// When loaded from `/managed-settings.json` or `/managed-settings.d/`,
+    /// these policies enforce plugin/MCP allowlists, permission overrides,
+    /// and model defaults.
+    managed_settings: Option<ManagedSettings>,
 }
 
 #[derive(Default)]
@@ -370,11 +378,15 @@ impl AppState {
             crate::plugins::bridge_plugin_hooks(&plugin.hooks, &mut hook_manager);
         }
 
-        // Create tool executor with hook, permission, and parallel configuration
+        // Create agent registry for inter-agent messaging
+        let agent_registry = Arc::new(AgentRegistry::new());
+
+        // Create tool executor with hook, permission, parallel, and agent registry
         let tool_executor = Arc::new(
             HookedToolExecutor::new(working_dir.clone(), hook_manager)
                 .with_permissions(Arc::clone(&permission_manager))
-                .with_parallel_config(parallel_config),
+                .with_parallel_config(parallel_config)
+                .with_agent_registry(Arc::clone(&agent_registry)),
         );
 
         // Load skills from standard directories
@@ -459,6 +471,7 @@ impl AppState {
             },
             keybinding_mgr: KeybindingManager::with_defaults(),
             notification_manager: NotificationManager::detect(),
+            managed_settings: None,
         }
     }
 
@@ -622,6 +635,17 @@ impl AppState {
     #[must_use]
     pub fn notification_manager(&self) -> &NotificationManager {
         &self.notification_manager
+    }
+
+    /// Returns the enterprise managed settings, if loaded.
+    #[must_use]
+    pub fn managed_settings(&self) -> Option<&ManagedSettings> {
+        self.managed_settings.as_ref()
+    }
+
+    /// Sets the enterprise managed settings for policy enforcement.
+    pub fn set_managed_settings(&mut self, settings: ManagedSettings) {
+        self.managed_settings = Some(settings);
     }
 
     /// Returns a reference to the tool execution state.

@@ -225,6 +225,30 @@ impl StatefulToolExecutor {
         self
     }
 
+    /// Sets the agent registry for inter-agent messaging.
+    ///
+    /// Delegates to the inner `ToolExecutor::with_agent_registry`.
+    #[must_use]
+    pub fn with_agent_registry(
+        mut self,
+        registry: std::sync::Arc<crate::agents::AgentRegistry>,
+    ) -> Self {
+        self.inner = self.inner.with_agent_registry(registry);
+        self
+    }
+
+    /// Sets the application-level sandbox policy for access control.
+    ///
+    /// Delegates to the inner `ToolExecutor::with_sandbox_policy`.
+    #[must_use]
+    pub fn with_sandbox_policy(
+        mut self,
+        policy: std::sync::Arc<super::sandbox::policy::SandboxPolicy>,
+    ) -> Self {
+        self.inner = self.inner.with_sandbox_policy(policy);
+        self
+    }
+
     /// Executes a tool call with persistent shell state.
     ///
     /// For bash commands:
