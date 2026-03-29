@@ -27,6 +27,7 @@
 //! ```
 
 pub mod conflict;
+pub mod messaging;
 pub mod orchestrator;
 pub mod parallel;
 pub mod worktree_agent;
@@ -47,6 +48,9 @@ pub use parallel::{
 pub use conflict::{
     AgentFileChanges, Conflict, ConflictDetector, ConflictReport, ConflictSeverity,
 };
+
+// Re-export messaging types
+pub use messaging::MessageRouter;
 
 // Re-export worktree agent types
 pub use worktree_agent::{
