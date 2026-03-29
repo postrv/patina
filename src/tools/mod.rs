@@ -57,3 +57,7 @@ pub use tasks::{
 
 // Re-export external editor type
 pub use external_editor::ExternalEditor;
+
+// Re-export sandbox types
+pub use sandbox::config::SandboxConfig;
+pub use sandbox::policy::SandboxPolicy;
