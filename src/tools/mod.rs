@@ -17,6 +17,7 @@ pub mod parallel;
 pub mod sandbox;
 mod security;
 mod stateful;
+pub mod tasks;
 pub mod todo;
 pub mod tool_search;
 pub mod vision;
@@ -43,3 +44,9 @@ pub use parallel::{ParallelConfig, ParallelExecutor};
 
 // Re-export tool search types
 pub use tool_search::{ToolSearchError, ToolSearchRegistry, ToolSearchResult};
+
+// Re-export task management types
+pub use tasks::{
+    task_create_tool, task_get_tool, task_list_tool, task_update_tool, Task, TaskStatus, TaskStore,
+    TaskUpdate,
+};
