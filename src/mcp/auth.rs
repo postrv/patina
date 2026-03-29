@@ -10,10 +10,11 @@
 //!
 //! ```
 //! use patina::mcp::auth::resolve_bearer_token;
+//! use secrecy::ExposeSecret;
 //!
 //! // Literal token
 //! let token = resolve_bearer_token("my-secret-token").unwrap();
-//! assert_eq!(token, "my-secret-token");
+//! assert_eq!(token.expose_secret(), "my-secret-token");
 //! ```
 //!
 //! # OAuth Client
@@ -24,13 +25,15 @@
 use crate::mcp::config::McpAuthConfig;
 use crate::mcp::token_storage::{McpOAuthToken, McpTokenStore};
 use anyhow::{anyhow, Context, Result};
+use secrecy::{ExposeSecret, SecretString};
 use serde::Deserialize;
 
 /// Resolves a bearer token from configuration.
 ///
 /// If the token starts with `$`, it is treated as an environment variable
 /// reference and the value is read from the process environment. Otherwise
-/// the token string is returned as-is.
+/// the token string is returned as-is. The result is wrapped in a
+/// [`SecretString`] to prevent accidental logging.
 ///
 /// # Arguments
 ///
@@ -46,11 +49,12 @@ use serde::Deserialize;
 ///
 /// ```
 /// use patina::mcp::auth::resolve_bearer_token;
+/// use secrecy::ExposeSecret;
 ///
 /// let token = resolve_bearer_token("literal-token").unwrap();
-/// assert_eq!(token, "literal-token");
+/// assert_eq!(token.expose_secret(), "literal-token");
 /// ```
-pub fn resolve_bearer_token(token_config: &str) -> Result<String> {
+pub fn resolve_bearer_token(token_config: &str) -> Result<SecretString> {
     if token_config.is_empty() {
         return Err(anyhow!("Bearer token is empty"));
     }
@@ -59,11 +63,12 @@ pub fn resolve_bearer_token(token_config: &str) -> Result<String> {
         if var_name.is_empty() {
             return Err(anyhow!("Bearer token '$' has no variable name"));
         }
-        std::env::var(var_name).with_context(|| {
+        let value = std::env::var(var_name).with_context(|| {
             format!("Environment variable '{var_name}' not set (referenced in MCP bearer token)")
-        })
+        })?;
+        Ok(SecretString::from(value))
     } else {
-        Ok(token_config.to_string())
+        Ok(SecretString::from(token_config.to_owned()))
     }
 }
 
@@ -71,7 +76,7 @@ pub fn resolve_bearer_token(token_config: &str) -> Result<String> {
 ///
 /// # Arguments
 ///
-/// * `token` - The bearer token value
+/// * `token` - The bearer token value (as a `SecretString`)
 ///
 /// # Returns
 ///
@@ -82,15 +87,20 @@ pub fn resolve_bearer_token(token_config: &str) -> Result<String> {
 ///
 /// ```
 /// use patina::mcp::auth::auth_headers;
+/// use secrecy::SecretString;
 ///
-/// let headers = auth_headers("my-token");
+/// let token = SecretString::from("my-token".to_owned());
+/// let headers = auth_headers(&token);
 /// assert_eq!(headers.len(), 1);
 /// assert_eq!(headers[0].0, "Authorization");
 /// assert_eq!(headers[0].1, "Bearer my-token");
 /// ```
 #[must_use]
-pub fn auth_headers(token: &str) -> Vec<(String, String)> {
-    vec![("Authorization".to_string(), format!("Bearer {token}"))]
+pub fn auth_headers(token: &SecretString) -> Vec<(String, String)> {
+    vec![(
+        "Authorization".to_string(),
+        format!("Bearer {}", token.expose_secret()),
+    )]
 }
 
 /// OAuth client for a specific MCP server.
@@ -188,6 +198,9 @@ impl McpOAuthClient {
 
     /// Gets a valid access token, loading from cache or refreshing if expired.
     ///
+    /// The returned token is wrapped in a [`SecretString`] to prevent accidental
+    /// logging.
+    ///
     /// # Token Resolution Order
     ///
     /// 1. Load from token store
@@ -201,17 +214,16 @@ impl McpOAuthClient {
     /// - No cached token exists (initial auth flow not yet completed)
     /// - The token is expired and has no refresh token
     /// - The refresh request fails
-    pub async fn get_token(&self) -> Result<String> {
+    pub async fn get_token(&self) -> Result<SecretString> {
         let cached = self.token_store.load_token(&self.server_name)?;
 
         match cached {
-            Some(token) if !McpOAuthToken::is_token_expired(&token) => Ok(token.access_token),
-            Some(token) if token.refresh_token.is_some() => {
-                let refresh_token = token.refresh_token.as_ref().expect("checked is_some above");
-                let new_token = self.refresh_token(refresh_token).await?;
-                self.token_store
-                    .store_token(&self.server_name, &new_token)?;
-                Ok(new_token.access_token)
+            Some(ref t) if !McpOAuthToken::is_token_expired(t) => Ok(t.access_token.clone()),
+            Some(ref t) if t.refresh_token.is_some() => {
+                let rt = t.refresh_token.as_ref().expect("checked is_some above");
+                let new_tok = self.refresh_token(rt.expose_secret()).await?;
+                self.token_store.store_token(&self.server_name, &new_tok)?;
+                Ok(new_tok.access_token)
             }
             Some(_) => Err(anyhow!(
                 "MCP OAuth token for '{}' is expired and has no refresh token",
@@ -281,13 +293,15 @@ impl McpOAuthClient {
         let expires_at = std::time::SystemTime::now()
             + std::time::Duration::from_secs(token_response.expires_in.unwrap_or(3600));
 
-        Ok(McpOAuthToken {
-            access_token: token_response.access_token,
-            refresh_token: token_response
-                .refresh_token
-                .or_else(|| Some(refresh_token.to_string())),
+        Ok(McpOAuthToken::new(
+            SecretString::from(token_response.access_token),
+            Some(SecretString::from(
+                token_response
+                    .refresh_token
+                    .unwrap_or_else(|| refresh_token.to_string()),
+            )),
             expires_at,
-        })
+        ))
     }
 
     /// Handles a 401 Unauthorized response by clearing the cached token and
@@ -296,16 +310,15 @@ impl McpOAuthClient {
     /// # Errors
     ///
     /// Returns an error if no refresh token is available or if the refresh fails.
-    pub async fn handle_unauthorized(&self) -> Result<String> {
+    pub async fn handle_unauthorized(&self) -> Result<SecretString> {
         let cached = self.token_store.load_token(&self.server_name)?;
 
         match cached {
-            Some(token) if token.refresh_token.is_some() => {
-                let refresh_token = token.refresh_token.as_ref().expect("checked is_some above");
-                let new_token = self.refresh_token(refresh_token).await?;
-                self.token_store
-                    .store_token(&self.server_name, &new_token)?;
-                Ok(new_token.access_token)
+            Some(ref t) if t.refresh_token.is_some() => {
+                let rt = t.refresh_token.as_ref().expect("checked is_some above");
+                let new_tok = self.refresh_token(rt.expose_secret()).await?;
+                self.token_store.store_token(&self.server_name, &new_tok)?;
+                Ok(new_tok.access_token)
             }
             _ => Err(anyhow!(
                 "Cannot handle 401 for MCP server '{}': no refresh token available",
@@ -332,7 +345,7 @@ mod tests {
     #[test]
     fn resolve_bearer_token_literal() {
         let token = resolve_bearer_token("my-secret-token").unwrap();
-        assert_eq!(token, "my-secret-token");
+        assert_eq!(token.expose_secret(), "my-secret-token");
     }
 
     #[test]
@@ -341,7 +354,7 @@ mod tests {
         // Set a test env var — must be serialized to avoid data races
         unsafe { std::env::set_var("PATINA_TEST_MCP_TOKEN", "env-token-value") };
         let token = resolve_bearer_token("$PATINA_TEST_MCP_TOKEN").unwrap();
-        assert_eq!(token, "env-token-value");
+        assert_eq!(token.expose_secret(), "env-token-value");
         unsafe { std::env::remove_var("PATINA_TEST_MCP_TOKEN") };
     }
 
@@ -373,7 +386,8 @@ mod tests {
 
     #[test]
     fn auth_headers_correct_format() {
-        let headers = auth_headers("my-token");
+        let token = SecretString::from("my-token".to_owned());
+        let headers = auth_headers(&token);
         assert_eq!(headers.len(), 1);
         assert_eq!(headers[0].0, "Authorization");
         assert_eq!(headers[0].1, "Bearer my-token");
@@ -466,11 +480,11 @@ mod tests {
         let store = McpTokenStore::new(dir.path().to_path_buf());
 
         // Pre-store a valid token
-        let token = McpOAuthToken {
-            access_token: "test-cached-access".to_string(),
-            refresh_token: Some("test-cached-refresh".to_string()),
-            expires_at: std::time::SystemTime::now() + std::time::Duration::from_secs(3600),
-        };
+        let token = McpOAuthToken::new(
+            SecretString::from("test-cached-access".to_owned()),
+            Some(SecretString::from("test-cached-refresh".to_owned())),
+            std::time::SystemTime::now() + std::time::Duration::from_secs(3600),
+        );
         store.store_token("cached-server", &token).unwrap();
 
         let config = McpAuthConfig::OAuth {
@@ -482,7 +496,7 @@ mod tests {
 
         let client = McpOAuthClient::new("cached-server", &config, store).unwrap();
         let result = client.get_token().await.unwrap();
-        assert_eq!(result, "test-cached-access");
+        assert_eq!(result.expose_secret(), "test-cached-access");
     }
 
     #[tokio::test]
@@ -491,11 +505,11 @@ mod tests {
         let store = McpTokenStore::new(dir.path().to_path_buf());
 
         // Pre-store an expired token with no refresh token
-        let token = McpOAuthToken {
-            access_token: "test-old-access".to_string(),
-            refresh_token: None,
-            expires_at: std::time::SystemTime::UNIX_EPOCH,
-        };
+        let token = McpOAuthToken::new(
+            SecretString::from("test-old-access".to_owned()),
+            None,
+            std::time::SystemTime::UNIX_EPOCH,
+        );
         store.store_token("expired-server", &token).unwrap();
 
         let config = McpAuthConfig::OAuth {

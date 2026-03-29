@@ -31,6 +31,7 @@ use std::process::Command;
 
 use super::auth::resolve_bearer_token;
 use super::config::{McpAuthConfig, McpServerEntry};
+use secrecy::ExposeSecret;
 
 /// Forge integration settings.
 ///
@@ -295,8 +296,10 @@ pub fn generate_forge_toml(
         if let Some(McpAuthConfig::Bearer { ref token }) = entry.auth {
             match resolve_bearer_token(token) {
                 Ok(resolved) => {
-                    merged_headers
-                        .insert("Authorization".to_string(), format!("Bearer {resolved}"));
+                    merged_headers.insert(
+                        "Authorization".to_string(),
+                        format!("Bearer {}", resolved.expose_secret()),
+                    );
                 }
                 Err(e) => {
                     tracing::warn!(

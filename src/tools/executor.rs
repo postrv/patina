@@ -996,6 +996,11 @@ impl ToolExecutor {
     async fn list_files(&self, input: &serde_json::Value) -> Result<ToolResult> {
         let path = input.get("path").and_then(|v| v.as_str()).unwrap_or(".");
 
+        // Reject symlinks to prevent TOCTOU attacks (consistent with read/write/edit)
+        if let Err(e) = self.check_symlink(path).await {
+            return Ok(ToolResult::Error(e));
+        }
+
         // Validate path is within working directory
         let full_path = match self.validate_path(path) {
             Ok(p) => p,

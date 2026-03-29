@@ -465,6 +465,7 @@ async fn test_list_files_blocks_absolute_path() {
             "outside working directory",
             "Absolute paths are not allowed",
             "absolute",
+            "Symlink not allowed",
         ],
     );
 }

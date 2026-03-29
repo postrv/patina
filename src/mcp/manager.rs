@@ -40,6 +40,7 @@ use crate::mcp::token_storage::McpTokenStore;
 use crate::tools::ToolResult;
 use anyhow::{anyhow, Result};
 use rmcp::model::{CallToolResult as SdkCallToolResult, Tool};
+use secrecy::{ExposeSecret, SecretString};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::future::Future;
@@ -351,8 +352,11 @@ async fn start_stdio_server(
     // Inject auth token as environment variable for stdio transport
     if let Some(auth) = &entry.auth {
         match resolve_auth_token(&name, auth).await {
-            Ok(token) => {
-                env.insert("MCP_AUTH_TOKEN".to_string(), token);
+            Ok(resolved) => {
+                env.insert(
+                    "MCP_AUTH_TOKEN".to_string(),
+                    resolved.expose_secret().to_string(),
+                );
             }
             Err(e) => {
                 tracing::warn!(
@@ -423,8 +427,8 @@ async fn start_http_server(
     let mut headers = entry.headers.clone().unwrap_or_default();
     if let Some(auth) = &entry.auth {
         match resolve_auth_token(&name, auth).await {
-            Ok(token) => {
-                for (k, v) in auth_headers(&token) {
+            Ok(ref resolved) => {
+                for (k, v) in auth_headers(resolved) {
                     headers.insert(k, v);
                 }
             }
@@ -499,7 +503,7 @@ async fn start_http_server(
 /// # Errors
 ///
 /// Returns an error if token resolution or refresh fails.
-async fn resolve_auth_token(server_name: &str, auth: &McpAuthConfig) -> Result<String> {
+async fn resolve_auth_token(server_name: &str, auth: &McpAuthConfig) -> Result<SecretString> {
     match auth {
         McpAuthConfig::Bearer { token } => resolve_bearer_token(token),
         McpAuthConfig::OAuth { .. } => {

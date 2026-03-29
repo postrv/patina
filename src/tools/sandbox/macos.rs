@@ -9,6 +9,25 @@ use std::path::Path;
 use super::config::SandboxConfig;
 use super::Sandbox;
 
+/// Escapes a path string for safe interpolation into a Seatbelt SBPL profile.
+///
+/// SBPL profiles use S-expressions with quoted strings. Unescaped backslashes
+/// and double-quotes in path names could break out of the string literal or
+/// inject arbitrary SBPL directives.
+///
+/// # Examples
+///
+/// ```
+/// use patina::tools::sandbox::macos::escape_sbpl_path;
+///
+/// assert_eq!(escape_sbpl_path(r#"/tmp/a"b"#), r#"/tmp/a\"b"#);
+/// assert_eq!(escape_sbpl_path(r"/tmp/a\b"), r"/tmp/a\\b");
+/// ```
+#[must_use]
+pub fn escape_sbpl_path(path: &str) -> String {
+    path.replace('\\', r"\\").replace('"', r#"\""#)
+}
+
 /// macOS Seatbelt sandbox.
 ///
 /// Generates a Seatbelt profile (SBPL) from [`SandboxConfig`] and wraps
@@ -55,13 +74,13 @@ impl MacOsSandbox {
 
         // Allow read to configured paths
         for path in &config.allow_read {
-            let path_str = path.display();
+            let path_str = escape_sbpl_path(&path.display().to_string());
             profile.push_str(&format!("(allow file-read* (subpath \"{path_str}\"))\n"));
         }
 
         // Allow write to configured paths
         for path in &config.allow_write {
-            let path_str = path.display();
+            let path_str = escape_sbpl_path(&path.display().to_string());
             profile.push_str(&format!("(allow file-write* (subpath \"{path_str}\"))\n"));
         }
 
@@ -164,5 +183,46 @@ mod tests {
     fn test_macos_sandbox_name() {
         let sandbox = MacOsSandbox;
         assert_eq!(sandbox.name(), "macos-seatbelt");
+    }
+
+    #[test]
+    fn test_escape_sbpl_path_no_special_chars() {
+        assert_eq!(escape_sbpl_path("/usr/local/bin"), "/usr/local/bin");
+    }
+
+    #[test]
+    fn test_escape_sbpl_path_with_quotes() {
+        assert_eq!(
+            escape_sbpl_path(r#"/tmp/dir "with" quotes"#),
+            r#"/tmp/dir \"with\" quotes"#
+        );
+    }
+
+    #[test]
+    fn test_escape_sbpl_path_with_backslashes() {
+        assert_eq!(escape_sbpl_path(r"/tmp/dir\name"), r"/tmp/dir\\name");
+    }
+
+    #[test]
+    fn test_escape_sbpl_path_with_both() {
+        assert_eq!(escape_sbpl_path(r#"/tmp/a\"b"#), r#"/tmp/a\\\"b"#);
+    }
+
+    #[test]
+    fn test_generate_profile_escapes_special_path_chars() {
+        let config = SandboxConfig {
+            enabled: true,
+            allow_read: vec![PathBuf::from(r#"/home/user/my "project""#)],
+            deny_read: vec![],
+            allow_write: vec![PathBuf::from(r#"/home/user/my "project""#)],
+            deny_write: vec![],
+            allow_execute: vec![],
+            deny_execute: vec![],
+            allow_network: false,
+        };
+        let profile = MacOsSandbox::generate_profile(&config);
+
+        // Quotes must be escaped so they don't break the SBPL string literal
+        assert!(profile.contains(r#"(subpath "/home/user/my \"project\"")"#));
     }
 }

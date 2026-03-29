@@ -4,13 +4,16 @@
 
 use anyhow::{Context, Result};
 use directories::ProjectDirs;
+use hmac::{Hmac, Mac};
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
+use sha2::Sha256;
 use std::path::{Path, PathBuf};
 use tokio::fs;
 use tracing::{error, warn};
 use uuid::Uuid;
+
+type HmacSha256 = Hmac<Sha256>;
 
 use super::Session;
 use crate::error::{RctError, RctResult};
@@ -210,12 +213,14 @@ pub(super) fn compute_checksum(data: &str) -> String {
     compute_checksum_with_key(data, &INTEGRITY_KEY)
 }
 
-/// Computes HMAC-SHA256 checksum of the given data using a specified key.
+/// Computes a proper HMAC-SHA256 checksum of the given data using a specified key.
+///
+/// Uses RFC 2104 HMAC construction to prevent length-extension attacks.
 fn compute_checksum_with_key(data: &str, key: &[u8]) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(key);
-    hasher.update(data.as_bytes());
-    hex::encode(hasher.finalize())
+    // HMAC-SHA256 (RFC 2104) prevents length-extension attacks
+    let mut mac = HmacSha256::new_from_slice(key).expect("HMAC key setup never fails");
+    mac.update(data.as_bytes());
+    hex::encode(mac.finalize().into_bytes())
 }
 
 /// Validates a session ID to prevent path traversal attacks.
