@@ -18,6 +18,7 @@ pub mod sandbox;
 mod security;
 mod stateful;
 pub mod todo;
+pub mod tool_search;
 pub mod vision;
 pub mod web_fetch;
 pub mod web_search;
@@ -39,3 +40,6 @@ pub use security::{
 
 // Re-export parallel execution types for convenience
 pub use parallel::{ParallelConfig, ParallelExecutor};
+
+// Re-export tool search types
+pub use tool_search::{ToolSearchError, ToolSearchRegistry, ToolSearchResult};
