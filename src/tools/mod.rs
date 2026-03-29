@@ -7,10 +7,12 @@
 //! - Glob pattern matching for file discovery
 //! - Grep content search with regex support
 //! - Web content fetching with HTML to markdown conversion
+//! - External editor integration (`$EDITOR` / `$VISUAL`)
 //! - Hook integration via `HookedToolExecutor`
 //! - Parallel tool execution for performance optimization
 
 mod executor;
+pub mod external_editor;
 mod hooked;
 pub mod lsp;
 pub mod parallel;
@@ -39,3 +41,6 @@ pub use security::{
 
 // Re-export parallel execution types for convenience
 pub use parallel::{ParallelConfig, ParallelExecutor};
+
+// Re-export external editor type
+pub use external_editor::ExternalEditor;
