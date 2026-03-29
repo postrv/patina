@@ -17,6 +17,7 @@ pub mod parallel;
 pub mod sandbox;
 mod security;
 mod stateful;
+pub mod tasks;
 pub mod todo;
 pub mod vision;
 pub mod web_fetch;
@@ -39,3 +40,9 @@ pub use security::{
 
 // Re-export parallel execution types for convenience
 pub use parallel::{ParallelConfig, ParallelExecutor};
+
+// Re-export task management types
+pub use tasks::{
+    task_create_tool, task_get_tool, task_list_tool, task_update_tool, Task, TaskStatus, TaskStore,
+    TaskUpdate,
+};
