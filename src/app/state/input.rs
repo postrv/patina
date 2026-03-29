@@ -113,6 +113,30 @@ impl InputState {
         }
     }
 
+    /// Deletes the character at the cursor position (forward-delete behavior).
+    pub fn delete_char_forward(&mut self) {
+        self.dirty = true;
+        let char_count = self.text.chars().count();
+        if self.cursor_pos < char_count {
+            let byte_pos = self
+                .text
+                .char_indices()
+                .nth(self.cursor_pos)
+                .map(|(i, _)| i)
+                .unwrap_or(self.text.len());
+            self.text.remove(byte_pos);
+        }
+
+        // Update or dismiss completion
+        if self.completion.is_some() {
+            if self.text.starts_with('/') {
+                self.update_completion_filter();
+            } else {
+                self.completion = None;
+            }
+        }
+    }
+
     /// Takes and returns the current input, clearing the buffer and resetting cursor.
     pub fn take(&mut self) -> String {
         self.dirty = true;
@@ -369,5 +393,44 @@ mod tests {
         let mut state = InputState::new();
         state.insert_char('a');
         assert!(!state.is_empty());
+    }
+
+    #[test]
+    fn test_delete_char_forward_at_cursor() {
+        let mut state = InputState::new();
+        state.set_text("abc".to_string());
+        state.set_cursor_position(0);
+        state.delete_char_forward();
+        assert_eq!(state.text(), "bc");
+        assert_eq!(state.cursor_position(), 0);
+    }
+
+    #[test]
+    fn test_delete_char_forward_at_end_is_noop() {
+        let mut state = InputState::new();
+        state.set_text("abc".to_string());
+        assert_eq!(state.cursor_position(), 3);
+        state.delete_char_forward();
+        assert_eq!(state.text(), "abc");
+        assert_eq!(state.cursor_position(), 3);
+    }
+
+    #[test]
+    fn test_delete_char_forward_mid_utf8() {
+        let mut state = InputState::new();
+        // "aéb" — 3 chars, cursor at 1 (between 'a' and 'é')
+        state.set_text("aéb".to_string());
+        state.set_cursor_position(1);
+        state.delete_char_forward();
+        assert_eq!(state.text(), "ab");
+        assert_eq!(state.cursor_position(), 1);
+    }
+
+    #[test]
+    fn test_delete_char_forward_on_empty_is_noop() {
+        let mut state = InputState::new();
+        state.delete_char_forward();
+        assert_eq!(state.text(), "");
+        assert_eq!(state.cursor_position(), 0);
     }
 }

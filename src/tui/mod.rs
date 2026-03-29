@@ -16,6 +16,8 @@ use ratatui::{
     Frame,
 };
 
+use unicode_width::UnicodeWidthStr;
+
 use crate::permissions::PermissionRequest;
 use crate::tui::theme::PatinaTheme;
 use crate::tui::widgets::compaction_progress::{CompactionProgressState, CompactionProgressWidget};
@@ -890,7 +892,10 @@ fn render_input(frame: &mut Frame, area: Rect, view: &RenderView) {
 
     frame.render_widget(input, area);
 
-    frame.set_cursor_position((area.x + view.input.len() as u16 + 1, area.y + 1));
+    frame.set_cursor_position((
+        area.x + UnicodeWidthStr::width(view.input) as u16 + 1,
+        area.y + 1,
+    ));
 }
 
 #[cfg(test)]

@@ -508,9 +508,10 @@ impl SlashCommandHandler {
             WorktreeAgentStatus::Stopped => "stopped",
         };
 
-        // Truncate task to 40 chars for table display
-        let task_display = if agent.task.len() > 40 {
-            format!("{}...", &agent.task[..37])
+        // Truncate task to 40 chars for table display (UTF-8 safe)
+        let task_display = if agent.task.chars().count() > 40 {
+            let truncated: String = agent.task.chars().take(37).collect();
+            format!("{truncated}...")
         } else {
             agent.task.clone()
         };
@@ -2764,6 +2765,40 @@ mod tests {
         let row = SlashCommandHandler::format_agent_row(&agent);
         assert!(row.contains("..."), "Should truncate long tasks");
         assert!(row.contains("completed"), "Should contain status");
+    }
+
+    #[test]
+    fn test_format_agent_row_non_ascii_task_no_panic() {
+        // CJK characters are multi-byte: each takes 3 bytes in UTF-8
+        // 50 CJK chars = 150 bytes but only 50 characters
+        let cjk_task = "\u{4e16}".repeat(50);
+        let agent = AgentInfo {
+            name: "test-agent".to_string(),
+            task: cjk_task,
+            worktree_path: PathBuf::from("/tmp/test"),
+            branch: "agent/test-agent".to_string(),
+            status: WorktreeAgentStatus::Running,
+        };
+
+        // This must not panic on multi-byte character boundaries
+        let row = SlashCommandHandler::format_agent_row(&agent);
+        assert!(row.contains("..."), "Should truncate long CJK tasks");
+    }
+
+    #[test]
+    fn test_format_agent_row_emoji_task_no_panic() {
+        // Emoji task: each emoji is 4 bytes in UTF-8
+        let emoji_task = "\u{1F600}".repeat(50);
+        let agent = AgentInfo {
+            name: "test-agent".to_string(),
+            task: emoji_task,
+            worktree_path: PathBuf::from("/tmp/test"),
+            branch: "agent/test-agent".to_string(),
+            status: WorktreeAgentStatus::Running,
+        };
+
+        let row = SlashCommandHandler::format_agent_row(&agent);
+        assert!(row.contains("..."), "Should truncate long emoji tasks");
     }
 
     #[test]

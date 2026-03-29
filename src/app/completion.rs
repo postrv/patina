@@ -54,6 +54,38 @@ impl CompletionProvider for BuiltinCommandProvider {
                 CompletionSource::Builtin,
             ),
             CompletionEntry::new(
+                "analyze",
+                "Analyze code with narsil",
+                CompletionSource::Builtin,
+            ),
+            CompletionEntry::new("audit", "Run security audit", CompletionSource::Builtin),
+            CompletionEntry::new(
+                "btw",
+                "Send a side note to the assistant",
+                CompletionSource::Builtin,
+            ),
+            CompletionEntry::new(
+                "bug",
+                "Report a bug or send feedback",
+                CompletionSource::Builtin,
+            ),
+            CompletionEntry::new(
+                "clear",
+                "Clear conversation history",
+                CompletionSource::Builtin,
+            ),
+            CompletionEntry::new("color", "Configure color theme", CompletionSource::Builtin),
+            CompletionEntry::new(
+                "compact",
+                "Compact conversation context",
+                CompletionSource::Builtin,
+            ),
+            CompletionEntry::new(
+                "config",
+                "View or edit configuration",
+                CompletionSource::Builtin,
+            ),
+            CompletionEntry::new(
                 "continuous",
                 "Start/stop continuous coding loop",
                 CompletionSource::Builtin,
@@ -64,8 +96,18 @@ impl CompletionProvider for BuiltinCommandProvider {
                 CompletionSource::Builtin,
             ),
             CompletionEntry::new(
+                "copy",
+                "Copy last response to clipboard",
+                CompletionSource::Builtin,
+            ),
+            CompletionEntry::new(
                 "cost",
                 "Show session cost and token usage",
+                CompletionSource::Builtin,
+            ),
+            CompletionEntry::new(
+                "doctor",
+                "Run environment diagnostics",
                 CompletionSource::Builtin,
             ),
             CompletionEntry::new(
@@ -84,6 +126,11 @@ impl CompletionProvider for BuiltinCommandProvider {
                 CompletionSource::Builtin,
             ),
             CompletionEntry::new(
+                "feedback",
+                "Report a bug or send feedback",
+                CompletionSource::Builtin,
+            ),
+            CompletionEntry::new(
                 "fork",
                 "Fork session into a new branch",
                 CompletionSource::Builtin,
@@ -95,7 +142,38 @@ impl CompletionProvider for BuiltinCommandProvider {
                 "Manage persistent memory",
                 CompletionSource::Builtin,
             ),
+            CompletionEntry::new(
+                "model",
+                "Show or switch the active model",
+                CompletionSource::Builtin,
+            ),
+            CompletionEntry::new(
+                "permissions",
+                "Manage tool permissions",
+                CompletionSource::Builtin,
+            ),
+            CompletionEntry::new(
+                "plan",
+                "View or manage implementation plan",
+                CompletionSource::Builtin,
+            ),
             CompletionEntry::new("plugins", "List loaded plugins", CompletionSource::Builtin),
+            CompletionEntry::new(
+                "rename",
+                "Rename the current session",
+                CompletionSource::Builtin,
+            ),
+            CompletionEntry::new(
+                "rewind",
+                "Rewind to last checkpoint",
+                CompletionSource::Builtin,
+            ),
+            CompletionEntry::new(
+                "sandbox",
+                "Configure sandbox settings",
+                CompletionSource::Builtin,
+            ),
+            CompletionEntry::new("status", "Show session status", CompletionSource::Builtin),
             CompletionEntry::new(
                 "terminal-setup",
                 "Configure terminal settings",
@@ -623,7 +701,7 @@ mod tests {
     fn builtin_provider_returns_all_commands() {
         let provider = BuiltinCommandProvider;
         let candidates = provider.candidates();
-        assert_eq!(candidates.len(), 14);
+        assert_eq!(candidates.len(), 32);
         for entry in &candidates {
             assert_eq!(entry.source, CompletionSource::Builtin);
             assert!(!entry.description.is_empty());
@@ -636,17 +714,35 @@ mod tests {
         let candidates = provider.candidates();
         let names: Vec<&str> = candidates.iter().map(|e| e.name.as_str()).collect();
         assert!(names.contains(&"agent"));
+        assert!(names.contains(&"analyze"));
+        assert!(names.contains(&"audit"));
+        assert!(names.contains(&"btw"));
+        assert!(names.contains(&"bug"));
+        assert!(names.contains(&"clear"));
+        assert!(names.contains(&"color"));
+        assert!(names.contains(&"compact"));
+        assert!(names.contains(&"config"));
         assert!(names.contains(&"continuous"));
         assert!(names.contains(&"context"));
+        assert!(names.contains(&"copy"));
         assert!(names.contains(&"cost"));
+        assert!(names.contains(&"doctor"));
         assert!(names.contains(&"effort"));
         assert!(names.contains(&"experiment"));
         assert!(names.contains(&"export"));
+        assert!(names.contains(&"feedback"));
         assert!(names.contains(&"fork"));
         assert!(names.contains(&"help"));
         assert!(names.contains(&"mcp"));
         assert!(names.contains(&"memory"));
+        assert!(names.contains(&"model"));
+        assert!(names.contains(&"permissions"));
+        assert!(names.contains(&"plan"));
         assert!(names.contains(&"plugins"));
+        assert!(names.contains(&"rename"));
+        assert!(names.contains(&"rewind"));
+        assert!(names.contains(&"sandbox"));
+        assert!(names.contains(&"status"));
         assert!(names.contains(&"terminal-setup"));
         assert!(names.contains(&"worktree"));
     }
@@ -698,7 +794,7 @@ mod tests {
         let builtin = BuiltinCommandProvider;
         let mcp = McpToolProvider::new(vec![("tool1".to_string(), "srv".to_string())]);
         let all = collect_candidates(&[&builtin, &mcp]);
-        assert_eq!(all.len(), 15); // 14 builtin + 1 mcp
+        assert_eq!(all.len(), 33); // 32 builtin + 1 mcp
     }
 
     #[test]
