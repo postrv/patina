@@ -5,6 +5,117 @@ All notable changes to Patina are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2026-03-30
+
+### Added
+
+#### Multi-Provider API Support
+- AWS Bedrock provider with region-based model routing
+- Google Vertex AI provider with project/region configuration
+- Provider fallback chains — try multiple providers in order
+
+#### New Tools
+- Task management tools: `task_create`, `task_get`, `task_list`, `task_update`
+- `cron_create`, `cron_list`, `cron_delete` for scheduled recurring jobs
+- `ask_user` for structured user interaction during tool loops
+- `tool_search` for deferred tool loading and MCP tool discovery
+- `send_message` for inter-agent communication
+- `multi_edit` for batch file edits across multiple files
+- `notebook_edit` for Jupyter notebook editing
+- External editor support via `$EDITOR` (Ctrl+X Ctrl+E)
+
+#### New Commands
+- `/plan` — plan mode workflow with step-by-step review
+- `/effort` — set reasoning effort level (low/medium/high/auto)
+- `/doctor` — diagnostic checks for system health
+- `/export` — conversation export (JSON, Markdown, text)
+- `/context` — context window capacity analysis and breakdown
+- `/analyze` and `/audit` — narsil code intelligence and security scanning
+- `/rewind` — session checkpoint picker for conversation branching
+- `/sandbox` — sandbox configuration management
+- `/settings` — view and edit configuration
+- `/status` — session status overview
+- `/color`, `/copy`, `/btw`, `/bug`, `/rename`, `/config`
+
+#### Forge Integration
+- Forge V8 sandbox MCP gateway support
+- Automatic Forge config generation from `.mcp.json`
+- Process context injection for sandboxed MCP servers
+
+#### MCP Enhancements
+- Migrated to rmcp SDK (0.16 → 1.2) for full MCP spec coverage
+- OAuth and bearer token authentication for MCP servers
+- Legacy SSE transport support
+- MCP config trust store for project `.mcp.json` validation
+
+#### Session Enhancements
+- Checkpoint system with named save points
+- Session branching and rewind
+- Session forking with parent tracking
+- Context restoration on resume (files, skills)
+- UI state persistence (scroll, cursor, input buffer)
+
+#### TUI Improvements
+- Transcript search (Ctrl+F) with regex and match navigation
+- Slash command completion popup with fuzzy matching
+- @-mention file autocomplete
+- Real-time session cost display in status bar
+- Desktop notifications via OSC escape sequences (iTerm2, Kitty, Ghostty)
+- Viewport-only rendering with `VirtualizedViewport` for performance
+- Keybinding customization system
+
+#### Infrastructure
+- Enterprise managed settings with `managed-settings.d/` drop-in fragments
+- OS-level sandboxing: macOS Seatbelt and Linux Landlock
+- Path-scoped rules engine for contextual `.claude` rules
+- Prompt-based hooks with LLM-driven decisions
+- `PostCompact` and `StopFailure` hook events
+- `--bare` flag for fast startup (skips hooks/plugins/skills)
+- stdin pipe support for scripting integration
+- Project structure and git status injected into system prompt
+- Accurate BPE token counting with tiktoken
+- Prompt caching with system blocks and cache cost accounting
+- Extended thinking with SSE parsing and per-turn usage tracking
+- Narsil system prompt integration for code-aware context
+
+### Changed
+- AppState decomposed from 4,467 to 2,531 lines across focused sub-states (`ConversationEngine`, `ViewState`, `ToolExecutionState`, etc.)
+- `KeyboardHandler` split into sub-modules (submit, clipboard, mouse)
+- Dirty flag tracking pushed into individual sub-states for granular re-rendering
+- Compaction migrated to V2 API with async `Summarizer` trait
+- `process_stream()` nesting flattened from depth 6 to 3
+- `main()` decomposed from cyclomatic complexity 44 into 7 focused functions
+- Provider factory extracted to break circular import
+- Retry logic extracted to dedicated `api/retry.rs` module
+- `RenderView` introduced to fully decouple TUI rendering from `AppState`
+- Dead code removed: unused multi_model stubs, audit_logger scaffolding, command_executor placeholders
+
+### Fixed
+- Arrow keys, autocomplete, and several panic-on-edge-case bugs in TUI
+- Keybinding issues: stale prompt state, chord clearing, shift+letter parsing, plus key, chord timeout
+- Lock poisoning panics replaced with graceful recovery across all Mutex usage
+- All unbounded channels replaced with bounded to prevent memory exhaustion
+- Hook normalization bypass that could skip security checks
+- OpenRouter unwrap panics on malformed responses
+- HTTP client panic on connection failure
+- Sandbox made opt-in via policy to prevent test breakage
+- TUI logging redirected to file to prevent display corruption
+- Production panics replaced with proper error handling throughout
+- HTML-escape on OAuth error responses to prevent XSS
+- Background task command validation
+- Doctest failures and formatting issues
+
+### Security
+- Post-connect DNS rebinding SSRF protection
+- Session HMAC hardening with per-user keys
+- OAuth token storage hardening
+- Seatbelt sandbox path validation
+- Symlink traversal checks
+- MCP command validation blocklists
+- Token-based IDE controller authentication
+- quinn-proto and rustls-webpki updated for security patches
+- Environment variable validation and credential scrubbing
+
 ## [1.0.0] - 2026-02-19
 
 ### Added
@@ -161,6 +272,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Enterprise features: cost controls, audit logging, multi-model support
 - Performance benchmarks with criterion
 
+[1.1.0]: https://github.com/postrv/patina/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/postrv/patina/compare/v0.9.0...v1.0.0
 [0.9.0]: https://github.com/postrv/patina/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/postrv/patina/compare/v0.7.0...v0.8.0
